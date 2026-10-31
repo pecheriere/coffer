@@ -817,7 +817,7 @@ async fn valid_split_replacement_clears_split_mismatch() {
         )
         .await
         .unwrap();
-    assert!(view.flags.is_empty());
+    assert_eq!(view.flags.len(), 0);
     let update = transaction_audit(&world).await.remove(0);
     assert_eq!(update.action, "transaction.update");
     let mismatch = update
