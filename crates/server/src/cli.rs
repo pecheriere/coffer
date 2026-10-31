@@ -350,17 +350,28 @@ async fn backup(store: &Store, dest: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `RUST_LOG` filter (default `info`); JSON lines when `COFFER_LOG_FORMAT`
-/// is `json`. Logs go to stderr. A process that already installed its own
-/// global subscriber before calling [`run`] (a test harness capturing logs)
-/// keeps it.
+/// `RUST_LOG` filter (default `info`; empty counts as unset); JSON lines
+/// when `COFFER_LOG_FORMAT` is `json`. Logs go to stderr. A process that
+/// already installed its own global subscriber before calling [`run`] (a
+/// test harness capturing logs) keeps it, and a debug event says so.
+///
+/// # Errors
+///
+/// [`CliError::Config`] when `RUST_LOG` is not a valid filter.
 fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
+    let filter = match env("RUST_LOG").filter(|spec| !spec.is_empty()) {
+        Some(spec) => EnvFilter::try_new(spec).map_err(|_| ConfigError::Invalid {
+            var: "RUST_LOG",
+            reason: "not a valid tracing filter, such as info,coffer_server=debug",
+        })?,
+        None => EnvFilter::new("info"),
+    };
     if tracing::dispatcher::has_been_set() {
+        tracing::debug!(
+            "an installed tracing subscriber is kept; RUST_LOG and COFFER_LOG_FORMAT are not applied"
+        );
         return Ok(());
     }
-    let filter = env("RUST_LOG")
-        .and_then(|spec| EnvFilter::try_new(spec).ok())
-        .unwrap_or_else(|| EnvFilter::new("info"));
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
