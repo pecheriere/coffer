@@ -80,6 +80,8 @@ CREATE TABLE transactions (
 
 CREATE INDEX transactions_account_posted ON transactions (account_id, posted_on);
 CREATE INDEX transactions_review_assignee ON transactions (review, assignee_id);
+-- The order of every transaction listing and its cursor.
+CREATE INDEX transactions_posted_id ON transactions (posted_on DESC, id DESC);
 
 -- The categorized parts of a transaction, in `position` order. They sum to
 -- the transaction's amount unless it is flagged `split_mismatch`.

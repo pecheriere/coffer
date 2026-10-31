@@ -198,28 +198,6 @@ pub struct TransactionFilter {
     pub text: Option<String>,
 }
 
-impl TransactionFilter {
-    /// Every transaction in `scope`.
-    #[must_use]
-    pub fn new(scope: AccountScope) -> Self {
-        Self {
-            scope,
-            accounts: Vec::new(),
-            from: None,
-            to: None,
-            review: None,
-            assignee: None,
-            categories: Vec::new(),
-            uncategorized: false,
-            pending: None,
-            flag: None,
-            min_minor: None,
-            max_minor: None,
-            text: None,
-        }
-    }
-}
-
 /// The column holding `flag`.
 fn flag_column(flag: TransactionFlag) -> &'static str {
     match flag {

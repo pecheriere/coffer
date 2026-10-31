@@ -213,7 +213,7 @@ pub struct TransactionPage {
 
 /// Which transactions to list, and which page. Every criterion set must
 /// hold; an empty list or `None` does not filter.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TransactionQueryInput {
     /// Only these accounts; each must be visible to the actor.
     pub accounts: Vec<AccountId>,
@@ -722,5 +722,18 @@ impl Ledger {
         }
         tx.commit().await?;
         Ok(views)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BATCH_SIZE_INVALID, MAX_BATCH_OPERATIONS};
+
+    #[test]
+    fn batch_size_message_states_the_limit() {
+        assert_eq!(
+            BATCH_SIZE_INVALID,
+            format!("a batch has 1 to {MAX_BATCH_OPERATIONS} operations")
+        );
     }
 }

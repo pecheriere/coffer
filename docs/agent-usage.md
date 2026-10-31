@@ -136,7 +136,9 @@ last changed the splits (`{member, agent, system, at}`); `origin` is
   - `review`: `reviewed` or `unreviewed`.
   - `assignee`: a member id, or `none` for unassigned transactions.
   - `category`: 1 to 100 comma-separated category ids; a transaction
-    matches when one of its splits uses one of them.
+    matches when one of its splits uses one of them. Unlike `account`, an
+    unknown category id is not an error: it matches nothing, so the result
+    may be empty.
   - `uncategorized=true`: only transactions without splits
     (`uncategorized=false` does not filter).
   - `pending`: `true` or `false`.
