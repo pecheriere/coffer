@@ -1,5 +1,6 @@
 //! coffer server: configuration, secrets, passkey identity and token handling.
 
+pub mod assets;
 pub mod auth;
 pub mod cli;
 pub mod config;

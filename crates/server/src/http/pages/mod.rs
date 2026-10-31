@@ -19,7 +19,7 @@ use axum::extract::rejection::{FormRejection, JsonRejection};
 use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, MatchedPath, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Form, Json, Router};
@@ -31,13 +31,6 @@ use super::AppState;
 use super::extract::session_cookie_value;
 use super::problem::Problem;
 use crate::auth::{AuthError, session_cookie};
-
-/// The browser glue, served as `/static/coffer.js`.
-const SCRIPT: &str = include_str!("coffer.js");
-
-/// The stylesheet, served as `/static/coffer.css` (the CSP forbids inline
-/// styles).
-const STYLE: &str = include_str!("coffer.css");
 
 /// Content Security Policy of every response.
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
@@ -54,10 +47,7 @@ pub fn router() -> Router<AppState> {
         .merge(account::routes())
         .merge(admin::routes())
         .route("/", get(home))
-        .route("/static/coffer.js", get(script))
-        .route("/static/coffer.css", get(style))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(middleware::map_response(security_headers))
 }
 
 /// `/` sends a signed-in visitor to their account page. Anyone else never
@@ -66,19 +56,7 @@ async fn home(_session: PageSession) -> Redirect {
     Redirect::to("/account")
 }
 
-async fn script() -> Response {
-    asset("text/javascript; charset=utf-8", SCRIPT)
-}
-
-async fn style() -> Response {
-    asset("text/css; charset=utf-8", STYLE)
-}
-
-fn asset(content_type: &'static str, body: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, content_type)], body).into_response()
-}
-
-async fn security_headers(mut response: Response) -> Response {
+pub(super) async fn security_headers(mut response: Response) -> Response {
     let html = response
         .headers()
         .get(header::CONTENT_TYPE)

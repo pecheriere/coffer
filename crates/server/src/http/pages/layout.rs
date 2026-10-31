@@ -1,7 +1,9 @@
 //! The shared page frame. Pages carry no inline script or style: behaviour
-//! lives in `/static/coffer.js` and looks in `/static/coffer.css`.
+//! lives in the script asset and looks in the stylesheet asset.
 
 use maud::{DOCTYPE, Markup, html};
+
+use crate::assets;
 
 /// The signed-in visitor, for the navigation bar.
 pub struct Viewer {
@@ -24,8 +26,8 @@ pub fn page(title: &str, viewer: Option<&Viewer>, content: &Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " · coffer" }
-                link rel="stylesheet" href="/static/coffer.css";
-                script src="/static/coffer.js" defer {}
+                link rel="stylesheet" href=(assets::CSS_BASE_CSS.url);
+                script src=(assets::JS_COFFER_JS.url) defer {}
             }
             body {
                 @if let Some(viewer) = viewer {

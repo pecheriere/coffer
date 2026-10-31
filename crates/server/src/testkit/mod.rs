@@ -9,6 +9,8 @@
     reason = "test harness: a setup step that fails must abort the test that called it"
 )]
 
+pub mod browser;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
