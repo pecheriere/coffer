@@ -16,7 +16,7 @@ use super::extract::{TypedJson, TypedJsonBytes, TypedPath, TypedQuery};
 use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
-use crate::http::idempotency::{self, IdempotencyKey};
+use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::accounts::{
     AccountPatch, AccountView, BalancePage, BalanceView, NewAccountInput, OpeningBalance,
@@ -170,7 +170,14 @@ pub(super) async fn create(
         include_in_forecast: value.include_in_forecast.unwrap_or(true),
         opening_balance: value.opening_balance,
     };
-    idempotency::create(&state, &actor, key, &method, &uri, &bytes, async |slot| {
+    let request = CreateRequest {
+        key,
+        method: &method,
+        uri: &uri,
+        body: &bytes,
+    };
+    let authorize = async || idempotency::write_household(&actor);
+    idempotency::create(&state, &actor, request, authorize, async |slot| {
         state.ledger.create_account(&actor, input, slot).await
     })
     .await

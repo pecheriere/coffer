@@ -209,31 +209,49 @@ pub async fn release(state: &AppState, slot: &IdempotencySlot) {
     }
 }
 
+/// An idempotent create as received: its optional key and what the
+/// request hash covers.
+#[derive(Debug, Clone)]
+pub struct CreateRequest<'a> {
+    pub key: Option<IdempotencyKey>,
+    pub method: &'a Method,
+    pub uri: &'a Uri,
+    pub body: &'a [u8],
+}
+
 /// Performs a create made with an optional `Idempotency-Key`, answering
-/// `201 Created` with its result: authorizes `WriteHousehold` before
-/// reserving the key (so a key never replays a response to a token that
-/// could not have made the request), replays a completed request, and
+/// `201 Created` with its result: runs `authorize` before reserving the
+/// key (so a key is never reserved by, nor replays a response to, a token
+/// that could not have made the request), replays a completed request, and
 /// releases the key when the create fails.
 ///
 /// # Errors
 ///
-/// `403` without `WriteHousehold`; the errors of [`reserve`]; the create's
-/// own error as a problem.
-pub async fn create<T, F>(
+/// The problem `authorize` returns; the errors of [`reserve`]; the
+/// create's own error as a problem.
+pub async fn create<T, A, F>(
     state: &AppState,
     actor: &Actor,
-    key: Option<IdempotencyKey>,
-    method: &Method,
-    uri: &Uri,
-    bytes: &[u8],
+    request: CreateRequest<'_>,
+    authorize: A,
     create: F,
 ) -> Result<Response, Problem>
 where
     T: Serialize,
+    A: AsyncFnOnce() -> Result<(), Problem>,
     F: AsyncFnOnce(Option<IdempotencySlot>) -> Result<T, LedgerError>,
 {
-    authorize(actor, Action::WriteHousehold)?;
-    let slot = match reserve(state, actor, key, method, uri.path(), bytes).await? {
+    authorize().await?;
+    let slot = match reserve(
+        state,
+        actor,
+        request.key,
+        request.method,
+        request.uri.path(),
+        request.body,
+    )
+    .await?
+    {
         Reserved::None => None,
         Reserved::Fresh(slot) => Some(slot),
         Reserved::Replay(response) => return Ok(response),
@@ -247,4 +265,13 @@ where
             Err(err.into())
         }
     }
+}
+
+/// The pre-reserve check of a create of household data: `WriteHousehold`.
+///
+/// # Errors
+///
+/// `403` without `WriteHousehold`.
+pub fn write_household(actor: &Actor) -> Result<(), Problem> {
+    Ok(authorize(actor, Action::WriteHousehold)?)
 }

@@ -13,7 +13,7 @@ use super::extract::{TypedJson, TypedJsonBytes, TypedPath};
 use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
-use crate::http::idempotency::{self, IdempotencyKey};
+use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::categories::{
     CategoryGroupInput, CategoryGroupPatch, CategoryGroupView, CategoryInput, CategoryPatch,
@@ -92,7 +92,14 @@ pub(super) async fn create(
     key: Option<IdempotencyKey>,
     TypedJsonBytes { value, bytes }: TypedJsonBytes<CategoryInput>,
 ) -> Result<Response, Problem> {
-    idempotency::create(&state, &actor, key, &method, &uri, &bytes, async |slot| {
+    let request = CreateRequest {
+        key,
+        method: &method,
+        uri: &uri,
+        body: &bytes,
+    };
+    let authorize = async || idempotency::write_household(&actor);
+    idempotency::create(&state, &actor, request, authorize, async |slot| {
         state.ledger.create_category(&actor, value, slot).await
     })
     .await
@@ -162,7 +169,14 @@ pub(super) async fn create_group(
     key: Option<IdempotencyKey>,
     TypedJsonBytes { value, bytes }: TypedJsonBytes<CategoryGroupInput>,
 ) -> Result<Response, Problem> {
-    idempotency::create(&state, &actor, key, &method, &uri, &bytes, async |slot| {
+    let request = CreateRequest {
+        key,
+        method: &method,
+        uri: &uri,
+        body: &bytes,
+    };
+    let authorize = async || idempotency::write_household(&actor);
+    idempotency::create(&state, &actor, request, authorize, async |slot| {
         state
             .ledger
             .create_category_group(&actor, value, slot)
