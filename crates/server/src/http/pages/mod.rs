@@ -69,9 +69,12 @@ pub(super) async fn security_headers(mut response: Response) -> Response {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP),
     );
+    // `same-origin`, not `no-referrer`: under `no-referrer` browsers send
+    // `Origin: null` on form posts, which `require_same_origin` refuses.
+    // Other sites still get no referrer, so link tokens never leave coffer.
     headers.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static("same-origin"),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,

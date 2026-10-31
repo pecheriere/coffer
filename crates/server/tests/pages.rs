@@ -189,12 +189,31 @@ async fn security_headers_present() {
         "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
          form-action 'self'; base-uri 'none'"
     );
-    assert_eq!(page.header(header::REFERRER_POLICY), "no-referrer");
+    assert_eq!(page.header(header::REFERRER_POLICY), "same-origin");
     assert_eq!(page.header(header::X_CONTENT_TYPE_OPTIONS), "nosniff");
     assert!(
         !page.body.contains("<script>") && !page.body.contains("style=\""),
         "pages carry no inline script or style"
     );
+}
+
+/// `same-origin`, not `no-referrer`: under `no-referrer` a browser sends
+/// `Origin: null` on a form POST, which the origin rule refuses, so every
+/// plain form would fail. `same-origin` still sends nothing to other sites,
+/// so setup and invite tokens in the path never leave coffer.
+#[tokio::test]
+async fn referrer_policy_lets_forms_send_their_origin() {
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+    for path in ["/login", CSS_BASE_CSS.url] {
+        let reply = browser.get(path).await;
+        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(
+            reply.header(header::REFERRER_POLICY),
+            "same-origin",
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -207,7 +226,7 @@ async fn invite_page_no_store() {
 
     assert_eq!(page.status, StatusCode::OK);
     assert_eq!(page.header(header::CACHE_CONTROL), "no-store");
-    assert_eq!(page.header(header::REFERRER_POLICY), "no-referrer");
+    assert_eq!(page.header(header::REFERRER_POLICY), "same-origin");
 }
 
 #[tokio::test]

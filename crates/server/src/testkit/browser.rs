@@ -142,6 +142,11 @@ impl Browser {
 
     /// Posts a form from the public origin.
     ///
+    /// The `Origin` header is set by hand. A real browser sends it on a form
+    /// POST only because pages carry `Referrer-Policy: same-origin`; under
+    /// `no-referrer` it would send `Origin: null` and the origin rule would
+    /// refuse the form.
+    ///
     /// # Panics
     ///
     /// If the request cannot be built or sent.
