@@ -6,6 +6,7 @@ mod agent_tokens;
 mod audit;
 mod backup;
 mod balances;
+mod categories;
 mod convert;
 mod error;
 mod household;
@@ -14,6 +15,7 @@ mod invites;
 mod members;
 mod passkeys;
 mod sessions;
+mod transactions;
 
 use std::path::Path;
 use std::time::Duration;
@@ -25,12 +27,20 @@ pub use accounts::{AccountChanges, AccountRecord, NewAccount};
 pub use agent_tokens::{AgentTokenRecord, NewAgentToken};
 pub use audit::{AuditEvent, AuditFilter};
 pub use balances::BalanceSnapshot;
+pub use categories::{
+    CategoryChanges, CategoryGroupChanges, CategoryGroupRecord, CategoryRecord, NewCategory,
+    NewCategoryGroup,
+};
 pub use error::StoreError;
 pub use idempotency::Reservation;
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use sessions::{NewSession, SessionRecord};
+pub use transactions::{
+    Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord, TransactionRecord,
+    UserFieldChanges,
+};
 
 const DEFAULT_PAGE_LIMIT: u32 = 50;
 const MAX_PAGE_LIMIT: u32 = 200;
