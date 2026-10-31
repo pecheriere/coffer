@@ -1,4 +1,4 @@
 # The repository's lint configuration applies to the asset tools too. The
 # inherited S603/S607/T201 ignores hold here: the tool runs a fixed argv of
-# `uvx`/`resvg` resolved from PATH, never a shell, and prints its progress.
+# `uv`/`resvg` resolved from PATH, never a shell, and prints its progress.
 extend = "../.github/ruff.toml"

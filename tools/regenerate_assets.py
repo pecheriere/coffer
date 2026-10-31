@@ -198,9 +198,13 @@ def download(url: str, destination: Path) -> Path:
 
 
 def font_tools(work: Path) -> Path:
-    """Install the hash-pinned fontTools into a fresh virtual environment; return its bin."""
+    """Install the hash-pinned fontTools into a fresh virtual environment; return its bin.
+
+    The environment uses the Python running this tool: uv never downloads one.
+    """
     venv = work / "venv"
-    subprocess.run(["uv", "venv", "--quiet", str(venv)], check=True)
+    create = ["uv", "venv", "--quiet", "--no-python-downloads", "--python", sys.executable]
+    subprocess.run([*create, str(venv)], check=True)
     python = venv / "bin" / "python"
     install = ["uv", "pip", "install", "--quiet", "--python", str(python), "--require-hashes"]
     subprocess.run([*install, "-r", str(FONT_REQUIREMENTS)], check=True)
