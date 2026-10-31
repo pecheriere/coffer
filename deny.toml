@@ -1,5 +1,15 @@
 [graph]
 all-features = true
+# Scopes the graph to the platforms coffer is built and developed on; every
+# advisory, licence and ban still applies to them.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
 
 [advisories]
 version = 2
