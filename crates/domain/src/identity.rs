@@ -30,6 +30,7 @@ pub enum IdentityError {
 
 /// A household member's role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,
@@ -60,6 +61,7 @@ impl FromStr for Role {
 
 /// The rights an agent token or role carries. Ordered `Read < Write < Admin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Read,

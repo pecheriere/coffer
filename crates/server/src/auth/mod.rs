@@ -102,7 +102,8 @@ impl From<Denied> for AuthError {
     }
 }
 
-fn denied_message(denied: Denied) -> String {
+/// What a policy denial tells the requester.
+pub(crate) fn denied_message(denied: Denied) -> String {
     match denied.reason {
         DenyReason::SessionRequired => "this action requires signing in with a passkey".to_owned(),
         DenyReason::InsufficientScope { needed } => {

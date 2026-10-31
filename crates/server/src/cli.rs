@@ -45,6 +45,8 @@ enum Command {
     /// interface) and expects 200 within 5 seconds. Reads no other
     /// configuration, so it works without access to the data directory.
     Healthcheck,
+    /// Print the OpenAPI document of the JSON API. Reads no configuration.
+    Openapi,
 }
 
 /// The commands that read the whole configuration and use the data
@@ -135,6 +137,7 @@ pub async fn run(
     let result = match cli.command {
         Command::Configured(command) => execute(command, &env, out).await,
         Command::Healthcheck => healthcheck(&env).await,
+        Command::Openapi => openapi(out),
     };
     match result {
         Ok(code) => code,
@@ -143,6 +146,15 @@ pub async fn run(
             error.exit_code()
         }
     }
+}
+
+/// Prints the pretty-printed OpenAPI document and a trailing newline.
+fn openapi(out: &mut dyn Write) -> Result<ExitCode, CliError> {
+    let document = http::api::openapi::document()
+        .to_pretty_json()
+        .map_err(|error| CliError::failed(&error))?;
+    writeln!(out, "{document}")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Probes the running server. Every failure, a bad `COFFER_LISTEN`

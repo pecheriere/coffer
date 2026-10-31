@@ -7,7 +7,7 @@
 //! route cannot forget it. `/api/` routes take bearer tokens only, which a
 //! browser never attaches on its own, so they are exempt.
 
-mod api;
+pub mod api;
 pub mod extract;
 mod health;
 mod pages;

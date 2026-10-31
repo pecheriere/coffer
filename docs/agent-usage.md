@@ -1,7 +1,10 @@
 # Using coffer from an AI agent
 
 Agents call the JSON API at `/api/v1` with a bearer token that a household
-member creates.
+member creates. The API is described by an OpenAPI 3.1 document served
+without a token at `GET /api/v1/openapi.json` (a copy is committed at
+`docs/api/openapi.json`); generate a client from it or read it for every
+operation, parameter and schema.
 
 ## Create a token
 
@@ -38,12 +41,15 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 
 ```json
 {
-  "member": {"id": "...", "username": "alice", "display_name": "Alice", "role": "admin"},
+  "member": {"id": "...", "username": "alice", "display_name": "Alice", "role": "admin", "disabled_at": null},
   "agent": {"id": "...", "name": "claude", "scope": "read"}
 }
 ```
 
-## Endpoints (all need `read`)
+## Endpoints
+
+`GET /api/v1/openapi.json` needs no token. Every other operation needs
+`read`:
 
 - `GET /api/v1/me` identifies the member and token behind the request.
 - `GET /api/v1/members` returns `{"items": [{id, username, display_name, role, disabled_at}]}`.
@@ -52,9 +58,9 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
   (ids), `from` (inclusive) and `to` (exclusive) as RFC 3339 timestamps
   (percent-encode `+` in offsets as `%2B`), `limit` (clamped to 1..200,
   default 50) and `after` (the previous `next`). These are the only accepted
-  parameters; an unknown or repeated parameter is a 400 `invalid`. Each event has `id`, `at`,
-  `actor` (`{kind: "member", member, agent}` or `{kind: "system", reason}`),
-  `action`, `entity_type`, `entity_id` and `changes`. `changes` is an object
+  parameters; an unknown or repeated parameter is a 400 `invalid`. Each
+  event has `id`, `at`, `actor` (`{kind: "member", member, agent}` or
+  `{kind: "system", reason}`), `action`, `entity_type`, `entity_id` and `changes`. `changes` is an object
   `{field: {"before": value, "after": value}}`, one entry per field the
   action touched; each value is `null`, a boolean, an integer or a string
   (ids, RFC 3339 timestamps and `YYYY-MM-DD` dates are strings). `before` is
@@ -64,9 +70,24 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 
 ## Errors
 
-Errors are `application/problem+json` with a stable `code`:
+Errors are `application/problem+json` bodies (RFC 9457):
+
+```json
+{
+  "type": "urn:coffer:problem:invalid",
+  "title": "Invalid request",
+  "status": 400,
+  "code": "invalid",
+  "detail": "the `limit` parameter is not valid"
+}
+```
+
+`type` is always `urn:coffer:problem:<code>`, and `code` is stable:
 `unauthenticated` (401, with `WWW-Authenticate: Bearer`), `forbidden` (403),
 `not_found` (404, including `/api`, `/api/v1` and unknown `/api/v1/*` paths),
-`method_not_allowed` (405, with an `Allow` header; the API is read-only here), `invalid` (400, bad
-query parameter), `invalid_cursor` (400), `internal` (500). Error bodies never
-echo what you sent.
+`method_not_allowed` (405, with an `Allow` header), `invalid` (400: a bad
+query or path parameter, or a body that is not valid JSON for the
+operation), `invalid_cursor` (400), `internal` (500). `detail`, when
+present, names at most the documented parameter at fault and never echoes
+what you sent. A problem may carry a `Retry-After` header (seconds): wait
+that long before retrying. Request bodies are limited to 256 KiB.

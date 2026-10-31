@@ -10,11 +10,14 @@ repository.workspace = true
 [features]
 # Test helpers (manual clock) for downstream crates' tests.
 testkit = []
+# OpenAPI schemas for the types the JSON API exposes.
+openapi = ["dep:utoipa"]
 
 [dependencies]
 jiff.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+utoipa = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]

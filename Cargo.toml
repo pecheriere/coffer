@@ -32,6 +32,13 @@ coffer-server = { path = "crates/server", version = "0.1.0" }
 # Async runtime and web
 tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 axum = "0.8.9"
+# OpenAPI document generated from the handlers and their types.
+utoipa = { version = "6.0.0", default-features = false, features = ["macros", "uuid", "jiff_0_2"] }
+utoipa-axum = "0.3.0"
+# Query string parsing for the typed API extractors (both already in the tree
+# through axum).
+serde_urlencoded = "0.7.1"
+serde_path_to_error = "0.1.20"
 
 # Storage
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }

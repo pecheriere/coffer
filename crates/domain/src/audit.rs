@@ -45,6 +45,33 @@ pub enum AuditValue {
     Text(String),
 }
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for AuditValue {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{
+            KnownFormat, ObjectBuilder, OneOfBuilder, SchemaFormat, Type,
+        };
+        let scalar = |schema_type| ObjectBuilder::new().schema_type(schema_type);
+        OneOfBuilder::new()
+            .item(scalar(Type::Null))
+            .item(scalar(Type::Boolean))
+            .item(scalar(Type::Integer).format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))))
+            .item(scalar(Type::String))
+            .description(Some(
+                "One audited value: a JSON scalar. Ids, instants (RFC 3339) and calendar days \
+                 (ISO 8601) are recorded as text.",
+            ))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for AuditValue {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("AuditValue")
+    }
+}
+
 impl From<bool> for AuditValue {
     fn from(value: bool) -> Self {
         Self::Bool(value)
@@ -87,9 +114,10 @@ impl<T: Into<AuditValue>> From<Option<T>> for AuditValue {
     }
 }
 
-/// One field's value before and after a change; [`AuditValue::Null`] on
-/// the side where the field did not exist.
+/// One field's value before and after a change; `null` on the side where
+/// the field did not exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FieldChange {
     pub before: AuditValue,
@@ -99,6 +127,7 @@ pub struct FieldChange {
 /// The fields an audited change touched, by name. Serialized as a JSON
 /// object `{field: {"before": value, "after": value}}`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct AuditChanges(BTreeMap<String, FieldChange>);
 

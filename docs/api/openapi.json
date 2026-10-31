@@ -1,0 +1,825 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "coffer",
+    "description": "The JSON API of a coffer server, a self-hosted household finance hub. Every operation but this document's takes an agent token as `Authorization: Bearer coffer_…`. Errors are `application/problem+json` bodies whose `type` is `urn:coffer:problem:<code>`.",
+    "contact": {
+      "name": "coffer",
+      "url": "https://github.com/pecheriere/coffer"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "url": "https://github.com/pecheriere/coffer#license"
+    },
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "{origin}",
+      "description": "A coffer server",
+      "variables": {
+        "origin": {
+          "default": "http://localhost:8080",
+          "description": "The server's `COFFER_PUBLIC_URL`"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Audit events, newest first.",
+        "description": "Audit events, newest first, narrowed by the query. Needs `read`. Pages with the opaque `next` cursor.",
+        "operationId": "listAudit",
+        "parameters": [
+          {
+            "name": "entity_type",
+            "in": "query",
+            "description": "Only events about this kind of entity, for example `member`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "in": "query",
+            "description": "Only events about the entity with this id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "member",
+            "in": "query",
+            "description": "Only changes made by this member (through a session or a token).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MemberId"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Only changes made through this agent token.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AgentTokenId"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only events at or after this instant (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Only events before this instant (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next` cursor of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most events to return, clamped to 1 to 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Who the bearer token belongs to.",
+        "description": "The member who created the bearer token, and the token itself.",
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "description": "The token's member and the token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/members": {
+      "get": {
+        "tags": [
+          "members"
+        ],
+        "summary": "Every household member, disabled ones included.",
+        "description": "Every household member, disabled ones included. Needs `read`.",
+        "operationId": "listMembers",
+        "responses": {
+          "200": {
+            "description": "Every member.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "The OpenAPI document of this API.",
+        "description": "The OpenAPI 3.1 document describing every operation of this API. Needs no token.",
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentTokenId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "AgentView": {
+        "type": "object",
+        "description": "An agent token, without its secret.",
+        "required": [
+          "id",
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentTokenId"
+          },
+          "name": {
+            "type": "string",
+            "description": "The name its member gave it."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope",
+            "description": "The rights it carries, never more than its member's role."
+          }
+        }
+      },
+      "AuditActorView": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A member, through a session (`agent` is `null`) or an agent token.",
+            "required": [
+              "member",
+              "agent",
+              "kind"
+            ],
+            "properties": {
+              "agent": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentTokenId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "member"
+                ]
+              },
+              "member": {
+                "$ref": "#/components/schemas/MemberId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "coffer itself, for example a provider sync.",
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why coffer made the change, for example `sync`."
+              }
+            }
+          }
+        ],
+        "description": "Who made an audited change."
+      },
+      "AuditChanges": {
+        "type": "object",
+        "description": "The fields an audited change touched, by name. Serialized as a JSON\nobject `{field: {\"before\": value, \"after\": value}}`.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/FieldChange"
+        },
+        "propertyNames": {
+          "type": "string"
+        }
+      },
+      "AuditEventId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "AuditEventView": {
+        "type": "object",
+        "description": "One audited change.",
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "action",
+          "entity_type",
+          "entity_id",
+          "changes"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "What was done, for example `member.create`."
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditActorView"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the change was made."
+          },
+          "changes": {
+            "$ref": "#/components/schemas/AuditChanges"
+          },
+          "entity_id": {
+            "type": "string",
+            "description": "The id of the entity changed."
+          },
+          "entity_type": {
+            "type": "string",
+            "description": "The kind of entity changed, for example `member`."
+          },
+          "id": {
+            "$ref": "#/components/schemas/AuditEventId"
+          }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "description": "One page of audit events, newest first.",
+        "required": [
+          "items",
+          "next"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEventView"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last page."
+          }
+        }
+      },
+      "AuditValue": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "One audited value: a JSON scalar. Ids, instants (RFC 3339) and calendar days (ISO 8601) are recorded as text."
+      },
+      "FieldChange": {
+        "type": "object",
+        "description": "One field's value before and after a change; `null` on the side where\nthe field did not exist.",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/AuditValue"
+          },
+          "before": {
+            "$ref": "#/components/schemas/AuditValue"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MeResponse": {
+        "type": "object",
+        "description": "The member and agent token behind the bearer token.",
+        "required": [
+          "member",
+          "agent"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentView"
+          },
+          "member": {
+            "$ref": "#/components/schemas/MemberView"
+          }
+        }
+      },
+      "MemberId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "MemberList": {
+        "type": "object",
+        "description": "Every household member.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberView"
+            }
+          }
+        }
+      },
+      "MemberView": {
+        "type": "object",
+        "description": "A household member. Never carries passkeys or tokens.",
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "role",
+          "disabled_at"
+        ],
+        "properties": {
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the member was disabled; `null` while active."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "The name shown to other members."
+          },
+          "id": {
+            "$ref": "#/components/schemas/MemberId"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "username": {
+            "type": "string",
+            "description": "The sign-in name: lowercase, unique in the household."
+          }
+        }
+      },
+      "OpenApiDocument": {
+        "type": "object",
+        "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
+        "required": [
+          "openapi",
+          "info"
+        ],
+        "properties": {
+          "components": {
+            "type": "object"
+          },
+          "info": {
+            "type": "object"
+          },
+          "openapi": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "object"
+          },
+          "servers": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "ProblemBody": {
+        "type": "object",
+        "description": "An error, as every API operation reports it (RFC 9457).",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ProblemCode"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A human-readable explanation of this occurrence. Never echoes input\nor a credential."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "A short, human-readable summary of the kind of problem."
+          },
+          "type": {
+            "type": "string",
+            "description": "`urn:coffer:problem:<code>`."
+          }
+        }
+      },
+      "ProblemCode": {
+        "type": "string",
+        "description": "A stable, machine-readable error code. The problem's `type` is\n`urn:coffer:problem:<code>`.",
+        "enum": [
+          "unauthenticated",
+          "forbidden",
+          "csrf_invalid",
+          "cross_origin",
+          "not_found",
+          "method_not_allowed",
+          "invalid",
+          "invalid_cursor",
+          "conflict",
+          "invite_unusable",
+          "ceremony_expired",
+          "busy",
+          "passkey_rejected",
+          "internal"
+        ]
+      },
+      "Role": {
+        "type": "string",
+        "description": "A household member's role.",
+        "enum": [
+          "admin",
+          "member"
+        ]
+      },
+      "Scope": {
+        "type": "string",
+        "description": "The rights an agent token or role carries. Ordered `Read < Write < Admin`.",
+        "enum": [
+          "read",
+          "write",
+          "admin"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "coffer agent token",
+        "description": "An agent token, created by a member on their account page."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "identity",
+      "description": "Who the token belongs to."
+    },
+    {
+      "name": "members",
+      "description": "The household's members."
+    },
+    {
+      "name": "audit",
+      "description": "The append-only log of every change."
+    },
+    {
+      "name": "meta",
+      "description": "This API's own description."
+    }
+  ]
+}

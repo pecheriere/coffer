@@ -26,6 +26,7 @@ cargo run -p coffer-server -- bootstrap-link            # first-admin setup link
 cargo run -p coffer-server -- recover-admin <username>  # re-enroll link for a locked-out admin
 cargo run -p coffer-server -- backup <dest>             # consistent database copy, mode 0600
 cargo run -p coffer-server -- healthcheck               # probe GET /healthz on COFFER_LISTEN
+cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the OpenAPI snapshot
 
 cargo fmt
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -41,7 +42,8 @@ cargo deny check
   third-party ones (dtolnay/rust-toolchain, Swatinem/rust-cache,
   EmbarkStudios/cargo-deny-action, zizmorcore/zizmor-action,
   ossf/scorecard-action, docker/setup-buildx-action,
-  docker/build-push-action) may be used.
+  docker/build-push-action) may be used. Spectral runs from a digest-pinned
+  image built from `.github/spectral/Dockerfile`.
 - The Dockerfile pins the Rust base image by digest (the version in
   `rust-toolchain.toml`) and its build tools by version, each a release at
   least 7 days old; Dependabot proposes base image updates.
@@ -59,7 +61,18 @@ cargo deny check
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
 - Every mutation goes through a `StoreTx` together with its audit entry.
-- Every handler authorizes through `coffer_domain::policy::authorize`.
+- Every handler authorizes through `coffer_domain::policy::authorize`; a
+  `Denied` becomes a problem only through `impl From<Denied> for Problem`.
+- API routes are added only through `ApiRouter::op` (`http/api/router.rs`)
+  with a `#[utoipa::path]`; the application router merges nothing else under
+  `/api`. Request, query, path and response types derive `ToSchema` or
+  `IntoParams`; no `serde_json::Value` in any of them. Extract with
+  `TypedJson`, `TypedQuery` and `TypedPath` (`http/api/extract.rs`), whose
+  rejections never echo input. Errors are `Problem`s with a `ProblemCode`.
+- After any API change, regenerate the snapshot with
+  `cargo run -p coffer-server -- openapi > docs/api/openapi.json`; a test
+  compares it with the generated document and CI lints it with Spectral
+  (`.spectral.yaml`, findings fixed in code, never by disabling a rule).
 - Errors use `thiserror`; no `unwrap`/`expect` outside tests.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.

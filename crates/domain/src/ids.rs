@@ -11,6 +11,17 @@ use uuid::Uuid;
 #[error("invalid id")]
 pub struct ParseIdError;
 
+/// The schema of every id: a canonical (hyphenated, lowercase) `UUIDv7`.
+#[cfg(feature = "openapi")]
+fn uuid_v7_schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, SchemaFormat, Type};
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Uuid)))
+        .description(Some("UUIDv7"))
+        .into()
+}
+
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -59,6 +70,20 @@ macro_rules! id_type {
         impl From<$name> for crate::audit::AuditValue {
             fn from(id: $name) -> Self {
                 Self::Text(id.to_string())
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                crate::ids::uuid_v7_schema()
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::ToSchema for $name {
+            fn name() -> std::borrow::Cow<'static, str> {
+                std::borrow::Cow::Borrowed(stringify!($name))
             }
         }
 
