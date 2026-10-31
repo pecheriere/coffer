@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use webauthn_rs::prelude::RegisterPublicKeyCredential;
 
-use super::layout::page;
+use super::layout::{Frame, auth_card, key_icon, page};
 use super::{ApiJson, PageError, start_session};
 use crate::auth::{AuthError, CeremonyId, InvitePreview};
 use crate::http::AppState;
@@ -33,28 +33,44 @@ async fn link_page(
     Path(token): Path<String>,
 ) -> Result<Response, PageError> {
     let preview = state.identity.describe_invite(&token).await?;
-    let content = html! {
-        h1 { "Create your passkey" }
+    let look = state.appearance.look(None).await;
+    let form = html! {
         @match &preview {
             InvitePreview::NewMember { display_name } => {
                 p { "Choose how you sign in to coffer." }
-                label for="username" { "Username" }
-                input #username name="username" type="text" autocomplete="username" maxlength="32"
-                    pattern="[a-z0-9_\\-]+" required;
-                label for="display-name" { "Display name" }
-                input #display-name name="display_name" type="text" maxlength="64"
-                    value=(display_name.as_ref().map(DisplayName::as_str).unwrap_or_default());
+                label.field {
+                    "Username"
+                    input #username .input name="username" type="text" autocomplete="username"
+                        maxlength="32" pattern="[a-z0-9_\\-]+" required;
+                }
+                label.field {
+                    "Display name"
+                    input #display-name .input name="display_name" type="text" maxlength="64"
+                        value=(display_name.as_ref().map(DisplayName::as_str).unwrap_or_default());
+                }
             }
             InvitePreview::Reenroll => {
                 p { "Add a new passkey to your existing account." }
             }
         }
-        label for="label" { "Name for this passkey" }
-        input #label type="text" maxlength="64" value="passkey";
-        div { button #enroll type="button" { "Create passkey" } }
+        label.field {
+            "Name for this passkey"
+            input #label .input type="text" maxlength="64" value="passkey";
+        }
+        button #enroll .btn .btn-primary .btn-block type="button" {
+            (key_icon())
+            "Create passkey"
+        }
         p #result role="status" {}
     };
-    Ok(page("Create your passkey", None, &content).into_response())
+    let frame = Frame {
+        look,
+        viewer: None,
+        current: None,
+        narrow: true,
+    };
+    let content = auth_card(look, "Create your passkey", &form);
+    Ok(page(&frame, "Create your passkey", &content).into_response())
 }
 
 #[derive(Deserialize)]

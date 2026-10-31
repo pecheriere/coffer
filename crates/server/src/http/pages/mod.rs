@@ -25,12 +25,14 @@ use axum::routing::get;
 use axum::{Form, Json, Router};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::MemberId;
+use coffer_store::Member;
 use serde::de::DeserializeOwned;
 
 use super::AppState;
 use super::extract::session_cookie_value;
 use super::problem::Problem;
 use crate::auth::{AuthError, session_cookie};
+use crate::themes::Look;
 
 /// Content Security Policy of every response.
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
@@ -165,10 +167,12 @@ impl IntoResponse for PageError {
     }
 }
 
-/// A signed-in visitor: who they are and the cookie that proves it, kept to
+/// A signed-in visitor: who they are, their member record (for the
+/// navigation bar and their look) and the cookie that proves it, kept to
 /// check the anti-forgery token.
 pub struct PageSession {
     actor: Actor,
+    member: Member,
     cookie: String,
 }
 
@@ -180,6 +184,16 @@ impl PageSession {
 
     fn cookie(&self) -> &str {
         &self.cookie
+    }
+
+    /// The signed-in member.
+    fn member(&self) -> &Member {
+        &self.member
+    }
+
+    /// How this visitor's pages are drawn.
+    pub(super) async fn look(&self, state: &AppState) -> Look {
+        state.appearance.look(Some(&self.member)).await
     }
 
     /// The anti-forgery token to embed in this visitor's forms.
@@ -205,7 +219,16 @@ impl FromRequestParts<AppState> for PageSession {
             .ok_or_else(|| PageError::from(AuthError::Unauthenticated))?
             .to_owned();
         let actor = state.sessions.resolve(&cookie).await?;
-        Ok(Self { actor, cookie })
+        let member = state
+            .store
+            .get_member(actor.member)
+            .await
+            .map_err(AuthError::from)?;
+        Ok(Self {
+            actor,
+            member,
+            cookie,
+        })
     }
 }
 

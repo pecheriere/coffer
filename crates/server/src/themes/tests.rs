@@ -3,11 +3,11 @@ use std::collections::BTreeSet;
 use coffer_domain::identity::ThemeName;
 
 use super::contract::{
-    COLOUR_TOKENS, NEGATIVE_ACCENT_MIN_DISTANCE, OTHER_TOKENS, PAIRS, Rgb, Scheme, Tokens,
-    contrast_ratio, oklab_distance, parse_theme,
+    COLOUR_TOKENS, Declaration, NEGATIVE_ACCENT_MIN_DISTANCE, OTHER_TOKENS, PAIRS, Rgb, Scheme,
+    Tokens, contrast_ratio, declarations, oklab_distance, parse_theme,
 };
 use super::{DEFAULT, THEMES, Theme};
-use crate::assets::ALL;
+use crate::assets::{ALL, CSS_BASE_CSS};
 
 const SCHEMES: [Scheme; 2] = [Scheme::Light, Scheme::Dark];
 const LICENSED_UNDER: &str =
@@ -369,4 +369,199 @@ fn only_the_copyright_header_declares_a_reserved_font_name() {
         copyright_header("Copyright 2016 Someone\nOther licence."),
         None
     );
+}
+
+fn base_declarations() -> Vec<Declaration> {
+    declarations(std::str::from_utf8(CSS_BASE_CSS.body).expect("UTF-8 stylesheet"))
+}
+
+/// Properties whose value may carry a colour.
+const COLOUR_PROPERTIES: &[&str] = &[
+    "color",
+    "background",
+    "background-color",
+    "border",
+    "border-top",
+    "border-bottom",
+    "border-color",
+    "outline",
+    "box-shadow",
+    "accent-color",
+];
+
+/// Keywords a colour-bearing value may hold besides `var()` calls.
+const COLOURLESS_KEYWORDS: &[&str] = &[
+    "!important",
+    "transparent",
+    "currentColor",
+    "none",
+    "inherit",
+    "solid",
+    "dashed",
+    "inset",
+];
+
+/// Every token named by a `var(--name…)` in `value`.
+fn var_names(value: &str) -> Vec<&str> {
+    value
+        .match_indices("var(--")
+        .map(|(at, call)| {
+            let rest = &value[at + call.len()..];
+            let end = rest
+                .find(|c: char| matches!(c, ',' | ')') || c.is_whitespace())
+                .unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect()
+}
+
+/// `value` with every `var(…)` call (fallback included) removed.
+fn without_vars(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(at) = rest.find("var(") {
+        out.push_str(&rest[..at]);
+        let mut depth = 0_usize;
+        let mut end = rest.len();
+        for (index, c) in rest[at..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = at + index + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push(' ');
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A number, or a number with a length or percentage unit.
+fn is_number_or_length(word: &str) -> bool {
+    let unsigned = word.trim_start_matches(['-', '+']);
+    let split = unsigned
+        .find(|c: char| c.is_ascii_alphabetic() || c == '%')
+        .unwrap_or(unsigned.len());
+    let (number, unit) = unsigned.split_at(split);
+    number.parse::<f64>().is_ok() && ["", "px", "rem", "em", "%", "vw", "vh", "ch"].contains(&unit)
+}
+
+/// Why a component declaration is not tokens only, if it is not.
+fn token_violation(declaration: &Declaration) -> Option<String> {
+    let Declaration {
+        property, value, ..
+    } = declaration;
+    for name in var_names(value) {
+        if !COLOUR_TOKENS.contains(&name) && !OTHER_TOKENS.contains(&name) {
+            return Some(format!("{property}: var(--{name}) is not a contract token"));
+        }
+    }
+    let lower = value.to_ascii_lowercase();
+    let hex_literal = lower
+        .match_indices('#')
+        .any(|(at, _)| lower[at + 1..].starts_with(|c: char| c.is_ascii_hexdigit()));
+    let colour_function = [
+        "rgb(",
+        "rgba(",
+        "hsl(",
+        "hwb(",
+        "lab(",
+        "lch(",
+        "oklch(",
+        "color(",
+        "light-dark(",
+    ]
+    .iter()
+    .any(|function| lower.contains(function));
+    if hex_literal || colour_function {
+        return Some(format!("{property}: {value} holds a colour literal"));
+    }
+    if matches!(property.as_str(), "font" | "font-family") && value.contains('"') {
+        return Some(format!("{property}: {value} names a font"));
+    }
+    if COLOUR_PROPERTIES.contains(&property.as_str()) {
+        let stray = without_vars(value)
+            .split([' ', ','])
+            .filter(|word| !word.is_empty())
+            .find(|word| !is_number_or_length(word) && !COLOURLESS_KEYWORDS.contains(word))
+            .map(str::to_owned);
+        if let Some(word) = stray {
+            return Some(format!("{property}: {value} holds {word:?}"));
+        }
+    }
+    None
+}
+
+#[test]
+fn declarations_reader_tracks_at_rules_and_drops_important() {
+    let found = declarations(
+        "/* a { } */ a { color: var(--text) } @media (min-width: 1px) { b { animation: none !important; top: 0 } }",
+    );
+    let triples: Vec<(&str, &str, &str)> = found
+        .iter()
+        .map(|d| (d.context.as_str(), d.property.as_str(), d.value.as_str()))
+        .collect();
+    assert_eq!(
+        triples,
+        vec![
+            ("", "color", "var(--text)"),
+            ("@media (min-width: 1px)", "animation", "none"),
+            ("@media (min-width: 1px)", "top", "0"),
+        ]
+    );
+}
+
+#[test]
+fn token_check_reports_literals_and_strangers() {
+    let violation = |property: &str, value: &str| {
+        token_violation(&Declaration {
+            context: String::new(),
+            property: property.to_owned(),
+            value: value.to_owned(),
+        })
+    };
+    assert!(violation("color", "#fff").is_some());
+    assert!(violation("background", "oklch(50% 0.1 20)").is_some());
+    assert!(violation("color", "red").is_some());
+    assert!(violation("border", "1px solid var(--nope)").is_some());
+    assert!(violation("font-family", "\"Comic Sans\", var(--font-body)").is_some());
+    assert!(violation("border", "1px dashed var(--muted)").is_none());
+    assert!(violation("box-shadow", "none").is_none());
+}
+
+#[test]
+fn components_read_only_tokens() {
+    let violations: Vec<String> = base_declarations()
+        .iter()
+        .filter_map(token_violation)
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "base.css reads more than tokens:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn motion_runs_only_when_allowed() {
+    let declarations = base_declarations();
+    let animations: Vec<&Declaration> = declarations
+        .iter()
+        .filter(|d| d.property == "animation" && d.value != "none")
+        .collect();
+    assert!(!animations.is_empty(), "the welcome mascot moves");
+    for declaration in animations {
+        assert_eq!(
+            declaration.context, "@media (prefers-reduced-motion: no-preference)",
+            "animation: {} runs regardless of the reduced-motion preference",
+            declaration.value
+        );
+    }
 }

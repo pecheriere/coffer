@@ -430,3 +430,70 @@ pub(crate) fn oklab_distance(a: Rgb, b: Rgb) -> f64 {
         .sum::<f64>()
         .sqrt()
 }
+
+/// One declaration of a component stylesheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Declaration {
+    /// The prelude of the enclosing at-rule (`@media (min-width: 40rem)`,
+    /// `@keyframes bob`), or `""` at the top level.
+    pub(crate) context: String,
+    /// The property, lowercased.
+    pub(crate) property: String,
+    /// The value, trimmed, with any trailing `!important` removed.
+    pub(crate) value: String,
+}
+
+/// Every declaration of a component stylesheet, in source order.
+///
+/// # Panics
+/// On an unterminated comment, unbalanced braces or text outside any rule:
+/// a test helper fails its test on a stylesheet it cannot read.
+pub(crate) fn declarations(css: &str) -> Vec<Declaration> {
+    let css = strip_comments(css).unwrap_or_else(|err| panic!("unreadable stylesheet: {err}"));
+    let mut out = Vec::new();
+    collect_declarations(&css, "", &mut out);
+    out
+}
+
+fn collect_declarations(block: &str, context: &str, out: &mut Vec<Declaration>) {
+    let mut rest = block;
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return;
+        }
+        let open = rest
+            .find('{')
+            .unwrap_or_else(|| panic!("text outside any rule: {:?}", rest.trim()));
+        let close = matching_brace(rest, open).unwrap_or_else(|err| panic!("{err}"));
+        let prelude = rest[..open].trim();
+        let body = &rest[open + 1..close];
+        if prelude.starts_with('@') && body.contains('{') {
+            collect_declarations(body, prelude, out);
+        } else {
+            for declaration in split_top_level(body, ';') {
+                let declaration = declaration.trim();
+                if declaration.is_empty() {
+                    continue;
+                }
+                let (property, value) = declaration
+                    .split_once(':')
+                    .unwrap_or_else(|| panic!("not a declaration: {declaration:?}"));
+                let value = value.trim();
+                let value = value
+                    .len()
+                    .checked_sub("!important".len())
+                    .filter(|&at| {
+                        value.is_char_boundary(at) && value[at..].eq_ignore_ascii_case("!important")
+                    })
+                    .map_or(value, |at| value[..at].trim_end());
+                out.push(Declaration {
+                    context: context.to_owned(),
+                    property: property.trim().to_ascii_lowercase(),
+                    value: value.to_owned(),
+                });
+            }
+        }
+        rest = &rest[close + 1..];
+    }
+}

@@ -9,9 +9,11 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use coffer_domain::identity::{Role, Scope, TokenName};
+use coffer_server::assets::CSS_BASE_CSS;
 use coffer_server::auth::AuthError;
 use coffer_server::testkit::browser::{Browser, Reply, with_admin};
 use coffer_server::testkit::{TEST_PUBLIC_URL, TestServer, link_token};
+use coffer_server::themes;
 use secrecy::ExposeSecret as _;
 use serde_json::json;
 use url::Url;
@@ -392,7 +394,7 @@ async fn members_page_manages_members_and_reenroll_links() {
     let members = admin.get("/admin/members").await;
     let csrf = members.csrf();
     let bob_row = Reply {
-        body: members.body[members.body.find("<td>bob</td>").unwrap()..].to_owned(),
+        body: members.body[members.body.find("class=\"item-title\">bob<").unwrap()..].to_owned(),
         ..members
     };
     let bob_id = bob_row.between("action=\"/admin/members/", "/role\"");
@@ -721,5 +723,187 @@ async fn root_sends_a_signed_in_member_home() {
     for reply in get_and_head(&mut admin, "/").await {
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
         assert_eq!(reply.header(header::LOCATION), "/account");
+    }
+}
+
+/// Every page a household sees, as (page, reply): sign-in, a bootstrap
+/// setup link, a new-member invite link, and the signed-in admin's account,
+/// members and invites pages. Bob is a member, so the members page lists
+/// someone the admin manages.
+async fn every_page() -> Vec<(&'static str, Reply)> {
+    let server = TestServer::new().await;
+    let setup = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let mut visitor = Browser::new(&server);
+    let mut pages = vec![
+        ("/login", visitor.get("/login").await),
+        ("/setup/<token>", visitor.get(setup.path()).await),
+    ];
+
+    let mut admin = Browser::new(&server);
+    let mut alice_key = server.authenticator();
+    let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    let actor = server
+        .sessions
+        .resolve(admin.cookie.as_deref().unwrap())
+        .await
+        .unwrap();
+    let for_bob = server
+        .identity
+        .create_invite(&actor, Role::Member, None)
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&server);
+    let mut bob_key = server.authenticator();
+    let done = bob.enroll(&mut bob_key, &for_bob, "bob", "Bob").await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    let pending = server
+        .identity
+        .create_invite(&actor, Role::Member, None)
+        .await
+        .unwrap();
+    pages.push(("/invite/<token>", visitor.get(pending.path()).await));
+
+    for path in ["/account", "/admin/members", "/admin/invites"] {
+        pages.push((path, admin.get(path).await));
+    }
+    pages
+}
+
+/// The opening tags `<name …>` in `html`.
+fn tags<'a>(html: &'a str, name: &str) -> Vec<(usize, &'a str)> {
+    let open = format!("<{name}");
+    html.match_indices(&open)
+        .filter(|(at, _)| {
+            html[at + open.len()..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        })
+        .map(|(at, _)| {
+            let end = html[at..].find('>').map_or(html.len(), |len| at + len + 1);
+            (at, &html[at..end])
+        })
+        .collect()
+}
+
+/// The value of attribute `name` in the opening tag `tag`.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!(" {name}=\"");
+    let from = tag.find(&key)? + key.len();
+    let len = tag[from..].find('"')?;
+    Some(&tag[from..from + len])
+}
+
+#[tokio::test]
+async fn every_page_is_themed_and_inline_free() {
+    for (page, reply) in every_page().await {
+        assert_eq!(reply.status, StatusCode::OK, "{page}: {}", reply.body);
+        let body = &reply.body;
+        let theme = format!("href=\"{}\"", themes::DEFAULT.stylesheet.url);
+        let base = format!("href=\"{}\"", CSS_BASE_CSS.url);
+        let theme_at = body
+            .find(&theme)
+            .unwrap_or_else(|| panic!("{page}: no theme"));
+        let base_at = body
+            .find(&base)
+            .unwrap_or_else(|| panic!("{page}: no base"));
+        assert!(theme_at < base_at, "{page}: tokens load before components");
+        for expected in [
+            "<meta name=\"color-scheme\" content=\"light dark\">",
+            "href=\"#main\"",
+            "<main id=\"main\"",
+        ] {
+            assert!(body.contains(expected), "{page}: missing {expected}");
+        }
+        assert!(!body.contains("style="), "{page}: inline style attribute");
+        assert!(tags(body, "style").is_empty(), "{page}: <style> element");
+        for (_, script) in tags(body, "script") {
+            assert!(
+                attribute(script, "src").is_some(),
+                "{page}: inline script {script}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn sign_in_page_greets_with_the_mascot() {
+    let server = TestServer::new().await;
+    let page = Browser::new(&server).get("/login").await;
+    assert_eq!(page.status, StatusCode::OK);
+    for expected in [
+        "illustration-welcome",
+        "id=\"login\"",
+        "Sign in with a passkey",
+    ] {
+        assert!(page.body.contains(expected), "missing {expected}");
+    }
+}
+
+#[tokio::test]
+async fn empty_states_show_the_resting_mascot() {
+    let (_server, mut admin, _) = with_admin().await;
+    let account = admin.get("/account").await;
+    assert!(account.body.contains("No agent tokens yet"));
+    assert!(account.body.contains("illustration-empty"));
+    let invites = admin.get("/admin/invites").await;
+    assert!(invites.body.contains("No pending invites."));
+}
+
+#[tokio::test]
+async fn every_form_control_has_an_accessible_name() {
+    for (page, reply) in every_page().await {
+        let body = &reply.body;
+        let labelled: Vec<&str> = tags(body, "label")
+            .into_iter()
+            .filter_map(|(_, tag)| attribute(tag, "for"))
+            .collect();
+        let controls = tags(body, "select")
+            .into_iter()
+            .chain(tags(body, "input"))
+            .filter(|(_, tag)| attribute(tag, "type") != Some("hidden"));
+        for (at, tag) in controls {
+            let id = attribute(tag, "id");
+            let enclosed = body[..at]
+                .rfind("<label")
+                .is_some_and(|label| !body[label..at].contains("</label>"));
+            let named = attribute(tag, "aria-label").is_some()
+                || id.is_some_and(|id| labelled.contains(&id))
+                || enclosed;
+            let which = attribute(tag, "name").or(id).unwrap_or(tag);
+            assert!(named, "{page}: control {which} has no accessible name");
+        }
+        if page == "/admin/members" {
+            assert!(
+                body.contains("aria-label=\"Role for bob\""),
+                "the role select names its member"
+            );
+        }
+    }
+}
+
+/// The text of every main-navigation link that marks the current page.
+fn current_nav_links(body: &str) -> Vec<String> {
+    let start = body.find("<nav").unwrap();
+    let nav = &body[start..start + body[start..].find("</nav>").unwrap()];
+    tags(nav, "a")
+        .into_iter()
+        .filter(|(_, tag)| attribute(tag, "aria-current") == Some("page"))
+        .map(|(at, tag)| {
+            let text = &nav[at + tag.len()..];
+            text[..text.find("</a>").unwrap()].to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn nav_marks_the_current_page() {
+    let (_server, mut admin, _) = with_admin().await;
+    for (path, current) in [("/account", "Account"), ("/admin/invites", "Invites")] {
+        let page = admin.get(path).await;
+        assert_eq!(
+            current_nav_links(&page.body),
+            vec![current.to_owned()],
+            "{path}"
+        );
+        assert_eq!(page.body.matches("aria-current=").count(), 1, "{path}");
     }
 }

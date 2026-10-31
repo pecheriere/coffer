@@ -10,14 +10,15 @@ use axum::{Json, Router};
 use coffer_domain::identity::{Actor, Scope, TokenName, role_ceiling};
 use coffer_domain::ids::{AgentTokenId, PasskeyId};
 use coffer_domain::policy::{Action, authorize};
-use jiff::SignedDuration;
+use coffer_store::{AgentTokenRecord, PasskeyRecord};
+use jiff::{SignedDuration, Timestamp};
 use maud::{Markup, html};
 use secrecy::ExposeSecret as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use webauthn_rs::prelude::RegisterPublicKeyCredential;
 
-use super::layout::{Viewer, csrf_field, once, page};
+use super::layout::{Frame, Nav, Viewer, csrf_field, empty_state, once, page};
 use super::{ApiJson, PageError, PageForm, PageSession};
 use crate::auth::{AuthError, CeremonyId};
 use crate::http::AppState;
@@ -38,18 +39,12 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// The navigation bar's data for the signed-in member.
-pub async fn viewer(state: &AppState, session: &PageSession) -> Result<Viewer, PageError> {
-    let actor = session.actor();
-    let member = state
-        .store
-        .get_member(actor.member)
-        .await
-        .map_err(AuthError::from)?;
-    Ok(Viewer {
-        display_name: member.display_name.to_string(),
-        is_admin: authorize(&actor, Action::ManageMembers).is_ok(),
+pub fn viewer(state: &AppState, session: &PageSession) -> Viewer {
+    Viewer {
+        display_name: session.member().display_name.to_string(),
+        is_admin: authorize(&session.actor(), Action::ManageMembers).is_ok(),
         csrf: session.csrf(state),
-    })
+    }
 }
 
 async fn account(
@@ -73,7 +68,8 @@ async fn render(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageOwnCredentials).map_err(AuthError::from)?;
-    let viewer = viewer(state, session).await?;
+    let viewer = viewer(state, session);
+    let look = session.look(state).await;
     let passkeys = state
         .store
         .list_passkeys(actor.member)
@@ -93,71 +89,119 @@ async fn render(
         }
         p #result role="status" {}
 
-        h2 { "Passkeys" }
-        table {
-            tr { th { "Name" } th { "Added" } th { "Last used" } th {} }
-            @for passkey in &passkeys {
-                tr {
-                    td { (passkey.label) }
-                    td { (passkey.created_at) }
-                    td { (passkey.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string())) }
-                    td {
-                        form method="post" action={ "/account/passkeys/" (passkey.id) "/remove" } {
-                            (csrf_field(csrf))
-                            button type="submit" { "Remove" }
-                        }
+        (passkeys_card(&passkeys, csrf))
+
+        section.card {
+            h2 { "Agent tokens" }
+            @if tokens.is_empty() {
+                (empty_state(look, "No agent tokens yet. Create one below to let an agent use coffer on your behalf."))
+            } @else {
+                ul.items {
+                    @for token in &tokens {
+                        (token_item(token, now, csrf, &format!("/account/tokens/{}/revoke", token.id), &html! {
+                            code { (token.prefix) "…" }
+                            " · Expires "
+                            (token.expires_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
+                        }))
                     }
                 }
             }
-        }
-        label for="passkey-label" { "Name for the new passkey" }
-        input #passkey-label type="text" maxlength="64" value="passkey";
-        button #add-passkey type="button" data-csrf=(csrf) { "Add a passkey" }
-
-        h2 { "Agent tokens" }
-        table {
-            tr { th { "Name" } th { "Scope" } th { "Token" } th { "Expires" } th { "Status" } th {} }
-            @for token in &tokens {
-                @let active = token.revoked_at.is_none()
-                    && token.expires_at.is_none_or(|at| at > now);
-                tr {
-                    td { (token.name) }
-                    td { (token.scope.as_str()) }
-                    td { code { (token.prefix) "…" } }
-                    td { (token.expires_at.map_or_else(|| "never".to_owned(), |at| at.to_string())) }
-                    td {
-                        @if token.revoked_at.is_some() { "revoked" }
-                        @else if !active { "expired" }
-                        @else { "active" }
+            h3 { "Create a token" }
+            form method="post" action="/account/tokens" {
+                (csrf_field(csrf))
+                label.field {
+                    "Name"
+                    input #token-name .input type="text" name="name" maxlength="64" required;
+                }
+                label.field {
+                    "Scope"
+                    select #token-scope .input name="scope" {
+                        @for scope in scopes_up_to(role_ceiling(actor.role)) {
+                            option value=(scope.as_str()) { (scope.as_str()) }
+                        }
                     }
-                    td {
-                        @if active {
-                            form method="post" action={ "/account/tokens/" (token.id) "/revoke" } {
+                }
+                label.field {
+                    "Expires after (days, optional)"
+                    input #token-expiry .input type="number" name="expires_days" min="1"
+                        max=(MAX_EXPIRY_DAYS);
+                }
+                button.btn.btn-primary type="submit" { "Create token" }
+            }
+        }
+    };
+    let frame = Frame {
+        look,
+        viewer: Some(&viewer),
+        current: Some(Nav::Account),
+        narrow: false,
+    };
+    Ok(page(&frame, "Account", &content))
+}
+
+fn passkeys_card(passkeys: &[PasskeyRecord], csrf: &str) -> Markup {
+    html! {
+        section.card {
+            h2 { "Passkeys" }
+            ul.items {
+                @for passkey in passkeys {
+                    li.item {
+                        div.item-main {
+                            span.item-title { (passkey.label) }
+                            span.item-meta {
+                                "Added " (passkey.created_at) " · Last used "
+                                (passkey.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
+                            }
+                        }
+                        div.item-actions {
+                            form method="post" action={ "/account/passkeys/" (passkey.id) "/remove" } {
                                 (csrf_field(csrf))
-                                button type="submit" { "Revoke" }
+                                button.btn type="submit" { "Remove" }
                             }
                         }
                     }
                 }
             }
+            label.field {
+                "Name for the new passkey"
+                input #passkey-label .input type="text" maxlength="64" value="passkey";
+            }
+            button #add-passkey .btn type="button" data-csrf=(csrf) { "Add a passkey" }
         }
-        h3 { "Create a token" }
-        form method="post" action="/account/tokens" {
-            (csrf_field(csrf))
-            label for="token-name" { "Name" }
-            input #token-name type="text" name="name" maxlength="64" required;
-            label for="token-scope" { "Scope" }
-            select #token-scope name="scope" {
-                @for scope in scopes_up_to(role_ceiling(actor.role)) {
-                    option value=(scope.as_str()) { (scope.as_str()) }
+    }
+}
+
+/// One agent token in a list: its name and `meta`, chips for its scope and
+/// status (quiet once it no longer works), and a revoke form posting to
+/// `revoke` while it is active.
+pub fn token_item(
+    token: &AgentTokenRecord,
+    now: Timestamp,
+    csrf: &str,
+    revoke: &str,
+    meta: &Markup,
+) -> Markup {
+    let active = token.revoked_at.is_none() && token.expires_at.is_none_or(|at| at > now);
+    html! {
+        li.item {
+            div.item-main {
+                span.item-title { (token.name) }
+                span.item-meta { (meta) }
+            }
+            span.chip { (token.scope.as_str()) }
+            @if token.revoked_at.is_some() { span.chip.chip-quiet { "revoked" } }
+            @else if !active { span.chip.chip-quiet { "expired" } }
+            @else { span.chip { "active" } }
+            @if active {
+                div.item-actions {
+                    form method="post" action=(revoke) {
+                        (csrf_field(csrf))
+                        button.btn type="submit" { "Revoke" }
+                    }
                 }
             }
-            label for="token-expiry" { "Expires after (days, optional)" }
-            input #token-expiry type="number" name="expires_days" min="1" max=(MAX_EXPIRY_DAYS);
-            div { button type="submit" { "Create token" } }
         }
-    };
-    Ok(page("Account", Some(&viewer), &content))
+    }
 }
 
 fn scopes_up_to(ceiling: Scope) -> impl Iterator<Item = Scope> {
