@@ -47,13 +47,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let text = fs::read_to_string(root.join(logical))
             .map_err(|err| format!("assets/{logical}: {err}"))?;
-        let text = pipeline::rewrite_references(&text, &|path| plain_urls.get(path).cloned())
-            .map_err(|err| {
-                format!(
-                    "assets/{logical}: {err} (a reference to another stylesheet or manifest \
-                     is not allowed)"
-                )
-            })?;
+        let text = pipeline::rewrite_references(&text, &|path| {
+            plain_urls
+                .get(path)
+                .cloned()
+                .ok_or_else(|| pipeline::unknown_reference(path, &logicals))
+        })
+        .map_err(|err| format!("assets/{logical}: {err}"))?;
         let body = text.into_bytes();
         let url = pipeline::hashed_url(logical, &body);
         built.insert(logical.clone(), Built { url, body });

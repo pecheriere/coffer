@@ -81,11 +81,22 @@ pub fn const_name(logical: &str) -> String {
         .collect()
 }
 
-/// Replaces each `asset:<path>` in `text` with `url_of(path)`. A path that
-/// names no asset is an error naming it.
+/// Why `asset:<path>` cannot be rewritten: `path` names no asset, or names
+/// a stylesheet or manifest among `logicals`, which are rewritten
+/// themselves and so have no URL yet.
+pub fn unknown_reference(path: &str, logicals: &[String]) -> String {
+    if rewrites_references(path) && logicals.iter().any(|logical| logical == path) {
+        format!("`asset:{path}` names another stylesheet or manifest, which is not allowed")
+    } else {
+        format!("`asset:{path}` names no asset")
+    }
+}
+
+/// Replaces each `asset:<path>` in `text` with `url_of(path)`, stopping at
+/// the first error `url_of` returns.
 pub fn rewrite_references(
     text: &str,
-    url_of: &dyn Fn(&str) -> Option<String>,
+    url_of: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     const MARKER: &str = "asset:";
     let mut out = String::with_capacity(text.len());
@@ -97,7 +108,7 @@ pub fn rewrite_references(
             .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || "._/-".contains(c)))
             .unwrap_or(after.len());
         let path = &after[..len];
-        let url = url_of(path).ok_or_else(|| format!("`asset:{path}` names no asset"))?;
+        let url = url_of(path)?;
         out.push_str(&url);
         rest = &after[len..];
     }
@@ -128,7 +139,9 @@ mod tests {
     #[test]
     fn references_are_rewritten_or_refused() {
         let url_of = |path: &str| {
-            (path == "fonts/a.woff2").then(|| "/static/fonts/a.1111111111111111.woff2".to_owned())
+            (path == "fonts/a.woff2")
+                .then(|| "/static/fonts/a.1111111111111111.woff2".to_owned())
+                .ok_or_else(|| format!("no {path}"))
         };
         assert_eq!(
             super::rewrite_references(r#"url("asset:fonts/a.woff2")"#, &url_of),
@@ -186,5 +199,23 @@ mod tests {
         assert!(err.contains("assets/css/a-b.css"), "{err}");
         assert!(err.contains("assets/css/a_b.css"), "{err}");
         assert!(err.contains("`CSS_A_B_CSS`"), "{err}");
+    }
+
+    #[test]
+    fn only_a_reference_to_a_rewritten_file_gets_the_hint() {
+        let logicals = names(&["css/base.css", "fonts/a.woff2", "themes/mochi.css"]);
+        let typo = super::unknown_reference("fonts/b.woff2", &logicals);
+        assert_eq!(typo, "`asset:fonts/b.woff2` names no asset");
+        let stylesheet = super::unknown_reference("themes/mochi.css", &logicals);
+        assert!(
+            stylesheet.contains("`asset:themes/mochi.css`"),
+            "{stylesheet}"
+        );
+        assert!(
+            stylesheet.contains("another stylesheet or manifest"),
+            "{stylesheet}"
+        );
+        let missing_stylesheet = super::unknown_reference("themes/nope.css", &logicals);
+        assert_eq!(missing_stylesheet, "`asset:themes/nope.css` names no asset");
     }
 }
