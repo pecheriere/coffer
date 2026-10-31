@@ -44,7 +44,8 @@ pub fn routes() -> Router<AppState> {
 pub fn viewer(state: &AppState, session: &PageSession) -> Viewer {
     Viewer {
         display_name: session.member().display_name.to_string(),
-        is_admin: authorize(&session.actor(), Action::ManageMembers).is_ok(),
+        can_manage_members: authorize(&session.actor(), Action::ManageMembers).is_ok(),
+        can_manage_household: authorize(&session.actor(), Action::ManageHousehold).is_ok(),
         csrf: session.csrf(state),
     }
 }
@@ -237,14 +238,16 @@ struct AppearanceForm {
 }
 
 /// Sets the member's own theme (empty follows the household) and colour
-/// scheme. A value that does not parse, or a theme that is not registered,
-/// is refused whole and never echoed.
+/// scheme. The policy is checked before the values are parsed, so a 403
+/// always comes before a 422. A value that does not parse, or a theme that
+/// is not registered, is refused whole and never echoed.
 async fn set_appearance(
     State(state): State<AppState>,
     session: PageSession,
     PageForm(form): PageForm<AppearanceForm>,
 ) -> Result<Redirect, PageError> {
     let actor = session.verify(&state, &form.csrf)?;
+    authorize(&actor, Action::ManageOwnPreferences).map_err(AuthError::from)?;
     let theme = (!form.theme.is_empty())
         .then(|| ThemeName::parse(&form.theme))
         .transpose()

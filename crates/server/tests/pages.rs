@@ -788,7 +788,12 @@ async fn every_page() -> Vec<(&'static str, Reply)> {
         .unwrap();
     pages.push(("/invite/<token>", visitor.get(pending.path()).await));
 
-    for path in ["/account", "/admin/members", "/admin/invites"] {
+    for path in [
+        "/account",
+        "/admin/members",
+        "/admin/invites",
+        "/admin/household",
+    ] {
         pages.push((path, admin.get(path).await));
     }
     pages

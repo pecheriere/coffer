@@ -12,7 +12,10 @@ use crate::themes::illustrations::Illustration;
 /// The signed-in visitor, for the navigation bar.
 pub struct Viewer {
     pub display_name: String,
-    pub is_admin: bool,
+    /// May open the members and invites pages.
+    pub can_manage_members: bool,
+    /// May open the household page.
+    pub can_manage_household: bool,
     pub csrf: String,
 }
 
@@ -94,9 +97,11 @@ fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
             }
             nav.nav aria-label="Main" {
                 (link(Nav::Account, "/account", "Account"))
-                @if viewer.is_admin {
+                @if viewer.can_manage_members {
                     (link(Nav::Members, "/admin/members", "Members"))
                     (link(Nav::Invites, "/admin/invites", "Invites"))
+                }
+                @if viewer.can_manage_household {
                     (link(Nav::Household, "/admin/household", "Household"))
                 }
             }
