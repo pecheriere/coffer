@@ -2,10 +2,13 @@
 
 use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, SplitId, TransactionId};
 use coffer_domain::money::Currency;
+use coffer_domain::policy::AccountScope;
 use coffer_domain::transactions::{
     Description, Memo, Notes, Payee, ReviewStatus, SplitInput, TransactionFlag, TransactionOrigin,
     UserState,
 };
+use std::collections::HashMap;
+
 use jiff::Timestamp;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
@@ -13,7 +16,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time, time_opt};
 use crate::members::expect_one;
-use crate::{Store, StoreError, StoreTx};
+use crate::{Page, PageRequest, Store, StoreError, StoreTx};
 
 macro_rules! columns {
     () => {
@@ -156,6 +159,181 @@ impl UserFieldChanges {
     }
 }
 
+/// Whose transactions a listing returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssigneeFilter {
+    /// Those assigned to this member.
+    Member(MemberId),
+    /// Those assigned to nobody.
+    Unassigned,
+}
+
+/// Which transactions a listing returns: those matching every criterion
+/// set. An empty list or `None` does not filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionFilter {
+    /// The accounts the requester may see; nothing outside them is listed.
+    pub scope: AccountScope,
+    /// Only these accounts.
+    pub accounts: Vec<AccountId>,
+    /// Posted on or after this day.
+    pub from: Option<Date>,
+    /// Posted before this day.
+    pub to: Option<Date>,
+    pub review: Option<ReviewStatus>,
+    pub assignee: Option<AssigneeFilter>,
+    /// With at least one split in one of these categories.
+    pub categories: Vec<CategoryId>,
+    /// Only transactions without splits; `false` does not filter.
+    pub uncategorized: bool,
+    pub pending: Option<bool>,
+    /// With this flag set.
+    pub flag: Option<TransactionFlag>,
+    /// A signed amount of at least this many minor units.
+    pub min_minor: Option<i64>,
+    /// A signed amount of at most this many minor units.
+    pub max_minor: Option<i64>,
+    /// Contained in the description, the payee or the notes, ignoring the
+    /// case of ASCII letters only; `%`, `_` and `\` match themselves.
+    pub text: Option<String>,
+}
+
+impl TransactionFilter {
+    /// Every transaction in `scope`.
+    #[must_use]
+    pub fn new(scope: AccountScope) -> Self {
+        Self {
+            scope,
+            accounts: Vec::new(),
+            from: None,
+            to: None,
+            review: None,
+            assignee: None,
+            categories: Vec::new(),
+            uncategorized: false,
+            pending: None,
+            flag: None,
+            min_minor: None,
+            max_minor: None,
+            text: None,
+        }
+    }
+}
+
+/// The column holding `flag`.
+fn flag_column(flag: TransactionFlag) -> &'static str {
+    match flag {
+        TransactionFlag::PossibleDuplicate => "flag_possible_duplicate",
+        TransactionFlag::SourceRemoved => "flag_source_removed",
+        TransactionFlag::SplitMismatch => "flag_split_mismatch",
+    }
+}
+
+/// A `LIKE` pattern matching any text containing `text`, its wildcards and
+/// escape character escaped with `\`.
+fn contains_pattern(text: &str) -> String {
+    let mut pattern = String::with_capacity(text.len() + 2);
+    pattern.push('%');
+    for c in text.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
+/// The cursor continuing after `record`: `<posted_on>~<id>`.
+fn cursor(record: &TransactionRecord) -> String {
+    format!("{}~{}", record.posted_on, record.id)
+}
+
+fn parse_cursor(cursor: &str) -> Result<(Date, TransactionId), StoreError> {
+    let (day, id) = cursor.split_once('~').ok_or(StoreError::InvalidCursor)?;
+    let day = day.parse::<Date>().map_err(|_| StoreError::InvalidCursor)?;
+    let id = id
+        .parse::<TransactionId>()
+        .map_err(|_| StoreError::InvalidCursor)?;
+    Ok((day, id))
+}
+
+/// Appends ` AND <column> IN (<ids>)` to `query`.
+fn push_in<T: std::fmt::Display>(query: &mut QueryBuilder<Sqlite>, column: &str, ids: &[T]) {
+    query.push(" AND ").push(column).push(" IN (");
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(id.to_string());
+    }
+    separated.push_unseparated(")");
+}
+
+/// Appends the conditions of `filter` to `query`.
+fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &TransactionFilter) {
+    if let AccountScope::Only(ids) = &filter.scope {
+        push_in(query, "account_id", ids);
+    }
+    if !filter.accounts.is_empty() {
+        push_in(query, "account_id", &filter.accounts);
+    }
+    if let Some(from) = filter.from {
+        query.push(" AND posted_on >= ").push_bind(from.to_string());
+    }
+    if let Some(to) = filter.to {
+        query.push(" AND posted_on < ").push_bind(to.to_string());
+    }
+    if let Some(review) = filter.review {
+        query.push(" AND review = ").push_bind(review.as_str());
+    }
+    match filter.assignee {
+        Some(AssigneeFilter::Member(member)) => {
+            query
+                .push(" AND assignee_id = ")
+                .push_bind(member.to_string());
+        }
+        Some(AssigneeFilter::Unassigned) => {
+            query.push(" AND assignee_id IS NULL");
+        }
+        None => {}
+    }
+    if !filter.categories.is_empty() {
+        query.push(
+            " AND EXISTS (SELECT 1 FROM transaction_splits s \
+             WHERE s.transaction_id = transactions.id",
+        );
+        push_in(query, "s.category_id", &filter.categories);
+        query.push(")");
+    }
+    if filter.uncategorized {
+        query.push(
+            " AND NOT EXISTS (SELECT 1 FROM transaction_splits s \
+             WHERE s.transaction_id = transactions.id)",
+        );
+    }
+    if let Some(pending) = filter.pending {
+        query.push(" AND pending = ").push_bind(pending);
+    }
+    if let Some(flag) = filter.flag {
+        query.push(" AND ").push(flag_column(flag)).push(" = 1");
+    }
+    if let Some(min) = filter.min_minor {
+        query.push(" AND amount_minor >= ").push_bind(min);
+    }
+    if let Some(max) = filter.max_minor {
+        query.push(" AND amount_minor <= ").push_bind(max);
+    }
+    if let Some(text) = &filter.text {
+        let pattern = contains_pattern(text);
+        query.push(" AND (raw_description LIKE ");
+        query.push_bind(pattern.clone());
+        query.push(" ESCAPE '\\' OR payee LIKE ");
+        query.push_bind(pattern.clone());
+        query.push(" ESCAPE '\\' OR notes LIKE ");
+        query.push_bind(pattern);
+        query.push(" ESCAPE '\\')");
+    }
+}
+
 fn flag(row: &SqliteRow, column: &str) -> Result<bool, StoreError> {
     match row
         .try_get::<i64, _>(column)
@@ -264,26 +442,50 @@ async fn fetch_transaction(
     .fetch_one(&mut *conn)
     .await
     .map_err(StoreError::from_sqlx)?;
-    let mut record = transaction_from_row(&row)?;
-    let rows = sqlx::query(
-        "SELECT id, category_id, minor_units FROM transaction_splits \
-         WHERE transaction_id = ? ORDER BY position",
-    )
-    .bind(id.to_string())
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(StoreError::from_sqlx)?;
-    record.splits = rows
-        .iter()
-        .map(|row| {
-            Ok(SplitRecord {
+    let mut records = vec![transaction_from_row(&row)?];
+    attach_splits(conn, &mut records).await?;
+    let [record] = <[TransactionRecord; 1]>::try_from(records)
+        .map_err(|_| corrupt("one transaction became several"))?;
+    Ok(record)
+}
+
+/// Loads the splits of every record in `records`, each in order.
+async fn attach_splits(
+    conn: &mut SqliteConnection,
+    records: &mut [TransactionRecord],
+) -> Result<(), StoreError> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT transaction_id, id, category_id, minor_units FROM transaction_splits \
+         WHERE transaction_id IN (",
+    );
+    let mut separated = query.separated(", ");
+    for record in records.iter() {
+        separated.push_bind(record.id.to_string());
+    }
+    separated.push_unseparated(") ORDER BY transaction_id, position");
+    let rows = query
+        .build()
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+    let mut splits: HashMap<TransactionId, Vec<SplitRecord>> = HashMap::new();
+    for row in &rows {
+        splits
+            .entry(parsed(row, "transaction_id")?)
+            .or_default()
+            .push(SplitRecord {
                 id: parsed(row, "id")?,
                 category: parsed(row, "category_id")?,
                 minor_units: row.try_get("minor_units").map_err(StoreError::from_sqlx)?,
-            })
-        })
-        .collect::<Result<_, StoreError>>()?;
-    Ok(record)
+            });
+    }
+    for record in records {
+        record.splits = splits.remove(&record.id).unwrap_or_default();
+    }
+    Ok(())
 }
 
 /// Empty notes are stored as `NULL`.
@@ -487,5 +689,67 @@ impl Store {
         // One read transaction, so the splits belong to the row read.
         let mut read = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         fetch_transaction(&mut read, id).await
+    }
+
+    /// The transactions matching `filter`, newest posting day first (ties
+    /// by id, newest first), each with its splits. The returned cursor
+    /// continues after the last item of the page.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::InvalidCursor`] if `page.after` is not a cursor issued by
+    /// this method; otherwise a backend error.
+    pub async fn list_transactions(
+        &self,
+        filter: &TransactionFilter,
+        page: &PageRequest,
+    ) -> Result<Page<TransactionRecord>, StoreError> {
+        let limit = page.effective_limit();
+        let after = page.after.as_deref().map(parse_cursor).transpose()?;
+        if matches!(&filter.scope, AccountScope::Only(ids) if ids.is_empty()) {
+            return Ok(Page {
+                items: Vec::new(),
+                next: None,
+            });
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(concat!(
+            "SELECT ",
+            columns!(),
+            " FROM transactions WHERE 1 = 1"
+        ));
+        push_filter(&mut query, filter);
+        if let Some((day, id)) = after {
+            query
+                .push(" AND (posted_on < ")
+                .push_bind(day.to_string())
+                .push(" OR (posted_on = ")
+                .push_bind(day.to_string())
+                .push(" AND id < ")
+                .push_bind(id.to_string())
+                .push("))");
+        }
+        // One extra row tells whether another page exists.
+        query
+            .push(" ORDER BY posted_on DESC, id DESC LIMIT ")
+            .push_bind(i64::from(limit) + 1);
+        // One read transaction, so the splits belong to the rows read.
+        let mut read = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
+        let rows = query
+            .build()
+            .fetch_all(&mut *read)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        let mut items = rows
+            .iter()
+            .map(transaction_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = if items.len() > limit as usize {
+            items.truncate(limit as usize);
+            items.last().map(cursor)
+        } else {
+            None
+        };
+        attach_splits(&mut read, &mut items).await?;
+        Ok(Page { items, next })
     }
 }

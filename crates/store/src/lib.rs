@@ -38,8 +38,8 @@ pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use sessions::{NewSession, SessionRecord};
 pub use transactions::{
-    Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord, TransactionRecord,
-    UserFieldChanges,
+    AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
+    TransactionFilter, TransactionRecord, UserFieldChanges,
 };
 
 const DEFAULT_PAGE_LIMIT: u32 = 50;
