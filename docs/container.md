@@ -28,9 +28,10 @@ without emulation.
 | | |
 |---|---|
 | Binary | `/coffer`; `ENTRYPOINT ["/coffer"]`, `CMD ["serve"]` |
-| User | `65532:65532`, no shell, no other files |
+| User | `65532:65532`, no shell |
+| CA certificates | `/etc/ssl/certs/ca-certificates.crt`, copied from the builder's Alpine `ca-certificates-bundle`, to verify provider TLS certificates |
 | Data | `VOLUME /data`, created with mode 0700 and owned by `65532:65532` |
-| Environment | `COFFER_DATA_DIR=/data`, `COFFER_LISTEN=0.0.0.0:8080` |
+| Environment | `COFFER_DATA_DIR=/data`, `COFFER_LISTEN=0.0.0.0:8080`, `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` |
 | Port | `8080` (plain HTTP) |
 | Health check | `["CMD", "/coffer", "healthcheck"]` |
 

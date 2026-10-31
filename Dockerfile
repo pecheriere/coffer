@@ -34,8 +34,11 @@ RUN case "$TARGETARCH" in \
     && install -D -m 0755 "target/$target/release/coffer" /out/rootfs/coffer \
     && install -d -m 0700 -o 65532 -g 65532 /out/rootfs/data
 
-# coffer makes no outbound TLS connections, so no CA bundle is copied in.
 FROM scratch
+
+# coffer verifies the TLS certificates of its providers against this bundle
+# (Alpine's ca-certificates-bundle, part of the digest-pinned base image).
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 # Copied as one tree, which keeps each entry's owner and mode. Copying the
 # data directory on its own would recreate it with mode 0755.
@@ -44,6 +47,7 @@ COPY --from=build /out/rootfs/ /
 USER 65532:65532
 ENV COFFER_DATA_DIR=/data
 ENV COFFER_LISTEN=0.0.0.0:8080
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK CMD ["/coffer", "healthcheck"]
