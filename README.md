@@ -70,4 +70,6 @@ A version that is too young is fixed by pinning an older one
 coffer bundles the Fredoka, Nunito and Manrope typefaces, under the SIL Open Font License
 1.1. Their licences are in [`crates/server/assets/fonts/`](crates/server/assets/fonts/).
 
+## License
+
 Licensed under either of MIT or Apache-2.0, at your option.
