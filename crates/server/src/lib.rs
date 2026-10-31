@@ -14,3 +14,4 @@ pub mod sync;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 pub mod themes;
+pub mod vault;

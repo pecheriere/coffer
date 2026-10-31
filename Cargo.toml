@@ -51,6 +51,10 @@ blake3 = "1.8"
 getrandom = "0.4.3"
 secrecy = "0.10.3"
 zeroize = "1.9.1"
+# Provider credential sealing (crates/server/src/vault.rs). Nonces come from
+# getrandom directly, so the default `getrandom` feature is off; `alloc` gives
+# the Vec-returning encrypt/decrypt and `zeroize` wipes the cipher state on drop.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 base64 = "0.23.1"
 subtle = "2.6.1"
 http = "1.4"

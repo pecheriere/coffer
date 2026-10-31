@@ -21,7 +21,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
-  `HTTPS_PROXY`, no redirects, time and size caps); `sync` (the provider-agnostic apply step
+  `HTTPS_PROXY`, no redirects, time and size caps); `vault` (provider
+  credentials sealed with XChaCha20-Poly1305 under a key derived from the
+  server key, bound to their connection id); `sync` (the provider-agnostic apply step
   matching provider records onto transactions); `canonical` (changes to
   canonical transactions shared by `sync` and `ledger`: imported fields and
   duplicate candidates); `cli` and
