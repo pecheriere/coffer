@@ -2,7 +2,9 @@
     clippy::unwrap_used,
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
-use coffer_domain::identity::{DisplayName, Role, Scope, TokenName, Username};
+use coffer_domain::identity::{
+    ColorScheme, DisplayName, Role, Scope, ThemeName, TokenName, Username,
+};
 use coffer_domain::ids::{InviteId, MemberId, SessionId};
 use coffer_store::{
     Invite, InviteKind, Member, NewAgentToken, NewInvite, NewMember, NewPasskey, NewSession, Store,
@@ -576,4 +578,61 @@ async fn touching_a_revoked_token_is_not_found() {
         tx.touch_agent_token(id, at(11)).await,
         Err(StoreError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn member_appearance_defaults_and_updates() {
+    let (_dir, store) = open().await;
+    let mut tx = store.begin().await.unwrap();
+    let created = tx
+        .insert_member(new_member("alice", Role::Member))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(created.theme, None);
+    assert_eq!(created.color_scheme, ColorScheme::System);
+    let stored = store.get_member(created.id).await.unwrap();
+    assert_eq!(stored.theme, None);
+    assert_eq!(stored.color_scheme, ColorScheme::System);
+
+    let mochi = ThemeName::parse("mochi").unwrap();
+    let mut tx = store.begin().await.unwrap();
+    tx.set_member_appearance(created.id, Some(&mochi), ColorScheme::Dark)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let stored = store.get_member(created.id).await.unwrap();
+    assert_eq!(stored.theme, Some(mochi.clone()));
+    assert_eq!(stored.color_scheme, ColorScheme::Dark);
+
+    let mut tx = store.begin().await.unwrap();
+    tx.set_member_appearance(created.id, None, ColorScheme::Light)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let stored = store.get_member(created.id).await.unwrap();
+    assert_eq!(stored.theme, None);
+    assert_eq!(stored.color_scheme, ColorScheme::Light);
+
+    let mut tx = store.begin().await.unwrap();
+    let err = tx
+        .set_member_appearance(MemberId::new(), Some(&mochi), ColorScheme::Dark)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::NotFound));
+}
+
+#[tokio::test]
+async fn household_theme_upserts() {
+    let (_dir, store) = open().await;
+    assert_eq!(store.household_theme().await.unwrap(), None);
+
+    for name in ["a", "b"] {
+        let theme = ThemeName::parse(name).unwrap();
+        let mut tx = store.begin().await.unwrap();
+        tx.set_household_theme(&theme).await.unwrap();
+        assert_eq!(tx.household_theme().await.unwrap(), Some(theme.clone()));
+        tx.commit().await.unwrap();
+        assert_eq!(store.household_theme().await.unwrap(), Some(theme));
+    }
 }

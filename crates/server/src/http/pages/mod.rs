@@ -11,33 +11,31 @@
 
 mod account;
 mod admin;
+mod household;
 mod layout;
 mod login;
 mod setup;
 
+use axum::body::Body;
 use axum::extract::rejection::{FormRejection, JsonRejection};
 use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, MatchedPath, Request, State};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::{Form, Json, Router};
+use axum::{Extension, Form, Json, Router};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::MemberId;
+use coffer_store::Member;
 use serde::de::DeserializeOwned;
 
 use super::AppState;
 use super::extract::session_cookie_value;
 use super::problem::Problem;
 use crate::auth::{AuthError, session_cookie};
-
-/// The browser glue, served as `/static/coffer.js`.
-const SCRIPT: &str = include_str!("coffer.js");
-
-/// The stylesheet, served as `/static/coffer.css` (the CSP forbids inline
-/// styles).
-const STYLE: &str = include_str!("coffer.css");
+use crate::themes::Look;
+use layout::Frame;
 
 /// Content Security Policy of every response.
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
@@ -53,11 +51,9 @@ pub fn router() -> Router<AppState> {
         .merge(login::routes())
         .merge(account::routes())
         .merge(admin::routes())
+        .merge(household::routes())
         .route("/", get(home))
-        .route("/static/coffer.js", get(script))
-        .route("/static/coffer.css", get(style))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(middleware::map_response(security_headers))
 }
 
 /// `/` sends a signed-in visitor to their account page. Anyone else never
@@ -66,19 +62,7 @@ async fn home(_session: PageSession) -> Redirect {
     Redirect::to("/account")
 }
 
-async fn script() -> Response {
-    asset("text/javascript; charset=utf-8", SCRIPT)
-}
-
-async fn style() -> Response {
-    asset("text/css; charset=utf-8", STYLE)
-}
-
-fn asset(content_type: &'static str, body: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, content_type)], body).into_response()
-}
-
-async fn security_headers(mut response: Response) -> Response {
+pub(super) async fn security_headers(mut response: Response) -> Response {
     let html = response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -186,14 +170,107 @@ impl IntoResponse for PageError {
         if status == StatusCode::UNAUTHORIZED {
             return Redirect::to("/login").into_response();
         }
-        (status, layout::error_page(&title, detail.as_deref())).into_response()
+        // The body is drawn by `render_error_pages`, which knows the look.
+        (status, Extension(ErrorPage { title, detail })).into_response()
     }
 }
 
-/// A signed-in visitor: who they are and the cookie that proves it, kept to
+/// What a failed page request says. Carried on the response until
+/// [`render_error_pages`] turns it into HTML.
+#[derive(Debug, Clone)]
+pub(super) struct ErrorPage {
+    title: String,
+    detail: Option<String>,
+}
+
+/// Draws the HTML of every [`ErrorPage`] response (and of a bare page 405,
+/// see [`error_page`]) in the visitor's look: the member's when the request
+/// carries a live session, else the household's.
+///
+/// Reading the session goes through `Sessions::resolve`, so an error
+/// response slides the session's idle expiry (at most one write a minute)
+/// exactly as any page load does. Every failure to resolve a look (no
+/// cookie, a stale or disabled session, a storage error) falls back to the
+/// default look: an error page never fails for want of a theme.
+pub(super) async fn render_error_pages(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let cookie = session_cookie_value(request.headers()).map(str::to_owned);
+    let in_api = in_api(request.uri());
+    let response = next.run(request).await;
+    let Some(error) = error_page(&response, in_api) else {
+        return response;
+    };
+    let member = match cookie {
+        Some(cookie) => member_for(&state, &cookie).await,
+        None => None,
+    };
+    let look = state.appearance.look(member.as_ref()).await;
+    let body = layout::page(
+        &Frame {
+            look,
+            viewer: None,
+            current: None,
+            narrow: true,
+        },
+        &error.title,
+        &layout::error_body(look, &error.title, error.detail.as_deref()),
+    );
+    let (mut parts, _) = response.into_parts();
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    Response::from_parts(parts, Body::from(body.into_string()))
+}
+
+/// What the error page of `response` says: the [`ErrorPage`] a handler
+/// attached, or "Method not allowed" for the bare 405 the router sends when
+/// a page URL is visited with the wrong method (`/api` paths get a problem
+/// from `problem_bodies` instead).
+fn error_page(response: &Response, in_api: bool) -> Option<ErrorPage> {
+    if let Some(error) = response.extensions().get::<ErrorPage>() {
+        return Some(error.clone());
+    }
+    let bare_405 = response.status() == StatusCode::METHOD_NOT_ALLOWED
+        && !response.headers().contains_key(header::CONTENT_TYPE);
+    (bare_405 && !in_api).then(|| ErrorPage {
+        title: "Method not allowed".to_owned(),
+        detail: None,
+    })
+}
+
+/// Whether `uri` is under `/api`, where errors are problems, not pages.
+fn in_api(uri: &Uri) -> bool {
+    let path = uri.path();
+    path == "/api" || path.starts_with("/api/")
+}
+
+/// The member behind a session cookie, if it is live.
+async fn member_for(state: &AppState, cookie: &str) -> Option<Member> {
+    let actor = state.sessions.resolve(cookie).await.ok()?;
+    state.store.get_member(actor.member).await.ok()
+}
+
+/// Unmatched paths: a problem under `/api` (`problem_bodies` fills in the
+/// body), the themed not-found page anywhere else.
+pub(super) async fn fallback(uri: Uri) -> Response {
+    if in_api(&uri) {
+        StatusCode::NOT_FOUND.into_response()
+    } else {
+        PageError::not_found().into_response()
+    }
+}
+
+/// A signed-in visitor: who they are, their member record (for the
+/// navigation bar and their look) and the cookie that proves it, kept to
 /// check the anti-forgery token.
 pub struct PageSession {
     actor: Actor,
+    member: Member,
     cookie: String,
 }
 
@@ -205,6 +282,16 @@ impl PageSession {
 
     fn cookie(&self) -> &str {
         &self.cookie
+    }
+
+    /// The signed-in member.
+    fn member(&self) -> &Member {
+        &self.member
+    }
+
+    /// How this visitor's pages are drawn.
+    pub(super) async fn look(&self, state: &AppState) -> Look {
+        state.appearance.look(Some(&self.member)).await
     }
 
     /// The anti-forgery token to embed in this visitor's forms.
@@ -230,7 +317,16 @@ impl FromRequestParts<AppState> for PageSession {
             .ok_or_else(|| PageError::from(AuthError::Unauthenticated))?
             .to_owned();
         let actor = state.sessions.resolve(&cookie).await?;
-        Ok(Self { actor, cookie })
+        let member = state
+            .store
+            .get_member(actor.member)
+            .await
+            .map_err(AuthError::from)?;
+        Ok(Self {
+            actor,
+            member,
+            cookie,
+        })
     }
 }
 

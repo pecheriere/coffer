@@ -12,6 +12,7 @@ pub mod extract;
 mod health;
 mod pages;
 pub mod problem;
+mod static_files;
 
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use axum::Router;
 use coffer_domain::time::Clock;
 use coffer_store::Store;
 
+use crate::appearance::Appearance;
 use crate::auth::{AgentTokens, Identity, Sessions};
 use crate::config::Config;
 
@@ -29,6 +31,7 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     pub agent_tokens: Arc<AgentTokens>,
     pub identity: Arc<Identity>,
+    pub appearance: Arc<Appearance>,
     pub store: Store,
     pub config: Config,
     pub clock: Arc<dyn Clock>,
@@ -46,10 +49,19 @@ pub fn router(state: AppState) -> Router {
         .merge(api::router())
         .merge(health::router())
         .merge(pages::router())
+        .merge(static_files::router())
+        .fallback(pages::fallback)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             pages::require_same_origin,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            pages::render_error_pages,
+        ))
         .layer(axum::middleware::from_fn(api::problem_bodies))
+        // Outermost, so every response gets the headers, `/api` problems
+        // included.
+        .layer(axum::middleware::map_response(pages::security_headers))
         .with_state(state)
 }

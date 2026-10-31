@@ -46,6 +46,20 @@ updates:
     commit-message:
       prefix: ci
 
+  # The hash-pinned fontTools and brotli the font regeneration tool installs.
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      pip-tools:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    commit-message:
+      prefix: build
+
   # The digest-pinned Rust base image in the Dockerfile.
   - package-ecosystem: docker
     directory: /

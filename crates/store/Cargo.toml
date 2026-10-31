@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only hooks (planting values the schema refuses) for the server's
+# testkit. Never part of a release build.
+testkit = []
+
 [dependencies]
 coffer-domain.workspace = true
 jiff.workspace = true

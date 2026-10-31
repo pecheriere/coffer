@@ -6,6 +6,7 @@ mod audit;
 mod backup;
 mod convert;
 mod error;
+mod household;
 mod invites;
 mod members;
 mod passkeys;
@@ -100,6 +101,38 @@ impl Store {
             .await
             .map_err(StoreError::from_sqlx)?;
         Ok(StoreTx { tx })
+    }
+
+    /// Run the fixed statement `sql` with one bound text value while CHECK constraints are
+    /// ignored, to plant a value the schema would refuse. Tests use it to
+    /// prove that such a value cannot break a read. Checks are turned back
+    /// on before the connection returns to the pool; if that fails, the
+    /// connection is closed instead.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or a statement fails.
+    #[cfg(any(test, feature = "testkit"))]
+    pub async fn execute_unchecked_for_tests(
+        &self,
+        sql: &'static str,
+        bind: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.pool.acquire().await.map_err(StoreError::from_sqlx)?;
+        sqlx::query("PRAGMA ignore_check_constraints = ON")
+            .execute(&mut *conn)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        let result = sqlx::query(sql).bind(bind).execute(&mut *conn).await;
+        let restored = sqlx::query("PRAGMA ignore_check_constraints = OFF")
+            .execute(&mut *conn)
+            .await;
+        if restored.is_err() {
+            conn.close_on_drop();
+        }
+        result.map_err(StoreError::from_sqlx)?;
+        restored.map_err(StoreError::from_sqlx)?;
+        Ok(())
     }
 }
 

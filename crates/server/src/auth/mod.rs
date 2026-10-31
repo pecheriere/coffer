@@ -6,9 +6,12 @@ pub mod identity;
 pub mod passkeys;
 pub mod sessions;
 
+use coffer_domain::audit::{AuditActor, AuditEntry};
 use coffer_domain::identity::IdentityError;
 use coffer_domain::policy::{Denied, DenyReason};
-use coffer_store::StoreError;
+use coffer_store::{StoreError, StoreTx};
+use jiff::Timestamp;
+use serde_json::Value;
 use webauthn_rs::prelude::WebauthnError;
 
 pub use agent_tokens::AgentTokens;
@@ -108,4 +111,29 @@ fn denied_message(denied: Denied) -> String {
         }
         DenyReason::ScopeAboveRole => "requested scope exceeds your role".to_owned(),
     }
+}
+
+/// Appends one audit entry inside `tx`, so it commits or rolls back with
+/// the change it records.
+pub(crate) async fn audit(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    actor: &AuditActor,
+    action: &str,
+    entity_type: &str,
+    entity_id: impl std::fmt::Display,
+    changes: Value,
+) -> Result<(), AuthError> {
+    tx.append_audit(
+        now,
+        &AuditEntry {
+            actor: actor.clone(),
+            action: action.to_owned(),
+            entity_type: entity_type.to_owned(),
+            entity_id: entity_id.to_string(),
+            changes,
+        },
+    )
+    .await?;
+    Ok(())
 }

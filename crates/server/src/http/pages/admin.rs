@@ -17,8 +17,8 @@ use maud::{Markup, html};
 use serde::Deserialize;
 use url::Url;
 
-use super::account::viewer;
-use super::layout::{csrf_field, once, page};
+use super::account::{token_item, viewer};
+use super::layout::{Frame, Nav, csrf_field, empty_state, once, page};
 use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
@@ -50,7 +50,8 @@ async fn render_members(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageMembers).map_err(AuthError::from)?;
-    let viewer = viewer(state, session).await?;
+    let viewer = viewer(state, session);
+    let look = session.look(state).await;
     let members = state.store.list_members().await.map_err(AuthError::from)?;
     let tokens = state.agent_tokens.list_all(&actor).await?;
     let username = |id: MemberId| {
@@ -66,74 +67,71 @@ async fn render_members(
         @if let Some(link) = link {
             (once("Re-enroll link created.", "new-link", link.as_str()))
         }
-        table {
-            tr { th { "Username" } th { "Name" } th { "Role" } th { "Status" } th {} }
-            @for member in &members {
-                tr {
-                    td { (member.username.as_str()) }
-                    td { (member.display_name) }
-                    td { (member.role.as_str()) }
-                    td { @if member.disabled_at.is_some() { "disabled" } @else { "active" } }
-                    td {
-                        @if member.disabled_at.is_none() {
-                            form.inline method="post" action={ "/admin/members/" (member.id) "/role" } {
-                                (csrf_field(csrf))
-                                select name="role" {
-                                    @for role in [Role::Member, Role::Admin] {
-                                        option value=(role.as_str()) selected[role == member.role] {
-                                            (role.as_str())
+        section.card {
+            h2 { "People" }
+            ul.items {
+                @for member in &members {
+                    li.item {
+                        div.item-main {
+                            span.item-title { (member.username.as_str()) }
+                            span.item-meta { (member.display_name) }
+                        }
+                        span.chip { (member.role.as_str()) }
+                        @if member.disabled_at.is_some() {
+                            span.chip.chip-quiet { "disabled" }
+                        } @else {
+                            span.chip { "active" }
+                            div.item-actions {
+                                form method="post" action={ "/admin/members/" (member.id) "/role" } {
+                                    (csrf_field(csrf))
+                                    select.input name="role"
+                                        aria-label={ "Role for " (member.username.as_str()) } {
+                                        @for role in [Role::Member, Role::Admin] {
+                                            option value=(role.as_str()) selected[role == member.role] {
+                                                (role.as_str())
+                                            }
                                         }
                                     }
+                                    button.btn type="submit" { "Set role" }
                                 }
-                                button type="submit" { "Set role" }
-                            }
-                            form.inline method="post" action={ "/admin/members/" (member.id) "/reenroll" } {
-                                (csrf_field(csrf))
-                                button type="submit" { "Re-enroll link" }
-                            }
-                            form.inline method="post" action={ "/admin/members/" (member.id) "/disable" } {
-                                (csrf_field(csrf))
-                                button type="submit" { "Disable" }
+                                form method="post" action={ "/admin/members/" (member.id) "/reenroll" } {
+                                    (csrf_field(csrf))
+                                    button.btn type="submit" { "Re-enroll link" }
+                                }
+                                form method="post" action={ "/admin/members/" (member.id) "/disable" } {
+                                    (csrf_field(csrf))
+                                    button.btn type="submit" { "Disable" }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        h2 { "Agent tokens" }
-        table {
-            tr {
-                th { "Member" } th { "Name" } th { "Token" } th { "Scope" }
-                th { "Created" } th { "Last used" } th { "Status" } th {}
-            }
-            @for token in &tokens {
-                @let active = token.revoked_at.is_none()
-                    && token.expires_at.is_none_or(|at| at > now);
-                tr {
-                    td { (username(token.member)) }
-                    td { (token.name) }
-                    td { code { (token.prefix) "…" } }
-                    td { (token.scope.as_str()) }
-                    td { (token.created_at) }
-                    td { (token.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string())) }
-                    td {
-                        @if token.revoked_at.is_some() { "revoked" }
-                        @else if !active { "expired" }
-                        @else { "active" }
-                    }
-                    td {
-                        @if active {
-                            form method="post" action={ "/admin/tokens/" (token.id) "/revoke" } {
-                                (csrf_field(csrf))
-                                button type="submit" { "Revoke" }
-                            }
-                        }
+        section.card {
+            h2 { "Agent tokens" }
+            @if tokens.is_empty() {
+                (empty_state(look, "No agent tokens in this household."))
+            } @else {
+                ul.items {
+                    @for token in &tokens {
+                        (token_item(token, now, csrf, &format!("/admin/tokens/{}/revoke", token.id), &html! {
+                            (username(token.member)) " · " code { (token.prefix) "…" }
+                            " · Created " (token.created_at) " · Last used "
+                            (token.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
+                        }))
                     }
                 }
             }
         }
     };
-    Ok(page("Members", Some(&viewer), &content))
+    let frame = Frame {
+        look,
+        viewer: Some(&viewer),
+        current: Some(Nav::Members),
+        narrow: false,
+    };
+    Ok(page(&frame, "Members", &content))
 }
 
 #[derive(Deserialize)]
@@ -223,53 +221,74 @@ async fn render_invites(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     let pending = state.identity.list_pending_invites(&actor).await?;
-    let viewer = viewer(state, session).await?;
+    let viewer = viewer(state, session);
+    let look = session.look(state).await;
     let csrf = &viewer.csrf;
     let content = html! {
         h1 { "Invites" }
         @if let Some(link) = link {
             (once("Invite link created.", "new-link", link.as_str()))
         }
-        h2 { "Invite someone" }
-        form method="post" action="/admin/invites" {
-            (csrf_field(csrf))
-            label for="invite-role" { "Role" }
-            select #invite-role name="role" {
-                option value="member" { "member" }
-                option value="admin" { "admin" }
-            }
-            label for="invite-name" { "Display name (optional suggestion)" }
-            input #invite-name type="text" name="display_name" maxlength="64";
-            div { button type="submit" { "Create invite link" } }
-        }
-        h2 { "Pending invites" }
-        table {
-            tr { th { "For" } th { "Created" } th { "Expires" } th {} }
-            @for invite in &pending {
-                tr {
-                    td {
-                        @match &invite.kind {
-                            InviteKind::Bootstrap => { "first admin" }
-                            InviteKind::NewMember { role, display_name } => {
-                                (role.as_str())
-                                @if let Some(name) = display_name { " (" (name) ")" }
-                            }
-                            InviteKind::Reenroll { member } => { "re-enroll " (member) }
-                        }
+        section.card {
+            h2 { "Invite someone" }
+            form method="post" action="/admin/invites" {
+                (csrf_field(csrf))
+                label.field {
+                    "Role"
+                    select #invite-role .input name="role" {
+                        option value="member" { "member" }
+                        option value="admin" { "admin" }
                     }
-                    td { (invite.created_at) }
-                    td { (invite.expires_at) }
-                    td {
-                        form method="post" action={ "/admin/invites/" (invite.id) "/revoke" } {
-                            (csrf_field(csrf))
-                            button type="submit" { "Revoke" }
+                }
+                label.field {
+                    "Display name (optional suggestion)"
+                    input #invite-name .input type="text" name="display_name" maxlength="64";
+                }
+                button.btn.btn-primary type="submit" { "Create invite link" }
+            }
+        }
+        section.card {
+            h2 { "Pending invites" }
+            @if pending.is_empty() {
+                (empty_state(look, "No pending invites."))
+            } @else {
+                ul.items {
+                    @for invite in &pending {
+                        li.item {
+                            div.item-main {
+                                span.item-title {
+                                    @match &invite.kind {
+                                        InviteKind::Bootstrap => { "first admin" }
+                                        InviteKind::NewMember { role, display_name } => {
+                                            (role.as_str())
+                                            @if let Some(name) = display_name { " (" (name) ")" }
+                                        }
+                                        InviteKind::Reenroll { member } => { "re-enroll " (member) }
+                                    }
+                                }
+                                span.item-meta {
+                                    "Created " (invite.created_at) " · Expires " (invite.expires_at)
+                                }
+                            }
+                            div.item-actions {
+                                form method="post" action={ "/admin/invites/" (invite.id) "/revoke" } {
+                                    (csrf_field(csrf))
+                                    button.btn type="submit" { "Revoke" }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     };
-    Ok(page("Invites", Some(&viewer), &content))
+    let frame = Frame {
+        look,
+        viewer: Some(&viewer),
+        current: Some(Nav::Invites),
+        narrow: false,
+    };
+    Ok(page(&frame, "Invites", &content))
 }
 
 #[derive(Deserialize)]

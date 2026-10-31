@@ -17,6 +17,7 @@ use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+use crate::appearance::Appearance;
 use crate::auth::{AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
 use crate::http::{self, AppState};
@@ -271,10 +272,12 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         config.clone(),
     ));
     let agent_tokens = Arc::new(AgentTokens::new(store.clone(), key, clock.clone()));
+    let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
     Ok(AppState {
         sessions,
         agent_tokens,
         identity,
+        appearance,
         store,
         config,
         clock,

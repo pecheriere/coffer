@@ -17,7 +17,13 @@ path = "src/main.rs"
 vendored-openssl = ["dep:openssl", "openssl/vendored"]
 # Test helpers (temporary server, manual clock, soft passkeys) for this
 # crate's integration tests. Never part of a release build.
-testkit = ["coffer-domain/testkit", "dep:webauthn-authenticator-rs"]
+testkit = [
+    "coffer-domain/testkit",
+    "coffer-store/testkit",
+    "dep:http-body-util",
+    "dep:tower",
+    "dep:webauthn-authenticator-rs",
+]
 
 [dependencies]
 axum.workspace = true
@@ -44,6 +50,8 @@ webauthn-rs.workspace = true
 zeroize.workspace = true
 openssl = { workspace = true, optional = true }
 # Optional: only for the testkit feature.
+http-body-util = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
 webauthn-authenticator-rs = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -52,8 +60,9 @@ rustix.workspace = true
 [dev-dependencies]
 # Enables the testkit feature for this crate's own integration tests.
 coffer-server = { workspace = true, features = ["testkit"] }
-http-body-util.workspace = true
-tower.workspace = true
+
+[build-dependencies]
+blake3.workspace = true
 
 [lints]
 workspace = true
