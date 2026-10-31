@@ -1243,3 +1243,32 @@ async fn transaction_view_lists_its_sources() {
     assert_eq!(source.amount_raw, "-12.50");
     assert_eq!(view.duplicate_candidates, Vec::new());
 }
+
+#[tokio::test]
+async fn malformed_rereport_of_a_known_record_is_not_vanished() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    apply(
+        &world,
+        &link,
+        vec![record("pending-1", 10, -1_250, "CORNER SHOP", true)],
+        &[],
+        window(),
+    )
+    .await;
+    let stored = only_transaction(&world, checking.id).await;
+    advance(&world);
+
+    // The provider reports the same record again, in a shape we refuse.
+    let mut reformatted = record("pending-1", 10, -1_250, "CORNER SHOP", true);
+    reformatted.amount_raw = "12,50".into();
+    let report = apply(&world, &link, vec![reformatted], &[], window()).await;
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.deleted, 0);
+    let kept = only_transaction(&world, checking.id).await;
+    assert_eq!(kept.id, stored.id);
+    assert_eq!(kept.flags, Vec::new());
+    assert_eq!(kept.sources.len(), 1);
+    assert_eq!(kept.sources[0].provider_txn_id, "pending-1");
+}

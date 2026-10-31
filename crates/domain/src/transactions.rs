@@ -263,7 +263,10 @@ impl Description {
     /// [`MISSING_DESCRIPTION`].
     #[must_use]
     pub fn from_provider(raw: &str) -> Self {
-        Self(sanitize_provider_text(raw, 500).unwrap_or_else(|| MISSING_DESCRIPTION.to_owned()))
+        Self(
+            sanitize_provider_text(raw, Self::MAX_CHARS)
+                .unwrap_or_else(|| MISSING_DESCRIPTION.to_owned()),
+        )
     }
 }
 

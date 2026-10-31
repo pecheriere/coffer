@@ -210,6 +210,15 @@ pub async fn apply_account_batch(
     if batch.account.as_ref().map(|account| account.id) != provider_account.account {
         return Err(SyncError::Invalid(BINDING_MISMATCH));
     }
+    // Every well-identified record counts as reported, even one skipped
+    // for another defect, so a malformed re-report never makes a known
+    // record vanish.
+    let present: HashSet<String> = batch
+        .transactions
+        .iter()
+        .filter(|normalized| valid_provider_id(&normalized.provider_id))
+        .map(|normalized| normalized.provider_id.clone())
+        .collect();
     let total = batch.transactions.len();
     let records: Vec<Record> = batch
         .transactions
@@ -233,7 +242,6 @@ pub async fn apply_account_batch(
     };
 
     // 1. The vanished set; nothing is deleted yet.
-    let present: HashSet<&str> = records.iter().map(|r| r.provider_id.as_str()).collect();
     let mut vanished: BTreeMap<SourceRecordId, SourceRecord> = BTreeMap::new();
     for provider_id in &batch.removed {
         if present.contains(provider_id.as_str()) {
