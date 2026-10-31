@@ -27,7 +27,7 @@ use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 
 use super::SyncError;
-use crate::ledger::duplicates::drop_candidate;
+use crate::ledger::duplicates::{drop_candidate, drop_stale_candidates};
 
 /// The reason every sync change is attributed to.
 pub const SYNC_REASON: &str = "system:sync";
@@ -334,6 +334,20 @@ fn sync_attribution(at: Timestamp) -> Attribution {
 }
 
 impl Apply<'_> {
+    /// Forgets the stale candidate pairs of `transaction`, which just
+    /// gained a posted record (see [`crate::ledger::duplicates`]). Records
+    /// about to vanish do not count.
+    async fn drop_stale_candidates(&mut self, transaction: TransactionId) -> Result<(), SyncError> {
+        Ok(drop_stale_candidates(
+            self.tx,
+            self.now,
+            &sync_actor(),
+            transaction,
+            &self.vanished,
+        )
+        .await?)
+    }
+
     async fn audit(
         &mut self,
         action: &str,
@@ -424,6 +438,9 @@ impl Apply<'_> {
                         self.audit("transaction.imported_update", transaction, changes)
                             .await?;
                         self.report.updated += 1;
+                    }
+                    if existing.fields.pending && !record.fields.pending {
+                        self.drop_stale_candidates(transaction).await?;
                     }
                     Ok(())
                 }
@@ -615,7 +632,7 @@ impl Apply<'_> {
         self.audit("transaction.attach_source", transaction, changes)
             .await?;
         self.report.attached += 1;
-        Ok(())
+        self.drop_stale_candidates(transaction).await
     }
 
     /// Applies `fields` to `current`'s imported fields, appending what

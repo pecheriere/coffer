@@ -743,6 +743,44 @@ async fn merge_drops_candidates_the_same_provider_reported_apart() {
 }
 
 #[tokio::test]
+async fn candidate_turning_posted_clears_stale_flag() {
+    let world = world().await;
+    // The pending candidate attaches its posted form (a record naming the
+    // one it replaces): the flagged posted purchase is another one.
+    let checking = account(&world, "Checking").await;
+    let attaching = link(&world, &checking).await;
+    let (pending, posted) = flagged_pair(&world, &attaching).await;
+    let mut replacement = record("final-1", 11, -1_250, "CORNER SHOP", false);
+    replacement.replaces_provider_id = Some("pending-1".into());
+    apply(&world, &attaching, vec![replacement]).await;
+    assert_eq!(get(&world, pending).await.sources.len(), 2);
+    let after = get(&world, posted).await;
+    assert_eq!(after.flags, Vec::new());
+    assert_eq!(after.duplicate_candidates, Vec::new());
+    let event = last_event(&world, posted, "transaction.candidate_removed").await;
+    assert_eq!(
+        event.actor,
+        AuditActor::System {
+            reason: "system:sync".into()
+        }
+    );
+
+    // The pending record itself is re-reported as posted.
+    let savings = account(&world, "Savings").await;
+    let in_place = link(&world, &savings).await;
+    let (_, posted) = flagged_pair(&world, &in_place).await;
+    apply(
+        &world,
+        &in_place,
+        vec![record("pending-1", 10, -1_250, "CORNER SHOP", false)],
+    )
+    .await;
+    let after = get(&world, posted).await;
+    assert_eq!(after.flags, Vec::new());
+    assert_eq!(after.duplicate_candidates, Vec::new());
+}
+
+#[tokio::test]
 async fn unmerge_restores_separate_transaction() {
     let world = world().await;
     let checking = account(&world, "Checking").await;
