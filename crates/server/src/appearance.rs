@@ -1,18 +1,16 @@
 //! The appearance service: the household theme and each member's theme and
 //! colour scheme, resolved into the [`Look`] a page is drawn with. Every
-//! change and its audit entry share one [`StoreTx`].
+//! change and its audit entry share one [`StoreTx`](coffer_store::StoreTx).
 
 use std::sync::Arc;
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
 use coffer_domain::identity::{Actor, ColorScheme, IdentityError, ThemeName};
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::time::Clock;
-use coffer_store::{Member, Store, StoreTx};
-use jiff::Timestamp;
+use coffer_store::{Member, Store};
 use serde_json::{Map, Value, json};
 
-use crate::auth::AuthError;
+use crate::auth::{AuthError, audit};
 use crate::themes::{self, DEFAULT, Look, Theme};
 
 /// Entity id of the household's audit entries: there is one household.
@@ -172,27 +170,4 @@ fn registered(name: &ThemeName) -> Result<(), AuthError> {
         Some(_) => Ok(()),
         None => Err(AuthError::Invalid(IdentityError::UnknownTheme)),
     }
-}
-
-async fn audit(
-    tx: &mut StoreTx,
-    now: Timestamp,
-    actor: &AuditActor,
-    action: &str,
-    entity_type: &str,
-    entity_id: impl std::fmt::Display,
-    changes: Value,
-) -> Result<(), AuthError> {
-    tx.append_audit(
-        now,
-        &AuditEntry {
-            actor: actor.clone(),
-            action: action.to_owned(),
-            entity_type: entity_type.to_owned(),
-            entity_id: entity_id.to_string(),
-            changes,
-        },
-    )
-    .await?;
-    Ok(())
 }
