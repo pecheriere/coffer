@@ -1746,6 +1746,808 @@
           }
         }
       }
+    },
+    "/api/v1/transactions": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Lists transactions.",
+        "description": "The transactions of every account the token may see, newest posting day first (ties newest first), each with its splits. Every filter given must hold. Needs `read`. Pages with the opaque `next` cursor.",
+        "operationId": "listTransactions",
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "Only these accounts: 1 to 100 comma-separated account ids. An\naccount that does not exist, or that the token cannot see, is a 404.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only transactions posted on or after this day (ISO 8601).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Only transactions posted before this day (ISO 8601).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "review",
+            "in": "query",
+            "description": "Only reviewed, or only unreviewed, transactions.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReviewStatus"
+            }
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "description": "Only transactions assigned to this member (an id), or to nobody\n(`none`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Only transactions with a split in one of these categories: 1 to 100\ncomma-separated category ids.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "uncategorized",
+            "in": "query",
+            "description": "`true`: only transactions without splits. `false` does not filter.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "pending",
+            "in": "query",
+            "description": "Only pending (`true`) or only posted (`false`) transactions.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "description": "Only transactions with this flag.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionFlag"
+            }
+          },
+          {
+            "name": "min_amount",
+            "in": "query",
+            "description": "Only signed amounts of at least this many minor units (negative is\nmoney out).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "max_amount",
+            "in": "query",
+            "description": "Only signed amounts of at most this many minor units.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "1 to 100 characters contained in the description, the payee or the\nnotes. Case is ignored for ASCII letters only; `%`, `_` and `\\` are\nmatched literally.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next` cursor of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most transactions to return, clamped to 1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of transactions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Creates a manual transaction.",
+        "description": "Creates a manual transaction, unreviewed and uncategorized, in an open account. Needs `write` on the account. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "operationId": "createTransaction",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The transaction, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The account is closed, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/batch": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Changes several transactions at once.",
+        "description": "Applies 1 to 200 patches, each to a different transaction, in order and atomically: all of them or none. Each is authorized, recorded and attributed like `PATCH /api/v1/transactions/{transaction_id}`. When one fails, the problem has its status and code, and its `detail` starts with `operations[<index>]: `. Needs `write` on every account involved.",
+        "operationId": "batchUpdateTransactions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The transactions as they now are, in operation order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/{transaction_id}": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "One transaction.",
+        "description": "One transaction with its splits. Needs `read`.",
+        "operationId": "getTransaction",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Deletes a manual transaction.",
+        "description": "Deletes a manual transaction and its splits. Imported transactions are never deleted by hand. Needs `write` on its account.",
+        "operationId": "deleteTransaction",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The transaction is deleted."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transaction is imported.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Changes a transaction.",
+        "description": "Changes the fields given: payee, notes, review, assignee and splits. Marking it reviewed records who reviewed it; changing the splits records who categorized it. A patch that changes nothing records nothing. Needs `write` on its account.",
+        "operationId": "updateTransaction",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransactionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The transaction as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1941,6 +2743,50 @@
           "scope": {
             "$ref": "#/components/schemas/Scope",
             "description": "The rights it carries, never more than its member's role."
+          }
+        }
+      },
+      "AttributionView": {
+        "type": "object",
+        "description": "Who made a change: a member, possibly through one of their agent\ntokens, or the system with its reason.",
+        "required": [
+          "member",
+          "agent",
+          "system",
+          "at"
+        ],
+        "properties": {
+          "agent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentTokenId",
+                "description": "The agent token the member acted through; `null` when signed in."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "member": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "system": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The system's reason, such as `system:sync`; `null` for a member."
           }
         }
       },
@@ -2163,6 +3009,41 @@
             "$ref": "#/components/schemas/BalanceSource"
           }
         }
+      },
+      "BatchOperation": {
+        "type": "object",
+        "description": "One change of a batch: a patch to one transaction.",
+        "required": [
+          "id",
+          "patch"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The transaction to change."
+          },
+          "patch": {
+            "$ref": "#/components/schemas/TransactionPatch"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchRequest": {
+        "type": "object",
+        "description": "Changes to several transactions, applied together.",
+        "required": [
+          "operations"
+        ],
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchOperation"
+            },
+            "description": "1 to 200 operations, each naming a different transaction."
+          }
+        },
+        "additionalProperties": false
       },
       "CategoryGroupId": {
         "type": "string",
@@ -2591,6 +3472,58 @@
         },
         "additionalProperties": false
       },
+      "NewTransactionRequest": {
+        "type": "object",
+        "description": "A manual transaction to create.",
+        "required": [
+          "account",
+          "posted_on",
+          "minor_units",
+          "description"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId",
+            "description": "An open manual account; the transaction takes its currency."
+          },
+          "description": {
+            "type": "string",
+            "description": "1 to 500 characters, without control characters."
+          },
+          "memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 500 characters, without control characters."
+          },
+          "minor_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount in the account currency's minor units; negative is money\nout."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 2000 characters; newlines are the only control characters\nallowed."
+          },
+          "payee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 200 characters, without control characters."
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day it posted (ISO 8601)."
+          }
+        },
+        "additionalProperties": false
+      },
       "OpenApiDocument": {
         "type": "object",
         "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
@@ -2704,6 +3637,14 @@
           "internal"
         ]
       },
+      "ReviewStatus": {
+        "type": "string",
+        "description": "Whether a member (or an agent) has looked at a transaction.",
+        "enum": [
+          "unreviewed",
+          "reviewed"
+        ]
+      },
       "Role": {
         "type": "string",
         "description": "A household member's role.",
@@ -2720,6 +3661,297 @@
           "write",
           "admin"
         ]
+      },
+      "SplitId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "SplitInput": {
+        "type": "object",
+        "description": "One categorized part of a transaction's amount.",
+        "required": [
+          "category",
+          "minor_units"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "minor_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This part in the transaction currency's minor units, with the\ntransaction's sign convention; never zero."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SplitView": {
+        "type": "object",
+        "description": "One categorized part of a transaction.",
+        "required": [
+          "id",
+          "category",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/SplitId"
+          }
+        }
+      },
+      "TransactionFlag": {
+        "type": "string",
+        "description": "Something about a transaction that needs a person's attention.",
+        "enum": [
+          "possible_duplicate",
+          "source_removed",
+          "split_mismatch"
+        ]
+      },
+      "TransactionId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "TransactionList": {
+        "type": "object",
+        "description": "Transactions, in the order of the request's operations.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          }
+        }
+      },
+      "TransactionOrigin": {
+        "type": "string",
+        "description": "How a transaction came to exist.",
+        "enum": [
+          "manual",
+          "imported"
+        ]
+      },
+      "TransactionPage": {
+        "type": "object",
+        "description": "One page of transactions, newest posting day first.",
+        "required": [
+          "items",
+          "next"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last page."
+          }
+        }
+      },
+      "TransactionPatch": {
+        "type": "object",
+        "description": "Changes to a transaction's user fields. An absent field stays as it is.",
+        "properties": {
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "An active member; `null` unassigns."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 2000 characters; newlines are the only control characters\nallowed. `null` or `\"\"` clears them."
+          },
+          "payee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 200 characters, without control characters; from then on a\nsync no longer changes it. `null` restores the payee the source\ngave."
+          },
+          "review": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewStatus",
+                "description": "`reviewed` records who reviewed it (unless it already was);\n`unreviewed` forgets the reviewer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "splits": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SplitInput"
+            },
+            "description": "Replaces every split and records who categorized it: `[]`\nuncategorizes, otherwise 1 to 50 non-zero splits on categories that\nare not archived, summing exactly to the amount."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TransactionView": {
+        "type": "object",
+        "description": "A transaction.",
+        "required": [
+          "id",
+          "account",
+          "amount",
+          "posted_on",
+          "transacted_on",
+          "pending",
+          "description",
+          "payee",
+          "memo",
+          "notes",
+          "review",
+          "assignee",
+          "splits",
+          "flags",
+          "origin",
+          "reviewed_by",
+          "categorized_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Negative is money out of the account."
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categorized_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttributionView",
+                "description": "Who last changed its splits; `null` if nobody has."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "description": "The description as its source gave it."
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionFlag"
+            }
+          },
+          "id": {
+            "$ref": "#/components/schemas/TransactionId"
+          },
+          "memo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TransactionOrigin"
+          },
+          "payee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day it posted (ISO 8601)."
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewStatus"
+          },
+          "reviewed_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttributionView",
+                "description": "Who marked it reviewed; `null` while unreviewed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SplitView"
+            },
+            "description": "In order; empty when uncategorized."
+          },
+          "transacted_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The day it was made, when the source says (ISO 8601)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -2747,6 +3979,10 @@
     {
       "name": "categories",
       "description": "The household's category groups and categories, which transaction splits use."
+    },
+    {
+      "name": "transactions",
+      "description": "Transactions, their splits into categories, and their review: listing, search, single changes and atomic batches."
     },
     {
       "name": "audit",

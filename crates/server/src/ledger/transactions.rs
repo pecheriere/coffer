@@ -2,18 +2,20 @@
 //! and agents set on any — splits, payee, notes, review and assignee — with
 //! who categorized and who reviewed.
 
+use std::collections::HashSet;
+
 use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, SplitId, TransactionId};
 use coffer_domain::money::Money;
-use coffer_domain::policy::{AccountLevel, authorize_account};
+use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account};
 use coffer_domain::transactions::{
     Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput, TransactionFlag,
     TransactionOrigin, validate_splits,
 };
 use coffer_store::{
-    Attribution, NewTransaction, PayeeChange, ReviewChange, StoreError, StoreTx, TransactionRecord,
-    UserFieldChanges,
+    AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange, ReviewChange,
+    StoreError, StoreTx, TransactionFilter, TransactionRecord, UserFieldChanges,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -35,6 +37,11 @@ const UNKNOWN_CATEGORY: &str = "a split names a category that does not exist";
 const ARCHIVED_CATEGORY: &str = "a split names an archived category";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NOT_MANUAL: &str = "only manual transactions can be deleted";
+const BATCH_SIZE_INVALID: &str = "a batch has 1 to 200 operations";
+const BATCH_REPEATED: &str = "each operation of a batch names a different transaction";
+
+/// The most operations one batch may hold.
+pub const MAX_BATCH_OPERATIONS: usize = 200;
 
 /// A field of a patch: absent (left as it is), `null` (cleared) or a value
 /// (set).
@@ -195,6 +202,51 @@ impl TransactionView {
     }
 }
 
+/// One page of transactions, newest posting day first.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TransactionPage {
+    pub items: Vec<TransactionView>,
+    /// Pass as `after` for the next page; `null` on the last page.
+    #[schema(required)]
+    pub next: Option<String>,
+}
+
+/// Which transactions to list, and which page. Every criterion set must
+/// hold; an empty list or `None` does not filter.
+#[derive(Debug, Clone, Default)]
+pub struct TransactionQueryInput {
+    /// Only these accounts; each must be visible to the actor.
+    pub accounts: Vec<AccountId>,
+    /// Posted on or after this day.
+    pub from: Option<Date>,
+    /// Posted before this day.
+    pub to: Option<Date>,
+    pub review: Option<ReviewStatus>,
+    pub assignee: Option<AssigneeFilter>,
+    /// With a split in at least one of these categories.
+    pub categories: Vec<CategoryId>,
+    /// Only uncategorized transactions; `false` does not filter.
+    pub uncategorized: bool,
+    pub pending: Option<bool>,
+    pub flag: Option<TransactionFlag>,
+    /// A signed amount of at least this many minor units.
+    pub min_minor: Option<i64>,
+    /// A signed amount of at most this many minor units.
+    pub max_minor: Option<i64>,
+    /// Text contained in the description, payee or notes.
+    pub text: Option<String>,
+    pub page: PageRequest,
+}
+
+/// One change of a batch: a patch to one transaction.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BatchOperation {
+    /// The transaction to change.
+    pub id: TransactionId,
+    pub patch: TransactionPatch,
+}
+
 /// A manual transaction to create.
 #[derive(Debug, Clone)]
 pub struct NewManualTransactionInput {
@@ -340,6 +392,85 @@ fn text_and_review_changes(
     (changes, audited)
 }
 
+/// Applies `patch` to transaction `id` inside `tx`, writing only the
+/// fields that change and auditing them; a patch that changes nothing
+/// writes nothing. Returns the transaction as it now is.
+async fn apply_patch(
+    tx: &mut StoreTx,
+    actor: &Actor,
+    access: &AccountAccess,
+    now: Timestamp,
+    id: TransactionId,
+    patch: TransactionPatch,
+) -> Result<TransactionRecord, LedgerError> {
+    let current = tx.get_transaction(id).await?;
+    authorize_account(actor, access, current.account, AccountLevel::Write)?;
+    let new_payee = match &patch.payee {
+        Patch::Absent => Patch::Absent,
+        Patch::Clear => Patch::Clear,
+        Patch::Set(value) => Patch::Set(payee(value)?),
+    };
+    // Empty notes clear them.
+    let new_notes = match &patch.notes {
+        Patch::Absent => Patch::Absent,
+        Patch::Clear => Patch::Clear,
+        Patch::Set(value) => notes(value)?.map_or(Patch::Clear, Patch::Set),
+    };
+
+    let (mut changes, mut audited) =
+        text_and_review_changes(&current, new_payee, new_notes, patch.review, actor, now);
+    let new_assignee = match patch.assignee {
+        Patch::Absent => None,
+        Patch::Clear => Some(None),
+        Patch::Set(member) => {
+            check_assignee(tx, member).await?;
+            Some(Some(member))
+        }
+    };
+    if let Some(assignee) = new_assignee.filter(|assignee| *assignee != current.assignee) {
+        audited = audited.change("assignee", current.assignee, assignee);
+        changes.assignee = Some(assignee);
+    }
+    let mut new_splits = None;
+    if let Some(splits) = patch.splits {
+        validate_splits(current.amount_minor, &splits)
+            .map_err(|err| LedgerError::Invalid(split_message(err)))?;
+        let before = current_splits(&current);
+        if splits != before {
+            check_categories(tx, &splits).await?;
+            audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
+            new_splits = Some(splits);
+        }
+    }
+
+    if audited.is_empty() {
+        return Ok(current);
+    }
+    let user_fields_change = changes.payee.is_some()
+        || changes.notes.is_some()
+        || changes.review.is_some()
+        || changes.assignee.is_some();
+    if user_fields_change {
+        tx.update_user_fields(id, changes).await?;
+    }
+    if let Some(splits) = new_splits {
+        tx.replace_splits(id, &splits, attribution(actor, now))
+            .await?;
+    }
+    let record = tx.get_transaction(id).await?;
+    audit(
+        tx,
+        now,
+        actor,
+        "transaction.update",
+        "transaction",
+        id,
+        audited,
+    )
+    .await?;
+    Ok(record)
+}
+
 impl Ledger {
     /// Creates a manual transaction in an open account, in the account's
     /// currency. With `slot`, the idempotency key is completed with the
@@ -449,71 +580,7 @@ impl Ledger {
         let access = self.access.resolve(actor).await?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let current = tx.get_transaction(id).await?;
-        authorize_account(actor, &access, current.account, AccountLevel::Write)?;
-        let new_payee = match &patch.payee {
-            Patch::Absent => Patch::Absent,
-            Patch::Clear => Patch::Clear,
-            Patch::Set(value) => Patch::Set(payee(value)?),
-        };
-        // Empty notes clear them.
-        let new_notes = match &patch.notes {
-            Patch::Absent => Patch::Absent,
-            Patch::Clear => Patch::Clear,
-            Patch::Set(value) => notes(value)?.map_or(Patch::Clear, Patch::Set),
-        };
-
-        let (mut changes, mut audited) =
-            text_and_review_changes(&current, new_payee, new_notes, patch.review, actor, now);
-        let new_assignee = match patch.assignee {
-            Patch::Absent => None,
-            Patch::Clear => Some(None),
-            Patch::Set(member) => {
-                check_assignee(&mut tx, member).await?;
-                Some(Some(member))
-            }
-        };
-        if let Some(assignee) = new_assignee.filter(|assignee| *assignee != current.assignee) {
-            audited = audited.change("assignee", current.assignee, assignee);
-            changes.assignee = Some(assignee);
-        }
-        let mut new_splits = None;
-        if let Some(splits) = patch.splits {
-            validate_splits(current.amount_minor, &splits)
-                .map_err(|err| LedgerError::Invalid(split_message(err)))?;
-            let before = current_splits(&current);
-            if splits != before {
-                check_categories(&mut tx, &splits).await?;
-                audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
-                new_splits = Some(splits);
-            }
-        }
-
-        if audited.is_empty() {
-            return Ok(TransactionView::new(&current));
-        }
-        let user_fields_change = changes.payee.is_some()
-            || changes.notes.is_some()
-            || changes.review.is_some()
-            || changes.assignee.is_some();
-        if user_fields_change {
-            tx.update_user_fields(id, changes).await?;
-        }
-        if let Some(splits) = new_splits {
-            tx.replace_splits(id, &splits, attribution(actor, now))
-                .await?;
-        }
-        let record = tx.get_transaction(id).await?;
-        audit(
-            &mut tx,
-            now,
-            actor,
-            "transaction.update",
-            "transaction",
-            id,
-            audited,
-        )
-        .await?;
+        let record = apply_patch(&mut tx, actor, &access, now, id, patch).await?;
         tx.commit().await?;
         Ok(TransactionView::new(&record))
     }
@@ -577,5 +644,83 @@ impl Ledger {
         let record = self.store.get_transaction(id).await?;
         authorize_account(actor, &access, record.account, AccountLevel::Transactions)?;
         Ok(TransactionView::new(&record))
+    }
+
+    /// The transactions in accounts the actor may see at
+    /// [`AccountLevel::Transactions`] that match `query`, newest posting day
+    /// first (ties newest first).
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::NotFound`] when a requested account does not exist or
+    /// is hidden; [`LedgerError::Denied`] when one is visible below
+    /// transaction access; an invalid cursor; storage failures.
+    pub async fn list_transactions(
+        &self,
+        actor: &Actor,
+        query: TransactionQueryInput,
+    ) -> Result<TransactionPage, LedgerError> {
+        let access = self.access.resolve(actor).await?;
+        for account in &query.accounts {
+            authorize_account(actor, &access, *account, AccountLevel::Transactions)?;
+            self.store.get_account(*account).await?;
+        }
+        let filter = TransactionFilter {
+            scope: access.scope(AccountLevel::Transactions),
+            accounts: query.accounts,
+            from: query.from,
+            to: query.to,
+            review: query.review,
+            assignee: query.assignee,
+            categories: query.categories,
+            uncategorized: query.uncategorized,
+            pending: query.pending,
+            flag: query.flag,
+            min_minor: query.min_minor,
+            max_minor: query.max_minor,
+            text: query.text,
+        };
+        let page = self.store.list_transactions(&filter, &query.page).await?;
+        Ok(TransactionPage {
+            items: page.items.iter().map(TransactionView::new).collect(),
+            next: page.next,
+        })
+    }
+
+    /// Applies every operation, in order, in one transaction: all of them
+    /// or none. Each is authorized and audited like
+    /// [`Ledger::update_transaction`]. Returns the transactions as they
+    /// now are, in operation order.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Invalid`] for an empty batch, one of more than
+    /// [`MAX_BATCH_OPERATIONS`], or one naming a transaction twice;
+    /// [`LedgerError::Operation`] with the index of the first operation
+    /// that fails and its error; storage failures.
+    pub async fn apply_batch(
+        &self,
+        actor: &Actor,
+        operations: Vec<BatchOperation>,
+    ) -> Result<Vec<TransactionView>, LedgerError> {
+        if !(1..=MAX_BATCH_OPERATIONS).contains(&operations.len()) {
+            return Err(LedgerError::Invalid(BATCH_SIZE_INVALID));
+        }
+        let mut seen = HashSet::with_capacity(operations.len());
+        if !operations.iter().all(|operation| seen.insert(operation.id)) {
+            return Err(LedgerError::Invalid(BATCH_REPEATED));
+        }
+        let access = self.access.resolve(actor).await?;
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let mut views = Vec::with_capacity(operations.len());
+        for (index, operation) in operations.into_iter().enumerate() {
+            let record = apply_patch(&mut tx, actor, &access, now, operation.id, operation.patch)
+                .await
+                .map_err(|error| LedgerError::operation(index, error))?;
+            views.push(TransactionView::new(&record));
+        }
+        tx.commit().await?;
+        Ok(views)
     }
 }

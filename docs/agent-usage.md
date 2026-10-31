@@ -24,8 +24,8 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`. |
-| `write` | Everything in `read`, plus changes to household data: creating and changing accounts, recording balances, and creating and changing categories. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories and transactions. |
+| `write` | Everything in `read`, plus changes to household data: creating and changing accounts, recording balances, creating and changing categories, and creating, reviewing, categorizing and deleting transactions. |
 | `admin` | Everything in `write`, plus household administration. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -115,6 +115,67 @@ first, ties oldest first). A category's `kind` is `expense`, `income` or
 Archiving never deletes: an archived category, or any category of an
 archived group, takes no new splits, and the splits it already has stay.
 Names are 1 to 100 characters without control characters.
+
+### Transactions
+
+A transaction has a signed `amount` (`{"minor_units": -1234, "currency":
+"USD"}`; negative is money out of the account), a `posted_on` day, the
+`description` its source gave, and the fields members and agents set:
+`payee`, `notes`, `review` (`unreviewed` or `reviewed`), `assignee` (a
+member id or `null`) and `splits` (`[{id, category, amount}]`, empty when
+uncategorized). `reviewed_by` and `categorized_by` say who reviewed and who
+last changed the splits (`{member, agent, system, at}`); `origin` is
+`manual` or `imported`.
+
+- `GET /api/v1/transactions` lists transactions, newest posting day first
+  (ties newest first), as `{"items": [...], "next": "<cursor>|null"}`.
+  Every parameter given must hold:
+  - `account`: 1 to 100 comma-separated account ids. An account that does
+    not exist or that the token cannot see is a 404 `not_found`.
+  - `from` (inclusive) and `to` (exclusive): `YYYY-MM-DD` posting days.
+  - `review`: `reviewed` or `unreviewed`.
+  - `assignee`: a member id, or `none` for unassigned transactions.
+  - `category`: 1 to 100 comma-separated category ids; a transaction
+    matches when one of its splits uses one of them.
+  - `uncategorized=true`: only transactions without splits
+    (`uncategorized=false` does not filter).
+  - `pending`: `true` or `false`.
+  - `flag`: `possible_duplicate`, `source_removed` or `split_mismatch`.
+  - `min_amount` and `max_amount` (both inclusive): the signed amount in
+    minor units, so `max_amount=-1` is every outflow.
+  - `q`: 1 to 100 characters searched in the description, the payee and the
+    notes. It matches text that contains it; letter case is ignored for the
+    ASCII letters `A`-`Z` only (`é` does not match `É`), and `%`, `_` and
+    `\` match themselves, not as wildcards. Percent-encode `%` as `%25`.
+  - `after` (the previous `next`) and `limit` (clamped to 1..200, default
+    50).
+
+  An unknown or repeated parameter, or a value that does not parse, is a
+  400 `invalid` naming the parameter; a cursor that does not parse is a 400
+  `invalid_cursor`.
+- `POST /api/v1/transactions` (`write` on the account) creates a manual
+  transaction in an open account from `account`, `posted_on`, `minor_units`,
+  `description` and optionally `payee`, `memo` and `notes`; it takes the
+  account's currency. Answers 201; a closed account is a 409 `conflict`.
+  Accepts an `Idempotency-Key`.
+- `GET /api/v1/transactions/{transaction_id}` reads one transaction.
+- `PATCH /api/v1/transactions/{transaction_id}` (`write`) changes any of
+  `payee` (`null` restores the source's), `notes` (`null` or `""` clears),
+  `review`, `assignee` (an active member, or `null`) and `splits` (`[]`
+  uncategorizes; otherwise 1 to 50 non-zero splits on categories that are
+  not archived, summing exactly to the amount). A patch that changes nothing
+  records nothing.
+- `DELETE /api/v1/transactions/{transaction_id}` (`write`) deletes a manual
+  transaction (204); an imported one is a 409 `conflict`.
+- `POST /api/v1/transactions/batch` (`write`) applies
+  `{"operations": [{"id": "<transaction id>", "patch": {...}}]}`: 1 to 200
+  patches, each to a different transaction, in order and atomically. It
+  answers `{"items": [...]}` in operation order, or, when one operation
+  fails, nothing is applied and the problem carries that failure's status
+  and code with a `detail` starting `operations[<index>]: ` (zero-based),
+  for example `operations[1]: a split names an archived category`. Use it
+  to review a page of transactions with the owner in one call: categorize,
+  assign and mark them reviewed together.
 
 ### Retrying creates
 

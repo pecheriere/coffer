@@ -12,7 +12,8 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::Actor;
-use coffer_domain::policy::Denied;
+use coffer_domain::ids::AccountId;
+use coffer_domain::policy::{AccountLevel, Denied, authorize_account};
 use coffer_domain::time::Clock;
 use coffer_store::{Store, StoreError, StoreTx};
 use jiff::Timestamp;
@@ -44,6 +45,25 @@ impl Ledger {
             access,
         }
     }
+
+    /// Whether `actor` may use `account` at `level`, decided before a
+    /// create reserves its idempotency key. Says nothing of whether the
+    /// account exists.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Denied`] when the account is hidden or visible below
+    /// `level`; a failure to resolve access.
+    pub async fn authorize_account_access(
+        &self,
+        actor: &Actor,
+        account: AccountId,
+        level: AccountLevel,
+    ) -> Result<(), LedgerError> {
+        let access = self.access.resolve(actor).await?;
+        authorize_account(actor, &access, account, level)?;
+        Ok(())
+    }
 }
 
 /// Why a ledger operation failed. Every message is safe to show the
@@ -72,6 +92,29 @@ pub enum LedgerError {
     /// The database failed.
     #[error("storage error")]
     Store(#[source] StoreError),
+    /// Operation `index` of a batch failed with `source`; the batch was not
+    /// applied.
+    #[error("operations[{index}]: {source}")]
+    Operation {
+        index: usize,
+        #[source]
+        source: Box<LedgerError>,
+    },
+}
+
+impl LedgerError {
+    /// `error`, raised by operation `index` of a batch. A storage or
+    /// internal failure stays as it is: it is not the operation's fault.
+    #[must_use]
+    pub fn operation(index: usize, error: Self) -> Self {
+        match error {
+            Self::Store(_) | Self::Internal(_) | Self::Auth(_) => error,
+            other => Self::Operation {
+                index,
+                source: Box::new(other),
+            },
+        }
+    }
 }
 
 impl From<StoreError> for LedgerError {
@@ -116,6 +159,13 @@ impl From<LedgerError> for Problem {
                 Self::new(StatusCode::CONFLICT, code, "Conflict").with_detail(message)
             }
             LedgerError::Auth(auth) => Self::from(auth),
+            // The status and code of the failure, its detail prefixed with
+            // the operation's index; never the transaction's id.
+            LedgerError::Operation { source, .. } => {
+                let mut problem = Self::from(*source);
+                problem.detail = Some(message);
+                problem
+            }
             LedgerError::Store(StoreError::InvalidCursor) => Self::new(
                 StatusCode::BAD_REQUEST,
                 ProblemCode::InvalidCursor,

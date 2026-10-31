@@ -10,6 +10,7 @@ mod me;
 mod members;
 pub mod openapi;
 mod router;
+mod transactions;
 
 use axum::Router;
 use axum::extract::Request;
@@ -43,6 +44,13 @@ fn routes() -> ApiRouter {
         .op(routes!(categories::update))
         .op(routes!(categories::create_group))
         .op(routes!(categories::update_group))
+        .op(routes!(transactions::list, transactions::create))
+        .op(routes!(transactions::batch))
+        .op(routes!(
+            transactions::get,
+            transactions::update,
+            transactions::delete
+        ))
         .op(routes!(openapi::serve))
 }
 
