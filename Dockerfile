@@ -16,21 +16,37 @@ RUN apk add --no-cache musl-dev perl make zig=0.15.2-r0 \
     && rustup target add aarch64-unknown-linux-musl x86_64-unknown-linux-musl
 
 WORKDIR /src
+
+# Dependencies build in their own layer, from the manifests and Cargo.lock
+# only, so the build cache reuses it until a manifest or Cargo.lock changes.
+# Each crate gets an empty stub source for this step (no build.rs, so only the
+# build-dependencies compile), and the target triple is computed once here.
 COPY Cargo.toml Cargo.lock ./
+COPY crates/domain/Cargo.toml crates/domain/
+COPY crates/store/Cargo.toml crates/store/
+COPY crates/server/Cargo.toml crates/server/
+RUN case "$TARGETARCH" in \
+        arm64) echo aarch64-unknown-linux-musl ;; \
+        amd64) echo x86_64-unknown-linux-musl ;; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac > /target-triple \
+    && mkdir -p crates/domain/src crates/store/src crates/server/src \
+    && touch crates/domain/src/lib.rs crates/store/src/lib.rs \
+    && echo 'fn main() {}' > crates/server/src/main.rs \
+    && target="$(cat /target-triple)" \
+    && cargo zigbuild --release --locked -p coffer-server --features vendored-openssl --target "$target"
+
 COPY crates ./crates
 
 # OpenSSL is built from source and linked statically (vendored-openssl), so
-# the image needs no system libssl. The final stage has no shell, so its
-# whole filesystem is laid out here: /data must be 0700 and owned by the
-# runtime user, which coffer checks at startup and Docker copies into a new
-# named volume.
-RUN case "$TARGETARCH" in \
-        arm64) target=aarch64-unknown-linux-musl ;; \
-        amd64) target=x86_64-unknown-linux-musl ;; \
-        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && CARGO_PROFILE_RELEASE_STRIP=true \
-       cargo zigbuild --release --locked -p coffer-server --features vendored-openssl --target "$target" \
+# the image needs no system libssl. The stub build of the coffer crates is
+# removed first, so the real sources always compile, whatever their
+# timestamps. The final stage has no shell, so its whole filesystem is laid
+# out here: /data must be 0700 and owned by the runtime user, which coffer
+# checks at startup and Docker copies into a new named volume.
+RUN target="$(cat /target-triple)" \
+    && cargo clean --release --target "$target" -p coffer-domain -p coffer-store -p coffer-server \
+    && cargo zigbuild --release --locked -p coffer-server --features vendored-openssl --target "$target" \
     && install -D -m 0755 "target/$target/release/coffer" /out/rootfs/coffer \
     && install -d -m 0700 -o 65532 -g 65532 /out/rootfs/data
 
