@@ -6,7 +6,10 @@ use std::collections::HashSet;
 
 use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
-use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, SplitId, TransactionId};
+use coffer_domain::ids::{
+    AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, ProviderAccountId, SourceRecordId,
+    SplitId, TransactionId,
+};
 use coffer_domain::money::Money;
 use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account};
 use coffer_domain::transactions::{
@@ -15,7 +18,7 @@ use coffer_domain::transactions::{
 };
 use coffer_store::{
     AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange, ReviewChange,
-    StoreError, StoreTx, TransactionFilter, TransactionRecord, UserFieldChanges,
+    SourceRecord, StoreError, StoreTx, TransactionFilter, TransactionRecord, UserFieldChanges,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -37,6 +40,8 @@ const UNKNOWN_CATEGORY: &str = "a split names a category that does not exist";
 const ARCHIVED_CATEGORY: &str = "a split names an archived category";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NOT_MANUAL: &str = "only manual transactions can be deleted";
+const ACCOUNT_LINKED: &str =
+    "the account is linked to a provider: its transactions come from syncs only";
 const BATCH_SIZE_INVALID: &str = "a batch has 1 to 200 operations";
 const BATCH_REPEATED: &str = "each operation of a batch names a different transaction";
 
@@ -126,6 +131,34 @@ pub struct SplitView {
     pub amount: Money,
 }
 
+/// A provider record a transaction was imported from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SourceView {
+    pub id: SourceRecordId,
+    pub connection: ConnectionId,
+    pub provider_account: ProviderAccountId,
+    pub pending: bool,
+    /// The day the provider says it posted (ISO 8601).
+    pub posted_on: Date,
+    /// The amount as the provider gave it, unconverted.
+    pub amount_raw: String,
+    pub first_seen_at: Timestamp,
+}
+
+impl SourceView {
+    fn new(source: &SourceRecord) -> Self {
+        Self {
+            id: source.id,
+            connection: source.connection,
+            provider_account: source.provider_account,
+            pending: source.fields.pending,
+            posted_on: source.fields.posted_on,
+            amount_raw: source.amount_raw.clone(),
+            first_seen_at: source.first_seen_at,
+        }
+    }
+}
+
 /// A transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TransactionView {
@@ -154,6 +187,12 @@ pub struct TransactionView {
     pub splits: Vec<SplitView>,
     pub flags: Vec<TransactionFlag>,
     pub origin: TransactionOrigin,
+    /// The provider records it was imported from, oldest posting day
+    /// first; empty for a manual transaction.
+    pub sources: Vec<SourceView>,
+    /// The transactions it may duplicate while flagged
+    /// `possible_duplicate`.
+    pub duplicate_candidates: Vec<TransactionId>,
     /// Who marked it reviewed; `null` while unreviewed.
     #[schema(required)]
     pub reviewed_by: Option<AttributionView>,
@@ -194,6 +233,8 @@ impl TransactionView {
                 .collect(),
             flags: record.flags.clone(),
             origin: record.origin,
+            sources: record.sources.iter().map(SourceView::new).collect(),
+            duplicate_candidates: record.duplicate_candidates.clone(),
             reviewed_by: record.reviewed.as_ref().map(AttributionView::new),
             categorized_by: record.categorized.as_ref().map(AttributionView::new),
             created_at: record.created_at,
@@ -439,6 +480,9 @@ async fn apply_patch(
         if splits != before {
             check_categories(tx, &splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
+            if current.flags.contains(&TransactionFlag::SplitMismatch) {
+                audited = audited.change("split_mismatch", true, false);
+            }
             new_splits = Some(splits);
         }
     }
@@ -456,6 +500,11 @@ async fn apply_patch(
     if let Some(splits) = new_splits {
         tx.replace_splits(id, &splits, attribution(actor, now))
             .await?;
+        // Valid splits sum to the amount again.
+        if current.flags.contains(&TransactionFlag::SplitMismatch) {
+            tx.set_flag(id, TransactionFlag::SplitMismatch, false)
+                .await?;
+        }
     }
     let record = tx.get_transaction(id).await?;
     audit(
@@ -481,8 +530,8 @@ impl Ledger {
     /// [`LedgerError::NotFound`] for an unknown or hidden account;
     /// [`LedgerError::Denied`] without write access to it;
     /// [`LedgerError::Invalid`] for an invalid text;
-    /// [`LedgerError::Conflict`] when the account is closed; storage
-    /// failures.
+    /// [`LedgerError::Conflict`] when the account is closed or linked to a
+    /// provider; storage failures.
     pub async fn create_manual_transaction(
         &self,
         actor: &Actor,
@@ -505,6 +554,9 @@ impl Ledger {
         let account = tx.get_account(input.account).await?;
         if account.closed_at.is_some() {
             return Err(LedgerError::Conflict(ProblemCode::Conflict, ACCOUNT_CLOSED));
+        }
+        if tx.account_is_linked(account.id).await? {
+            return Err(LedgerError::Conflict(ProblemCode::Conflict, ACCOUNT_LINKED));
         }
         let mut record = tx
             .insert_transaction(NewTransaction {

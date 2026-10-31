@@ -2649,7 +2649,8 @@
         "type": "string",
         "description": "Where an account's data comes from.",
         "enum": [
-          "manual"
+          "manual",
+          "linked"
         ]
       },
       "AccountView": {
@@ -3291,6 +3292,11 @@
           }
         }
       },
+      "ConnectionId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
       "Currency": {
         "type": "string",
         "description": "An active ISO 4217 currency code; its exponent gives the minor unit (USD 2, JPY 0).",
@@ -3637,6 +3643,11 @@
           "internal"
         ]
       },
+      "ProviderAccountId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
       "ReviewStatus": {
         "type": "string",
         "description": "Whether a member (or an agent) has looked at a transaction.",
@@ -3661,6 +3672,51 @@
           "write",
           "admin"
         ]
+      },
+      "SourceRecordId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "SourceView": {
+        "type": "object",
+        "description": "A provider record a transaction was imported from.",
+        "required": [
+          "id",
+          "connection",
+          "provider_account",
+          "pending",
+          "posted_on",
+          "amount_raw",
+          "first_seen_at"
+        ],
+        "properties": {
+          "amount_raw": {
+            "type": "string",
+            "description": "The amount as the provider gave it, unconverted."
+          },
+          "connection": {
+            "$ref": "#/components/schemas/ConnectionId"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "$ref": "#/components/schemas/SourceRecordId"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The day the provider says it posted (ISO 8601)."
+          },
+          "provider_account": {
+            "$ref": "#/components/schemas/ProviderAccountId"
+          }
+        }
       },
       "SplitId": {
         "type": "string",
@@ -3838,6 +3894,8 @@
           "splits",
           "flags",
           "origin",
+          "sources",
+          "duplicate_candidates",
           "reviewed_by",
           "categorized_by",
           "created_at",
@@ -3879,6 +3937,13 @@
           "description": {
             "type": "string",
             "description": "The description as its source gave it."
+          },
+          "duplicate_candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionId"
+            },
+            "description": "The transactions it may duplicate while flagged\n`possible_duplicate`."
           },
           "flags": {
             "type": "array",
@@ -3931,6 +3996,13 @@
                 "type": "null"
               }
             ]
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceView"
+            },
+            "description": "The provider records it was imported from, oldest posting day\nfirst; empty for a manual transaction."
           },
           "splits": {
             "type": "array",

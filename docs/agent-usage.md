@@ -75,7 +75,9 @@ Amounts are integers in the minor units of the account's ISO 4217 currency
 money owed or going out.
 
 - `GET /api/v1/accounts` lists accounts with their latest balance;
-  `include_closed=true` adds closed ones.
+  `include_closed=true` adds closed ones. An account's `source` is `manual`
+  (kept by hand) or `linked` (bound to a provider account: syncs bring its
+  transactions and balances).
 - `POST /api/v1/accounts` (`write`) creates a manual account from `name`,
   `kind`, `currency` and optionally `liquidity` (by default the kind's: a
   credit card is a `short_term_liability`), `include_in_net_worth`,
@@ -127,6 +129,23 @@ uncategorized). `reviewed_by` and `categorized_by` say who reviewed and who
 last changed the splits (`{member, agent, system, at}`); `origin` is
 `manual` or `imported`.
 
+An imported transaction lists the provider records it came from in
+`sources` (`[{id, connection, provider_account, pending, posted_on,
+amount_raw, first_seen_at}]`). A sync matches each record to one
+transaction: the same record updates it; a posted record replacing a
+pending one (even with a tip of up to 20 %) joins the pending one's
+transaction, which keeps its id and everything members set; and two
+identical purchases stay two transactions. A sync never changes `payee`
+once set by hand, `notes`, `review`, `assignee` or `splits`, with one
+exception: when the amount changes and there is a single split, the split
+follows (attributed to `system:sync`). Flags ask for a look:
+`possible_duplicate` (the record may be the same purchase as the
+transactions in `duplicate_candidates`; a sync never merges them),
+`source_removed` (the provider no longer reports it, and it was kept
+because it holds changes members made) and `split_mismatch` (its amount
+changed and its several splits no longer sum to it; saving valid splits
+clears it).
+
 - `GET /api/v1/transactions` lists transactions, newest posting day first
   (ties newest first), as `{"items": [...], "next": "<cursor>|null"}`.
   Every parameter given must hold:
@@ -158,7 +177,8 @@ last changed the splits (`{member, agent, system, at}`); `origin` is
 - `POST /api/v1/transactions` (`write` on the account) creates a manual
   transaction in an open account from `account`, `posted_on`, `minor_units`,
   `description` and optionally `payee`, `memo` and `notes`; it takes the
-  account's currency. Answers 201; a closed account is a 409 `conflict`.
+  account's currency. Answers 201; a closed account, or a linked one, is a
+  409 `conflict`.
   Accepts an `Idempotency-Key`.
 - `GET /api/v1/transactions/{transaction_id}` reads one transaction.
 - `PATCH /api/v1/transactions/{transaction_id}` (`write`) changes any of

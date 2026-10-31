@@ -26,6 +26,10 @@ pub enum AccountSource {
     /// Kept by hand: balances (and transactions) are entered by members or
     /// agents, never by a sync.
     Manual,
+    /// Bound to a provider account: syncs bring its transactions and
+    /// balances. Transactions entered by hand before it was linked stay
+    /// and are never touched by a sync; no new ones can be entered.
+    Linked,
 }
 
 /// An account's balance at the end of one day.
@@ -77,7 +81,7 @@ pub struct AccountView {
 }
 
 impl AccountView {
-    fn new(record: &AccountRecord, latest: Option<&BalanceSnapshot>) -> Self {
+    fn new(record: &AccountRecord, latest: Option<&BalanceSnapshot>, linked: bool) -> Self {
         Self {
             id: record.id,
             name: record.name.as_str().to_owned(),
@@ -87,7 +91,11 @@ impl AccountView {
             liquidity_overridden: record.liquidity_overridden,
             include_in_net_worth: record.include_in_net_worth,
             include_in_forecast: record.include_in_forecast,
-            source: AccountSource::Manual,
+            source: if linked {
+                AccountSource::Linked
+            } else {
+                AccountSource::Manual
+            },
             closed: record.closed_at.is_some(),
             latest_balance: latest.map(|snapshot| BalanceView::new(snapshot, record.currency)),
             created_at: record.created_at,
@@ -219,7 +227,7 @@ impl Ledger {
             changes,
         )
         .await?;
-        let view = AccountView::new(&record, opening.as_ref());
+        let view = AccountView::new(&record, opening.as_ref(), false);
         complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
         Ok(view)
@@ -316,7 +324,8 @@ impl Ledger {
             record
         };
         let latest = self.store.latest_balance(id).await?;
-        Ok(AccountView::new(&record, latest.as_ref()))
+        let linked = self.store.account_is_linked(id).await?;
+        Ok(AccountView::new(&record, latest.as_ref(), linked))
     }
 
     /// One account with its latest balance.
@@ -334,7 +343,8 @@ impl Ledger {
         authorize_account(actor, &access, id, AccountLevel::Balances)?;
         let record = self.store.get_account(id).await?;
         let latest = self.store.latest_balance(id).await?;
-        Ok(AccountView::new(&record, latest.as_ref()))
+        let linked = self.store.account_is_linked(id).await?;
+        Ok(AccountView::new(&record, latest.as_ref(), linked))
     }
 
     /// The accounts the actor may see, oldest first; closed ones only when
@@ -354,7 +364,8 @@ impl Ledger {
         let mut views = Vec::with_capacity(records.len());
         for record in &records {
             let latest = self.store.latest_balance(record.id).await?;
-            views.push(AccountView::new(record, latest.as_ref()));
+            let linked = self.store.account_is_linked(record.id).await?;
+            views.push(AccountView::new(record, latest.as_ref(), linked));
         }
         Ok(views)
     }

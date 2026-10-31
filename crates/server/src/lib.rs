@@ -8,6 +8,7 @@ pub mod config;
 pub mod http;
 pub mod ledger;
 pub mod secrets;
+pub mod sync;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 pub mod themes;
