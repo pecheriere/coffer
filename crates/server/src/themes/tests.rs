@@ -303,12 +303,17 @@ fn illustrations_are_inert_svg_fragments() {
     }
 }
 
-/// Whether `body` holds ` on<letters>=`, an inline event handler attribute.
+/// Whether `body` holds `on<letters>=` after ASCII whitespace, an inline
+/// event handler attribute.
 fn has_event_handler(body: &str) -> bool {
-    body.match_indices(" on").any(|(at, _)| {
-        let rest = &body[at + 3..];
+    body.match_indices("on").any(|(at, _)| {
+        let after_space = body[..at]
+            .bytes()
+            .next_back()
+            .is_some_and(|b| b.is_ascii_whitespace());
+        let rest = &body[at + 2..];
         let letters = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
-        letters > 0 && rest[letters..].trim_start().starts_with('=')
+        after_space && letters > 0 && rest[letters..].trim_start().starts_with('=')
     })
 }
 
@@ -316,7 +321,10 @@ fn has_event_handler(body: &str) -> bool {
 fn event_handler_detection_finds_inline_handlers() {
     assert!(has_event_handler(r#"<circle onload="x()"/>"#));
     assert!(has_event_handler(r#"<g onclick = "x()"/>"#));
+    assert!(has_event_handler("<circle\nonload=\"x()\"/>"));
+    assert!(has_event_handler("<circle\tonload=\"x()\"/>"));
     assert!(!has_event_handler("<text>on a hill</text>"));
+    assert!(!has_event_handler("<text>\non a hill</text>"));
 }
 
 #[test]
@@ -556,21 +564,53 @@ fn components_read_only_tokens() {
     );
 }
 
+/// Every declaration that moves something (an animation or a transition)
+/// outside `@media (prefers-reduced-motion: no-preference)`.
+fn motion_outside_the_preference(declarations: &[Declaration]) -> Vec<String> {
+    declarations
+        .iter()
+        .filter(|d| {
+            let moving = match d.property.as_str() {
+                "animation" | "animation-name" => d.value != "none",
+                property => property.starts_with("transition") && d.value != "none",
+            };
+            moving && d.context != "@media (prefers-reduced-motion: no-preference)"
+        })
+        .map(|d| format!("{}: {}", d.property, d.value))
+        .collect()
+}
+
+#[test]
+fn motion_check_reports_every_kind_of_motion() {
+    let found = motion_outside_the_preference(&declarations(
+        "a { animation: bob 2s } b { animation-name: bob } c { transition: top 1s } \
+         d { transition-property: top } e { animation: none; transition: none } \
+         @media (prefers-reduced-motion: no-preference) { f { animation: bob 2s; transition: top 1s } }",
+    ));
+    assert_eq!(
+        found,
+        vec![
+            "animation: bob 2s",
+            "animation-name: bob",
+            "transition: top 1s",
+            "transition-property: top",
+        ]
+    );
+}
+
 #[test]
 fn motion_runs_only_when_allowed() {
     let declarations = base_declarations();
-    let animations: Vec<&Declaration> = declarations
-        .iter()
-        .filter(|d| d.property == "animation" && d.value != "none")
-        .collect();
-    assert!(!animations.is_empty(), "the welcome mascot moves");
-    for declaration in animations {
-        assert_eq!(
-            declaration.context, "@media (prefers-reduced-motion: no-preference)",
-            "animation: {} runs regardless of the reduced-motion preference",
-            declaration.value
-        );
-    }
+    assert!(
+        declarations.iter().any(|d| d.property == "animation"
+            && d.context == "@media (prefers-reduced-motion: no-preference)"),
+        "the welcome mascot moves"
+    );
+    let unguarded = motion_outside_the_preference(&declarations);
+    assert!(
+        unguarded.is_empty(),
+        "motion regardless of the reduced-motion preference: {unguarded:?}"
+    );
 }
 
 /// At 360 px every control stays in view: components wrap instead of

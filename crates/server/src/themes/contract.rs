@@ -445,6 +445,9 @@ pub(crate) struct Declaration {
 
 /// Every declaration of a component stylesheet, in source order.
 ///
+/// Nested at-rules are not joined: a declaration's `context` is only its
+/// innermost at-rule's prelude, enough while `base.css` nests none.
+///
 /// # Panics
 /// On an unterminated comment, unbalanced braces or text outside any rule:
 /// a test helper fails its test on a stylesheet it cannot read.
