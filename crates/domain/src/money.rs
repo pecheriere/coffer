@@ -22,9 +22,27 @@ pub enum MoneyError {
 }
 
 /// The active ISO 4217 currencies and their minor-unit exponents, sorted by
-/// code. Copied from ISO 4217 List One (published 2026-09-17); fund codes and
-/// codes without minor units (precious metals, SDR, bond-market units,
-/// testing and "no currency") are excluded.
+/// code.
+///
+/// Source: ISO 4217 List One, as published by the maintenance agency (SIX)
+/// at
+/// <https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml>,
+/// edition published 2026-09-17 (`Pblshd`), downloaded 2026-10-31.
+///
+/// An entry `<CcyNtry>` is kept when it has a `<Ccy>` code, its `<CcyNm>` is
+/// not marked `IsFund="true"`, and its `<CcyMnrUnts>` is a number rather
+/// than `N.A.`; a code is listed once. That rule drops the fund codes
+/// (BOV, CHE, CHW, CLF, COU, MXV, USN, UYI, UYW, XAD; UYW, the Uruguayan
+/// wage-index unit, is marked `IsFund="true"` in this edition, so it falls
+/// under the same rule) and the codes without minor units (XAG, XAU, XPD,
+/// XPT, XBA to XBD, XDR, XSU, XUA, XTS, XXX). ANG, replaced by XCG, and BGN,
+/// replaced by the euro on 2026-01-01, are absent from this edition, so they
+/// do not parse.
+///
+/// To regenerate: download the file above, apply the rule to every
+/// `<CcyNtry>`, sort the codes and replace the entries below; then update
+/// the edition and download dates here. `currency_table_is_sorted_and_every_code_parses`
+/// checks the result.
 const CURRENCIES: [(&str, u8); 155] = [
     ("AED", 2),
     ("AFN", 2),
@@ -292,7 +310,10 @@ const MAX_DIGITS: usize = 18;
 /// A decimal amount as text, as providers report it: `-?[0-9]{1,18}` with an
 /// optional `.` and 1 to 18 fractional digits. It has no currency until
 /// [`DecimalAmount::to_minor_units`] gives it one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// It deliberately has no equality: `"12.30"` and `"12.3"` are the same
+/// amount, so compare [`DecimalAmount::to_minor_units`] results instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct DecimalAmount(String);
 
@@ -524,14 +545,14 @@ mod tests {
             "1e3", "+1", " 1", "1 ", "", "-", ".5", "1.", "1,5", "--1", "١",
         ] {
             assert_eq!(
-                DecimalAmount::parse(malformed),
-                Err(MoneyError::Malformed),
+                DecimalAmount::parse(malformed).err(),
+                Some(MoneyError::Malformed),
                 "{malformed:?}"
             );
         }
         assert_eq!(
-            DecimalAmount::parse(&"1".repeat(19)),
-            Err(MoneyError::Malformed)
+            DecimalAmount::parse(&"1".repeat(19)).err(),
+            Some(MoneyError::Malformed)
         );
         assert_eq!(minor("100", "JPY"), Ok(100));
         assert_eq!(minor("100.0", "JPY"), Ok(100));
@@ -553,7 +574,7 @@ mod tests {
     fn decimal_negation_flips_the_sign() {
         let amount = DecimalAmount::parse("12.30").unwrap();
         assert_eq!(amount.negated().as_str(), "-12.30");
-        assert_eq!(amount.negated().negated(), amount);
+        assert_eq!(amount.negated().negated().as_str(), "12.30");
         assert_eq!(amount.negated().to_minor_units(usd()), Ok(-1230));
     }
 
