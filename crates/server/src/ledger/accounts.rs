@@ -1,6 +1,5 @@
 //! Accounts and their daily balance snapshots.
 
-use axum::http::StatusCode;
 use coffer_domain::accounts::{
     AccountKind, AccountName, BalanceSource, LiquidityClass, default_liquidity,
 };
@@ -15,7 +14,7 @@ use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Ledger, LedgerError, audit};
+use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 
 const NAME_INVALID: &str = "account name must be 1 to 100 characters without control characters";
@@ -221,12 +220,7 @@ impl Ledger {
         )
         .await?;
         let view = AccountView::new(&record, opening.as_ref());
-        if let Some(slot) = slot {
-            let json = serde_json::to_string(&view)
-                .map_err(|_| LedgerError::Internal("response serialization failed"))?;
-            tx.complete_idempotency(slot.member, &slot.key, StatusCode::CREATED.as_u16(), &json)
-                .await?;
-        }
+        complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
         Ok(view)
     }

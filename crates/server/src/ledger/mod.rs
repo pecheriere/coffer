@@ -1,4 +1,5 @@
-//! The ledger: accounts and their balances. Every operation authorizes
+//! The ledger: accounts and their balances, categories and transactions.
+//! Every operation authorizes
 //! through the policy, with account access from the [`AccessResolver`], and
 //! writes its audit entry in the same transaction as its change.
 
@@ -15,6 +16,7 @@ use coffer_store::{Store, StoreError, StoreTx};
 use jiff::Timestamp;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
+use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::{Problem, ProblemCode};
 
 /// The ledger service.
@@ -151,5 +153,22 @@ async fn audit(
         },
     )
     .await?;
+    Ok(())
+}
+
+/// Completes `slot`, when a key was sent, with the `201 Created` response
+/// `view` inside `tx`, so the key, the resource and its audit entry commit
+/// together.
+async fn complete_created(
+    tx: &mut StoreTx,
+    slot: Option<IdempotencySlot>,
+    view: &impl serde::Serialize,
+) -> Result<(), LedgerError> {
+    if let Some(slot) = slot {
+        let json = serde_json::to_string(view)
+            .map_err(|_| LedgerError::Internal("response serialization failed"))?;
+        tx.complete_idempotency(slot.member, &slot.key, StatusCode::CREATED.as_u16(), &json)
+            .await?;
+    }
     Ok(())
 }

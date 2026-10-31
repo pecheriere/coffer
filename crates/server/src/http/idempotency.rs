@@ -8,18 +8,22 @@
 //! the transaction that writes the resource and its audit entry, so the
 //! three commit together. A create that fails releases the key.
 
+use axum::Json;
 use axum::extract::OptionalFromRequestParts;
 use axum::http::request::Parts;
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse as _, Response};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::MemberId;
+use coffer_domain::policy::{Action, authorize};
 use coffer_store::Reservation;
+use serde::Serialize;
 use zeroize::Zeroizing;
 
 use super::AppState;
 use super::problem::{Problem, ProblemCode};
 use crate::auth::AuthError;
+use crate::ledger::LedgerError;
 use crate::secrets::ServerKey;
 
 /// The request header carrying the key.
@@ -202,5 +206,45 @@ pub async fn release(state: &AppState, slot: &IdempotencySlot) {
     .await;
     if let Err(error) = released {
         tracing::warn!(error = ?error, "idempotency key not released");
+    }
+}
+
+/// Performs a create made with an optional `Idempotency-Key`, answering
+/// `201 Created` with its result: authorizes `WriteHousehold` before
+/// reserving the key (so a key never replays a response to a token that
+/// could not have made the request), replays a completed request, and
+/// releases the key when the create fails.
+///
+/// # Errors
+///
+/// `403` without `WriteHousehold`; the errors of [`reserve`]; the create's
+/// own error as a problem.
+pub async fn create<T, F>(
+    state: &AppState,
+    actor: &Actor,
+    key: Option<IdempotencyKey>,
+    method: &Method,
+    uri: &Uri,
+    bytes: &[u8],
+    create: F,
+) -> Result<Response, Problem>
+where
+    T: Serialize,
+    F: AsyncFnOnce(Option<IdempotencySlot>) -> Result<T, LedgerError>,
+{
+    authorize(actor, Action::WriteHousehold)?;
+    let slot = match reserve(state, actor, key, method, uri.path(), bytes).await? {
+        Reserved::None => None,
+        Reserved::Fresh(slot) => Some(slot),
+        Reserved::Replay(response) => return Ok(response),
+    };
+    match create(slot.clone()).await {
+        Ok(view) => Ok((StatusCode::CREATED, Json(view)).into_response()),
+        Err(err) => {
+            if let Some(slot) = &slot {
+                release(state, slot).await;
+            }
+            Err(err.into())
+        }
     }
 }

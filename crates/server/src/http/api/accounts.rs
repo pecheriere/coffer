@@ -2,12 +2,11 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{Method, StatusCode, Uri};
-use axum::response::{IntoResponse as _, Response};
+use axum::http::{Method, Uri};
+use axum::response::Response;
 use coffer_domain::accounts::{AccountKind, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
-use coffer_domain::policy::{Action, authorize};
 use coffer_store::PageRequest;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,7 @@ use super::extract::{TypedJson, TypedJsonBytes, TypedPath, TypedQuery};
 use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
-use crate::http::idempotency::{self, IdempotencyKey, Reserved};
+use crate::http::idempotency::{self, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::accounts::{
     AccountPatch, AccountView, BalancePage, BalanceView, NewAccountInput, OpeningBalance,
@@ -162,14 +161,6 @@ pub(super) async fn create(
     key: Option<IdempotencyKey>,
     TypedJsonBytes { value, bytes }: TypedJsonBytes<NewAccountRequest>,
 ) -> Result<Response, Problem> {
-    // Checked before reserving, so a key never replays a response to a
-    // token that could not have made the request.
-    authorize(&actor, Action::WriteHousehold)?;
-    let slot = match idempotency::reserve(&state, &actor, key, &method, uri.path(), &bytes).await? {
-        Reserved::None => None,
-        Reserved::Fresh(slot) => Some(slot),
-        Reserved::Replay(response) => return Ok(response),
-    };
     let input = NewAccountInput {
         name: value.name,
         kind: value.kind,
@@ -179,19 +170,10 @@ pub(super) async fn create(
         include_in_forecast: value.include_in_forecast.unwrap_or(true),
         opening_balance: value.opening_balance,
     };
-    match state
-        .ledger
-        .create_account(&actor, input, slot.clone())
-        .await
-    {
-        Ok(view) => Ok((StatusCode::CREATED, Json(view)).into_response()),
-        Err(err) => {
-            if let Some(slot) = &slot {
-                idempotency::release(&state, slot).await;
-            }
-            Err(err.into())
-        }
-    }
+    idempotency::create(&state, &actor, key, &method, &uri, &bytes, async |slot| {
+        state.ledger.create_account(&actor, input, slot).await
+    })
+    .await
 }
 
 /// One account.
