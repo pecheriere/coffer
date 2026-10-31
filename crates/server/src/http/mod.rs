@@ -59,7 +59,9 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             pages::render_error_pages,
         ))
-        .layer(axum::middleware::map_response(pages::security_headers))
         .layer(axum::middleware::from_fn(api::problem_bodies))
+        // Outermost, so every response gets the headers, `/api` problems
+        // included.
+        .layer(axum::middleware::map_response(pages::security_headers))
         .with_state(state)
 }
