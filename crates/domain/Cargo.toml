@@ -1,0 +1,25 @@
+[package]
+name = "coffer-domain"
+description = "Pure domain types for coffer: ids, identity, policy and clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Test helpers (manual clock) for downstream crates' tests.
+testkit = []
+
+[dependencies]
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

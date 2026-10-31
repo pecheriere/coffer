@@ -1,0 +1,14 @@
+body { font-family: system-ui, sans-serif; margin: 0; line-height: 1.45; color: #1b1b1b; }
+main { max-width: 46rem; margin: 0 auto; padding: 1rem; }
+nav { display: flex; gap: 1rem; align-items: center; padding: .6rem 1rem; border-bottom: 1px solid #ccc; }
+nav .spacer { flex: 1; }
+form.inline { display: inline; margin: 0; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border-bottom: 1px solid #ddd; padding: .35rem; text-align: left; vertical-align: top; }
+label { display: block; margin-top: .6rem; font-weight: 600; }
+input, select, button { font-size: 1rem; padding: .35rem .6rem; margin: .25rem .25rem .25rem 0; }
+code { word-break: break-all; }
+section.once { border: 2px solid #b58900; padding: .5rem 1rem; margin: 1rem 0; }
+#result { font-weight: 600; min-height: 1.4em; }
+#result.ok { color: #176f2c; }
+#result.error { color: #b00020; }
