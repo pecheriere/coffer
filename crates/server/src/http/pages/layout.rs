@@ -22,6 +22,7 @@ pub enum Nav {
     Account,
     Members,
     Invites,
+    Household,
 }
 
 /// How a page is framed: its look, who is signed in, which navigation item
@@ -96,6 +97,7 @@ fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
                 @if viewer.is_admin {
                     (link(Nav::Members, "/admin/members", "Members"))
                     (link(Nav::Invites, "/admin/invites", "Invites"))
+                    (link(Nav::Household, "/admin/household", "Household"))
                 }
             }
             span.who {

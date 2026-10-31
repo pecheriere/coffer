@@ -6,7 +6,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use coffer_domain::audit::AuditActor;
 use coffer_domain::identity::{Actor, ColorScheme, IdentityError, Role, Scope, ThemeName, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
@@ -352,4 +352,287 @@ async fn unknown_stored_theme_falls_back() {
     tx.commit().await.unwrap();
     let look = server.appearance.look(Some(&stored)).await;
     assert_eq!(look.theme.name, "mochi");
+}
+
+// Pages: the member's appearance card and the household page.
+
+/// Admin "alice" and member "bob", each signed in over HTTP in a browser.
+async fn browsers() -> (TestServer, Browser, Browser, MemberId) {
+    let (server, alice, _) = with_admin().await;
+    let actor = server
+        .sessions
+        .resolve(alice.cookie.as_deref().unwrap())
+        .await
+        .unwrap();
+    let invite = server
+        .identity
+        .create_invite(&actor, Role::Member, None)
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&server);
+    let mut bob_key = server.authenticator();
+    let done = bob.enroll(&mut bob_key, &invite, "bob", "Bob").await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    let bob_id = server
+        .sessions
+        .resolve(bob.cookie.as_deref().unwrap())
+        .await
+        .unwrap()
+        .member;
+    (server, alice, bob, bob_id)
+}
+
+/// Whether the radio `name`=`value` in `body` is checked.
+///
+/// Panics if the page has no such radio.
+fn checked(body: &str, name: &str, value: &str) -> bool {
+    let needle = format!("type=\"radio\" name=\"{name}\" value=\"{value}\"");
+    let at = body
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no radio {name}={value:?} in page:\n{body}"));
+    let start = body[..at].rfind("<input").unwrap();
+    let end = at + body[at..].find('>').unwrap();
+    body[start..end].contains(" checked")
+}
+
+const FORGED: &str = "x\"><script>";
+
+#[tokio::test]
+async fn account_page_offers_every_theme_and_scheme() {
+    let (_server, _alice, mut bob, _) = browsers().await;
+    let page = bob.get("/account").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let body = &page.body;
+    assert!(body.contains("<h2>Appearance</h2>"));
+    assert!(body.contains("action=\"/account/appearance\""));
+    assert!(body.contains("Household default (Mochi)"));
+    assert!(checked(body, "theme", ""));
+    for theme in themes::THEMES {
+        assert!(!checked(body, "theme", theme.name), "{}", theme.name);
+        assert!(body.contains(theme.label));
+    }
+    assert!(checked(body, "color_scheme", "system"));
+    assert!(!checked(body, "color_scheme", "light"));
+    assert!(!checked(body, "color_scheme", "dark"));
+    for label in ["Match this device", "Light", "Dark", "Save appearance"] {
+        assert!(body.contains(label), "missing {label}");
+    }
+}
+
+#[tokio::test]
+async fn forcing_a_scheme_is_rendered_without_script() {
+    let (_server, _alice, mut bob, _) = browsers().await;
+    let csrf = bob.get("/account").await.csrf();
+    let saved = bob
+        .post_form(
+            "/account/appearance",
+            &[("csrf", &csrf), ("theme", ""), ("color_scheme", "dark")],
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.header(header::LOCATION), "/account");
+
+    let page = bob.get("/account").await;
+    assert!(
+        page.body
+            .contains("<html lang=\"en\" data-scheme=\"dark\">")
+    );
+    assert!(page.body.contains("content=\"dark\""));
+    assert!(checked(&page.body, "color_scheme", "dark"));
+    assert!(!checked(&page.body, "color_scheme", "system"));
+
+    let saved = bob
+        .post_form(
+            "/account/appearance",
+            &[
+                ("csrf", &csrf),
+                ("theme", "mochi"),
+                ("color_scheme", "system"),
+            ],
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    let page = bob.get("/account").await;
+    assert!(!page.body.contains("data-scheme"));
+    assert!(page.body.contains("content=\"light dark\""));
+    assert!(checked(&page.body, "theme", "mochi"));
+    assert!(!checked(&page.body, "theme", ""));
+}
+
+#[tokio::test]
+async fn error_pages_wear_the_members_scheme() {
+    let (_server, _alice, mut bob, _) = browsers().await;
+    let csrf = bob.get("/account").await.csrf();
+    let saved = bob
+        .post_form(
+            "/account/appearance",
+            &[("csrf", &csrf), ("theme", ""), ("color_scheme", "dark")],
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+
+    let missing = bob.get("/nope").await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    assert!(missing.body.contains("illustration-error"));
+    assert!(missing.body.contains("data-scheme=\"dark\""));
+    assert!(missing.body.contains("content=\"dark\""));
+}
+
+#[tokio::test]
+async fn appearance_rejects_unknown_values() {
+    let (server, _alice, mut bob, bob_id) = browsers().await;
+    let csrf = bob.get("/account").await.csrf();
+    let long = "a".repeat(10_000);
+    let forged: [&[(&str, &str)]; 5] = [
+        &[("theme", FORGED), ("color_scheme", "dark")],
+        &[("theme", "nope"), ("color_scheme", "dark")],
+        &[("theme", &long), ("color_scheme", "dark")],
+        &[("theme", ""), ("color_scheme", "purple")],
+        &[("theme", ""), ("color_scheme", "dark"), ("extra", "1")],
+    ];
+    for fields in forged {
+        let mut all = vec![("csrf", csrf.as_str())];
+        all.extend_from_slice(fields);
+        let reply = bob.post_form("/account/appearance", &all).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{fields:?}: {}",
+            reply.body
+        );
+        assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
+        assert!(!reply.body.contains("<script>\""), "{fields:?} echoed");
+        assert!(!reply.body.contains(&long));
+    }
+    let unsigned = bob
+        .post_form(
+            "/account/appearance",
+            &[("theme", ""), ("color_scheme", "dark")],
+        )
+        .await;
+    assert_eq!(unsigned.status, StatusCode::FORBIDDEN);
+
+    let stored = member(&server, bob_id).await;
+    assert_eq!(stored.theme, None);
+    assert_eq!(stored.color_scheme, ColorScheme::System);
+    assert_eq!(
+        events(&server, "member.appearance").await,
+        Vec::<AuditEvent>::new()
+    );
+}
+
+#[tokio::test]
+async fn household_page_is_admin_only() {
+    let (server, mut alice, mut bob, _) = browsers().await;
+    let bob_account = bob.get("/account").await;
+    assert!(!bob_account.body.contains("href=\"/admin/household\""));
+    assert_eq!(
+        bob.get("/admin/household").await.status,
+        StatusCode::FORBIDDEN
+    );
+    let refused = bob
+        .post_form(
+            "/admin/household",
+            &[("csrf", &bob_account.csrf()), ("theme", "mochi")],
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert_eq!(server.store.household_theme().await.unwrap(), None);
+
+    let page = alice.get("/admin/household").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.body.contains("<h1>Household</h1>"));
+    assert!(
+        page.body.contains(
+            "The theme everyone sees unless they choose their own on their account page."
+        )
+    );
+    assert!(page.body.contains("Save household theme"));
+    assert!(checked(&page.body, "theme", "mochi"));
+    assert!(
+        page.body
+            .contains("href=\"/admin/household\" aria-current=\"page\"")
+    );
+
+    let saved = alice
+        .post_form(
+            "/admin/household",
+            &[("csrf", &page.csrf()), ("theme", "mochi")],
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.header(header::LOCATION), "/admin/household");
+    assert_eq!(
+        server.store.household_theme().await.unwrap(),
+        Some(theme("mochi"))
+    );
+    let recorded = events(&server, "household.theme").await;
+    assert_eq!(recorded.len(), 1);
+    let alice_id = server
+        .sessions
+        .resolve(alice.cookie.as_deref().unwrap())
+        .await
+        .unwrap()
+        .member;
+    assert_eq!(
+        recorded[0].actor,
+        AuditActor::Member {
+            member: alice_id,
+            agent: None
+        }
+    );
+    assert_eq!(recorded[0].changes, json!({"from": null, "to": "mochi"}));
+}
+
+#[tokio::test]
+async fn household_form_rejects_forged_values() {
+    let (server, mut alice, _bob, _) = browsers().await;
+    let csrf = alice.get("/admin/household").await.csrf();
+    let forged: [&[(&str, &str)]; 4] = [
+        &[("theme", FORGED)],
+        &[("theme", "nope")],
+        &[("theme", "")],
+        &[("theme", "mochi"), ("extra", "1")],
+    ];
+    for fields in forged {
+        let mut all = vec![("csrf", csrf.as_str())];
+        all.extend_from_slice(fields);
+        let reply = alice.post_form("/admin/household", &all).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{fields:?}: {}",
+            reply.body
+        );
+        assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
+        assert!(!reply.body.contains("<script>\""), "{fields:?} echoed");
+    }
+    let unsigned = alice
+        .post_form("/admin/household", &[("theme", "mochi")])
+        .await;
+    assert_eq!(unsigned.status, StatusCode::FORBIDDEN);
+
+    assert_eq!(server.store.household_theme().await.unwrap(), None);
+    assert_eq!(
+        events(&server, "household.theme").await,
+        Vec::<AuditEvent>::new()
+    );
+}
+
+#[tokio::test]
+async fn account_page_survives_a_retired_theme() {
+    let (server, _alice, mut bob, bob_id) = browsers().await;
+    let mut tx = server.store.begin().await.unwrap();
+    tx.set_member_appearance(bob_id, Some(&theme("retired")), ColorScheme::System)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let page = bob.get("/account").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(checked(&page.body, "theme", ""));
+    assert!(
+        page.body
+            .contains(&format!("href=\"{}\"", DEFAULT.stylesheet.url))
+    );
 }

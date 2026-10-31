@@ -293,7 +293,12 @@ async fn bearer_token_does_not_authenticate_pages() {
     let bearer = format!("Bearer {}", secrecy::ExposeSecret::expose_secret(&token));
     let mut anonymous = Browser::new(&server);
 
-    for path in ["/account", "/admin/members", "/admin/invites"] {
+    for path in [
+        "/account",
+        "/admin/members",
+        "/admin/invites",
+        "/admin/household",
+    ] {
         let request = Request::builder()
             .uri(path)
             .header(header::AUTHORIZATION, &bearer)

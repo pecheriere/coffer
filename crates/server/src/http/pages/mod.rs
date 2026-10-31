@@ -11,6 +11,7 @@
 
 mod account;
 mod admin;
+mod household;
 mod layout;
 mod login;
 mod setup;
@@ -50,6 +51,7 @@ pub fn router() -> Router<AppState> {
         .merge(login::routes())
         .merge(account::routes())
         .merge(admin::routes())
+        .merge(household::routes())
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }

@@ -1,4 +1,4 @@
-//! The signed-in member's own passkeys and agent tokens.
+//! The signed-in member's own passkeys, agent tokens and appearance.
 
 use std::str::FromStr as _;
 
@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use coffer_domain::identity::{Actor, Scope, TokenName, role_ceiling};
+use coffer_domain::identity::{Actor, ColorScheme, Scope, ThemeName, TokenName, role_ceiling};
 use coffer_domain::ids::{AgentTokenId, PasskeyId};
 use coffer_domain::policy::{Action, authorize};
 use coffer_store::{AgentTokenRecord, PasskeyRecord};
@@ -24,6 +24,7 @@ use crate::auth::{AuthError, CeremonyId};
 use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::secrets::SecretToken;
+use crate::themes::{self, THEMES, Theme};
 
 /// Longest token lifetime the form accepts.
 const MAX_EXPIRY_DAYS: u32 = 3650;
@@ -31,6 +32,7 @@ const MAX_EXPIRY_DAYS: u32 = 3650;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/account", get(account))
+        .route("/account/appearance", post(set_appearance))
         .route("/account/passkeys/{id}/remove", post(remove_passkey))
         .route("/account/tokens", post(create_token))
         .route("/account/tokens/{id}/revoke", post(revoke_token))
@@ -76,6 +78,7 @@ async fn render(
         .await
         .map_err(AuthError::from)?;
     let tokens = state.agent_tokens.list_own(&actor).await?;
+    let household = state.appearance.household_theme().await;
     let now = state.clock.now();
     let csrf = &viewer.csrf;
     let content = html! {
@@ -90,6 +93,7 @@ async fn render(
         p #result role="status" {}
 
         (passkeys_card(&passkeys, csrf))
+        (appearance_card(session, household, csrf))
 
         section.card {
             h2 { "Agent tokens" }
@@ -169,6 +173,85 @@ fn passkeys_card(passkeys: &[PasskeyRecord], csrf: &str) -> Markup {
             button #add-passkey .btn type="button" data-csrf=(csrf) { "Add a passkey" }
         }
     }
+}
+
+/// The member's theme and colour scheme. The household default is checked
+/// when the stored theme is unset or no longer registered.
+fn appearance_card(session: &PageSession, household: &Theme, csrf: &str) -> Markup {
+    let member = session.member();
+    let own = member
+        .theme
+        .as_ref()
+        .and_then(|name| themes::find(name.as_str()))
+        .map(|theme| theme.name);
+    let schemes = [
+        (ColorScheme::System, "Match this device"),
+        (ColorScheme::Light, "Light"),
+        (ColorScheme::Dark, "Dark"),
+    ];
+    html! {
+        section.card {
+            h2 { "Appearance" }
+            form method="post" action="/account/appearance" {
+                (csrf_field(csrf))
+                fieldset.choices {
+                    legend { "Theme" }
+                    label.choice {
+                        input type="radio" name="theme" value="" checked[own.is_none()];
+                        "Household default (" (household.label) ")"
+                    }
+                    @for theme in THEMES {
+                        label.choice {
+                            input type="radio" name="theme" value=(theme.name)
+                                checked[own == Some(theme.name)];
+                            (theme.label)
+                        }
+                    }
+                }
+                fieldset.choices {
+                    legend { "Light or dark" }
+                    @for (scheme, label) in schemes {
+                        label.choice {
+                            input type="radio" name="color_scheme" value=(scheme.as_str())
+                                checked[member.color_scheme == scheme];
+                            (label)
+                        }
+                    }
+                }
+                button.btn.btn-primary type="submit" { "Save appearance" }
+            }
+        }
+    }
+}
+
+/// Unknown fields are refused: a forged form fails whole.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppearanceForm {
+    #[serde(default)]
+    csrf: String,
+    #[serde(default)]
+    theme: String,
+    #[serde(default)]
+    color_scheme: String,
+}
+
+/// Sets the member's own theme (empty follows the household) and colour
+/// scheme. A value that does not parse, or a theme that is not registered,
+/// is refused whole and never echoed.
+async fn set_appearance(
+    State(state): State<AppState>,
+    session: PageSession,
+    PageForm(form): PageForm<AppearanceForm>,
+) -> Result<Redirect, PageError> {
+    let actor = session.verify(&state, &form.csrf)?;
+    let theme = (!form.theme.is_empty())
+        .then(|| ThemeName::parse(&form.theme))
+        .transpose()
+        .map_err(AuthError::Invalid)?;
+    let scheme = ColorScheme::from_str(&form.color_scheme).map_err(AuthError::Invalid)?;
+    state.appearance.set_member(&actor, theme, scheme).await?;
+    Ok(Redirect::to("/account"))
 }
 
 /// One agent token in a list: its name and `meta`, chips for its scope and
