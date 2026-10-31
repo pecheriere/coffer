@@ -64,7 +64,7 @@ impl Reply {
         let from = self
             .body
             .find(start)
-            .unwrap_or_else(|| panic!("`{start}` not in page:\n{}", self.body))
+            .unwrap_or_else(|| panic!("`{start}` not found in the page"))
             + start.len();
         let len = self.body[from..].find(end).expect("terminator");
         self.body[from..from + len].to_owned()
@@ -243,7 +243,7 @@ impl Browser {
                 }),
             )
             .await;
-        assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
+        assert_eq!(begun.status, StatusCode::OK, "`begun` status");
         let begun = begun.json();
         let options: CreationChallengeResponse =
             serde_json::from_value(begun["options"].clone()).expect("options");
@@ -268,7 +268,7 @@ impl Browser {
         let begun = self
             .post_json("/auth/login/begin", &json!({ "username": username }))
             .await;
-        assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
+        assert_eq!(begun.status, StatusCode::OK, "`begun` status");
         let begun = begun.json();
         let options: RequestChallengeResponse =
             serde_json::from_value(begun["options"].clone()).expect("options");
@@ -297,6 +297,6 @@ pub async fn with_admin() -> (TestServer, Browser, SoftAuthenticator) {
     let mut browser = Browser::new(&server);
     let mut auth = server.authenticator();
     let done = browser.enroll(&mut auth, &link, "alice", "Alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     (server, browser, auth)
 }

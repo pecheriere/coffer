@@ -32,7 +32,7 @@ async fn full_journey() {
     assert!(page.body.contains("name=\"username\""));
     let mut alice_key = server.authenticator();
     let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     assert_eq!(done.json()["redirect"], "/account");
     assert!(done.header(header::SET_COOKIE).contains("HttpOnly"));
 
@@ -50,7 +50,7 @@ async fn full_journey() {
             &[("csrf", &csrf), ("role", "member"), ("display_name", "Bob")],
         )
         .await;
-    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    assert_eq!(created.status, StatusCode::OK, "`created` status");
     assert_eq!(created.header(header::CACHE_CONTROL), "no-store");
     let link = Url::parse(&created.between("id=\"new-link\">", "<")).expect("invite link");
     assert!(link.path().starts_with("/invite/"));
@@ -59,7 +59,7 @@ async fn full_journey() {
     let mut bob = Browser::new(&server);
     let mut bob_key = server.authenticator();
     let done = bob.enroll(&mut bob_key, &link, "bob", "Bob").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let denied = bob.get("/admin/members").await;
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
     assert!(denied.header(header::CONTENT_TYPE).starts_with("text/html"));
@@ -100,7 +100,7 @@ async fn full_journey() {
             ],
         )
         .await;
-    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    assert_eq!(created.status, StatusCode::OK, "`created` status");
     assert_eq!(created.header(header::CACHE_CONTROL), "no-store");
     let token = created.between("id=\"new-token\">", "<");
     assert!(token.starts_with("coffer_"));
@@ -123,7 +123,7 @@ async fn full_journey() {
     // Signing in again over the login endpoints works, and so does logout.
     let mut returning = Browser::new(&server);
     let done = returning.login(&mut alice_key, "alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     assert_eq!(done.json()["redirect"], "/account");
     let page = returning.get("/account").await;
     assert_eq!(page.status, StatusCode::OK);
@@ -335,7 +335,7 @@ async fn passkeys_can_be_added_and_removed() {
             &json!({}),
         )
         .await;
-    assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
+    assert_eq!(begun.status, StatusCode::OK, "`begun` status");
     let begun = begun.json();
     let options: CreationChallengeResponse =
         serde_json::from_value(begun["options"].clone()).unwrap();
@@ -353,7 +353,7 @@ async fn passkeys_can_be_added_and_removed() {
             }),
         )
         .await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
 
     let listed = admin.get("/account").await;
     assert!(listed.body.contains("second key"));
@@ -431,7 +431,7 @@ async fn members_page_manages_members_and_reenroll_links() {
             &[("csrf", &csrf)],
         )
         .await;
-    assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+    assert_eq!(issued.status, StatusCode::OK, "`issued` status");
     assert_eq!(issued.header(header::CACHE_CONTROL), "no-store");
     let link = Url::parse(&issued.between("id=\"new-link\">", "<")).unwrap();
     let page = Browser::new(&server).get(link.path()).await;
@@ -554,7 +554,7 @@ async fn signing_in_again_ends_the_previous_session() {
 
     let done = admin.login(&mut auth, "alice").await;
 
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let new = admin.cookie.clone().unwrap();
     assert_ne!(old, new);
     assert!(matches!(
@@ -616,7 +616,10 @@ async fn admin_sees_and_revokes_member_tokens() {
     assert!(members.body.contains(&bob_token.prefix));
     assert!(!members.body.contains(bob_secret.expose_secret()));
     let revoke_path = format!("/admin/tokens/{}/revoke", bob_token.id);
-    assert!(members.body.contains(&revoke_path), "{}", members.body);
+    assert!(
+        members.body.contains(&revoke_path),
+        "revoke link missing from the members page"
+    );
 
     // A member may not use it, not even on another member's token.
     let bob_page = bob.get("/account").await;
@@ -671,7 +674,7 @@ async fn sign_in_trims_the_username() {
 
     let done = browser.login(&mut auth, "  Alice ").await;
 
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
 }
 
 #[tokio::test]
@@ -735,7 +738,7 @@ async fn root_sends_a_visitor_without_a_session_to_sign_in() {
         .into_iter()
         .chain(get_and_head(&mut stale, "/").await)
     {
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
         assert_eq!(reply.header(header::LOCATION), "/login");
     }
 }
@@ -745,7 +748,7 @@ async fn root_sends_a_signed_in_member_home() {
     let (_server, mut admin, _) = with_admin().await;
 
     for reply in get_and_head(&mut admin, "/").await {
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
         assert_eq!(reply.header(header::LOCATION), "/account");
     }
 }
@@ -766,7 +769,7 @@ async fn every_page() -> Vec<(&'static str, Reply)> {
     let mut admin = Browser::new(&server);
     let mut alice_key = server.authenticator();
     let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let actor = server
         .sessions
         .resolve(admin.cookie.as_deref().unwrap())
@@ -780,7 +783,7 @@ async fn every_page() -> Vec<(&'static str, Reply)> {
     let mut bob = Browser::new(&server);
     let mut bob_key = server.authenticator();
     let done = bob.enroll(&mut bob_key, &for_bob, "bob", "Bob").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let pending = server
         .identity
         .create_invite(&actor, Role::Member, None)
@@ -824,7 +827,7 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 #[tokio::test]
 async fn every_page_is_themed_and_inline_free() {
     for (page, reply) in every_page().await {
-        assert_eq!(reply.status, StatusCode::OK, "{page}: {}", reply.body);
+        assert_eq!(reply.status, StatusCode::OK, "GET {page}");
         let body = &reply.body;
         let theme = format!("href=\"{}\"", themes::DEFAULT.stylesheet.url);
         let base = format!("href=\"{}\"", CSS_BASE_CSS.url);
@@ -939,7 +942,7 @@ async fn nav_marks_the_current_page() {
 
 /// The security headers and the themed body every error page carries.
 fn assert_themed_error(reply: &Reply, status: StatusCode) {
-    assert_eq!(reply.status, status, "{}", reply.body);
+    assert_eq!(reply.status, status, "`reply` status");
     assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
     assert_eq!(reply.header(header::CACHE_CONTROL), "no-store");
     assert_eq!(

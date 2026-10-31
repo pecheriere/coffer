@@ -322,9 +322,9 @@ async fn member_with_a_corrupt_theme_still_signs_in() {
 
     let mut browser = Browser::new(&server);
     let signed_in = browser.login(&mut auth, "alice").await;
-    assert_eq!(signed_in.status, StatusCode::OK, "{}", signed_in.body);
+    assert_eq!(signed_in.status, StatusCode::OK, "`signed_in` status");
     let account = browser.get("/account").await;
-    assert_eq!(account.status, StatusCode::OK, "{}", account.body);
+    assert_eq!(account.status, StatusCode::OK, "`account` status");
     assert!(account.body.contains("Alice"));
     assert_eq!(member(&server, alice).await.theme, None);
 }
@@ -345,9 +345,9 @@ async fn member_with_a_corrupt_color_scheme_still_signs_in() {
 
     let mut browser = Browser::new(&server);
     let signed_in = browser.login(&mut auth, "alice").await;
-    assert_eq!(signed_in.status, StatusCode::OK, "{}", signed_in.body);
+    assert_eq!(signed_in.status, StatusCode::OK, "`signed_in` status");
     let account = browser.get("/account").await;
-    assert_eq!(account.status, StatusCode::OK, "{}", account.body);
+    assert_eq!(account.status, StatusCode::OK, "`account` status");
     assert!(account.body.contains("Alice"));
     assert_eq!(member_scheme(&server, alice).await, ColorScheme::System);
 }
@@ -395,7 +395,7 @@ async fn browsers() -> (TestServer, Browser, Browser, MemberId) {
     let mut bob = Browser::new(&server);
     let mut bob_key = server.authenticator();
     let done = bob.enroll(&mut bob_key, &invite, "bob", "Bob").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let bob_id = server
         .sessions
         .resolve(bob.cookie.as_deref().unwrap())
@@ -412,7 +412,7 @@ fn checked(body: &str, name: &str, value: &str) -> bool {
     let needle = format!("type=\"radio\" name=\"{name}\" value=\"{value}\"");
     let at = body
         .find(&needle)
-        .unwrap_or_else(|| panic!("no radio {name}={value:?} in page:\n{body}"));
+        .unwrap_or_else(|| panic!("no radio {name}={value:?} in the page"));
     let start = body[..at].rfind("<input").unwrap();
     let end = at + body[at..].find('>').unwrap();
     body[start..end].contains(" checked")
@@ -424,7 +424,7 @@ const FORGED: &str = "x\"><script>";
 async fn account_page_offers_every_theme_and_scheme() {
     let (_server, _alice, mut bob, _) = browsers().await;
     let page = bob.get("/account").await;
-    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(page.status, StatusCode::OK, "`page` status");
     let body = &page.body;
     assert!(body.contains("<h2>Appearance</h2>"));
     assert!(body.contains("action=\"/account/appearance\""));
@@ -452,7 +452,7 @@ async fn forcing_a_scheme_is_rendered_without_script() {
             &[("csrf", &csrf), ("theme", ""), ("color_scheme", "dark")],
         )
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
     assert_eq!(saved.header(header::LOCATION), "/account");
 
     let page = bob.get("/account").await;
@@ -474,7 +474,7 @@ async fn forcing_a_scheme_is_rendered_without_script() {
             ],
         )
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
     let page = bob.get("/account").await;
     assert!(!page.body.contains("data-scheme"));
     assert!(page.body.contains("content=\"light dark\""));
@@ -492,7 +492,7 @@ async fn error_pages_wear_the_members_scheme() {
             &[("csrf", &csrf), ("theme", ""), ("color_scheme", "dark")],
         )
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
 
     let missing = bob.get("/nope").await;
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
@@ -559,11 +559,11 @@ async fn household_page_is_admin_only() {
             &[("csrf", &bob_account.csrf()), ("theme", "mochi")],
         )
         .await;
-    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "`refused` status");
     assert_eq!(server.store.household_theme().await.unwrap(), None);
 
     let page = alice.get("/admin/household").await;
-    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(page.status, StatusCode::OK, "`page` status");
     assert!(page.body.contains("<h1>Household</h1>"));
     assert!(
         page.body.contains(
@@ -583,7 +583,7 @@ async fn household_page_is_admin_only() {
             &[("csrf", &page.csrf()), ("theme", "mochi")],
         )
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
     assert_eq!(saved.header(header::LOCATION), "/admin/household");
     assert_eq!(
         server.store.household_theme().await.unwrap(),
@@ -652,7 +652,7 @@ async fn account_page_survives_a_retired_theme() {
     tx.commit().await.unwrap();
 
     let page = bob.get("/account").await;
-    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(page.status, StatusCode::OK, "`page` status");
     assert!(checked(&page.body, "theme", ""));
     assert!(
         page.body
@@ -676,12 +676,12 @@ async fn household_default_applies_to_everyone_without_a_choice() {
     let saved = alice
         .post_form("/admin/household", &[("csrf", &csrf), ("theme", "fjord")])
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
 
     let mut anonymous = Browser::new(&server);
     for path in ["/login", "/nope"] {
         let page = anonymous.get(path).await;
-        assert!(links(&page.body, "fjord"), "{path}: {}", page.body);
+        assert!(links(&page.body, "fjord"), "{path}: no link to fjord");
         assert!(!links(&page.body, "mochi"), "{path}");
     }
     let account = bob.get("/account").await;
@@ -698,7 +698,7 @@ async fn member_override_beats_the_household_default() {
     let saved = alice
         .post_form("/admin/household", &[("csrf", &csrf), ("theme", "fjord")])
         .await;
-    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "`saved` status");
 
     let csrf = bob.get("/account").await.csrf();
     let chosen = bob
@@ -711,7 +711,7 @@ async fn member_override_beats_the_household_default() {
             ],
         )
         .await;
-    assert_eq!(chosen.status, StatusCode::SEE_OTHER, "{}", chosen.body);
+    assert_eq!(chosen.status, StatusCode::SEE_OTHER, "`chosen` status");
 
     for path in ["/account", "/nope"] {
         let page = bob.get(path).await;
