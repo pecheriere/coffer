@@ -71,7 +71,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 - A real UI (dashboards, transaction lists). Only the auth/admin pages in §6.4.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
-  local change, but no tables or code for it exist in v1.
+  local change, but no tables or code for it exist in v1 (superseded for agent
+  tokens by §8.2).
 - Automatic plan adjustment. v1 provides the plan-vs-actual data; suggestions
   come later and will never change the plan without confirmation.
 - Investment holdings, performance, cost basis, vest schedules. Investment and
@@ -80,7 +81,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 - Zero-based / envelope budgeting à la YNAB ("give every dollar a job").
 - Multiple households per deployment (multi-tenancy).
 - Data sources other than SimpleFin and manual entry (CSV/OFX import later).
-  The provider interface (§6.2) is in v1; other implementations are not.
+  The provider interface (§6.2) is in v1; other implementations are not,
+  except Plaid (§8.6).
 - OAuth for MCP (needed for hosted clients like claude.ai). v1 uses bearer
   tokens; the token design must not preclude adding OAuth later.
 - Native mobile apps, notifications.
@@ -122,7 +124,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
   state under one data directory.
 - **Passkeys require HTTPS and a stable origin.** WebAuthn Relying Party ID and
   origin are configuration, set to the externally visible hostname.
-- **External network access** is limited to SimpleFin and the FX rate source.
+- **External network access** is limited to SimpleFin and the FX rate source
+  (extended by §8.5).
 - **SimpleFin limits:** the SimpleFin Bridge rate-limits (roughly 24 requests
   per connection per day) and returns at most ~90 days per request. Sync
   scheduling must stay well within this.
@@ -519,3 +522,87 @@ held to a high bar:
 - Test strategy, provided: domain logic (money, schedules, forecast, FX,
   net worth) is unit-tested; SimpleFin is tested against a mock server;
   passkey flows are tested end-to-end with a software authenticator.
+
+## 8. Addendum (2026-10-31)
+
+Decisions made while planning the typed API, accounts, transactions, matching
+and provider sync (plan 2a, with Plaid in plan 2b). Where this section differs
+from an earlier one, this section governs.
+
+### 8.1 Typed API now
+
+The OpenAPI 3.1 document (§6.11, §6.14) is generated from code from plan 2 on
+(issue #6). It is served unauthenticated at `/api/v1/openapi.json`, committed at
+`docs/api/openapi.json`, compared with the generated document by a test, and
+linted in CI. Problem `type` is `urn:coffer:problem:<code>`. Document to router
+is tested per operation and method; router to document holds by construction:
+`ApiRouter` is the only way to add an API route, and the application router
+merges nothing else under `/api`.
+
+### 8.2 Per-account authorization
+
+§3's "no tables or code for it" is superseded for agent tokens (issue #5):
+every account-scoped decision goes through
+`authorize_account(actor, access, account, level)` with levels
+`balances < transactions < write`. Plan 2a resolves every actor to uniform
+access at its scope; plan 2b adds per-token grants. Per-member visibility
+remains a non-goal. Hidden accounts answer exactly like missing ones (404); a
+visible account with too low a level answers 403 naming the level needed.
+
+### 8.3 Provider credentials
+
+Provider credentials are sealed with XChaCha20-Poly1305 under a key derived
+(BLAKE3 `derive_key`, context `coffer 2026-10 provider credentials v1`) from
+the server key in `COFFER_SECRET_KEY_FILE`. The connection id is the associated
+data, and a version byte allows a dedicated key later. Losing the server key
+means reconnecting every provider. A connection's credentials can be replaced
+(reconnect) without losing its bindings.
+
+### 8.4 Matching v1
+
+The description key is the uppercase ASCII letters of the description, every
+other character being a separator, reduced to the first two tokens of three or
+more letters. The fingerprint is `fp1:<amount minor units>:<description key>`.
+
+A candidate is a canonical transaction of the same Account that is imported
+(manual transactions are never candidates), dated within 4 days, and has no
+live source from the same connection. It must have the same amount; or, when
+all its live sources are pending records that vanished from the current fetch,
+an amount within 20 % and the same non-empty description key (a pending charge
+posting with a tip). One candidate attaches. Several candidates are narrowed to
+those with an equal description key and amount; if still ambiguous the record
+becomes a new transaction flagged as a possible duplicate.
+
+Removal of vanished sources happens after matching. A pending record still
+present beside its posted form produces a flagged possible duplicate, never a
+silent second transaction. When an imported amount changes and the transaction
+has one split, that split follows the amount (a `system:sync` change); with
+several splits they stay and the transaction is flagged.
+
+### 8.5 Outbound network
+
+§5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge
+hosts (`COFFER_SIMPLEFIN_HOSTS`, default `bridge.simplefin.org`,
+`beta-bridge.simplefin.org`), Plaid's API host when Plaid is configured (plan
+2b), and the FX source (plan 3). HTTPS on port 443 only, no redirects, and
+targets must resolve to public addresses. `HTTPS_PROXY` is honoured when set;
+then coffer does not resolve target hosts, and the public-address check is the
+proxy's job. The exact host list lives in `docs/configuration.md`.
+
+### 8.6 Plaid
+
+Plan 2b adds Plaid as a second provider behind the same interface. Link runs on
+one page whose CSP alone also allows `https://cdn.plaid.com`. The environments
+are `sandbox` and `production` (Plaid retired `development` in 2024).
+Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
+disconnect calls `/item/remove`, and 730 days of history are requested.
+
+### 8.7 Household timezone
+
+Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
+default `UTC`), an environment variable until household settings arrive (plan 3).
+
+### 8.8 Deferred
+
+Rules (a §2 goal), transfer links, household settings, a starter category set
+and unbinding a provider account move to plan 3.
