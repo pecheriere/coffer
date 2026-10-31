@@ -1,0 +1,70 @@
+/* Mochi: soft and friendly. Pistachio paper, raspberry accent, round shapes.
+   A theme is tokens only (see AGENTS.md, "Themes and assets"). */
+@font-face {
+  font-family: "Fredoka";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("asset:fonts/fredoka-600.woff2") format("woff2");
+  unicode-range: U+0000-024F, U+0259, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0300-0304, U+0308, U+0329, U+1E00-1EFF, U+2000-206F, U+20A0-20C0, U+2113, U+2122, U+2190-2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("asset:fonts/nunito-400-800.woff2") format("woff2");
+  unicode-range: U+0000-024F, U+0259, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0300-0304, U+0308, U+0329, U+1E00-1EFF, U+2000-206F, U+20A0-20C0, U+2113, U+2122, U+2190-2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+:root {
+  --bg: light-dark(#F3F6F1, #19171E);
+  --surface: light-dark(#FFFFFF, #24212B);
+  --text: light-dark(#2A2833, #F3EFF5);
+  --muted: light-dark(#605D69, #ABA5B3);
+  --accent: light-dark(#C2386A, #FF8FB6);
+  --on-accent: light-dark(#FFFFFF, #2E0C1B);
+  --accent-soft: light-dark(#FBE4EC, #3D2230);
+  --accent-press: light-dark(#8F2049, #C2386A);
+  --positive: light-dark(#2A7653, #82D8AB);
+  --negative: light-dark(#4B5BB5, #9DB4FF);
+  --warning: light-dark(#835C00, #F2C75E);
+  --warn-soft: light-dark(#FDF2D3, #3A3018);
+  --border: light-dark(#E3E7E0, #353140);
+  --control-border: light-dark(#898790, #746F7B);
+  --shadow: light-dark(rgba(194, 56, 106, .22), rgba(0, 0, 0, .5));
+
+  --font-head: "Fredoka", ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --font-body: "Nunito", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-num: "Nunito", ui-rounded, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --weight-head: 600;
+  --weight-button: 800;
+  --tracking-head: 0;
+  --style-display: normal;
+
+  --radius: 26px;
+  --radius-sm: 16px;
+  --radius-btn: 999px;
+  --radius-chip: 999px;
+  --icon-stroke: 2.1;
+
+  --card-bg: var(--surface);
+  --card-border-width: 0;
+  --card-border-color: var(--border);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 14px 32px -20px var(--shadow);
+  --input-bg: var(--bg);
+  --input-border-width: 2px;
+  --input-border-color: var(--control-border);
+  --button-primary-bg: var(--accent);
+  --button-primary-fg: var(--on-accent);
+  --button-primary-shadow: 0 3px 0 var(--accent-press);
+  --button-secondary-bg: var(--accent-soft);
+  --button-secondary-fg: var(--text);
+  --button-secondary-border: transparent;
+  --nav-bg: var(--surface);
+  --nav-border-color: var(--border);
+  --nav-active-bg: var(--accent);
+  --nav-active-fg: var(--on-accent);
+  --nav-active-shadow: none;
+  --illustration-animation: bob 3.6s ease-in-out infinite;
+}

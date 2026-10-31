@@ -3,7 +3,7 @@
 
 use maud::{DOCTYPE, Markup, html};
 
-use crate::assets;
+use crate::{assets, themes};
 
 /// The signed-in visitor, for the navigation bar.
 pub struct Viewer {
@@ -30,6 +30,7 @@ pub fn page(title: &str, viewer: Option<&Viewer>, content: &Markup) -> Markup {
                 link rel="icon" href="/favicon.ico" sizes="48x48";
                 link rel="apple-touch-icon" href=(assets::ICONS_APPLE_TOUCH_ICON_PNG.url);
                 link rel="manifest" href=(assets::MANIFEST_WEBMANIFEST.url);
+                link rel="stylesheet" href=(themes::DEFAULT.stylesheet.url);
                 link rel="stylesheet" href=(assets::CSS_BASE_CSS.url);
                 script src=(assets::JS_COFFER_JS.url) defer {}
             }

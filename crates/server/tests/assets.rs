@@ -2,9 +2,11 @@
 
 use axum::http::{StatusCode, header};
 use coffer_server::assets::{
-    ALL, ICONS_APPLE_TOUCH_ICON_PNG, ICONS_FAVICON_ICO, ICONS_FAVICON_SVG, MANIFEST_WEBMANIFEST,
+    ALL, CSS_BASE_CSS, ICONS_APPLE_TOUCH_ICON_PNG, ICONS_FAVICON_ICO, ICONS_FAVICON_SVG,
+    MANIFEST_WEBMANIFEST,
 };
 use coffer_server::testkit::{TestServer, browser::Browser};
+use coffer_server::themes;
 
 #[tokio::test]
 async fn hashed_assets_are_served_immutable() {
@@ -130,4 +132,25 @@ async fn pages_declare_icons_and_manifest() {
     ] {
         assert!(page.body.contains(&link), "missing {link}");
     }
+}
+
+#[tokio::test]
+async fn pages_link_the_default_theme_before_the_base_stylesheet() {
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+    let page = browser.get("/login").await;
+    let theme = format!(
+        "<link rel=\"stylesheet\" href=\"{}\">",
+        themes::DEFAULT.stylesheet.url
+    );
+    let base = format!("<link rel=\"stylesheet\" href=\"{}\">", CSS_BASE_CSS.url);
+    let theme_at = page
+        .body
+        .find(&theme)
+        .expect("the theme stylesheet is linked");
+    let base_at = page
+        .body
+        .find(&base)
+        .expect("the base stylesheet is linked");
+    assert!(theme_at < base_at, "tokens load before the components");
 }

@@ -8,3 +8,4 @@ pub mod http;
 pub mod secrets;
 #[cfg(feature = "testkit")]
 pub mod testkit;
+pub mod themes;
