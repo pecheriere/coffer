@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut logicals = Vec::new();
     collect(root, "", &mut logicals)?;
-    check_names(&logicals)?;
+    pipeline::check_names(&logicals)?;
 
     // Files that name no other asset are hashed first, so a stylesheet or
     // manifest can refer to them by their final URL.
@@ -106,29 +106,6 @@ fn collect(dir: &Path, prefix: &str, found: &mut Vec<String>) -> Result<(), Box<
             collect(&entry.path(), &format!("{logical}/"), found)?;
         } else {
             found.push(logical);
-        }
-    }
-    Ok(())
-}
-
-/// Refuses a file that cannot be served and two files that would share a
-/// constant.
-fn check_names(logicals: &[String]) -> Result<(), Box<dyn Error>> {
-    let mut seen: BTreeMap<String, &str> = BTreeMap::new();
-    for logical in logicals {
-        if pipeline::content_type(logical).is_none() {
-            return Err(format!(
-                "assets/{logical} has no known content type: remove it or add its extension \
-                 to `pipeline::content_type` in build_support/pipeline.rs"
-            )
-            .into());
-        }
-        if let Some(other) = seen.insert(pipeline::const_name(logical), logical) {
-            return Err(format!(
-                "assets/{other} and assets/{logical} would both be `{}`",
-                pipeline::const_name(logical)
-            )
-            .into());
         }
     }
     Ok(())

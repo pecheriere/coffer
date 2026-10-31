@@ -3,6 +3,8 @@
 //! Compiled into `build.rs`, which generates the asset table, and into the
 //! library's tests, which check the generated table against these rules.
 
+use std::collections::BTreeMap;
+
 /// The `Content-Type` served for a file, from its extension; `None` for an
 /// extension the server does not serve.
 pub fn content_type(logical: &str) -> Option<&'static str> {
@@ -18,6 +20,27 @@ pub fn content_type(logical: &str) -> Option<&'static str> {
         "txt" => "text/plain; charset=utf-8",
         _ => return None,
     })
+}
+
+/// Refuses a file that cannot be served and two files that would share a
+/// constant. The error names the files and says how to fix it.
+pub fn check_names(logicals: &[String]) -> Result<(), String> {
+    let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+    for logical in logicals {
+        if content_type(logical).is_none() {
+            return Err(format!(
+                "assets/{logical} has no known content type: remove it or add its extension \
+                 to `pipeline::content_type` in build_support/pipeline.rs"
+            ));
+        }
+        let name = const_name(logical);
+        if let Some(other) = seen.insert(name.clone(), logical) {
+            return Err(format!(
+                "assets/{other} and assets/{logical} would both be `{name}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether the file may name other assets as `asset:<path>`.
@@ -130,5 +153,38 @@ mod tests {
             super::const_name("fonts/nunito-400-800.woff2"),
             "FONTS_NUNITO_400_800_WOFF2"
         );
+    }
+
+    fn names(logicals: &[&str]) -> Vec<String> {
+        logicals.iter().map(|&l| l.to_owned()).collect()
+    }
+
+    #[test]
+    fn servable_distinct_names_pass() {
+        assert_eq!(
+            super::check_names(&names(&[
+                "css/base.css",
+                "fonts/a.woff2",
+                "manifest.webmanifest"
+            ])),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_file_with_an_unknown_extension_is_refused() {
+        let err = super::check_names(&names(&["css/base.css", "notes.md"]))
+            .expect_err("unknown extension");
+        assert!(err.contains("assets/notes.md"), "{err}");
+        assert!(err.contains("no known content type"), "{err}");
+    }
+
+    #[test]
+    fn two_files_sharing_a_constant_are_refused() {
+        let err = super::check_names(&names(&["css/a-b.css", "css/a_b.css"]))
+            .expect_err("constant collision");
+        assert!(err.contains("assets/css/a-b.css"), "{err}");
+        assert!(err.contains("assets/css/a_b.css"), "{err}");
+        assert!(err.contains("`CSS_A_B_CSS`"), "{err}");
     }
 }
