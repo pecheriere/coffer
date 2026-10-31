@@ -83,3 +83,8 @@ jobs:
           # no emulation is needed.
           platforms: linux/arm64,linux/amd64
           push: false
+          # Pull requests and main share one build cache. Tag builds (this
+          # workflow reused by release.yml) read it but never write it, and
+          # release.yml's publish job uses no cache at all.
+          cache-from: type=gha,scope=docker-build
+          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,mode=max,scope=docker-build' || '' }}
