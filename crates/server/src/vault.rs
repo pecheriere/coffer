@@ -2,13 +2,17 @@
 //!
 //! Provider credentials (a `SimpleFin` access URL, later a Plaid access token)
 //! are stored only sealed: XChaCha20-Poly1305 under a key derived from the
-//! server key, with the connection id as associated data so a sealed blob
-//! opens only for the connection it was sealed for. In clear they exist only
-//! in memory, as a [`SecretString`] or in [`Zeroizing`] buffers.
+//! server key. In clear they exist only in memory, as a [`SecretString`] or in
+//! [`Zeroizing`] buffers.
 //!
 //! Sealed format: `version (0x01) || nonce (24 bytes) || ciphertext || tag (16
 //! bytes)`. The version byte selects the key, so a dedicated credential key
 //! can be introduced later without rewriting existing rows at once.
+//!
+//! Associated data: `"coffer connection credentials\0" || version || connection
+//! id (16 bytes)`. A sealed blob opens only for the connection it was sealed
+//! for, and only under the version it was sealed with: relabelling the version
+//! byte fails authentication rather than steering the blob to another key.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
@@ -25,12 +29,14 @@ const KEY_CONTEXT_V1: &str = "coffer 2026-10 provider credentials v1";
 const VERSION_V1: u8 = 0x01;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-/// Prefix of the associated data; the connection id's 16 bytes follow.
+/// Prefix of the associated data; the version byte and the connection id's 16
+/// bytes follow.
 const AAD_PREFIX: &[u8] = b"coffer connection credentials\0";
 
 /// Why credentials could not be sealed or opened. Every message is fixed: no
 /// variant carries credential bytes, sealed or in clear.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VaultError {
     /// The sealed blob is too short, or what it holds is not UTF-8; also a
     /// plaintext too long for the cipher to seal.
@@ -45,7 +51,7 @@ pub enum VaultError {
     Decrypt,
     /// The operating system could not supply a nonce.
     #[error("operating system random source failed")]
-    Random,
+    Random(#[source] getrandom::Error),
 }
 
 /// Credentials as stored in the `connections.credentials` column. Opaque:
@@ -121,14 +127,14 @@ impl CredentialVault {
         plaintext: &SecretString,
     ) -> Result<SealedCredentials, VaultError> {
         let mut nonce = [0_u8; NONCE_LEN];
-        getrandom::fill(&mut nonce).map_err(|_| VaultError::Random)?;
+        getrandom::fill(&mut nonce).map_err(VaultError::Random)?;
         let ciphertext = self
             .cipher()
             .encrypt(
                 &XNonce::from(nonce),
                 Payload {
                     msg: plaintext.expose_secret().as_bytes(),
-                    aad: &associated_data(connection),
+                    aad: &associated_data(VERSION_V1, connection),
                 },
             )
             .map_err(|_| VaultError::Malformed)?;
@@ -167,7 +173,7 @@ impl CredentialVault {
                     &nonce,
                     Payload {
                         msg: ciphertext,
-                        aad: &associated_data(connection),
+                        aad: &associated_data(version, connection),
                     },
                 )
                 .map_err(|_| VaultError::Decrypt)?,
@@ -182,10 +188,11 @@ impl CredentialVault {
     }
 }
 
-/// `"coffer connection credentials\0" || connection id (16 bytes)`.
-fn associated_data(connection: ConnectionId) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(AAD_PREFIX.len() + 16);
+/// `"coffer connection credentials\0" || version || connection id (16 bytes)`.
+fn associated_data(version: u8, connection: ConnectionId) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(AAD_PREFIX.len() + 1 + 16);
     aad.extend_from_slice(AAD_PREFIX);
+    aad.push(version);
     aad.extend_from_slice(connection.as_uuid().as_bytes());
     aad
 }
@@ -234,13 +241,31 @@ mod tests {
         assert_eq!(reopened.expose_secret(), PLAINTEXT);
     }
 
+    /// A server key of known bytes and, independently of the vault, the
+    /// spec §8.3 cipher derived from it.
+    fn known_key(dir: &tempfile::TempDir) -> (ServerKey, XChaCha20Poly1305) {
+        let path = dir.path().join("known");
+        std::fs::write(&path, [42_u8; 32]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let derived = blake3::derive_key("coffer 2026-10 provider credentials v1", &[42_u8; 32]);
+        (
+            ServerKey::load_or_create(&path).unwrap(),
+            XChaCha20Poly1305::new(&derived.into()),
+        )
+    }
+
+    /// Spec §8.3 associated data: prefix, version byte, connection id.
+    fn spec_aad(version: u8, connection: ConnectionId) -> Vec<u8> {
+        let mut aad = b"coffer connection credentials\0".to_vec();
+        aad.push(version);
+        aad.extend_from_slice(connection.as_uuid().as_bytes());
+        aad
+    }
+
     #[test]
     fn sealed_format_matches_spec() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("k");
-        std::fs::write(&path, [42_u8; 32]).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let key = ServerKey::load_or_create(&path).unwrap();
+        let (key, cipher) = known_key(&dir);
         let connection = ConnectionId::new();
 
         let blob = sealed_bytes(
@@ -250,24 +275,46 @@ mod tests {
         );
 
         // Spec §8.3: version 0x01, 24-byte nonce, ciphertext and 16-byte tag,
-        // under BLAKE3 derive_key of the server key, connection id as AAD.
+        // under BLAKE3 derive_key of the server key; the version byte and the
+        // connection id are bound as associated data.
         assert_eq!(blob[0], 0x01);
         assert_eq!(blob.len(), 1 + 24 + PLAINTEXT.len() + 16);
-        let derived = blake3::derive_key("coffer 2026-10 provider credentials v1", &[42_u8; 32]);
-        let cipher = XChaCha20Poly1305::new(&derived.into());
-        let mut aad = b"coffer connection credentials\0".to_vec();
-        aad.extend_from_slice(connection.as_uuid().as_bytes());
         let nonce = XNonce::try_from(&blob[1..25]).unwrap();
         let plain = cipher
             .decrypt(
                 &nonce,
                 Payload {
                     msg: &blob[25..],
-                    aad: &aad,
+                    aad: &spec_aad(0x01, connection),
                 },
             )
             .unwrap();
         assert_eq!(plain, PLAINTEXT.as_bytes());
+    }
+
+    #[test]
+    fn authentic_non_utf8_plaintext_is_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (key, cipher) = known_key(&dir);
+        let connection = ConnectionId::new();
+        let nonce = [7_u8; 24];
+        let ciphertext = cipher
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: &[0xff, 0xfe, 0x80],
+                    aad: &spec_aad(0x01, connection),
+                },
+            )
+            .unwrap();
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&ciphertext);
+
+        assert!(matches!(
+            CredentialVault::new(&key).open(connection, &SealedCredentials::from(blob)),
+            Err(VaultError::Malformed)
+        ));
     }
 
     #[test]

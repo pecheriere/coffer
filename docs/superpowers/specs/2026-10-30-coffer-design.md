@@ -553,8 +553,11 @@ visible account with too low a level answers 403 naming the level needed.
 
 Provider credentials are sealed with XChaCha20-Poly1305 under a key derived
 (BLAKE3 `derive_key`, context `coffer 2026-10 provider credentials v1`) from
-the server key in `COFFER_SECRET_KEY_FILE`. The connection id is the associated
-data, and a version byte allows a dedicated key later. Losing the server key
+the server key in `COFFER_SECRET_KEY_FILE`. A sealed value is
+`version || nonce || ciphertext || tag`; a version byte allows a dedicated key
+later. The associated data is `"coffer connection credentials\0" || version ||
+connection id`, so a value opens only for its connection and under the version
+it was sealed with. Losing the server key
 means reconnecting every provider. A connection's credentials can be replaced
 (reconnect) without losing its bindings.
 

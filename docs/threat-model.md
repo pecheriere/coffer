@@ -29,9 +29,11 @@
 - **Provider credentials are stored only sealed.** They are encrypted with
   XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
   the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider
-  credentials v1`). The connection id is the associated data, so a sealed
-  value copied to another connection's row does not open; any altered byte
-  fails authentication. A leading version byte allows a dedicated key later.
+  credentials v1`). The connection id and the leading version byte are bound
+  as associated data, so a sealed value copied to another connection's row
+  does not open, and relabelling its version (to steer it to another key)
+  fails authentication, as does any altered byte. The version byte allows a
+  dedicated key later.
   In clear they exist only in memory, in buffers wiped after use, and never
   appear in logs, errors, the audit log or responses. A stolen database or
   backup does not reveal them without the server key; losing the server key
