@@ -490,6 +490,8 @@ async fn sync_run_start_since_counts_from_the_earliest() {
         (0, 1, Some(at(101))),
         (0, 2, None),
         (50, 0, Some(at(101))),
+        // Started exactly at `since`: outside the window.
+        (2, 0, Some(at(101))),
     ] {
         assert_eq!(
             tx.sync_run_start_since(connection, at(since), skip)

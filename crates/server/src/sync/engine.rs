@@ -306,7 +306,7 @@ impl SyncService {
     }
 
     /// The household's current day.
-    pub(super) fn today(&self) -> Date {
+    fn today(&self) -> Date {
         self.clock
             .now()
             .to_zoned(self.config.timezone.clone())
@@ -382,7 +382,8 @@ impl SyncService {
         let detail = match failure {
             Failure::Removed => CONNECTION_REMOVED.to_owned(),
             Failure::Connection { status, text } => {
-                if tx.get_connection(connection.id).await?.status != ConnectionStatus::Removed {
+                let stored = tx.get_connection(connection.id).await?;
+                if still_current(&stored, connection) {
                     tx.update_connection_status(
                         connection.id,
                         ConnectionStatusChange {
@@ -442,40 +443,10 @@ impl SyncService {
         let connection_errors = joined_errors(&result.connection_errors);
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let removed = totals.connection_removed
-            || tx.get_connection(connection.id).await?.status == ConnectionStatus::Removed;
-        let (status, detail) = if removed {
-            // The accounts applied before the removal committed stay; the
-            // run says the rest was abandoned.
-            let status = if totals.accounts == 0 {
-                SyncRunStatus::Failed
-            } else {
-                SyncRunStatus::Partial
-            };
-            let detail = if totals.accounts == 0 {
-                CONNECTION_REMOVED.to_owned()
-            } else {
-                format!(
-                    "{}; {CONNECTION_REMOVED}",
-                    totals.detail(connection_errors.is_some())
-                )
-            };
-            (status, detail)
-        } else if connection_errors.is_some()
-            || totals.failed_accounts > 0
-            || totals.report.skipped > 0
-        {
-            (
-                SyncRunStatus::Partial,
-                totals.detail(connection_errors.is_some()),
-            )
-        } else {
-            (
-                SyncRunStatus::Succeeded,
-                totals.detail(connection_errors.is_some()),
-            )
-        };
-        if !removed {
+        let stored = tx.get_connection(connection.id).await?;
+        let removed = totals.connection_removed || stored.status == ConnectionStatus::Removed;
+        let (status, detail) = outcome(&totals, removed, connection_errors.is_some());
+        if !removed && still_current(&stored, connection) {
             tx.update_connection_status(
                 connection.id,
                 ConnectionStatusChange {
@@ -627,6 +598,35 @@ impl SyncService {
         tx.set_provider_account_error(record.id, Some(ACCOUNT_NOT_STORED.to_owned()))
             .await?;
         tx.commit().await
+    }
+}
+
+/// Whether the outcome of a run that opened `opened` may still be recorded
+/// on the connection, now `stored`: it is not removed and holds the same
+/// sealed credentials. A reconnect while the run was fetching replaces
+/// them, and the run's outcome then says nothing about the new ones.
+fn still_current(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
+    stored.status != ConnectionStatus::Removed && stored.credentials == opened.credentials
+}
+
+/// The status and detail of a run that applied `totals`. When the
+/// connection was removed meanwhile, the accounts applied before the removal
+/// committed stay and the run says the rest was abandoned.
+fn outcome(totals: &Totals, removed: bool, connection_errors: bool) -> (SyncRunStatus, String) {
+    let detail = totals.detail(connection_errors);
+    if removed {
+        if totals.accounts == 0 {
+            (SyncRunStatus::Failed, CONNECTION_REMOVED.to_owned())
+        } else {
+            (
+                SyncRunStatus::Partial,
+                format!("{detail}; {CONNECTION_REMOVED}"),
+            )
+        }
+    } else if connection_errors || totals.failed_accounts > 0 || totals.report.skipped > 0 {
+        (SyncRunStatus::Partial, detail)
+    } else {
+        (SyncRunStatus::Succeeded, detail)
     }
 }
 
@@ -841,7 +841,37 @@ mod tests {
     use jiff::civil::date;
     use jiff::tz::TimeZone;
 
-    use super::{days_before, joined_errors, window_start};
+    use coffer_domain::sync::SyncRunStatus;
+
+    use super::{
+        AccountOutcome, ApplyReport, CONNECTION_REMOVED, Totals, days_before, joined_errors,
+        outcome, window_start,
+    };
+
+    /// A run whose connection is removed after some accounts were applied
+    /// is partial and says so; one removed before any is failed.
+    #[test]
+    fn removal_mid_run_outcomes() {
+        let mut totals = Totals::default();
+        assert_eq!(
+            outcome(&totals, true, false),
+            (SyncRunStatus::Failed, CONNECTION_REMOVED.to_owned())
+        );
+        totals.add(&AccountOutcome::Applied(ApplyReport {
+            created: 2,
+            ..ApplyReport::default()
+        }));
+        totals.add(&AccountOutcome::ConnectionRemoved);
+        let (status, detail) = outcome(&totals, true, false);
+        assert_eq!(status, SyncRunStatus::Partial);
+        assert_eq!(
+            detail,
+            "1 accounts, 0 with errors; 2 created, 0 attached, 0 updated, 0 deleted, 0 held, \
+             0 skipped; the connection is removed"
+        );
+        assert_eq!(outcome(&totals, false, false).0, SyncRunStatus::Succeeded);
+        assert_eq!(outcome(&totals, false, true).0, SyncRunStatus::Partial);
+    }
 
     #[test]
     fn window_rules() {

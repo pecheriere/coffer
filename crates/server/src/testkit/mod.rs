@@ -377,26 +377,41 @@ pub struct FakeProvider {
     capabilities: Capabilities,
     responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
     requests: Mutex<Vec<FakeFetch>>,
-    gate: Mutex<Option<FetchGate>>,
+    fetch_gate: Mutex<Option<CallGate>>,
+    connect_gate: Mutex<Option<CallGate>>,
+    disconnect_gate: Mutex<Option<CallGate>>,
     disconnect_error: Mutex<Option<ProviderError>>,
     disconnects: Mutex<Vec<SecretString>>,
 }
 
-/// Holds the next fetch of a [`FakeProvider`] until released (see
-/// [`FakeProvider::hold_next_fetch`]).
+/// Holds the next call of one kind to a [`FakeProvider`] until released
+/// (see [`FakeProvider::hold_next_fetch`]).
 #[derive(Debug, Clone)]
-pub struct FetchGate {
+pub struct CallGate {
     entered: Arc<Notify>,
     release: Arc<Notify>,
 }
 
-impl FetchGate {
-    /// Waits until the held fetch has started.
+impl CallGate {
+    fn new() -> Self {
+        Self {
+            entered: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Signals that the held call started, then waits for its release.
+    async fn hold(self) {
+        self.entered.notify_one();
+        self.release.notified().await;
+    }
+
+    /// Waits until the held call has started.
     pub async fn entered(&self) {
         self.entered.notified().await;
     }
 
-    /// Lets the held fetch answer.
+    /// Lets the held call answer.
     pub fn release(&self) {
         self.release.notify_one();
     }
@@ -437,7 +452,9 @@ impl FakeProvider {
             capabilities,
             responses: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
-            gate: Mutex::new(None),
+            fetch_gate: Mutex::new(None),
+            connect_gate: Mutex::new(None),
+            disconnect_gate: Mutex::new(None),
             disconnect_error: Mutex::new(None),
             disconnects: Mutex::new(Vec::new()),
         }
@@ -446,13 +463,22 @@ impl FakeProvider {
     /// Makes the next fetch wait, once it has started, until the returned
     /// gate is released, so a test can act while a sync is mid-fetch.
     #[must_use]
-    pub fn hold_next_fetch(&self) -> FetchGate {
-        let gate = FetchGate {
-            entered: Arc::new(Notify::new()),
-            release: Arc::new(Notify::new()),
-        };
-        *lock(&self.gate) = Some(gate.clone());
-        gate
+    pub fn hold_next_fetch(&self) -> CallGate {
+        hold(&self.fetch_gate)
+    }
+
+    /// Makes the next `connect` wait, once it has started, until the
+    /// returned gate is released.
+    #[must_use]
+    pub fn hold_next_connect(&self) -> CallGate {
+        hold(&self.connect_gate)
+    }
+
+    /// Makes the next `disconnect` wait, once it has started, until the
+    /// returned gate is released.
+    #[must_use]
+    pub fn hold_next_disconnect(&self) -> CallGate {
+        hold(&self.disconnect_gate)
     }
 
     /// Makes the next `disconnect` fail with `error`.
@@ -498,7 +524,13 @@ impl Provider for FakeProvider {
         input: ConnectInput,
     ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
         let ConnectInput::SimpleFinSetupToken(token) = input;
-        Box::pin(std::future::ready(Ok(token)))
+        let gate = lock(&self.connect_gate).take();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.hold().await;
+            }
+            Ok(token)
+        })
     }
 
     fn fetch<'a>(
@@ -521,11 +553,10 @@ impl Provider for FakeProvider {
             .unwrap_or_else(PoisonError::into_inner)
             .pop_front()
             .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())));
-        let gate = lock(&self.gate).take();
+        let gate = lock(&self.fetch_gate).take();
         Box::pin(async move {
             if let Some(gate) = gate {
-                gate.entered.notify_one();
-                gate.release.notified().await;
+                gate.hold().await;
             }
             response
         })
@@ -540,8 +571,21 @@ impl Provider for FakeProvider {
             Some(error) => Err(error),
             None => Ok(()),
         };
-        Box::pin(std::future::ready(result))
+        let gate = lock(&self.disconnect_gate).take();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.hold().await;
+            }
+            result
+        })
     }
+}
+
+/// Installs a new gate in `slot` and returns it.
+fn hold(slot: &Mutex<Option<CallGate>>) -> CallGate {
+    let gate = CallGate::new();
+    *lock(slot) = Some(gate.clone());
+    gate
 }
 
 /// Locks `mutex`, recovering the data of a test that panicked holding it.

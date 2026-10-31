@@ -158,8 +158,36 @@ pub struct AccountPatch {
     pub closed: Option<bool>,
 }
 
-fn parse_name(name: &str) -> Result<AccountName, LedgerError> {
+/// `name` as an account name.
+///
+/// # Errors
+///
+/// [`LedgerError::Invalid`] unless it is 1 to 100 characters without
+/// control characters.
+pub(crate) fn parse_name(name: &str) -> Result<AccountName, LedgerError> {
     AccountName::parse(name).map_err(|_| LedgerError::Invalid(NAME_INVALID))
+}
+
+/// An account to create whose input has been validated, so that a refused
+/// request never takes the write lock.
+#[derive(Debug, Clone)]
+pub(crate) struct ValidNewAccount {
+    name: AccountName,
+    input: NewAccountInput,
+}
+
+impl ValidNewAccount {
+    /// Validates `input`.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Invalid`] for an invalid name.
+    pub(crate) fn parse(input: NewAccountInput) -> Result<Self, LedgerError> {
+        Ok(Self {
+            name: parse_name(&input.name)?,
+            input,
+        })
+    }
 }
 
 impl Ledger {
@@ -178,9 +206,10 @@ impl Ledger {
         slot: Option<IdempotencySlot>,
     ) -> Result<AccountView, LedgerError> {
         authorize(actor, Action::WriteHousehold)?;
+        let valid = ValidNewAccount::parse(input)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let (record, opening) = Self::insert_account(&mut tx, now, actor, input).await?;
+        let (record, opening) = Self::insert_account(&mut tx, now, actor, valid).await?;
         let view = AccountView::new(&record, opening.as_ref(), false);
         complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
@@ -194,14 +223,14 @@ impl Ledger {
     ///
     /// # Errors
     ///
-    /// [`LedgerError::Invalid`] for an invalid name; storage failures.
+    /// Storage failures.
     pub(crate) async fn insert_account(
         tx: &mut StoreTx,
         now: Timestamp,
         actor: &Actor,
-        input: NewAccountInput,
+        valid: ValidNewAccount,
     ) -> Result<(AccountRecord, Option<BalanceSnapshot>), LedgerError> {
-        let name = parse_name(&input.name)?;
+        let ValidNewAccount { name, input } = valid;
         let (liquidity, liquidity_overridden) = match input.liquidity {
             Some(chosen) => (chosen, true),
             None => (default_liquidity(input.kind), false),

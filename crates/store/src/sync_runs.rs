@@ -46,8 +46,8 @@ pub struct NewSyncRun {
 /// A connection's recent runs, for rate limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunCounts {
-    /// Runs queued or running, plus finished runs started at or after the
-    /// given instant.
+    /// Runs queued or running, plus finished runs started after the given
+    /// instant.
     pub started_or_pending: u32,
     /// When the most recent run started.
     pub last_started_at: Option<Timestamp>,
@@ -208,7 +208,7 @@ impl StoreTx {
     }
 
     /// The counts rate limits use for `connection`: runs queued, running or
-    /// started at or after `since`, the last start, and whether a run is in
+    /// started after `since`, the last start, and whether a run is in
     /// flight. Read inside the transaction that queues a run, so two
     /// requests cannot both pass a limit.
     ///
@@ -222,7 +222,7 @@ impl StoreTx {
     ) -> Result<RunCounts, StoreError> {
         let row = sqlx::query(
             "SELECT \
-             COALESCE(SUM(status IN ('queued', 'running') OR started_at >= ?), 0) AS counted, \
+             COALESCE(SUM(status IN ('queued', 'running') OR started_at > ?), 0) AS counted, \
              MAX(started_at) AS last_started_at, \
              COALESCE(MAX(status IN ('queued', 'running')), 0) AS in_flight \
              FROM sync_runs WHERE connection_id = ?",
@@ -241,7 +241,7 @@ impl StoreTx {
         })
     }
 
-    /// When the run of `connection` started at or after `since` that comes
+    /// When the run of `connection` started after `since` that comes
     /// `skip` places after the earliest one started; `None` when there are
     /// not that many.
     ///
@@ -256,7 +256,7 @@ impl StoreTx {
     ) -> Result<Option<Timestamp>, StoreError> {
         let started: Option<i64> = sqlx::query_scalar(
             "SELECT started_at FROM sync_runs \
-             WHERE connection_id = ? AND started_at >= ? \
+             WHERE connection_id = ? AND started_at > ? \
              ORDER BY started_at, id LIMIT 1 OFFSET ?",
         )
         .bind(connection.to_string())

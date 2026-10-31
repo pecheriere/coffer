@@ -320,14 +320,16 @@ async fn bind_requires_same_currency() {
         .sync
         .bind(&world.alice, usd.id, euros)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::CurrencyMismatch));
     let err = world
         .server
         .sync
         .bind(&world.alice, odd.id, euros)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::CurrencyMismatch));
 
     assert_eq!(world.provider_account("acct-usd").await.account, None);
@@ -403,7 +405,7 @@ async fn bind_applies_held_records() {
             None,
         )
         .await;
-    assert_eq!(unbound["items"], json!([]));
+    assert_eq!(unbound["items"].as_array().map(Vec::len), Some(0));
     let (_, all) = world
         .call(Method::GET, "/api/v1/provider-accounts", &reader, None)
         .await;
@@ -414,7 +416,8 @@ async fn bind_applies_held_records() {
         .sync
         .bind(&world.alice, held.id, checking)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(again, SyncError::Conflict(_)));
 }
 
@@ -639,7 +642,8 @@ async fn bind_needs_write_on_account() {
         .sync
         .bind(&reader, held.id, checking)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(denied(
         &err,
         Action::AccessAccount {
@@ -671,7 +675,8 @@ async fn rate_limit_refuses_with_retry_after() {
     let err = sync
         .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(
         err,
         SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_hours(8)
@@ -679,7 +684,8 @@ async fn rate_limit_refuses_with_retry_after() {
     let err = sync
         .request_sync(None, world.connection, SyncTrigger::Schedule)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(
         err,
         SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_hours(8)
@@ -711,7 +717,8 @@ async fn manual_and_scheduled_syncs_keep_their_minimum_interval() {
     let err = sync
         .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(
         err,
         SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_mins(30)
@@ -722,7 +729,8 @@ async fn manual_and_scheduled_syncs_keep_their_minimum_interval() {
     let err = sync
         .request_sync(None, world.connection, SyncTrigger::Schedule)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(
         err,
         SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_mins(30)
@@ -746,7 +754,8 @@ async fn manual_and_scheduled_syncs_keep_their_minimum_interval() {
         let err = sync
             .request_sync(actor, world.connection, trigger)
             .await
-            .unwrap_err();
+            .err()
+            .unwrap();
         assert!(matches!(err, SyncError::Invalid(_)));
     }
 }
@@ -761,7 +770,8 @@ async fn second_request_while_queued_refused() {
     let err = sync
         .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::InProgress));
     let problem = coffer_server::http::problem::Problem::from(err);
     assert_eq!(problem.status, StatusCode::CONFLICT);
@@ -772,7 +782,8 @@ async fn second_request_while_queued_refused() {
     let err = sync
         .request_sync(None, world.connection, SyncTrigger::Schedule)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::InProgress));
     assert_eq!(world.audit_actions("sync.request").await.len(), 1);
 }
@@ -935,7 +946,8 @@ async fn reconnect_reseals_and_keeps_bindings() {
     assert_eq!(view.accounts[0].account, Some(checking));
 
     let after = world.sealed().await.unwrap();
-    assert_ne!(after, before);
+    let resealed = after != before;
+    assert!(resealed);
     assert!(!contains(&after, "RENEWED-CREDENTIAL"));
     assert!(world.opens_to(world.connection, after, renewed));
     assert_eq!(
@@ -991,19 +1003,19 @@ async fn remove_fails_cleanly_when_disconnect_fails() {
         .sync
         .remove_connection(&world.alice, world.connection)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::Provider(_)));
     let problem = coffer_server::http::problem::Problem::from(err);
     assert_eq!(problem.status, StatusCode::BAD_GATEWAY);
-    assert_eq!(
-        world
-            .server
-            .store
-            .get_connection(world.connection)
-            .await
-            .unwrap(),
-        before
-    );
+    let unchanged = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap()
+        == before;
+    assert!(unchanged);
     assert_eq!(world.audit_actions("connection.remove").await.len(), 0);
 
     // Once the provider answers, the removal goes through.
@@ -1020,7 +1032,7 @@ async fn remove_fails_cleanly_when_disconnect_fails() {
         .await
         .unwrap();
     assert_eq!(removed.status, ConnectionStatus::Removed);
-    assert_eq!(removed.credentials, None);
+    assert!(removed.credentials.is_none());
     let disconnects = world.fake.disconnects();
     assert_eq!(disconnects.len(), 2);
     let gave_up_stored = disconnects[1].expose_secret() == PLAINTEXT;
@@ -1032,14 +1044,16 @@ async fn remove_fails_cleanly_when_disconnect_fails() {
         .sync
         .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::Conflict(_)));
     let err = world
         .server
         .sync
         .remove_connection(&world.alice, world.connection)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::Conflict(_)));
 }
 
@@ -1084,24 +1098,25 @@ async fn member_cannot_remove_or_reconnect_others_connection() {
             setup_token("https://other@bridge.example"),
         )
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(denied(&err, action, needs_admin));
     let err = world
         .server
         .sync
         .remove_connection(&bob, world.connection)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(denied(&err, action, needs_admin));
-    assert_eq!(
-        world
-            .server
-            .store
-            .get_connection(world.connection)
-            .await
-            .unwrap(),
-        before
-    );
+    let unchanged = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap()
+        == before;
+    assert!(unchanged);
     assert_eq!(world.fake.disconnects().len(), 0);
 
     // Bob may remove a connection he added.
@@ -1181,14 +1196,16 @@ async fn bind_refuses_unknown_and_removed() {
         .sync
         .bind(&world.alice, ProviderAccountId::new(), checking)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::NotFound));
     let err = world
         .server
         .sync
         .bind(&world.alice, held.id, AccountId::new())
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::NotFound));
 
     world
@@ -1202,7 +1219,517 @@ async fn bind_refuses_unknown_and_removed() {
         .sync
         .bind(&world.alice, held.id, checking)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(matches!(err, SyncError::Conflict(_)));
     assert_eq!(world.provider_account("acct-1").await.account, None);
+}
+
+const RENEWED: &str = "https://user:RENEWED-CREDENTIAL@bridge.example/simplefin";
+
+/// A reconnect that commits while a removal is giving up the old
+/// credentials makes the removal refuse: erasing the new credentials would
+/// leave them live at the provider.
+#[tokio::test]
+async fn remove_refuses_when_reconnected_during_disconnect() {
+    let world = world().await;
+    let gate = world.fake.hold_next_disconnect();
+    let sync = Arc::clone(&world.server.sync);
+    let alice = world.alice;
+    let connection = world.connection;
+    let removing = tokio::spawn(async move { sync.remove_connection(&alice, connection).await });
+
+    gate.entered().await;
+    world
+        .server
+        .sync
+        .reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .unwrap();
+    gate.release();
+    let err = removing.await.unwrap().err().unwrap();
+
+    assert!(matches!(err, SyncError::Conflict(_)));
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active);
+    assert!(world.opens_to(world.connection, stored.credentials.unwrap(), RENEWED));
+    assert_eq!(world.audit_actions("connection.remove").await.len(), 0);
+}
+
+/// A reconnect whose connection is removed while the provider connects
+/// gives the new credentials up again before refusing.
+#[tokio::test]
+async fn reconnect_gives_up_new_credentials_when_removed_meanwhile() {
+    let world = world().await;
+    let gate = world.fake.hold_next_connect();
+    let sync = Arc::clone(&world.server.sync);
+    let alice = world.alice;
+    let connection = world.connection;
+    let reconnecting = tokio::spawn(async move {
+        sync.reconnect(&alice, connection, setup_token(RENEWED))
+            .await
+    });
+
+    gate.entered().await;
+    world
+        .server
+        .sync
+        .remove_connection(&world.alice, world.connection)
+        .await
+        .unwrap();
+    gate.release();
+    let err = reconnecting.await.unwrap().err().unwrap();
+
+    assert!(matches!(err, SyncError::Conflict(_)));
+    let disconnects = world.fake.disconnects();
+    assert_eq!(disconnects.len(), 2);
+    let gave_up_old = disconnects[0].expose_secret() == PLAINTEXT;
+    let gave_up_new = disconnects[1].expose_secret() == RENEWED;
+    assert!(gave_up_old);
+    assert!(gave_up_new);
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Removed);
+    assert!(stored.credentials.is_none());
+}
+
+/// Of two reconnects racing, the one that loses gives its credentials up
+/// instead of overwriting the winner's.
+#[tokio::test]
+async fn losing_reconnect_gives_up_its_credentials() {
+    let world = world().await;
+    let gate = world.fake.hold_next_connect();
+    let sync = Arc::clone(&world.server.sync);
+    let alice = world.alice;
+    let connection = world.connection;
+    let slow = tokio::spawn(async move {
+        sync.reconnect(&alice, connection, setup_token(PLAINTEXT))
+            .await
+    });
+
+    gate.entered().await;
+    world
+        .server
+        .sync
+        .reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .unwrap();
+    gate.release();
+    let err = slow.await.unwrap().err().unwrap();
+
+    assert!(matches!(err, SyncError::Conflict(_)));
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert!(world.opens_to(world.connection, stored.credentials.unwrap(), RENEWED));
+    assert_eq!(world.fake.disconnects().len(), 1);
+    assert_eq!(world.audit_actions("connection.reconnect").await.len(), 1);
+}
+
+/// A run that started with the old credentials and fails after a reconnect
+/// does not mark the reconnected connection as needing reauthentication.
+#[tokio::test]
+async fn reconnect_during_a_running_sync_is_not_undone() {
+    let world = world().await;
+    let gate = world.fake.hold_next_fetch();
+    world.fake.push(Err(ProviderError::ReauthRequired));
+    let run = world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    let sync = Arc::clone(&world.server.sync);
+    let running = tokio::spawn(async move { sync.run(run.id).await });
+
+    gate.entered().await;
+    world
+        .server
+        .sync
+        .reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .unwrap();
+    gate.release();
+    let finished = running.await.unwrap().unwrap();
+
+    assert_eq!(finished.status, SyncRunStatus::Failed);
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active);
+    assert_eq!(stored.last_error, None);
+}
+
+#[tokio::test]
+async fn removal_proceeds_when_the_provider_already_refuses_the_credentials() {
+    let world = world().await;
+    world
+        .fake
+        .fail_next_disconnect(ProviderError::ReauthRequired);
+    world
+        .server
+        .sync
+        .remove_connection(&world.alice, world.connection)
+        .await
+        .unwrap();
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Removed);
+    assert!(stored.credentials.is_none());
+    assert_eq!(world.fake.disconnects().len(), 1);
+}
+
+#[tokio::test]
+async fn removal_proceeds_when_the_credentials_cannot_be_opened() {
+    let world = world().await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.set_connection_credentials(world.connection, Some(vec![1, 2, 3]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    world
+        .server
+        .sync
+        .remove_connection(&world.alice, world.connection)
+        .await
+        .unwrap();
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Removed);
+    assert!(stored.credentials.is_none());
+    assert_eq!(world.fake.disconnects().len(), 0);
+    assert!(captured_log_text().contains("its credentials cannot be opened"));
+}
+
+#[tokio::test]
+async fn removal_proceeds_when_the_provider_is_not_offered() {
+    let server = TestServer::new().await;
+    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let member = server.authenticator().enroll(&link, "alice", "Alice").await;
+    let alice = Actor {
+        member,
+        role: Role::Admin,
+        via: Via::Session,
+    };
+    let connection = server
+        .seed_connection(ProviderKind::SimpleFin, "Family bank", member, PLAINTEXT)
+        .await;
+
+    server
+        .sync
+        .remove_connection(&alice, connection)
+        .await
+        .unwrap();
+    let stored = server.store.get_connection(connection).await.unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Removed);
+    assert!(stored.credentials.is_none());
+    assert!(captured_log_text().contains("its provider is not offered"));
+}
+
+#[tokio::test]
+async fn bind_to_a_closed_account_is_refused() {
+    let world = world().await;
+    world
+        .sync_once(vec![reported(
+            "acct-1",
+            "USD",
+            None,
+            vec![txn("t-1", "-4.50")],
+        )])
+        .await;
+    let held = world.provider_account("acct-1").await;
+    let checking = world.account("Checking", "USD").await;
+    world
+        .server
+        .ledger
+        .update_account(
+            &world.alice,
+            checking,
+            coffer_server::ledger::accounts::AccountPatch {
+                closed: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let writer = world.token(Scope::Write).await;
+    let (status, problem) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/provider-accounts/{}/bind", held.id),
+            &writer,
+            Some(json!({"account": checking})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"].as_str(), Some("conflict"));
+    assert_eq!(world.provider_account("acct-1").await.account, None);
+    assert_eq!(world.transactions(checking).await.len(), 0);
+}
+
+#[tokio::test]
+async fn reconnect_on_a_removed_connection_is_refused() {
+    let world = world().await;
+    world
+        .server
+        .sync
+        .remove_connection(&world.alice, world.connection)
+        .await
+        .unwrap();
+    let err = world
+        .server
+        .sync
+        .reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, SyncError::Conflict(_)));
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert!(stored.credentials.is_none());
+    assert_eq!(world.audit_actions("connection.reconnect").await.len(), 0);
+}
+
+/// Reconnecting is no way around the limits: it queues a run only when a
+/// manual request would be allowed.
+#[tokio::test]
+async fn reconnect_does_not_queue_a_run_beyond_the_limits() {
+    let world = world().await;
+    let sync = &world.server.sync;
+    let run = sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    // A run in flight: no second one.
+    sync.reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .unwrap();
+    let runs = || async {
+        world
+            .server
+            .store
+            .list_sync_runs(world.connection, &PageRequest::default())
+            .await
+            .unwrap()
+            .items
+            .len()
+    };
+    assert_eq!(runs().await, 1);
+
+    // Rate limited: 30 minutes after the last start.
+    sync.run(run.id).await.unwrap();
+    world.server.clock.advance(SignedDuration::from_mins(30));
+    sync.reconnect(&world.alice, world.connection, setup_token(PLAINTEXT))
+        .await
+        .unwrap();
+    assert_eq!(runs().await, 1);
+    assert_eq!(world.audit_actions("connection.reconnect").await.len(), 2);
+}
+
+/// The 24-hour window and the wait agree: a run started exactly 24 hours
+/// ago no longer counts.
+#[tokio::test]
+async fn daily_budget_frees_exactly_after_24_hours() {
+    let world = world().await;
+    let sync = &world.server.sync;
+    let first = world.now();
+    for _ in 0..16 {
+        let run = sync
+            .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+            .await
+            .unwrap();
+        sync.run(run.id).await.unwrap();
+        world.server.clock.advance(SignedDuration::from_hours(1));
+    }
+    let day = SignedDuration::from_hours(24);
+    world.server.clock.set(
+        first
+            .checked_add(day)
+            .unwrap()
+            .checked_sub(SignedDuration::from_millis(1))
+            .unwrap(),
+    );
+    let err = sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        err,
+        SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_millis(1)
+    ));
+
+    world.server.clock.set(first.checked_add(day).unwrap());
+    let mut tx = world.server.store.begin().await.unwrap();
+    let counts = tx
+        .sync_run_counts(world.connection, world.now().checked_sub(day).unwrap())
+        .await
+        .unwrap();
+    drop(tx);
+    assert_eq!(counts.started_or_pending, 15);
+    sync.request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+}
+
+/// Without a name from the caller or a usable one from the provider, the
+/// request is refused with a message that asks for a name.
+#[tokio::test]
+async fn create_account_without_a_usable_name_asks_for_one() {
+    let world = world().await;
+    let mut nameless = reported("acct-1", "USD", Some(AccountKind::Checking), Vec::new());
+    nameless.name = "\u{200b}".into();
+    world.sync_once(vec![nameless]).await;
+    let held = world.provider_account("acct-1").await;
+    let writer = world.token(Scope::Write).await;
+
+    let (status, problem) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/provider-accounts/{}/create-account", held.id),
+            &writer,
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let asks_for_name = problem["detail"]
+        .as_str()
+        .is_some_and(|detail| detail.starts_with("name is required"));
+    assert!(asks_for_name);
+    assert_eq!(world.audit_actions("account.create").await.len(), 0);
+}
+
+/// A run that succeeds with the old credentials after a reconnect records
+/// nothing on the connection: no sync has used the new credentials yet.
+#[tokio::test]
+async fn reconnect_during_a_successful_sync_keeps_the_new_state() {
+    let world = world().await;
+    let gate = world.fake.hold_next_fetch();
+    world.fake.push(Ok(FetchResult {
+        accounts: vec![reported("acct-1", "USD", None, vec![txn("t-1", "-4.50")])],
+        connection_errors: Vec::new(),
+        cursor: None,
+    }));
+    let run = world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    let sync = Arc::clone(&world.server.sync);
+    let running = tokio::spawn(async move { sync.run(run.id).await });
+
+    gate.entered().await;
+    world
+        .server
+        .sync
+        .reconnect(&world.alice, world.connection, setup_token(RENEWED))
+        .await
+        .unwrap();
+    gate.release();
+    let finished = running.await.unwrap().unwrap();
+
+    assert_eq!(finished.status, SyncRunStatus::Succeeded);
+    assert_eq!(
+        world.provider_accounts().await.len(),
+        1,
+        "the data is applied"
+    );
+    let stored = world
+        .server
+        .store
+        .get_connection(world.connection)
+        .await
+        .unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active);
+    assert_eq!(stored.last_attempt_at, None);
+    assert_eq!(stored.last_success_at, None);
+}
+
+/// An invalid name is refused before the write lock is taken: with another
+/// writer holding it, the refusal still comes at once.
+#[tokio::test]
+async fn invalid_names_are_refused_before_taking_the_write_lock() {
+    let world = world().await;
+    world
+        .sync_once(vec![reported(
+            "acct-1",
+            "USD",
+            Some(AccountKind::Checking),
+            Vec::new(),
+        )])
+        .await;
+    let held = world.provider_account("acct-1").await;
+    let writer = world.server.store.begin().await.unwrap();
+
+    let created = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        world.server.ledger.create_account(
+            &world.alice,
+            NewAccountInput {
+                name: String::new(),
+                kind: AccountKind::Checking,
+                currency: Currency::parse("USD").unwrap(),
+                liquidity: None,
+                include_in_net_worth: true,
+                include_in_forecast: true,
+                opening_balance: None,
+            },
+            None,
+        ),
+    )
+    .await;
+    let refused_at_once = matches!(
+        created,
+        Ok(Err(coffer_server::ledger::LedgerError::Invalid(_)))
+    );
+    assert!(refused_at_once);
+
+    let linked = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        world.server.sync.create_account_and_bind(
+            &world.alice,
+            held.id,
+            coffer_server::sync::connections::NewLinkedAccountInput {
+                name: Some(String::new()),
+                kind: None,
+                liquidity: None,
+                include_in_net_worth: true,
+                include_in_forecast: true,
+            },
+        ),
+    )
+    .await;
+    let refused_at_once = matches!(linked, Ok(Err(SyncError::Invalid(_))));
+    assert!(refused_at_once);
+    drop(writer);
 }

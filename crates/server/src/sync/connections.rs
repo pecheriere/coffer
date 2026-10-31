@@ -22,6 +22,7 @@ use coffer_store::{
 };
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp};
+use secrecy::SecretString;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -32,7 +33,7 @@ use super::engine::{
 };
 use super::provider::{Capabilities, ConnectInput, ProviderError, ProviderKind};
 use crate::http::idempotency::IdempotencySlot;
-use crate::ledger::accounts::{AccountView, NewAccountInput};
+use crate::ledger::accounts::{AccountView, NewAccountInput, ValidNewAccount, parse_name};
 use crate::ledger::{Ledger, LedgerError};
 use crate::vault::SealedCredentials;
 
@@ -42,6 +43,9 @@ const KIND_REQUIRED: &str = "kind is required: the provider gives no kind for th
 const TRIGGER_INVALID: &str =
     "a member or agent requests manual syncs; only the schedule requests scheduled ones";
 const SERIALIZATION_FAILED: &str = "response serialization failed";
+const NAME_REQUIRED: &str = "name is required: the provider gives no usable name for this account";
+const CONNECTION_CHANGED: &str =
+    "the connection was reconnected or removed meanwhile; retry the request";
 
 /// The window the daily budget counts runs in.
 const BUDGET_WINDOW: SignedDuration = SignedDuration::from_hours(24);
@@ -496,15 +500,56 @@ impl SyncService {
             .provider_of(&current)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
         let credentials = provider.connect(input).await.map_err(SyncError::Provider)?;
-        let sealed = self
-            .vault
-            .seal(id, &credentials)
-            .map_err(SyncError::Vault)?;
+        let record = match self
+            .store_reconnect(actor, &current, &credentials, provider.capabilities())
+            .await
+        {
+            Ok(record) => record,
+            Err(err) => {
+                // Nothing stored the new credentials: give them up again
+                // rather than leave them live at the provider.
+                if let Err(disconnect) = provider.disconnect(&credentials).await {
+                    tracing::warn!(
+                        connection = %id,
+                        error = ?disconnect,
+                        "could not give up the credentials of a failed reconnect"
+                    );
+                }
+                return Err(err);
+            }
+        };
         drop(credentials);
+        tracing::info!(connection = %id, "connection reconnected");
+        let access = self.access.resolve(actor).await?;
+        let accounts = self
+            .store
+            .list_provider_accounts(Some(id))
+            .await?
+            .into_iter()
+            .filter(|account| visible(&access, account))
+            .map(ProviderAccountView::from)
+            .collect();
+        Ok(self.connection_view(record, accounts))
+    }
 
+    /// Stores reconnected `credentials` for `current`, sealed under its id,
+    /// if it is neither removed nor reconnected since it was read; queues a
+    /// manual run when the limits allow one.
+    async fn store_reconnect(
+        &self,
+        actor: &Actor,
+        current: &ConnectionRecord,
+        credentials: &SecretString,
+        capabilities: Capabilities,
+    ) -> Result<ConnectionRecord, SyncError> {
+        let id = current.id;
+        let sealed = self.vault.seal(id, credentials).map_err(SyncError::Vault)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let before = ensure_not_removed(&mut tx, id).await?;
+        if before.credentials != current.credentials {
+            return Err(SyncError::Conflict(CONNECTION_CHANGED));
+        }
         tx.set_connection_credentials(id, Some(sealed.into()))
             .await?;
         tx.update_connection_status(
@@ -535,15 +580,7 @@ impl SyncService {
             changes,
         )
         .await?;
-        match check_limits(
-            &mut tx,
-            id,
-            SyncTrigger::Manual,
-            provider.capabilities(),
-            now,
-        )
-        .await
-        {
+        match check_limits(&mut tx, id, SyncTrigger::Manual, capabilities, now).await {
             Ok(()) => {
                 tx.insert_sync_run(NewSyncRun {
                     connection: id,
@@ -553,24 +590,16 @@ impl SyncService {
                 })
                 .await?;
             }
-            // A run already queued uses the new credentials; otherwise the
+            // A queued run uses the new credentials when it starts; a
+            // running one cannot undo the reconnect (the engine updates the
+            // status only for the credentials it used). Otherwise the
             // schedule syncs it once the limits allow.
             Err(SyncError::InProgress | SyncError::RateLimited { .. }) => {}
             Err(err) => return Err(err),
         }
         let record = tx.get_connection(id).await?;
         tx.commit().await?;
-        tracing::info!(connection = %id, "connection reconnected");
-        let access = self.access.resolve(actor).await?;
-        let accounts = self
-            .store
-            .list_provider_accounts(Some(id))
-            .await?
-            .into_iter()
-            .filter(|account| visible(&access, account))
-            .map(ProviderAccountView::from)
-            .collect();
-        Ok(self.connection_view(record, accounts))
+        Ok(record)
     }
 
     /// Gives up the connection's credentials at the provider, then erases
@@ -584,9 +613,10 @@ impl SyncService {
     ///
     /// [`SyncError::Denied`] unless the actor may remove the connection;
     /// [`SyncError::NotFound`] for an unknown connection;
-    /// [`SyncError::Conflict`] for a removed one; [`SyncError::Provider`]
-    /// when the provider fails to give up the credentials, with nothing
-    /// changed; storage failures.
+    /// [`SyncError::Conflict`] for a removed one, or one reconnected while
+    /// its credentials were given up (retry); [`SyncError::Provider`] when
+    /// the provider fails to give up the credentials, with nothing changed;
+    /// storage failures.
     pub async fn remove_connection(
         &self,
         actor: &Actor,
@@ -608,6 +638,11 @@ impl SyncService {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let before = ensure_not_removed(&mut tx, id).await?;
+        if before.credentials != current.credentials {
+            // Reconnected while the old credentials were given up: erasing
+            // the new ones would leave them live at the provider.
+            return Err(SyncError::Conflict(CONNECTION_CHANGED));
+        }
         tx.set_connection_credentials(id, None).await?;
         tx.update_connection_status(
             id,
@@ -641,9 +676,14 @@ impl SyncService {
     /// Gives up `connection`'s credentials at its provider, opened only for
     /// the call.
     async fn disconnect(&self, connection: &ConnectionRecord) -> Result<(), SyncError> {
-        let (Some(provider), Some(sealed)) =
-            (self.provider_of(connection), &connection.credentials)
-        else {
+        let Some(sealed) = &connection.credentials else {
+            tracing::warn!(
+                connection = %connection.id,
+                "connection removed without disconnecting: it holds no credentials"
+            );
+            return Ok(());
+        };
+        let Some(provider) = self.provider_of(connection) else {
             tracing::warn!(
                 connection = %connection.id,
                 "connection removed without disconnecting: its provider is not offered"
@@ -779,6 +819,9 @@ impl SyncService {
     ) -> Result<LinkedAccountView, SyncError> {
         authorize(actor, Action::WriteHousehold)?;
         authorize(actor, Action::ManageConnections)?;
+        if let Some(name) = &input.name {
+            parse_name(name)?;
+        }
         let access = self.access.resolve(actor).await?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
@@ -795,21 +838,25 @@ impl SyncService {
             .ok_or(SyncError::Invalid(KIND_REQUIRED))?;
         let currency =
             Currency::parse(&current.currency_raw).map_err(|_| SyncError::CurrencyMismatch)?;
-        let (record, _) = Ledger::insert_account(
-            &mut tx,
-            now,
-            actor,
-            NewAccountInput {
-                name: input.name.unwrap_or_else(|| default_account_name(&current)),
-                kind,
-                currency,
-                liquidity: input.liquidity,
-                include_in_net_worth: input.include_in_net_worth,
-                include_in_forecast: input.include_in_forecast,
-                opening_balance: None,
-            },
-        )
-        .await?;
+        let name = if let Some(name) = input.name {
+            name
+        } else {
+            let name = default_account_name(&current);
+            if parse_name(&name).is_err() {
+                return Err(SyncError::Invalid(NAME_REQUIRED));
+            }
+            name
+        };
+        let valid = ValidNewAccount::parse(NewAccountInput {
+            name,
+            kind,
+            currency,
+            liquidity: input.liquidity,
+            include_in_net_worth: input.include_in_net_worth,
+            include_in_forecast: input.include_in_forecast,
+            opening_balance: None,
+        })?;
+        let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;
         authorize_account(actor, &access, record.id, AccountLevel::Write)?;
         let bound = bind_in(&mut tx, now, actor, &access, provider_account, record.id).await?;
         tx.commit().await?;
