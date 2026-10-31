@@ -57,6 +57,13 @@ http = "1.4"
 # Safe access to umask(2); already in the tree through tempfile.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs", "process"] }
 url = "2.5.8"
+# Outbound HTTPS (crates/server/src/egress.rs). rustls with the ring provider
+# and the platform verifier; reqwest gets a preconfigured rustls client, so
+# aws-lc-rs is never built, and no default feature (system proxy, HTTP/2,
+# charset) is enabled.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7.1"
 
 # HTML and CLI
 maud = { version = "0.27.0", features = ["axum"] }

@@ -6,6 +6,7 @@ pub mod auth;
 pub mod canonical;
 pub mod cli;
 pub mod config;
+pub mod egress;
 pub mod http;
 pub mod ledger;
 pub mod secrets;
