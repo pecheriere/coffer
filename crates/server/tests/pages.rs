@@ -3,227 +3,21 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "integration test: helpers outside #[test] functions panic to fail the test"
+    reason = "integration test: helpers outside #[test] functions unwrap to fail the test"
 )]
 
-use axum::Router;
 use axum::body::Body;
-use axum::http::{HeaderMap, Method, Request, StatusCode, header};
+use axum::http::{Method, Request, StatusCode, header};
 use coffer_domain::identity::{Role, Scope, TokenName};
+use coffer_server::assets::CSS_BASE_CSS;
 use coffer_server::auth::AuthError;
-use coffer_server::http::router;
-use coffer_server::testkit::{SoftAuthenticator, TEST_PUBLIC_URL, TestServer, link_token};
-use http_body_util::BodyExt as _;
+use coffer_server::testkit::browser::{Browser, Reply, with_admin};
+use coffer_server::testkit::{TEST_PUBLIC_URL, TestServer, link_token};
+use coffer_server::themes;
 use secrecy::ExposeSecret as _;
-use serde_json::{Value, json};
-use tower::ServiceExt as _;
+use serde_json::json;
 use url::Url;
-use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
-
-struct Reply {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: String,
-}
-
-impl Reply {
-    fn json(&self) -> Value {
-        serde_json::from_str(&self.body).expect("JSON body")
-    }
-
-    fn header(&self, name: header::HeaderName) -> &str {
-        self.headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-    }
-
-    /// The value of the hidden anti-forgery field.
-    fn csrf(&self) -> String {
-        self.between("name=\"csrf\" value=\"", "\"")
-    }
-
-    fn between(&self, start: &str, end: &str) -> String {
-        let from = self
-            .body
-            .find(start)
-            .unwrap_or_else(|| panic!("`{start}` not in page:\n{}", self.body))
-            + start.len();
-        let len = self.body[from..].find(end).expect("terminator");
-        self.body[from..from + len].to_owned()
-    }
-}
-
-/// A browser: the router and one cookie jar.
-struct Browser {
-    router: Router,
-    cookie: Option<String>,
-}
-
-impl Browser {
-    fn new(server: &TestServer) -> Self {
-        Self {
-            router: router(server.app_state()),
-            cookie: None,
-        }
-    }
-
-    async fn send(&mut self, request: Request<Body>) -> Reply {
-        let response = self
-            .router
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("response");
-        let (parts, body) = response.into_parts();
-        let body = body.collect().await.expect("body").to_bytes();
-        for value in parts.headers.get_all(header::SET_COOKIE) {
-            let value = value.to_str().expect("ASCII cookie");
-            if let Some(rest) = value.strip_prefix("coffer_session=") {
-                let token = rest.split(';').next().unwrap_or_default();
-                self.cookie = (!token.is_empty()).then(|| token.to_owned());
-            }
-        }
-        Reply {
-            status: parts.status,
-            headers: parts.headers,
-            body: String::from_utf8_lossy(&body).into_owned(),
-        }
-    }
-
-    fn builder(&self, method: Method, path: &str) -> axum::http::request::Builder {
-        let mut builder = Request::builder().method(method).uri(path);
-        if let Some(cookie) = &self.cookie {
-            builder = builder.header(header::COOKIE, format!("coffer_session={cookie}"));
-        }
-        builder
-    }
-
-    async fn get(&mut self, path: &str) -> Reply {
-        let request = self
-            .builder(Method::GET, path)
-            .body(Body::empty())
-            .expect("request");
-        self.send(request).await
-    }
-
-    /// The `Origin` header is set by hand. A real browser sends it on a form
-    /// POST only because pages carry `Referrer-Policy: same-origin`; under
-    /// `no-referrer` it would send `Origin: null` and the origin rule would
-    /// refuse the form.
-    async fn post_form(&mut self, path: &str, fields: &[(&str, &str)]) -> Reply {
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(fields)
-            .finish();
-        let request = self
-            .builder(Method::POST, path)
-            .header(header::ORIGIN, TEST_PUBLIC_URL)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .expect("request");
-        self.send(request).await
-    }
-
-    async fn post_form_from(&mut self, path: &str, origin: &str, fields: &[(&str, &str)]) -> Reply {
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(fields)
-            .finish();
-        let request = self
-            .builder(Method::POST, path)
-            .header(header::ORIGIN, origin)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .expect("request");
-        self.send(request).await
-    }
-
-    async fn post_json_with(
-        &mut self,
-        path: &str,
-        origin: Option<&str>,
-        csrf: Option<&str>,
-        body: &Value,
-    ) -> Reply {
-        let mut builder = self
-            .builder(Method::POST, path)
-            .header(header::CONTENT_TYPE, "application/json");
-        if let Some(origin) = origin {
-            builder = builder.header(header::ORIGIN, origin);
-        }
-        if let Some(csrf) = csrf {
-            builder = builder.header("X-CSRF-Token", csrf);
-        }
-        let request = builder.body(Body::from(body.to_string())).expect("request");
-        self.send(request).await
-    }
-
-    async fn post_json(&mut self, path: &str, body: &Value) -> Reply {
-        self.post_json_with(path, Some(TEST_PUBLIC_URL), None, body)
-            .await
-    }
-
-    /// Redeems an invite or setup link with `auth`: begin, register, finish.
-    async fn enroll(
-        &mut self,
-        auth: &mut SoftAuthenticator,
-        link: &Url,
-        username: &str,
-        display_name: &str,
-    ) -> Reply {
-        let begun = self
-            .post_json(
-                "/auth/enroll/begin",
-                &json!({
-                    "token": link_token(link),
-                    "username": username,
-                    "display_name": display_name,
-                }),
-            )
-            .await;
-        assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
-        let begun = begun.json();
-        let options: CreationChallengeResponse =
-            serde_json::from_value(begun["options"].clone()).expect("options");
-        let credential = auth.register(options).expect("register");
-        self.post_json(
-            "/auth/enroll/finish",
-            &json!({
-                "ceremony": begun["ceremony"],
-                "label": "soft passkey",
-                "credential": credential,
-            }),
-        )
-        .await
-    }
-
-    async fn login(&mut self, auth: &mut SoftAuthenticator, username: &str) -> Reply {
-        let begun = self
-            .post_json("/auth/login/begin", &json!({ "username": username }))
-            .await;
-        assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
-        let begun = begun.json();
-        let options: RequestChallengeResponse =
-            serde_json::from_value(begun["options"].clone()).expect("options");
-        let credential = auth.sign(options);
-        self.post_json(
-            "/auth/login/finish",
-            &json!({ "ceremony": begun["ceremony"], "credential": credential }),
-        )
-        .await
-    }
-}
-
-/// A server whose admin "alice" is enrolled and signed in over HTTP.
-async fn with_admin() -> (TestServer, Browser, SoftAuthenticator) {
-    let server = TestServer::new().await;
-    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
-    let mut browser = Browser::new(&server);
-    let mut auth = server.authenticator();
-    let done = browser.enroll(&mut auth, &link, "alice", "Alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
-    (server, browser, auth)
-}
+use webauthn_rs::prelude::CreationChallengeResponse;
 
 #[tokio::test]
 async fn full_journey() {
@@ -238,7 +32,7 @@ async fn full_journey() {
     assert!(page.body.contains("name=\"username\""));
     let mut alice_key = server.authenticator();
     let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     assert_eq!(done.json()["redirect"], "/account");
     assert!(done.header(header::SET_COOKIE).contains("HttpOnly"));
 
@@ -256,7 +50,7 @@ async fn full_journey() {
             &[("csrf", &csrf), ("role", "member"), ("display_name", "Bob")],
         )
         .await;
-    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    assert_eq!(created.status, StatusCode::OK, "`created` status");
     assert_eq!(created.header(header::CACHE_CONTROL), "no-store");
     let link = Url::parse(&created.between("id=\"new-link\">", "<")).expect("invite link");
     assert!(link.path().starts_with("/invite/"));
@@ -265,7 +59,7 @@ async fn full_journey() {
     let mut bob = Browser::new(&server);
     let mut bob_key = server.authenticator();
     let done = bob.enroll(&mut bob_key, &link, "bob", "Bob").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let denied = bob.get("/admin/members").await;
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
     assert!(denied.header(header::CONTENT_TYPE).starts_with("text/html"));
@@ -306,7 +100,7 @@ async fn full_journey() {
             ],
         )
         .await;
-    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    assert_eq!(created.status, StatusCode::OK, "`created` status");
     assert_eq!(created.header(header::CACHE_CONTROL), "no-store");
     let token = created.between("id=\"new-token\">", "<");
     assert!(token.starts_with("coffer_"));
@@ -329,7 +123,7 @@ async fn full_journey() {
     // Signing in again over the login endpoints works, and so does logout.
     let mut returning = Browser::new(&server);
     let done = returning.login(&mut alice_key, "alice").await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     assert_eq!(done.json()["redirect"], "/account");
     let page = returning.get("/account").await;
     assert_eq!(page.status, StatusCode::OK);
@@ -411,7 +205,7 @@ async fn security_headers_present() {
 async fn referrer_policy_lets_forms_send_their_origin() {
     let server = TestServer::new().await;
     let mut browser = Browser::new(&server);
-    for path in ["/login", "/static/coffer.css"] {
+    for path in ["/login", CSS_BASE_CSS.url] {
         let reply = browser.get(path).await;
         assert_eq!(reply.status, StatusCode::OK, "{path}");
         assert_eq!(
@@ -499,7 +293,12 @@ async fn bearer_token_does_not_authenticate_pages() {
     let bearer = format!("Bearer {}", secrecy::ExposeSecret::expose_secret(&token));
     let mut anonymous = Browser::new(&server);
 
-    for path in ["/account", "/admin/members", "/admin/invites"] {
+    for path in [
+        "/account",
+        "/admin/members",
+        "/admin/invites",
+        "/admin/household",
+    ] {
         let request = Request::builder()
             .uri(path)
             .header(header::AUTHORIZATION, &bearer)
@@ -536,7 +335,7 @@ async fn passkeys_can_be_added_and_removed() {
             &json!({}),
         )
         .await;
-    assert_eq!(begun.status, StatusCode::OK, "{}", begun.body);
+    assert_eq!(begun.status, StatusCode::OK, "`begun` status");
     let begun = begun.json();
     let options: CreationChallengeResponse =
         serde_json::from_value(begun["options"].clone()).unwrap();
@@ -554,16 +353,15 @@ async fn passkeys_can_be_added_and_removed() {
             }),
         )
         .await;
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
 
     let listed = admin.get("/account").await;
     assert!(listed.body.contains("second key"));
 
     // Remove it again; the form carries the passkey id.
     let after_label = Reply {
-        status: listed.status,
-        headers: HeaderMap::new(),
         body: listed.body[listed.body.find("second key").unwrap()..].to_owned(),
+        ..listed
     };
     let id = after_label.between("action=\"/account/passkeys/", "/remove\"");
     let removed = admin
@@ -620,9 +418,8 @@ async fn members_page_manages_members_and_reenroll_links() {
     let members = admin.get("/admin/members").await;
     let csrf = members.csrf();
     let bob_row = Reply {
-        status: members.status,
-        headers: HeaderMap::new(),
-        body: members.body[members.body.find("<td>bob</td>").unwrap()..].to_owned(),
+        body: members.body[members.body.find("class=\"item-title\">bob<").unwrap()..].to_owned(),
+        ..members
     };
     let bob_id = bob_row.between("action=\"/admin/members/", "/role\"");
 
@@ -634,7 +431,7 @@ async fn members_page_manages_members_and_reenroll_links() {
             &[("csrf", &csrf)],
         )
         .await;
-    assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+    assert_eq!(issued.status, StatusCode::OK, "`issued` status");
     assert_eq!(issued.header(header::CACHE_CONTROL), "no-store");
     let link = Url::parse(&issued.between("id=\"new-link\">", "<")).unwrap();
     let page = Browser::new(&server).get(link.path()).await;
@@ -677,24 +474,6 @@ async fn invites_page_lists_and_revokes_pending_invites() {
 
     assert_eq!(revoked.status, StatusCode::SEE_OTHER);
     assert!(!admin.get("/admin/invites").await.body.contains("/revoke\""));
-}
-
-#[tokio::test]
-async fn static_assets_are_served() {
-    let server = TestServer::new().await;
-    let mut browser = Browser::new(&server);
-
-    let script = browser.get("/static/coffer.js").await;
-    assert_eq!(script.status, StatusCode::OK);
-    assert!(
-        script
-            .header(header::CONTENT_TYPE)
-            .starts_with("text/javascript")
-    );
-    assert!(script.body.contains("navigator.credentials"));
-    let style = browser.get("/static/coffer.css").await;
-    assert_eq!(style.status, StatusCode::OK);
-    assert!(style.header(header::CONTENT_TYPE).starts_with("text/css"));
 }
 
 #[tokio::test]
@@ -775,7 +554,7 @@ async fn signing_in_again_ends_the_previous_session() {
 
     let done = admin.login(&mut auth, "alice").await;
 
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
     let new = admin.cookie.clone().unwrap();
     assert_ne!(old, new);
     assert!(matches!(
@@ -837,7 +616,10 @@ async fn admin_sees_and_revokes_member_tokens() {
     assert!(members.body.contains(&bob_token.prefix));
     assert!(!members.body.contains(bob_secret.expose_secret()));
     let revoke_path = format!("/admin/tokens/{}/revoke", bob_token.id);
-    assert!(members.body.contains(&revoke_path), "{}", members.body);
+    assert!(
+        members.body.contains(&revoke_path),
+        "revoke link missing from the members page"
+    );
 
     // A member may not use it, not even on another member's token.
     let bob_page = bob.get("/account").await;
@@ -892,7 +674,7 @@ async fn sign_in_trims_the_username() {
 
     let done = browser.login(&mut auth, "  Alice ").await;
 
-    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
 }
 
 #[tokio::test]
@@ -956,7 +738,7 @@ async fn root_sends_a_visitor_without_a_session_to_sign_in() {
         .into_iter()
         .chain(get_and_head(&mut stale, "/").await)
     {
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
         assert_eq!(reply.header(header::LOCATION), "/login");
     }
 }
@@ -966,7 +748,306 @@ async fn root_sends_a_signed_in_member_home() {
     let (_server, mut admin, _) = with_admin().await;
 
     for reply in get_and_head(&mut admin, "/").await {
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
         assert_eq!(reply.header(header::LOCATION), "/account");
     }
+}
+
+/// Every page a household sees, as (page, reply): sign-in, a bootstrap
+/// setup link, a new-member invite link, and the signed-in admin's account,
+/// members and invites pages. Bob is a member, so the members page lists
+/// someone the admin manages.
+async fn every_page() -> Vec<(&'static str, Reply)> {
+    let server = TestServer::new().await;
+    let setup = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let mut visitor = Browser::new(&server);
+    let mut pages = vec![
+        ("/login", visitor.get("/login").await),
+        ("/setup/<token>", visitor.get(setup.path()).await),
+    ];
+
+    let mut admin = Browser::new(&server);
+    let mut alice_key = server.authenticator();
+    let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
+    let actor = server
+        .sessions
+        .resolve(admin.cookie.as_deref().unwrap())
+        .await
+        .unwrap();
+    let for_bob = server
+        .identity
+        .create_invite(&actor, Role::Member, None)
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&server);
+    let mut bob_key = server.authenticator();
+    let done = bob.enroll(&mut bob_key, &for_bob, "bob", "Bob").await;
+    assert_eq!(done.status, StatusCode::OK, "`done` status");
+    let pending = server
+        .identity
+        .create_invite(&actor, Role::Member, None)
+        .await
+        .unwrap();
+    pages.push(("/invite/<token>", visitor.get(pending.path()).await));
+
+    for path in [
+        "/account",
+        "/admin/members",
+        "/admin/invites",
+        "/admin/household",
+    ] {
+        pages.push((path, admin.get(path).await));
+    }
+    pages
+}
+
+/// The opening tags `<name …>` in `html`.
+fn tags<'a>(html: &'a str, name: &str) -> Vec<(usize, &'a str)> {
+    let open = format!("<{name}");
+    html.match_indices(&open)
+        .filter(|(at, _)| {
+            html[at + open.len()..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        })
+        .map(|(at, _)| {
+            let end = html[at..].find('>').map_or(html.len(), |len| at + len + 1);
+            (at, &html[at..end])
+        })
+        .collect()
+}
+
+/// The value of attribute `name` in the opening tag `tag`.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!(" {name}=\"");
+    let from = tag.find(&key)? + key.len();
+    let len = tag[from..].find('"')?;
+    Some(&tag[from..from + len])
+}
+
+#[tokio::test]
+async fn every_page_is_themed_and_inline_free() {
+    for (page, reply) in every_page().await {
+        assert_eq!(reply.status, StatusCode::OK, "GET {page}");
+        let body = &reply.body;
+        let theme = format!("href=\"{}\"", themes::DEFAULT.stylesheet.url);
+        let base = format!("href=\"{}\"", CSS_BASE_CSS.url);
+        let theme_at = body
+            .find(&theme)
+            .unwrap_or_else(|| panic!("{page}: no theme"));
+        let base_at = body
+            .find(&base)
+            .unwrap_or_else(|| panic!("{page}: no base"));
+        assert!(theme_at < base_at, "{page}: tokens load before components");
+        for expected in [
+            "<meta name=\"color-scheme\" content=\"light dark\">",
+            "href=\"#main\"",
+            "<main id=\"main\"",
+        ] {
+            assert!(body.contains(expected), "{page}: missing {expected}");
+        }
+        assert!(!body.contains("style="), "{page}: inline style attribute");
+        assert!(tags(body, "style").is_empty(), "{page}: <style> element");
+        for (_, script) in tags(body, "script") {
+            assert!(
+                attribute(script, "src").is_some(),
+                "{page}: inline script {script}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn sign_in_page_greets_with_the_mascot() {
+    let server = TestServer::new().await;
+    let page = Browser::new(&server).get("/login").await;
+    assert_eq!(page.status, StatusCode::OK);
+    for expected in [
+        "illustration-welcome",
+        "id=\"login\"",
+        "Sign in with a passkey",
+    ] {
+        assert!(page.body.contains(expected), "missing {expected}");
+    }
+}
+
+#[tokio::test]
+async fn empty_states_show_the_resting_mascot() {
+    let (_server, mut admin, _) = with_admin().await;
+    let account = admin.get("/account").await;
+    assert!(account.body.contains("No agent tokens yet"));
+    assert!(account.body.contains("illustration-empty"));
+    let invites = admin.get("/admin/invites").await;
+    assert!(invites.body.contains("No pending invites."));
+}
+
+#[tokio::test]
+async fn every_form_control_has_an_accessible_name() {
+    for (page, reply) in every_page().await {
+        let body = &reply.body;
+        let labelled: Vec<&str> = tags(body, "label")
+            .into_iter()
+            .filter_map(|(_, tag)| attribute(tag, "for"))
+            .collect();
+        let controls = tags(body, "select")
+            .into_iter()
+            .chain(tags(body, "input"))
+            .filter(|(_, tag)| attribute(tag, "type") != Some("hidden"));
+        for (at, tag) in controls {
+            let id = attribute(tag, "id");
+            let enclosed = body[..at]
+                .rfind("<label")
+                .is_some_and(|label| !body[label..at].contains("</label>"));
+            let named = attribute(tag, "aria-label").is_some()
+                || id.is_some_and(|id| labelled.contains(&id))
+                || enclosed;
+            let which = attribute(tag, "name").or(id).unwrap_or(tag);
+            assert!(named, "{page}: control {which} has no accessible name");
+        }
+        if page == "/admin/members" {
+            assert!(
+                body.contains("aria-label=\"Role for bob\""),
+                "the role select names its member"
+            );
+        }
+    }
+}
+
+/// The text of every main-navigation link that marks the current page.
+fn current_nav_links(body: &str) -> Vec<String> {
+    let start = body.find("<nav").unwrap();
+    let nav = &body[start..start + body[start..].find("</nav>").unwrap()];
+    tags(nav, "a")
+        .into_iter()
+        .filter(|(_, tag)| attribute(tag, "aria-current") == Some("page"))
+        .map(|(at, tag)| {
+            let text = &nav[at + tag.len()..];
+            text[..text.find("</a>").unwrap()].to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn nav_marks_the_current_page() {
+    let (_server, mut admin, _) = with_admin().await;
+    for (path, current) in [("/account", "Account"), ("/admin/invites", "Invites")] {
+        let page = admin.get(path).await;
+        assert_eq!(
+            current_nav_links(&page.body),
+            vec![current.to_owned()],
+            "{path}"
+        );
+        assert_eq!(page.body.matches("aria-current=").count(), 1, "{path}");
+    }
+}
+
+/// The security headers and the themed body every error page carries.
+fn assert_themed_error(reply: &Reply, status: StatusCode) {
+    assert_eq!(reply.status, status, "`reply` status");
+    assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
+    assert_eq!(reply.header(header::CACHE_CONTROL), "no-store");
+    assert_eq!(
+        reply.header(header::CONTENT_SECURITY_POLICY),
+        "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
+         form-action 'self'; base-uri 'none'"
+    );
+    assert!(
+        reply
+            .body
+            .contains(&format!("href=\"{}\"", themes::DEFAULT.stylesheet.url))
+    );
+    assert!(reply.body.contains("illustration-error"));
+    assert!(reply.body.contains("href=\"/account\""));
+}
+
+#[tokio::test]
+async fn unknown_page_renders_a_themed_not_found() {
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+
+    let [get, head] = get_and_head(&mut browser, "/nope").await;
+
+    assert_themed_error(&get, StatusCode::NOT_FOUND);
+    assert!(get.body.contains("Not found"));
+    assert_eq!(head.status, StatusCode::NOT_FOUND);
+}
+
+/// A page URL revisited with the wrong method (the token-created page is
+/// drawn at `/account/tokens`, so history or a bookmark sends a GET) gets
+/// the themed error page, not a blank one.
+#[tokio::test]
+async fn wrong_method_on_a_page_renders_a_themed_error() {
+    let (_server, mut admin, _) = with_admin().await;
+
+    for path in ["/account/tokens", "/logout"] {
+        let reply = admin.get(path).await;
+
+        assert_themed_error(&reply, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(reply.body.contains("Method not allowed"), "{path}");
+        assert_eq!(reply.header(header::ALLOW), "POST", "{path}");
+    }
+}
+
+#[tokio::test]
+async fn error_page_with_a_stale_cookie_still_renders() {
+    let (server, mut admin, _) = with_admin().await;
+    let invite = server
+        .identity
+        .create_invite(
+            &server
+                .sessions
+                .resolve(admin.cookie.as_deref().unwrap())
+                .await
+                .unwrap(),
+            Role::Member,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&server);
+    let mut bob_key = server.authenticator();
+    assert_eq!(
+        bob.enroll(&mut bob_key, &invite, "bob", "Bob").await.status,
+        StatusCode::OK
+    );
+    let members = admin.get("/admin/members").await;
+    let csrf = members.csrf();
+    let bob_row = Reply {
+        body: members.body[members.body.find("class=\"item-title\">bob<").unwrap()..].to_owned(),
+        ..members
+    };
+    let bob_id = bob_row.between("action=\"/admin/members/", "/role\"");
+    let disabled = admin
+        .post_form(
+            &format!("/admin/members/{bob_id}/disable"),
+            &[("csrf", &csrf)],
+        )
+        .await;
+    assert_eq!(disabled.status, StatusCode::SEE_OTHER);
+    let mut garbage = Browser::new(&server);
+    garbage.cookie = Some("garbage".to_owned());
+
+    for visitor in [&mut garbage, &mut bob] {
+        let reply = visitor.get("/nope").await;
+        assert_themed_error(&reply, StatusCode::NOT_FOUND);
+        let account = visitor.get("/account").await;
+        assert_eq!(account.status, StatusCode::SEE_OTHER);
+        assert_eq!(account.header(header::LOCATION), "/login");
+    }
+}
+
+#[tokio::test]
+async fn conflict_pages_are_themed() {
+    let (_server, mut admin, _) = with_admin().await;
+    let account = admin.get("/account").await;
+    let id = account.between("action=\"/account/passkeys/", "/remove\"");
+
+    let reply = admin
+        .post_form(
+            &format!("/account/passkeys/{id}/remove"),
+            &[("csrf", &account.csrf())],
+        )
+        .await;
+
+    assert_themed_error(&reply, StatusCode::CONFLICT);
+    assert!(reply.body.contains("last passkey"));
 }

@@ -1,0 +1,60 @@
+/* Fjord: calm and Scandinavian. Cool air, slate blue, generous room. */
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("asset:fonts/manrope-400-800.woff2") format("woff2");
+  unicode-range: U+0000-024F, U+0259, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0300-0304, U+0308, U+0329, U+1E00-1EFF, U+2000-206F, U+20A0-20C0, U+2113, U+2122, U+2190-2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+:root {
+  --bg: light-dark(#F2F5F6, #0F161B);
+  --surface: light-dark(#FFFFFF, #172128);
+  --text: light-dark(#182730, #E5ECEF);
+  --muted: light-dark(#52626C, #93A4AE);
+  --accent: light-dark(#2C6480, #86BEDA);
+  --on-accent: light-dark(#FFFFFF, #0A1A23);
+  --accent-soft: light-dark(#E1EDF2, #1B3341);
+  --positive: light-dark(#2A7150, #6FC69A);
+  --negative: light-dark(#B23A2F, #F2897D);
+  --warning: light-dark(#865700, #E2B451);
+  --warn-soft: light-dark(#FBF1DC, #33280F);
+  --border: light-dark(#D8E0E4, #26343D);
+  --control-border: light-dark(#7D8991, #63717A);
+  --shadow: light-dark(rgba(24, 39, 48, .10), rgba(0, 0, 0, .4));
+
+  --font-head: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --weight-head: 700;
+  --weight-button: 700;
+  --tracking-head: -.02em;
+  --style-display: normal;
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-btn: 10px;
+  --radius-chip: 8px;
+  --icon-stroke: 1.7;
+
+  --card-bg: var(--surface);
+  --card-border-width: 1px;
+  --card-border-color: var(--border);
+  --card-shadow: none;
+  --input-bg: var(--bg);
+  --input-border-width: 1px;
+  --input-border-color: var(--control-border);
+  --button-primary-bg: var(--accent);
+  --button-primary-fg: var(--on-accent);
+  --button-primary-shadow: none;
+  --button-secondary-bg: var(--surface);
+  --button-secondary-fg: var(--text);
+  --button-secondary-border: var(--border);
+  --nav-bg: var(--surface);
+  --nav-border-color: var(--border);
+  --nav-active-bg: var(--accent-soft);
+  --nav-active-fg: var(--text);
+  --nav-active-shadow: none;
+  --illustration-animation: none;
+}

@@ -56,14 +56,15 @@ jobs:
           # The PR's merge commit and its first parent, the base it merges into.
           fetch-depth: 2
           persist-credentials: false
-      - name: Lint and test the CI scripts
+      - name: Lint and test the CI scripts and asset tools
         run: |
           python3 -m venv "$RUNNER_TEMP/lint"
           "$RUNNER_TEMP/lint/bin/pip" install --quiet --require-hashes --only-binary :all: \
             -r .github/requirements-lint.txt
-          "$RUNNER_TEMP/lint/bin/ruff" check .github/scripts
-          "$RUNNER_TEMP/lint/bin/ruff" format --check .github/scripts
+          "$RUNNER_TEMP/lint/bin/ruff" check .github/scripts tools
+          "$RUNNER_TEMP/lint/bin/ruff" format --check .github/scripts tools
           python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
+          python3 -I -m unittest discover -s tools -p 'test_*.py'
       - name: Refuse crate versions published less than 7 days ago
         run: python3 -I .github/scripts/crate_age.py --base HEAD^1
 

@@ -14,6 +14,11 @@ pub enum Action {
     /// passkey, so an agent able to issue links could give itself a session;
     /// this needs an admin signed in with a passkey.
     IssueEnrollmentLink,
+    /// Change the acting member's own theme and colour scheme. Only ever
+    /// the actor's own member: there is no target to name.
+    ManageOwnPreferences,
+    /// Change household-wide settings, such as the household theme.
+    ManageHousehold,
 }
 
 /// Why an action was denied.
@@ -48,8 +53,11 @@ enum Requirement {
 pub fn authorize(actor: &Actor, action: Action) -> Result<(), Denied> {
     let requirement = match action {
         Action::ReadHousehold => Requirement::Scope(Scope::Read),
+        Action::ManageOwnPreferences => Requirement::Scope(Scope::Write),
         Action::ManageOwnCredentials => Requirement::Session,
-        Action::ManageMembers | Action::ManageInvites => Requirement::Scope(Scope::Admin),
+        Action::ManageMembers | Action::ManageInvites | Action::ManageHousehold => {
+            Requirement::Scope(Scope::Admin)
+        }
         Action::IssueEnrollmentLink => Requirement::SessionWithScope(Scope::Admin),
     };
     let session = matches!(actor.via, Via::Session);
@@ -201,6 +209,63 @@ mod tests {
             authorize(&agent(Role::Admin, Scope::Admin), Action::ManageInvites),
             Ok(())
         );
+    }
+
+    #[test]
+    fn preferences_need_write_and_household_needs_admin() {
+        let member = session(Role::Member);
+        assert_eq!(authorize(&member, Action::ManageOwnPreferences), Ok(()));
+        assert_eq!(
+            authorize(&member, Action::ManageHousehold),
+            Err(Denied {
+                action: Action::ManageHousehold,
+                reason: DenyReason::InsufficientScope {
+                    needed: Scope::Admin
+                },
+            })
+        );
+        assert_eq!(
+            authorize(&agent(Role::Admin, Scope::Write), Action::ManageHousehold),
+            Err(Denied {
+                action: Action::ManageHousehold,
+                reason: DenyReason::InsufficientScope {
+                    needed: Scope::Admin
+                },
+            })
+        );
+    }
+
+    /// Every role, credential and scope against the two appearance actions.
+    /// A token is capped by its member's role, so a member's admin token
+    /// still cannot change household settings.
+    #[test]
+    fn appearance_actions_matrix() {
+        let table = [
+            (session(Role::Member), true, false),
+            (session(Role::Admin), true, true),
+            (agent(Role::Member, Scope::Read), false, false),
+            (agent(Role::Member, Scope::Write), true, false),
+            (agent(Role::Member, Scope::Admin), true, false),
+            (agent(Role::Admin, Scope::Read), false, false),
+            (agent(Role::Admin, Scope::Write), true, false),
+            (agent(Role::Admin, Scope::Admin), true, true),
+        ];
+        for (actor, preferences, household) in table {
+            for (action, allowed, needed) in [
+                (Action::ManageOwnPreferences, preferences, Scope::Write),
+                (Action::ManageHousehold, household, Scope::Admin),
+            ] {
+                let expected = if allowed {
+                    Ok(())
+                } else {
+                    Err(Denied {
+                        action,
+                        reason: DenyReason::InsufficientScope { needed },
+                    })
+                };
+                assert_eq!(authorize(&actor, action), expected, "{actor:?} {action:?}");
+            }
+        }
     }
 
     #[test]

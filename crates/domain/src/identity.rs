@@ -20,6 +20,12 @@ pub enum IdentityError {
     UnknownRole,
     #[error("unknown scope")]
     UnknownScope,
+    #[error("theme name must be 1 to 32 characters of a-z, 0-9 or '-'")]
+    InvalidThemeName,
+    #[error("unknown colour scheme")]
+    UnknownColorScheme,
+    #[error("unknown theme")]
+    UnknownTheme,
 }
 
 /// A household member's role.
@@ -126,6 +132,75 @@ impl Username {
 impl fmt::Display for Username {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// The name of a visual theme: `[a-z0-9-]`, 1 to 32 characters. Whether a
+/// theme of that name exists is the server's concern.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ThemeName(String);
+
+impl ThemeName {
+    /// Validates `input` without changing it.
+    ///
+    /// # Errors
+    /// Returns [`IdentityError::InvalidThemeName`] when `input` is empty, too
+    /// long or contains characters outside `[a-z0-9-]`.
+    pub fn parse(input: &str) -> Result<Self, IdentityError> {
+        let valid = (1..=32).contains(&input.len())
+            && input
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if valid {
+            Ok(Self(input.to_owned()))
+        } else {
+            Err(IdentityError::InvalidThemeName)
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ThemeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Light or dark rendering: follow the device, or force one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorScheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ColorScheme {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ColorScheme::System => "system",
+            ColorScheme::Light => "light",
+            ColorScheme::Dark => "dark",
+        }
+    }
+}
+
+impl FromStr for ColorScheme {
+    type Err = IdentityError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "system" => Ok(ColorScheme::System),
+            "light" => Ok(ColorScheme::Light),
+            "dark" => Ok(ColorScheme::Dark),
+            _ => Err(IdentityError::UnknownColorScheme),
+        }
     }
 }
 
@@ -293,6 +368,39 @@ mod tests {
         fn labels_reject_more_than_64_characters(input in "[a-zé]{65,100}") {
             proptest::prop_assert_eq!(TokenName::parse(&input), Err(IdentityError::InvalidTokenName));
         }
+    }
+
+    #[test]
+    fn theme_name_validates() {
+        for good in ["mochi", "a-1"] {
+            assert_eq!(ThemeName::parse(good).unwrap().as_str(), good);
+        }
+        for bad in ["", &"a".repeat(33), "Mochi", "a b"] {
+            assert_eq!(
+                ThemeName::parse(bad),
+                Err(IdentityError::InvalidThemeName),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            ThemeName::parse(&"a".repeat(32)).unwrap().as_str().len(),
+            32
+        );
+    }
+
+    #[test]
+    fn color_scheme_roundtrips() {
+        assert_eq!("dark".parse::<ColorScheme>(), Ok(ColorScheme::Dark));
+        assert_eq!(ColorScheme::Dark.as_str(), "dark");
+        assert_eq!(
+            "purple".parse::<ColorScheme>(),
+            Err(IdentityError::UnknownColorScheme)
+        );
+        assert_eq!(ColorScheme::default(), ColorScheme::System);
+        assert_eq!(
+            serde_json::to_string(&ColorScheme::Light).unwrap(),
+            "\"light\""
+        );
     }
 
     #[test]

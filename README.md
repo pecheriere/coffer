@@ -65,4 +65,11 @@ python3 -I .github/scripts/crate_age.py --base main
 A version that is too young is fixed by pinning an older one
 (`cargo update -p <crate> --precise <version>`), not by an allow entry.
 
+## Fonts
+
+coffer bundles the Fredoka, Nunito and Manrope typefaces, under the SIL Open Font License
+1.1. Their licences are in [`crates/server/assets/fonts/`](crates/server/assets/fonts/).
+
+## License
+
 Licensed under either of MIT or Apache-2.0, at your option.

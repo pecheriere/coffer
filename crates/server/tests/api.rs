@@ -9,6 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::MemberId;
+use coffer_server::assets::CSS_BASE_CSS;
 use coffer_server::http::router;
 use coffer_server::secrets::SecretToken;
 use coffer_server::testkit::TestServer;
@@ -318,6 +319,52 @@ async fn wrong_method_under_api_is_405_problem_json() {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{uri}");
         assert!(response.headers().contains_key(header::ALLOW));
         assert_eq!(problem_code(response).await, "method_not_allowed");
+    }
+}
+
+/// Every response carries the security headers, including the problems
+/// `problem_bodies` writes for unmatched `/api` paths and methods.
+#[tokio::test]
+async fn security_headers_on_every_response() {
+    let world = world().await;
+    let token = token(&world, Scope::Admin).await;
+
+    for (method, uri, status) in [
+        ("GET", "/api/nope", StatusCode::NOT_FOUND),
+        ("DELETE", "/api/v1/me", StatusCode::METHOD_NOT_ALLOWED),
+        ("GET", "/api/v1/me", StatusCode::OK),
+        ("GET", "/login", StatusCode::OK),
+        ("GET", "/nope", StatusCode::NOT_FOUND),
+        ("GET", CSS_BASE_CSS.url, StatusCode::OK),
+        (
+            "GET",
+            "/static/css/base.0000000000000000.css",
+            StatusCode::NOT_FOUND,
+        ),
+        ("GET", "/healthz", StatusCode::OK),
+    ] {
+        let response = send(&world.server, method, uri, Some(&token)).await;
+        assert_eq!(response.status(), status, "{method} {uri}");
+        let headers = response.headers();
+        assert_eq!(
+            headers[header::CONTENT_SECURITY_POLICY],
+            "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
+             form-action 'self'; base-uri 'none'",
+            "{method} {uri}"
+        );
+        assert_eq!(
+            headers[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff",
+            "{method} {uri}"
+        );
+        assert_eq!(
+            headers[header::REFERRER_POLICY],
+            "same-origin",
+            "{method} {uri}"
+        );
+        if status == StatusCode::METHOD_NOT_ALLOWED {
+            assert_eq!(headers[header::ALLOW], "GET,HEAD", "{method} {uri}");
+        }
     }
 }
 

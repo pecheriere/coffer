@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use webauthn_rs::prelude::PublicKeyCredential;
 
-use super::layout::page;
+use super::layout::{Frame, auth_card, key_icon, page};
 use super::{ApiJson, PageError, PageForm, PageSession, start_session};
 use crate::auth::{AuthError, CeremonyId, clear_session_cookie};
 use crate::http::AppState;
@@ -27,15 +27,28 @@ pub fn routes() -> Router<AppState> {
         .route("/logout", post(logout))
 }
 
-async fn login_page() -> Response {
-    let content = html! {
-        h1 { "Sign in" }
-        label for="username" { "Username" }
-        input #username type="text" autocomplete="username webauthn" maxlength="32" required;
-        div { button #login type="button" { "Sign in with passkey" } }
+async fn login_page(State(state): State<AppState>) -> Response {
+    let look = state.appearance.look(None).await;
+    let form = html! {
+        label.field {
+            "Username"
+            input #username .input type="text" autocomplete="username webauthn" maxlength="32"
+                required;
+        }
+        button #login .btn .btn-primary .btn-block type="button" {
+            (key_icon())
+            "Sign in with a passkey"
+        }
         p #result role="status" {}
+        p.fine { "No passwords. Face ID, Touch ID, Windows Hello or a security key." }
     };
-    page("Sign in", None, &content).into_response()
+    let frame = Frame {
+        look,
+        viewer: None,
+        current: None,
+        narrow: true,
+    };
+    page(&frame, "Sign in", &auth_card(look, "Welcome home", &form)).into_response()
 }
 
 #[derive(Deserialize)]

@@ -74,7 +74,7 @@ async fn run_and_stop(server: &TestServer) -> String {
         .unwrap();
     let mut reply = String::new();
     stream.read_to_string(&mut reply).await.unwrap();
-    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.starts_with("HTTP/1.1 200"), "GET /healthz");
 
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), handle)

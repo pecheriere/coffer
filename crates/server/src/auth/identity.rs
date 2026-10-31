@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::AuditActor;
 use coffer_domain::identity::{
     Actor, DisplayName, IdentityError, Role, Scope, TokenName, Username,
 };
@@ -23,8 +23,8 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, RequestChallengeResponse, WebauthnError,
 };
 
-use super::AuthError;
 use super::passkeys::{Ceremony, CeremonyId, EnrollTarget, Passkeys};
+use super::{AuthError, audit};
 use crate::config::Config;
 use crate::secrets::{SecretToken, ServerKey, TokenKind, mint};
 
@@ -952,29 +952,6 @@ fn passkey_insert_error(err: StoreError) -> AuthError {
         StoreError::Conflict(_) => AuthError::PasskeyAlreadyRegistered,
         other => other.into(),
     }
-}
-
-async fn audit(
-    tx: &mut StoreTx,
-    now: Timestamp,
-    actor: &AuditActor,
-    action: &str,
-    entity_type: &str,
-    entity_id: impl std::fmt::Display,
-    changes: Value,
-) -> Result<(), AuthError> {
-    tx.append_audit(
-        now,
-        &AuditEntry {
-            actor: actor.clone(),
-            action: action.to_owned(),
-            entity_type: entity_type.to_owned(),
-            entity_id: entity_id.to_string(),
-            changes,
-        },
-    )
-    .await?;
-    Ok(())
 }
 
 fn decode_passkey(record: &PasskeyRecord) -> Result<Passkey, AuthError> {

@@ -64,6 +64,25 @@ cargo deny check
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 
+## Themes and assets
+
+- Static files live in `crates/server/assets/`. `build.rs` serves each at a
+  content-hashed URL (`/static/<dir>/<name>.<hash>.<ext>`, cached for a year)
+  and rewrites `asset:<path>` references in CSS and the web manifest. Rust
+  code names an asset by its generated constant (`assets::CSS_BASE_CSS`).
+- A theme is one token file, `assets/themes/<name>.css`: `@font-face` rules
+  and one `:root` block, colours as `light-dark(<light>, <dark>)`.
+  Components (`assets/css/base.css`) read only tokens: no colour literal or
+  font name outside a theme file.
+- Adding a theme: the token file (plus its fonts and `ofl-<family>.txt` under
+  `assets/fonts/`), then one `Theme` entry in `crates/server/src/themes/mod.rs`.
+  The theme tests check every token in both schemes and WCAG AA contrast.
+- Fonts and icons come from `tools/regenerate_assets.py` (pinned sources and
+  tools); never edit them by hand. Fonts whose copyright header declares a
+  Reserved Font Name are not subset.
+- The web manifest's `theme_color` and `background_color` are Mochi's
+  values for every theme: the manifest is static and cached by the device.
+
 ## Testing rules
 
 Tests specify behavior; no tests that restate implementation or exist for
