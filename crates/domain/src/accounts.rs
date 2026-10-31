@@ -17,6 +17,8 @@ pub enum AccountError {
     UnknownKind,
     #[error("unknown liquidity class")]
     UnknownLiquidity,
+    #[error("unknown balance source")]
+    UnknownBalanceSource,
 }
 
 /// What an account is.
@@ -117,6 +119,40 @@ impl FromStr for LiquidityClass {
             "long_term_liability" => Self::LongTermLiability,
             _ => return Err(AccountError::UnknownLiquidity),
         })
+    }
+}
+
+/// Where a balance snapshot came from. A day holds one snapshot, whichever
+/// was written last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BalanceSource {
+    /// Reported by a provider sync.
+    Sync,
+    /// Entered by a member or an agent.
+    Manual,
+}
+
+impl BalanceSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sync => "sync",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+impl FromStr for BalanceSource {
+    type Err = AccountError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sync" => Ok(Self::Sync),
+            "manual" => Ok(Self::Manual),
+            _ => Err(AccountError::UnknownBalanceSource),
+        }
     }
 }
 
@@ -228,6 +264,17 @@ mod tests {
         assert_eq!(
             "liquid".parse::<LiquidityClass>(),
             Err(AccountError::UnknownLiquidity)
+        );
+        for source in [BalanceSource::Sync, BalanceSource::Manual] {
+            assert_eq!(source.as_str().parse::<BalanceSource>(), Ok(source));
+            assert_eq!(
+                serde_json::to_string(&source).unwrap(),
+                format!("\"{}\"", source.as_str())
+            );
+        }
+        assert_eq!(
+            "Manual".parse::<BalanceSource>(),
+            Err(AccountError::UnknownBalanceSource)
         );
     }
 

@@ -1,12 +1,15 @@
 //! SQLite persistence for coffer. The only crate that depends on `sqlx`; its
 //! public API speaks domain types only.
 
+mod accounts;
 mod agent_tokens;
 mod audit;
 mod backup;
+mod balances;
 mod convert;
 mod error;
 mod household;
+mod idempotency;
 mod invites;
 mod members;
 mod passkeys;
@@ -18,9 +21,12 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+pub use accounts::{AccountChanges, AccountRecord, NewAccount};
 pub use agent_tokens::{AgentTokenRecord, NewAgentToken};
 pub use audit::{AuditEvent, AuditFilter};
+pub use balances::BalanceSnapshot;
 pub use error::StoreError;
+pub use idempotency::Reservation;
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
