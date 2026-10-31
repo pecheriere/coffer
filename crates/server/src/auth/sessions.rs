@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{MemberId, SessionId};
 use coffer_domain::time::Clock;
@@ -11,7 +11,6 @@ use coffer_store::{NewSession, Store, StoreError};
 use http::HeaderValue;
 use jiff::{SignedDuration, Timestamp};
 use secrecy::ExposeSecret as _;
-use serde_json::json;
 use subtle::ConstantTimeEq as _;
 
 use super::AuthError;
@@ -191,7 +190,7 @@ impl Sessions {
                 action: "session.logout".to_owned(),
                 entity_type: "member".to_owned(),
                 entity_id: session.member.to_string(),
-                changes: json!({}),
+                changes: AuditChanges::new(),
             },
         )
         .await?;

@@ -54,7 +54,13 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
   default 50) and `after` (the previous `next`). These are the only accepted
   parameters; an unknown or repeated parameter is a 400 `invalid`. Each event has `id`, `at`,
   `actor` (`{kind: "member", member, agent}` or `{kind: "system", reason}`),
-  `action`, `entity_type`, `entity_id` and `changes`.
+  `action`, `entity_type`, `entity_id` and `changes`. `changes` is an object
+  `{field: {"before": value, "after": value}}`, one entry per field the
+  action touched; each value is `null`, a boolean, an integer or a string
+  (ids, RFC 3339 timestamps and `YYYY-MM-DD` dates are strings). `before` is
+  `null` for a field the action set, `after` is `null` for one it removed.
+  Entries recorded before this format (bare `{"from", "to"}` objects) are
+  returned in it too.
 
 ## Errors
 

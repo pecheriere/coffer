@@ -165,6 +165,11 @@ async fn audit_shows_agent_attribution() {
     assert_eq!(event["actor"]["kind"], "member");
     assert_eq!(event["actor"]["member"], world.alice.member.to_string());
     assert!(event["actor"]["agent"].is_null());
+    // Changes are `{field: {before, after}}`.
+    assert_eq!(
+        event["changes"]["scope"],
+        serde_json::json!({ "before": null, "after": "read" })
+    );
 
     // Filtering by the member returns only that member's actions.
     let uri = format!("/api/v1/audit?member={}", world.bob);

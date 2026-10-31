@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use coffer_domain::audit::AuditActor;
+use coffer_domain::audit::{AuditActor, AuditChanges};
 use coffer_domain::identity::{
     Actor, DisplayName, IdentityError, Role, Scope, TokenName, Username,
 };
@@ -16,7 +16,6 @@ use coffer_store::{
 };
 use jiff::Timestamp;
 use secrecy::ExposeSecret as _;
-use serde_json::{Value, json};
 use url::Url;
 use webauthn_rs::prelude::{
     CreationChallengeResponse, CredentialID, Passkey, PublicKeyCredential,
@@ -109,7 +108,7 @@ impl Identity {
                     "invite.revoke",
                     "invite",
                     invite.id,
-                    json!({}),
+                    AuditChanges::new(),
                 )
                 .await?;
             }
@@ -251,7 +250,7 @@ impl Identity {
             "invite.revoke",
             "invite",
             invite,
-            json!({}),
+            AuditChanges::new(),
         )
         .await?;
         tx.commit().await?;
@@ -453,12 +452,11 @@ impl Identity {
                 if bootstrap && admin_exists(&mut tx).await? {
                     return Err(AuthError::InviteInvalid);
                 }
-                let changes = json!({
-                    "username": username.as_str(),
-                    "display_name": display_name.as_str(),
-                    "role": role.as_str(),
-                    "invite": invite,
-                });
+                let changes = AuditChanges::new()
+                    .set("username", username.as_str())
+                    .set("display_name", display_name.as_str())
+                    .set("role", role.as_str())
+                    .set("invite", invite);
                 let created = tx
                     .insert_member(NewMember {
                         id: member,
@@ -587,7 +585,7 @@ impl Identity {
             "passkey.remove",
             "passkey",
             id,
-            json!({ "label": { "from": removed.label, "to": null } }),
+            AuditChanges::new().unset("label", removed.label),
         )
         .await?;
         tx.commit().await?;
@@ -690,7 +688,7 @@ impl Identity {
             "session.login",
             "member",
             member,
-            json!({ "passkey": record.id }),
+            AuditChanges::new().set("passkey", record.id),
         )
         .await?;
         tx.commit().await?;
@@ -725,7 +723,7 @@ impl Identity {
         if target.role == Role::Admin {
             revoke_invites_created_by(&mut tx, now, &actor.into(), member).await?;
         }
-        let changes = json!({ "from": target.role.as_str(), "to": role.as_str() });
+        let changes = AuditChanges::new().change("role", target.role.as_str(), role.as_str());
         audit(
             &mut tx,
             now,
@@ -771,7 +769,7 @@ impl Identity {
             "member.disable",
             "member",
             member,
-            json!({ "disabled_at": { "from": null, "to": now.to_string() } }),
+            AuditChanges::new().set("disabled_at", now),
         )
         .await?;
         tx.commit().await?;
@@ -810,8 +808,7 @@ impl Identity {
         let expires_at = now
             .checked_add(self.config.invite_ttl)
             .map_err(|_| AuthError::Internal("invite expiry out of range"))?;
-        let mut changes = invite_changes(&kind);
-        changes["expires_at"] = json!(expires_at.to_string());
+        let changes = invite_changes(&kind).set("expires_at", expires_at);
         let invite = tx
             .insert_invite(NewInvite {
                 token_hash: self.key.hash(TokenKind::Invite, token.expose_secret()),
@@ -884,7 +881,7 @@ async fn revoke_invites_created_by(
                 "invite.revoke",
                 "invite",
                 invite.id,
-                json!({ "reason": "issuer no longer an admin" }),
+                AuditChanges::new().set("reason", "issuer no longer an admin"),
             )
             .await?;
         }
@@ -899,15 +896,18 @@ fn member_actor(member: MemberId) -> AuditActor {
     }
 }
 
-fn invite_changes(kind: &InviteKind) -> Value {
+fn invite_changes(kind: &InviteKind) -> AuditChanges {
+    let changes = AuditChanges::new();
     match kind {
-        InviteKind::Bootstrap => json!({ "kind": "bootstrap" }),
-        InviteKind::NewMember { role, display_name } => json!({
-            "kind": "new_member",
-            "role": role.as_str(),
-            "display_name": display_name.as_ref().map(DisplayName::as_str),
-        }),
-        InviteKind::Reenroll { member } => json!({ "kind": "reenroll", "member": member }),
+        InviteKind::Bootstrap => changes.set("kind", "bootstrap"),
+        InviteKind::NewMember { role, display_name } => changes
+            .set("kind", "new_member")
+            .set("role", role.as_str())
+            .set(
+                "display_name",
+                display_name.as_ref().map(DisplayName::as_str),
+            ),
+        InviteKind::Reenroll { member } => changes.set("kind", "reenroll").set("member", *member),
     }
 }
 
@@ -931,7 +931,10 @@ async fn add_passkey(
         })
         .await
         .map_err(passkey_insert_error)?;
-    let changes = json!({ "member": member, "label": label.as_str(), "invite": invite });
+    let changes = AuditChanges::new()
+        .set("member", member)
+        .set("label", label.as_str())
+        .set("invite", invite);
     audit(
         tx,
         now,

@@ -7,7 +7,7 @@
 )]
 
 use axum::http::{StatusCode, header};
-use coffer_domain::audit::AuditActor;
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, ColorScheme, IdentityError, Role, Scope, ThemeName, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
 use coffer_domain::policy::{Action, Denied, DenyReason};
@@ -16,7 +16,6 @@ use coffer_server::testkit::TestServer;
 use coffer_server::testkit::browser::{Browser, with_admin};
 use coffer_server::themes::{self, DEFAULT};
 use coffer_store::{AuditEvent, AuditFilter, Member, PageRequest};
-use serde_json::json;
 
 fn session(member: MemberId, role: Role) -> Actor {
     Actor {
@@ -113,7 +112,7 @@ async fn member_choice_is_stored_and_audited() {
     assert_eq!(event.entity_id, bob.to_string());
     assert_eq!(
         event.changes,
-        json!({"color_scheme": {"from": "system", "to": "dark"}})
+        AuditChanges::new().change("color_scheme", "system", "dark")
     );
 
     // The same choice again changes nothing and records nothing.
@@ -135,7 +134,7 @@ async fn member_choice_is_stored_and_audited() {
     assert_eq!(recorded.len(), 2);
     assert_eq!(
         recorded[0].changes,
-        json!({"theme": {"from": null, "to": "mochi"}})
+        AuditChanges::new().change("theme", AuditValue::Null, "mochi")
     );
 }
 
@@ -223,7 +222,10 @@ async fn household_theme_requires_admin() {
     );
     assert_eq!(recorded[0].entity_type, "household");
     assert_eq!(recorded[0].entity_id, "household");
-    assert_eq!(recorded[0].changes, json!({"from": null, "to": "mochi"}));
+    assert_eq!(
+        recorded[0].changes,
+        AuditChanges::new().change("theme", AuditValue::Null, "mochi")
+    );
 
     // Setting the same theme again records nothing.
     server
@@ -604,7 +606,10 @@ async fn household_page_is_admin_only() {
             agent: None
         }
     );
-    assert_eq!(recorded[0].changes, json!({"from": null, "to": "mochi"}));
+    assert_eq!(
+        recorded[0].changes,
+        AuditChanges::new().change("theme", AuditValue::Null, "mochi")
+    );
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use coffer_domain::audit::AuditActor;
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, DisplayName, Role, Scope, TokenName, Username, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
 use coffer_domain::policy::{Action, Denied, DenyReason};
@@ -155,6 +155,28 @@ async fn invite_creates_member_with_invite_role() {
             agent: None
         }
     );
+    // Each invite property is its own field, set by the creation.
+    let fields: Vec<_> = invite_create.changes.iter().collect();
+    assert_eq!(
+        fields.iter().map(|(field, _)| *field).collect::<Vec<_>>(),
+        ["display_name", "expires_at", "kind", "role"]
+    );
+    assert!(
+        fields
+            .iter()
+            .all(|(_, change)| change.before == AuditValue::Null)
+    );
+    let after = |name: &str| {
+        fields
+            .iter()
+            .find(|(field, _)| *field == name)
+            .map(|(_, change)| change.after.clone())
+            .unwrap()
+    };
+    assert_eq!(after("kind"), AuditValue::from("new_member"));
+    assert_eq!(after("role"), AuditValue::from("member"));
+    assert_eq!(after("display_name"), AuditValue::Null);
+    assert!(matches!(after("expires_at"), AuditValue::Text(_)));
     let member_create = events
         .iter()
         .rfind(|e| e.action == "member.create")
@@ -177,7 +199,7 @@ async fn invite_creates_member_with_invite_role() {
     // Neither the invite token nor its hash ends up in the audit log.
     let token = link_token(&link);
     for event in &events {
-        let changes = event.changes.to_string();
+        let changes = serde_json::to_string(&event.changes).unwrap();
         assert!(!changes.contains(&token), "{changes}");
         assert!(!changes.contains("hash"), "{changes}");
         assert!(!changes.contains("credential"), "{changes}");
@@ -492,7 +514,7 @@ async fn cannot_remove_last_passkey() {
     assert_eq!(removed.entity_id, only.to_string());
     assert_eq!(
         removed.changes,
-        serde_json::json!({ "label": { "from": "soft passkey", "to": null } })
+        AuditChanges::new().unset("label", "soft passkey")
     );
 
     // Another member's passkey cannot be removed, and agents cannot manage
@@ -630,7 +652,7 @@ async fn disabling_member_ends_sessions_tokens_and_logins() {
         .unwrap();
     assert_eq!(
         disabled.changes,
-        serde_json::json!({ "disabled_at": { "from": null, "to": now.to_string() } })
+        AuditChanges::new().set("disabled_at", now)
     );
 }
 
@@ -664,12 +686,19 @@ async fn admin_cannot_demote_self_if_last() {
         server.store.get_member(alice).await.unwrap().role,
         Role::Member
     );
-    let role_changes = audit(&server)
+    let role_changes: Vec<_> = audit(&server)
         .await
         .into_iter()
         .filter(|e| e.action == "member.role")
-        .count();
-    assert_eq!(role_changes, 2);
+        .map(|e| e.changes)
+        .collect();
+    assert_eq!(
+        role_changes,
+        [
+            AuditChanges::new().change("role", "member", "admin"),
+            AuditChanges::new().change("role", "admin", "member"),
+        ]
+    );
 }
 
 #[tokio::test]

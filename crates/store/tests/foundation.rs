@@ -2,11 +2,10 @@
     clippy::unwrap_used,
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::ids::{AgentTokenId, MemberId};
 use coffer_store::{AuditFilter, PageRequest, Store, StoreError};
 use jiff::Timestamp;
-use serde_json::json;
 use tempfile::TempDir;
 
 fn at(ms: i64) -> Timestamp {
@@ -19,7 +18,7 @@ fn entry(action: &str, actor: AuditActor) -> AuditEntry {
         action: action.into(),
         entity_type: "member".into(),
         entity_id: "m1".into(),
-        changes: json!({ "k": action }),
+        changes: AuditChanges::new().set("k", action),
     }
 }
 
@@ -83,7 +82,10 @@ async fn committed_audit_is_listed_newest_first_with_cursor() {
     let actions: Vec<_> = first.items.iter().map(|e| e.action.as_str()).collect();
     assert_eq!(actions, ["three", "two"]);
     assert_eq!(first.items[0].at, at(1_002));
-    assert_eq!(first.items[0].changes, json!({ "k": "three" }));
+    assert_eq!(
+        first.items[0].changes,
+        AuditChanges::new().set("k", "three")
+    );
     assert_eq!(first.items[0].actor, system());
     let cursor = first.next.expect("a second page exists");
 

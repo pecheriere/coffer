@@ -9,6 +9,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode, header};
 use axum::routing::get;
+use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
 use coffer_domain::policy::DenyReason;
@@ -560,9 +561,15 @@ async fn token_lifecycle_is_audited_without_secrets() {
     assert!(actions.contains(&"token.create"));
     assert!(actions.contains(&"token.revoke"));
     let create = events.iter().find(|e| e.action == "token.create").unwrap();
-    assert_eq!(create.changes["name"], "claude");
-    assert_eq!(create.changes["scope"], "write");
-    assert!(create.changes["expires_at"].is_string());
+    assert!(record.expires_at.is_some());
+    let recorded = AuditChanges::new()
+        .set("member", record.member)
+        .set("name", "claude")
+        .set("scope", "write")
+        .set("expires_at", record.expires_at);
+    assert_eq!(create.changes, recorded);
+    let revoke = events.iter().find(|e| e.action == "token.revoke").unwrap();
+    assert_eq!(revoke.changes, recorded);
     let dump = format!("{events:?}");
     assert!(!dump.contains(token.expose_secret()));
 }

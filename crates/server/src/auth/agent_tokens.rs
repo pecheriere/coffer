@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use coffer_domain::audit::AuditEntry;
+use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Scope, TokenName, Via};
 use coffer_domain::ids::AgentTokenId;
 use coffer_domain::policy::{Action, authorize, check_token_scope};
@@ -12,7 +12,6 @@ use coffer_domain::time::Clock;
 use coffer_store::{AgentTokenRecord, Member, NewAgentToken, Store, StoreError};
 use jiff::{SignedDuration, Timestamp};
 use secrecy::ExposeSecret as _;
-use serde_json::json;
 
 use super::AuthError;
 use crate::secrets::{SecretToken, ServerKey, TokenKind, agent_token_prefix, mint};
@@ -78,12 +77,7 @@ impl AgentTokens {
                 action: "token.create".to_owned(),
                 entity_type: "agent_token".to_owned(),
                 entity_id: record.id.to_string(),
-                changes: json!({
-                    "member": record.member,
-                    "name": record.name.as_str(),
-                    "scope": record.scope.as_str(),
-                    "expires_at": record.expires_at.map(|at| at.to_string()),
-                }),
+                changes: token_changes(&record),
             },
         )
         .await?;
@@ -150,12 +144,7 @@ impl AgentTokens {
                 action: "token.revoke".to_owned(),
                 entity_type: "agent_token".to_owned(),
                 entity_id: id.to_string(),
-                changes: json!({
-                    "member": record.member,
-                    "name": record.name.as_str(),
-                    "scope": record.scope.as_str(),
-                    "expires_at": record.expires_at.map(|at| at.to_string()),
-                }),
+                changes: token_changes(&record),
             },
         )
         .await?;
@@ -236,4 +225,14 @@ impl AgentTokens {
             Err(err) => Err(err.into()),
         }
     }
+}
+
+/// What a token's audit entries record: who it belongs to and what it may
+/// do, never the secret or its hash.
+fn token_changes(record: &AgentTokenRecord) -> AuditChanges {
+    AuditChanges::new()
+        .set("member", record.member)
+        .set("name", record.name.as_str())
+        .set("scope", record.scope.as_str())
+        .set("expires_at", record.expires_at)
 }

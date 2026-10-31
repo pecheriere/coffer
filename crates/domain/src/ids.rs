@@ -56,6 +56,12 @@ macro_rules! id_type {
             }
         }
 
+        impl From<$name> for crate::audit::AuditValue {
+            fn from(id: $name) -> Self {
+                Self::Text(id.to_string())
+            }
+        }
+
         impl TryFrom<String> for $name {
             type Error = ParseIdError;
 

@@ -219,7 +219,7 @@ async fn logout_invalidates_and_audits() {
         (logout.entity_type.as_str(), logout.entity_id.clone()),
         ("member", alice.to_string())
     );
-    assert_eq!(logout.changes, serde_json::json!({}));
+    assert!(logout.changes.is_empty());
 }
 
 #[tokio::test]

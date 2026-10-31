@@ -6,12 +6,11 @@ pub mod identity;
 pub mod passkeys;
 pub mod sessions;
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::identity::IdentityError;
 use coffer_domain::policy::{Denied, DenyReason};
 use coffer_store::{StoreError, StoreTx};
 use jiff::Timestamp;
-use serde_json::Value;
 use webauthn_rs::prelude::WebauthnError;
 
 pub use agent_tokens::AgentTokens;
@@ -122,7 +121,7 @@ pub(crate) async fn audit(
     action: &str,
     entity_type: &str,
     entity_id: impl std::fmt::Display,
-    changes: Value,
+    changes: AuditChanges,
 ) -> Result<(), AuthError> {
     tx.append_audit(
         now,

@@ -1,8 +1,9 @@
 //! Append-only audit log.
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry, AuditValue};
 use coffer_domain::ids::{AgentTokenId, AuditEventId, MemberId};
 use jiff::Timestamp;
+use serde_json::{Map, Value};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite};
 
@@ -18,8 +19,11 @@ pub struct AuditEvent {
     pub action: String,
     pub entity_type: String,
     pub entity_id: String,
-    pub changes: serde_json::Value,
+    pub changes: AuditChanges,
 }
+
+/// `changes_version` of rows written by this code.
+const CHANGES_VERSION: i64 = 2;
 
 /// Narrowing criteria for [`Store::list_audit`]; unset fields match anything.
 /// `from` is inclusive, `to` is exclusive.
@@ -58,8 +62,8 @@ impl StoreTx {
         sqlx::query(
             "INSERT INTO audit_events \
              (id, at, actor_kind, actor_member_id, actor_agent_id, actor_system_reason, \
-              action, entity_type, entity_id, changes_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              action, entity_type, entity_id, changes_json, changes_version) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(at.as_millisecond())
@@ -71,6 +75,7 @@ impl StoreTx {
         .bind(&entry.entity_type)
         .bind(&entry.entity_id)
         .bind(changes)
+        .bind(CHANGES_VERSION)
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
@@ -106,7 +111,8 @@ impl Store {
 
         let mut query = QueryBuilder::<Sqlite>::new(
             "SELECT id, at, actor_kind, actor_member_id, actor_agent_id, actor_system_reason, \
-             action, entity_type, entity_id, changes_json FROM audit_events WHERE 1 = 1",
+             action, entity_type, entity_id, changes_json, changes_version \
+             FROM audit_events WHERE 1 = 1",
         );
         if let Some(entity_type) = &filter.entity_type {
             query.push(" AND entity_type = ").push_bind(entity_type);
@@ -187,27 +193,205 @@ fn audit_event_from_row(row: &SqliteRow) -> Result<AuditEvent, StoreError> {
     };
     let at = Timestamp::from_millisecond(row.try_get("at").map_err(StoreError::from_sqlx)?)
         .map_err(StoreError::backend)?;
+    let action = get("action")?;
+    let json = get("changes_json")?;
+    let changes = match row
+        .try_get::<i64, _>("changes_version")
+        .map_err(StoreError::from_sqlx)?
+    {
+        1 => legacy_changes(&action, &json)?,
+        CHANGES_VERSION => serde_json::from_str(&json).map_err(StoreError::backend)?,
+        _ => return Err(corrupt("unknown audit changes version")),
+    };
     Ok(AuditEvent {
         id: get("id")?.parse().map_err(StoreError::backend)?,
         at,
         actor,
-        action: get("action")?,
+        action,
         entity_type: get("entity_type")?,
         entity_id: get("entity_id")?,
-        changes: serde_json::from_str(&get("changes_json")?).map_err(StoreError::backend)?,
+        changes,
     })
+}
+
+/// Reads a version-1 `changes_json`, written before changes were typed.
+/// `member.role` and `household.theme` stored a bare `{from, to}` for their
+/// one field; elsewhere a field holding exactly `{from, to}` was a change
+/// and any other value was set. Values without a scalar form are kept as
+/// their compact JSON text.
+fn legacy_changes(action: &str, json: &str) -> Result<AuditChanges, StoreError> {
+    let Value::Object(object) = serde_json::from_str(json).map_err(StoreError::backend)? else {
+        return Err(corrupt("audit changes are not an object"));
+    };
+    let field = match action {
+        "member.role" => Some("role"),
+        "household.theme" => Some("theme"),
+        _ => None,
+    };
+    if let Some(field) = field
+        && let Some((from, to)) = from_to(&object)
+    {
+        return Ok(AuditChanges::new().change(field, legacy_value(from), legacy_value(to)));
+    }
+    Ok(object
+        .iter()
+        .fold(AuditChanges::new(), |changes, (field, value)| {
+            match value.as_object().and_then(from_to) {
+                Some((from, to)) => changes.change(field, legacy_value(from), legacy_value(to)),
+                None => changes.set(field, legacy_value(value)),
+            }
+        }))
+}
+
+/// The two values of an object with exactly the keys `from` and `to`.
+fn from_to(object: &Map<String, Value>) -> Option<(&Value, &Value)> {
+    match (object.len(), object.get("from"), object.get("to")) {
+        (2, Some(from), Some(to)) => Some((from, to)),
+        _ => None,
+    }
+}
+
+fn legacy_value(value: &Value) -> AuditValue {
+    match value {
+        Value::Null => AuditValue::Null,
+        Value::Bool(flag) => AuditValue::Bool(*flag),
+        Value::String(text) => AuditValue::Text(text.clone()),
+        Value::Number(number) => number
+            .as_i64()
+            .map_or_else(|| AuditValue::Text(number.to_string()), AuditValue::Int),
+        Value::Array(_) | Value::Object(_) => AuditValue::Text(value.to_string()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use coffer_domain::audit::{AuditChanges, AuditValue};
+    use coffer_domain::ids::MemberId;
 
     use super::*;
 
-    #[tokio::test]
-    async fn audit_is_append_only() {
+    async fn open() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("coffer.db")).await.unwrap();
+        (dir, store)
+    }
+
+    #[tokio::test]
+    async fn changes_roundtrip_typed() {
+        let (_dir, store) = open().await;
+        let member = MemberId::new();
+        let changes = AuditChanges::new()
+            .set("member", member)
+            .set("enabled", true)
+            .set("count", 42_i64)
+            .set("expires_at", None::<Timestamp>)
+            .change("role", "member", "admin")
+            .unset("label", "kitchen");
+        let mut tx = store.begin().await.unwrap();
+        tx.append_audit(
+            Timestamp::from_millisecond(1_000).unwrap(),
+            &AuditEntry {
+                actor: AuditActor::System {
+                    reason: "test".into(),
+                },
+                action: "from.to".into(),
+                entity_type: "member".into(),
+                entity_id: member.to_string(),
+                changes: changes.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let version: i64 = sqlx::query_scalar("SELECT changes_version FROM audit_events")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(version, 2);
+        let events = store
+            .list_audit(&AuditFilter::default(), &PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(events.items[0].changes, changes);
+    }
+
+    #[tokio::test]
+    async fn legacy_rows_are_read_as_typed_changes() {
+        let (_dir, store) = open().await;
+        let rows = [
+            ("passkey.remove", r#"{"label":{"from":"k","to":null}}"#),
+            ("member.role", r#"{"from":"member","to":"admin"}"#),
+            ("household.theme", r#"{"from":null,"to":"mochi"}"#),
+            ("other.action", r#"{"from":"a","to":"b"}"#),
+            ("member.create", r#"{"username":"bob"}"#),
+            (
+                "member.mixed",
+                r#"{"n":3,"ok":false,"list":[1, 2],"obj":{"from":1}}"#,
+            ),
+        ];
+        for (action, changes) in rows {
+            // Inserted as 0.1.0 and the design system wrote them: no version.
+            sqlx::query(
+                "INSERT INTO audit_events \
+                 (id, at, actor_kind, actor_system_reason, action, entity_type, entity_id, \
+                  changes_json) \
+                 VALUES (?, 0, 'system', 'system:cli', ?, 'x', 'x', ?)",
+            )
+            .bind(AuditEventId::new().to_string())
+            .bind(action)
+            .bind(changes)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+
+        let events = store
+            .list_audit(&AuditFilter::default(), &PageRequest::default())
+            .await
+            .unwrap();
+        let read = |action: &str| {
+            events
+                .items
+                .iter()
+                .find(|event| event.action == action)
+                .unwrap()
+                .changes
+                .clone()
+        };
+        assert_eq!(
+            read("passkey.remove"),
+            AuditChanges::new().unset("label", "k")
+        );
+        assert_eq!(
+            read("member.role"),
+            AuditChanges::new().change("role", "member", "admin")
+        );
+        assert_eq!(
+            read("household.theme"),
+            AuditChanges::new().change("theme", AuditValue::Null, "mochi")
+        );
+        assert_eq!(
+            read("other.action"),
+            AuditChanges::new().set("from", "a").set("to", "b")
+        );
+        assert_eq!(
+            read("member.create"),
+            AuditChanges::new().set("username", "bob")
+        );
+        assert_eq!(
+            read("member.mixed"),
+            AuditChanges::new()
+                .set("n", 3_i64)
+                .set("ok", false)
+                .set("list", "[1,2]")
+                .set("obj", r#"{"from":1}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_is_append_only() {
+        let (_dir, store) = open().await;
         let mut tx = store.begin().await.unwrap();
         tx.append_audit(
             Timestamp::from_millisecond(1_000).unwrap(),
@@ -218,7 +402,7 @@ mod tests {
                 action: "member.create".into(),
                 entity_type: "member".into(),
                 entity_id: "m1".into(),
-                changes: json!({}),
+                changes: AuditChanges::new(),
             },
         )
         .await
