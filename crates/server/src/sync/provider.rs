@@ -307,37 +307,104 @@ impl ProviderRegistry {
     }
 }
 
-/// `raw` made safe to store, log or show: control characters removed, the
-/// user information of any `scheme://user:pass@host` replaced by
-/// `scheme://***@host` (everything from `://` to the last `@` before the next
-/// whitespace is hidden), and truncated to [`MAX_PROVIDER_MESSAGE_CHARS`]
-/// characters. Every provider text that reaches storage, logs or responses
-/// passes through it.
+/// `raw` made safe to store, log or show:
+/// - control characters and Unicode format characters (zero-width
+///   characters, bidi overrides, the byte order mark) are removed, so none
+///   can hide a pattern below or spoof what a reader sees;
+/// - in every whitespace-separated word holding an `@` (or `%40`), the
+///   user information before it becomes `***`: everything after a scheme
+///   separator (`://`, JSON-escaped `:\/\/`, percent-encoded `%3A%2F%2F`)
+///   up to the last `@`, or, without a separator, a leading `user:pass`;
+/// - the result is truncated to [`MAX_PROVIDER_MESSAGE_CHARS`] characters.
+///
+/// It hides more than the user information when a path or query holds an
+/// `@`. Every provider text that reaches storage, logs or responses passes
+/// through it.
 #[must_use]
 pub fn sanitize_provider_message(raw: &str) -> String {
-    let cleaned: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let cleaned: String = raw
+        .chars()
+        .filter(|&c| !c.is_control() && !is_format_char(c))
+        .collect();
     let mut out = String::with_capacity(cleaned.len());
     let mut rest = cleaned.as_str();
-    while let Some(index) = rest.find("://") {
-        let (before, after) = rest.split_at(index + 3);
-        out.push_str(before);
-        // Redact up to the last `@` before the next whitespace: that covers
-        // user information holding characters a URL would escape (`/`,
-        // `@`), at the cost of hiding more than the user information when
-        // a path or query holds an `@`.
-        let end = after.find(char::is_whitespace).unwrap_or(after.len());
-        let (token, tail) = after.split_at(end);
-        match token.rfind('@') {
-            Some(at) => {
-                out.push_str("***");
-                out.push_str(&token[at..]);
-            }
-            None => out.push_str(token),
-        }
-        rest = tail;
+    while !rest.is_empty() {
+        let word_start = rest
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..word_start]);
+        rest = &rest[word_start..];
+        let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        out.push_str(&redact_word(&rest[..word_end]));
+        rest = &rest[word_end..];
     }
-    out.push_str(rest);
     out.chars().take(MAX_PROVIDER_MESSAGE_CHARS).collect()
+}
+
+/// Scheme separators, lowercase: plain, JSON-escaped and percent-encoded.
+const SCHEME_SEPARATORS: [&str; 3] = ["://", ":\\/\\/", "%3a%2f%2f"];
+
+/// `word` with any user information before its last `@` replaced by `***`.
+fn redact_word(word: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    // ASCII lowercasing keeps every byte offset.
+    let lower = word.to_ascii_lowercase();
+    let Some(at) = [lower.rfind('@'), lower.rfind("%40")]
+        .into_iter()
+        .flatten()
+        .max()
+    else {
+        return Cow::Borrowed(word);
+    };
+    let separator_end = SCHEME_SEPARATORS
+        .iter()
+        .filter_map(|separator| lower[..at].find(separator).map(|i| i + separator.len()))
+        .min();
+    let start = if let Some(end) = separator_end {
+        end
+    } else {
+        // Without a scheme, only `user:pass@` is a credential; an address
+        // such as `ops@example.org` is kept.
+        let start = word.find(char::is_alphanumeric).unwrap_or(at).min(at);
+        let user = &lower[start..at];
+        if !user.contains(':') && !user.contains("%3a") {
+            return Cow::Borrowed(word);
+        }
+        start
+    };
+    if start >= at {
+        return Cow::Borrowed(word);
+    }
+    Cow::Owned(format!("{}***{}", &word[..start], &word[at..]))
+}
+
+/// Whether `c` is a Unicode format character (general category Cf, as of
+/// Unicode 15.1).
+fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61c}'
+            | '\u{6dd}'
+            | '\u{70f}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
 }
 
 #[cfg(test)]
@@ -379,6 +446,74 @@ mod tests {
         ] {
             assert_eq!(sanitize_provider_message(kept), kept);
         }
+    }
+
+    /// Credentials echoed back in an altered form are hidden too.
+    #[test]
+    fn sanitize_redacts_altered_credential_forms() {
+        for (raw, expected) in [
+            // JSON-escaped slashes.
+            (
+                r#"{"url":"https:\/\/u:pw1@h.example\/x"}"#,
+                r#"{"url":"https:\/\/***@h.example\/x"}"#,
+            ),
+            // Percent-encoded, the `@` encoded too.
+            (
+                "see https%3A%2F%2Fu%3Apw2%40h.example%2Fx",
+                "see https%3A%2F%2F***%40h.example%2Fx",
+            ),
+            (
+                "see https%3a%2f%2fu%3apw3@h.example",
+                "see https%3a%2f%2f***@h.example",
+            ),
+            // No scheme at all.
+            ("failed for u:pw4@h.example/x", "failed for ***@h.example/x"),
+            ("(u:pw5@h.example)", "(***@h.example)"),
+            // A zero-width character inside the separator.
+            ("https:/\u{200b}/u:pw6@h.example", "https://***@h.example"),
+            ("https\u{2060}://u:pw7@h.example", "https://***@h.example"),
+        ] {
+            let sanitized = sanitize_provider_message(raw);
+            assert_eq!(sanitized, expected);
+            assert!(!sanitized.contains("pw"), "no password survives");
+        }
+        // An address without a password is not a credential.
+        assert_eq!(
+            sanitize_provider_message("write to ops@example.org"),
+            "write to ops@example.org"
+        );
+    }
+
+    /// Unicode format characters (zero-width, bidi overrides, BOM) cannot
+    /// spoof what a reader sees.
+    #[test]
+    fn sanitize_strips_format_characters() {
+        assert_eq!(
+            sanitize_provider_message("Bank\u{202e}gnp.exe\u{202c} \u{feff}ok\u{200d}\u{ad}"),
+            "Bankgnp.exe ok"
+        );
+        for format in [
+            '\u{600}',
+            '\u{61c}',
+            '\u{180e}',
+            '\u{200b}',
+            '\u{200f}',
+            '\u{2066}',
+            '\u{2069}',
+            '\u{206f}',
+            '\u{fff9}',
+            '\u{110bd}',
+            '\u{1d173}',
+            '\u{e0001}',
+            '\u{e007f}',
+        ] {
+            assert_eq!(
+                sanitize_provider_message(&format!("a{format}b")),
+                "ab",
+                "{format:?}"
+            );
+        }
+        assert_eq!(sanitize_provider_message("café ✓"), "café ✓");
     }
 
     #[test]

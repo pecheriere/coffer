@@ -13,7 +13,7 @@
 pub mod browser;
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
@@ -29,6 +29,7 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt as _};
 use url::Url;
@@ -638,17 +639,79 @@ pub fn capture_logs() {
     });
 }
 
-/// Every event logged in this process since [`capture_logs`] ran, one per
-/// line: its level, its message and its other fields. Tests running in
-/// parallel share it, so a test looks for what identifies its own records.
+/// Every event and span logged in this process since [`capture_logs`]
+/// ran, one per line: an event's level, message and other fields; a span's
+/// name and fields, and fields recorded on it later. Only the newest 16 MiB
+/// are kept. Tests running in parallel share it, so a test looks for what
+/// identifies its own records.
 #[must_use]
 pub fn captured_log_text() -> String {
-    captured().clone()
+    captured().text().to_owned()
 }
 
-fn captured() -> MutexGuard<'static, String> {
-    static CAPTURED: Mutex<String> = Mutex::new(String::new());
+/// The most text the capture keeps, in bytes.
+const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
+
+fn captured() -> MutexGuard<'static, CapturedLog> {
+    static CAPTURED: Mutex<CapturedLog> = Mutex::new(CapturedLog::with_limit(CAPTURE_LIMIT));
     CAPTURED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Captured log lines, of which only the newest `limit` bytes are kept.
+struct CapturedLog {
+    text: String,
+    limit: usize,
+}
+
+impl CapturedLog {
+    const fn with_limit(limit: usize) -> Self {
+        Self {
+            text: String::new(),
+            limit,
+        }
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Appends `line` and a newline, then drops the oldest whole lines
+    /// beyond the limit. A line longer than the limit is cut to fit.
+    fn push_line(&mut self, line: &str) {
+        let room = self.limit.saturating_sub(1);
+        let mut end = line.len().min(room);
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&line[..end]);
+        self.text.push('\n');
+        if let Some(excess) = self.text.len().checked_sub(self.limit).filter(|&e| e > 0) {
+            // Newlines are always character boundaries.
+            let cut = self.text.as_bytes()[excess..]
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .map_or(self.text.len(), |at| excess + at + 1);
+            self.text.drain(..cut);
+        }
+    }
+}
+
+/// One capture line: `head`, then the message, then the other fields.
+fn capture_line(head: &str, fields: &Fields) -> String {
+    let mut line = head.to_owned();
+    if let Some(message) = fields.0.get("message") {
+        line.push(' ');
+        line.push_str(message);
+    }
+    for (name, value) in &fields.0 {
+        if *name != "message" {
+            line.push(' ');
+            line.push_str(name);
+            line.push('=');
+            line.push_str(value);
+        }
+    }
+    line
 }
 
 /// An [`event_signal`] not yet fired.
@@ -664,25 +727,29 @@ fn waiters() -> MutexGuard<'static, Vec<Waiter>> {
     WAITERS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Appends every event to the capture, then fires the [`Waiter`]s it
-/// matches and forgets them.
+/// Appends every event and span to the capture, and fires the
+/// [`Waiter`]s an event matches, then forgets them.
 struct Signals;
 
 impl<S: Subscriber> Layer<S> for Signals {
+    fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        let mut fields = Fields(HashMap::new());
+        attrs.record(&mut fields);
+        let head = format!("SPAN {}", attrs.metadata().name());
+        captured().push_line(&capture_line(&head, &fields));
+    }
+
+    fn on_record(&self, _id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
+        let mut fields = Fields(HashMap::new());
+        values.record(&mut fields);
+        captured().push_line(&capture_line("SPAN RECORD", &fields));
+    }
+
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut fields = Fields(HashMap::new());
         event.record(&mut fields);
-        {
-            let mut captured = captured();
-            let message = fields.0.get("message").map_or("", String::as_str);
-            let _ = write!(captured, "{} {message}", event.metadata().level());
-            for (name, value) in &fields.0 {
-                if *name != "message" {
-                    let _ = write!(captured, " {name}={value}");
-                }
-            }
-            captured.push('\n');
-        }
+        let head = event.metadata().level().to_string();
+        captured().push_line(&capture_line(&head, &fields));
         let mut waiters = waiters();
         if waiters.is_empty() {
             return;
@@ -705,5 +772,28 @@ struct Fields(HashMap<&'static str, String>);
 impl Visit for Fields {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.0.insert(field.name(), format!("{value:?}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CapturedLog;
+
+    #[test]
+    fn capture_keeps_the_newest_lines_within_its_bound() {
+        let mut log = CapturedLog::with_limit(100);
+        for i in 0..50 {
+            log.push_line(&format!("line {i:03}"));
+        }
+        assert!(log.text().len() <= 100, "the bound holds");
+        assert!(
+            log.text().ends_with("line 049\n"),
+            "the newest line is kept"
+        );
+        assert!(log.text().starts_with("line "), "cut at a line boundary");
+        assert!(!log.text().contains("line 000"), "the oldest lines go");
+        // A line longer than the bound is kept alone, cut to it.
+        log.push_line(&"x".repeat(300));
+        assert!(log.text().len() <= 100);
     }
 }

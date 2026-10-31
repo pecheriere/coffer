@@ -461,6 +461,12 @@ impl SyncService {
         today: Date,
     ) -> AccountOutcome {
         if !valid_provider_account_id(&data.provider_account_id) {
+            // Nothing can be recorded on an account without a usable id:
+            // the run counts it among the accounts with errors.
+            tracing::warn!(
+                connection = %connection,
+                "provider account with an invalid id skipped"
+            );
             return AccountOutcome::Failed;
         }
         let now = self.clock.now();

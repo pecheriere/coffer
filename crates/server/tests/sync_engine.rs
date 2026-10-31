@@ -724,3 +724,44 @@ async fn run_view_reports_attribution_and_records() {
     );
     assert!(world.server.sync.run(SyncRunId::new()).await.is_err());
 }
+
+#[tokio::test]
+async fn invalid_provider_account_id_leaves_a_trace() {
+    let world = world().await;
+    world.fake.push(Ok(fetched(vec![
+        provider_account("", "USD", world.days_ago(90), Vec::new()),
+        provider_account("acct-ok", "USD", world.days_ago(90), Vec::new()),
+    ])));
+    let run = world.sync().await;
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    let detail = run.detail.unwrap();
+    assert!(
+        detail.starts_with("2 accounts, 1 with errors"),
+        "the run counts the rejected account"
+    );
+    let logs = captured_log_text();
+    let connection = world.connection.to_string();
+    assert!(
+        logs.lines().any(|line| {
+            line.starts_with("WARN")
+                && line.contains("provider account with an invalid id skipped")
+                && line.contains(&connection)
+        }),
+        "a warning names the connection"
+    );
+}
+
+#[tokio::test]
+async fn captured_logs_include_span_fields() {
+    let _server = TestServer::new().await;
+    let marker = format!("span-marker-{}", ConnectionId::new());
+    let span = tracing::info_span!("probe", secret = %marker, later = tracing::field::Empty);
+    let recorded = format!("recorded-marker-{}", ConnectionId::new());
+    span.record("later", recorded.as_str());
+    let logs = captured_log_text();
+    assert!(logs.contains(&marker), "span fields are captured");
+    assert!(
+        logs.contains(&recorded),
+        "fields recorded later are captured"
+    );
+}
