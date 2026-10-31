@@ -26,6 +26,10 @@ pub fn page(title: &str, viewer: Option<&Viewer>, content: &Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " · coffer" }
+                link rel="icon" type="image/svg+xml" href=(assets::ICONS_FAVICON_SVG.url);
+                link rel="icon" href="/favicon.ico" sizes="48x48";
+                link rel="apple-touch-icon" href=(assets::ICONS_APPLE_TOUCH_ICON_PNG.url);
+                link rel="manifest" href=(assets::MANIFEST_WEBMANIFEST.url);
                 link rel="stylesheet" href=(assets::CSS_BASE_CSS.url);
                 script src=(assets::JS_COFFER_JS.url) defer {}
             }
