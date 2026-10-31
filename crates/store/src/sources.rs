@@ -573,6 +573,29 @@ impl StoreTx {
         Ok(())
     }
 
+    /// The transactions that list `candidate` as one they may duplicate,
+    /// in id order.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn listed_as_candidate(
+        &mut self,
+        candidate: TransactionId,
+    ) -> Result<Vec<TransactionId>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT transaction_id FROM duplicate_candidates WHERE candidate_id = ? \
+             ORDER BY transaction_id",
+        )
+        .bind(candidate.to_string())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        rows.iter()
+            .map(|row| parsed(row, "transaction_id"))
+            .collect()
+    }
+
     /// Forget every duplicate candidate of `transaction`.
     ///
     /// # Errors

@@ -259,7 +259,7 @@ fn sanitize_provider_text(raw: &str, max: usize) -> Option<String> {
 impl Description {
     /// A provider's description, sanitized to the limits rather than
     /// refused: control characters become spaces, it is trimmed and cut
-    /// to 500 characters, and an empty one becomes
+    /// to [`Self::MAX_CHARS`] characters, and an empty one becomes
     /// [`MISSING_DESCRIPTION`].
     #[must_use]
     pub fn from_provider(raw: &str) -> Self {
@@ -269,10 +269,11 @@ impl Description {
 
 impl Payee {
     /// A provider's payee, sanitized like [`Description::from_provider`]
-    /// and cut to 200 characters; `None` when nothing is left.
+    /// and cut to [`Self::MAX_CHARS`] characters; `None` when nothing is
+    /// left.
     #[must_use]
     pub fn from_provider(raw: &str) -> Option<Self> {
-        sanitize_provider_text(raw, 200).map(Self)
+        sanitize_provider_text(raw, Self::MAX_CHARS).map(Self)
     }
 }
 
@@ -281,7 +282,7 @@ impl Memo {
     /// `None` when nothing is left.
     #[must_use]
     pub fn from_provider(raw: &str) -> Option<Self> {
-        sanitize_provider_text(raw, 500).map(Self)
+        sanitize_provider_text(raw, Self::MAX_CHARS).map(Self)
     }
 }
 

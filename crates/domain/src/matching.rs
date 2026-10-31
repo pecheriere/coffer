@@ -155,27 +155,65 @@ pub fn decide(incoming: &Incoming, candidates: &[Candidate]) -> MatchDecision {
     }
 }
 
+/// Whether a pending record and a posted one may be the same purchase:
+/// posted within [`DATE_TOLERANCE_DAYS`], with the same amount, or with the
+/// posted amount within [`PENDING_SUCCESSOR_TOLERANCE_PERCENT`] of the
+/// pending one and the same non-empty description key.
+fn pending_and_posted_match(
+    pending_on: Date,
+    pending_amount: i64,
+    pending_key: &str,
+    posted_on: Date,
+    posted_amount: i64,
+    posted_key: &str,
+) -> bool {
+    within_date_tolerance(pending_on, posted_on)
+        && (pending_amount == posted_amount
+            || (same_key(pending_key, posted_key)
+                && within_successor_tolerance(pending_amount, posted_amount)))
+}
+
 /// The transactions among `pending` that a posted record `incoming` may be
 /// the posted form of, while their pending records are still reported
-/// beside it. `pending` holds transactions whose sources are all pending
-/// records the current fetch of the same connection still reports, which
-/// [`decide`] never offers; a match is posted within
-/// [`DATE_TOLERANCE_DAYS`] with the same amount, or an amount within
-/// [`PENDING_SUCCESSOR_TOLERANCE_PERCENT`] and the same non-empty
-/// description key. Such a record becomes a new transaction flagged as a
+/// beside it. `pending` holds transactions whose live sources are all
+/// pending records the same connection still reports, which [`decide`]
+/// never offers. Such a record becomes a new transaction flagged as a
 /// possible duplicate of them, never a silent second transaction.
 #[must_use]
 pub fn pending_counterparts(incoming: &Incoming, pending: &[Candidate]) -> Vec<TransactionId> {
     pending
         .iter()
         .filter(|candidate| {
-            within_date_tolerance(candidate.posted_on, incoming.posted_on)
-                && (candidate.amount_minor == incoming.amount_minor
-                    || (same_key(&candidate.description_key, &incoming.description_key)
-                        && within_successor_tolerance(
-                            candidate.amount_minor,
-                            incoming.amount_minor,
-                        )))
+            pending_and_posted_match(
+                candidate.posted_on,
+                candidate.amount_minor,
+                &candidate.description_key,
+                incoming.posted_on,
+                incoming.amount_minor,
+                &incoming.description_key,
+            )
+        })
+        .map(|candidate| candidate.transaction)
+        .collect()
+}
+
+/// The roles of [`pending_counterparts`] swapped: the transactions among
+/// `posted` that a pending record `incoming` may be the pending form of.
+/// `posted` holds transactions whose live sources are all posted records
+/// the same connection still reports.
+#[must_use]
+pub fn posted_counterparts(incoming: &Incoming, posted: &[Candidate]) -> Vec<TransactionId> {
+    posted
+        .iter()
+        .filter(|candidate| {
+            pending_and_posted_match(
+                incoming.posted_on,
+                incoming.amount_minor,
+                &incoming.description_key,
+                candidate.posted_on,
+                candidate.amount_minor,
+                &candidate.description_key,
+            )
         })
         .map(|candidate| candidate.transaction)
         .collect()
@@ -188,7 +226,7 @@ mod tests {
 
     use super::{
         Candidate, DATE_TOLERANCE_DAYS, Incoming, MatchDecision, decide, description_key,
-        fingerprint, is_eligible, pending_counterparts,
+        fingerprint, is_eligible, pending_counterparts, posted_counterparts,
     };
     use crate::ids::TransactionId;
 
@@ -349,6 +387,20 @@ mod tests {
         assert_eq!(
             pending_counterparts(&record, &[tip.clone(), same.clone(), far, unrelated]),
             vec![tip.transaction, same.transaction]
+        );
+    }
+
+    #[test]
+    fn posted_counterparts_of_a_pending_record() {
+        let record = incoming(10, -4_000, "BISTRO CENTRAL");
+        let tipped = candidate(12, -4_800, "BISTRO CENTRAL 9");
+        let too_much = candidate(12, -4_801, "BISTRO CENTRAL");
+        let same = candidate(9, -4_000, "ELSEWHERE");
+        let far = candidate(20, -4_000, "BISTRO CENTRAL");
+        assert_eq!(
+            posted_counterparts(&record, &[tipped.clone(), too_much, same.clone(), far]),
+            vec![tipped.transaction, same.transaction],
+            "the tolerance is a share of the pending amount"
         );
     }
 

@@ -14,7 +14,7 @@ use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::ids::{ConnectionId, ProviderAccountId, SourceRecordId, TransactionId};
 use coffer_domain::matching::{
     Candidate, DATE_TOLERANCE_DAYS, Incoming, MatchDecision, decide, description_key,
-    pending_counterparts,
+    pending_counterparts, posted_counterparts,
 };
 use coffer_domain::transactions::{
     Description, Memo, Payee, SplitInput, TransactionFlag, TransactionOrigin,
@@ -35,6 +35,31 @@ const CONNECTION_MISMATCH: &str = "the provider account belongs to another conne
 const BINDING_MISMATCH: &str = "the account is not the provider account's binding";
 const RECORD_MOVED: &str = "a record moved to another provider account";
 const DATE_OUT_OF_RANGE: &str = "a posting date is out of range";
+
+/// The longest provider record id, in characters.
+pub const MAX_PROVIDER_ID_CHARS: usize = 255;
+
+/// The longest raw amount, in characters.
+pub const MAX_AMOUNT_RAW_CHARS: usize = 64;
+
+/// Whether `id` can identify a provider record: 1 to
+/// [`MAX_PROVIDER_ID_CHARS`] characters without control characters.
+fn valid_provider_id(id: &str) -> bool {
+    (1..=MAX_PROVIDER_ID_CHARS).contains(&id.chars().count()) && !id.chars().any(char::is_control)
+}
+
+/// Whether `raw` is a decimal text of at most [`MAX_AMOUNT_RAW_CHARS`]
+/// characters: an optional sign, digits, and optionally a point and more
+/// digits.
+fn valid_amount_raw(raw: &str) -> bool {
+    if raw.len() > MAX_AMOUNT_RAW_CHARS {
+        return false;
+    }
+    let unsigned = raw.strip_prefix(['-', '+']).unwrap_or(raw);
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, "0"));
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    digits(whole) && digits(fraction)
+}
 
 /// A transaction record as a provider reports it, its amount already in
 /// the account currency's minor units. Texts are sanitized to the
@@ -97,6 +122,9 @@ pub struct ApplyReport {
     pub source_removed: u32,
     /// Records held for an unbound provider account.
     pub held: u32,
+    /// Malformed records skipped (an empty, over-long or control-character
+    /// provider id, or an amount that is not a decimal text).
+    pub skipped: u32,
 }
 
 /// An incoming record with its texts sanitized.
@@ -108,8 +136,14 @@ struct Record {
 }
 
 impl Record {
-    fn new(normalized: NormalizedTransaction) -> Self {
-        Self {
+    /// The record, its texts sanitized; `None` when its provider id or raw
+    /// amount is malformed.
+    fn new(normalized: NormalizedTransaction) -> Option<Self> {
+        if !valid_provider_id(&normalized.provider_id) || !valid_amount_raw(&normalized.amount_raw)
+        {
+            return None;
+        }
+        Some(Self {
             fields: ImportedFields {
                 posted_on: normalized.posted_on,
                 transacted_on: normalized.transacted_on,
@@ -122,7 +156,7 @@ impl Record {
             provider_id: normalized.provider_id,
             amount_raw: normalized.amount_raw,
             replaces: normalized.replaces_provider_id,
-        }
+        })
     }
 
     fn from_held(source: SourceRecord) -> Self {
@@ -176,14 +210,26 @@ pub async fn apply_account_batch(
     if batch.account.as_ref().map(|account| account.id) != provider_account.account {
         return Err(SyncError::Invalid(BINDING_MISMATCH));
     }
-    let records: Vec<Record> = batch.transactions.into_iter().map(Record::new).collect();
+    let total = batch.transactions.len();
+    let records: Vec<Record> = batch
+        .transactions
+        .into_iter()
+        .filter_map(Record::new)
+        .collect();
+    let skipped = u32::try_from(total - records.len()).unwrap_or(u32::MAX);
+    if skipped > 0 {
+        tracing::warn!(skipped, "skipped malformed provider records");
+    }
     let mut apply = Apply {
         tx,
         now,
         connection,
         provider_account: provider_account.id,
         vanished: HashSet::new(),
-        report: ApplyReport::default(),
+        report: ApplyReport {
+            skipped,
+            ..ApplyReport::default()
+        },
     };
 
     // 1. The vanished set; nothing is deleted yet.
@@ -411,23 +457,29 @@ impl Apply<'_> {
                 self.create(account, &record, held, &others).await
             }
             MatchDecision::New => {
-                // A posted record beside its still-reported pending form is
-                // flagged, never a silent second transaction.
-                let others = if record.fields.pending {
-                    Vec::new()
+                // A record beside its other form (pending beside posted, in
+                // either order) is flagged, never a silent second
+                // transaction.
+                let pending = record.fields.pending;
+                let others: Vec<Candidate> = rows
+                    .iter()
+                    .zip(&candidates)
+                    .filter(|(row, candidate)| {
+                        let mut live = row
+                            .sources
+                            .iter()
+                            .filter(|source| !self.vanished.contains(&source.id))
+                            .peekable();
+                        candidate.live_source_from_same_connection
+                            && live.peek().is_some()
+                            && live.all(|source| source.fields.pending != pending)
+                    })
+                    .map(|(_, candidate)| candidate.clone())
+                    .collect();
+                let others = if pending {
+                    posted_counterparts(&incoming, &others)
                 } else {
-                    let pending: Vec<Candidate> = rows
-                        .iter()
-                        .zip(&candidates)
-                        .filter(|(row, candidate)| {
-                            candidate.live_source_from_same_connection
-                                && row.sources.iter().all(|source| {
-                                    source.fields.pending && !self.vanished.contains(&source.id)
-                                })
-                        })
-                        .map(|(_, candidate)| candidate.clone())
-                        .collect();
-                    pending_counterparts(&incoming, &pending)
+                    pending_counterparts(&incoming, &others)
                 };
                 self.create(account, &record, held, &others).await
             }
@@ -671,6 +723,28 @@ impl Apply<'_> {
         Ok(changes)
     }
 
+    /// Records that `removed`, a deleted transaction, is no longer a
+    /// candidate of `transaction`, whose `PossibleDuplicate` flag clears
+    /// once it has no candidate left.
+    async fn candidate_removed(
+        &mut self,
+        transaction: TransactionId,
+        removed: TransactionId,
+    ) -> Result<(), SyncError> {
+        let current = self.tx.get_transaction(transaction).await?;
+        let mut changes = AuditChanges::new().unset("duplicate_candidate", removed);
+        if current.duplicate_candidates.is_empty()
+            && current.flags.contains(&TransactionFlag::PossibleDuplicate)
+        {
+            self.tx
+                .set_flag(transaction, TransactionFlag::PossibleDuplicate, false)
+                .await?;
+            changes = changes.change("possible_duplicate", true, false);
+        }
+        self.audit("transaction.candidate_removed", transaction, changes)
+            .await
+    }
+
     /// Step 3 for one vanished record: deletes it; a transaction left
     /// without records is deleted when it holds no user state, otherwise
     /// kept and flagged `SourceRemoved`.
@@ -680,10 +754,14 @@ impl Apply<'_> {
             return Ok(());
         };
         if !self.tx.sources_of(transaction).await?.is_empty() {
-            return Ok(());
+            let changes = AuditChanges::new().unset("source", source.id);
+            return self
+                .audit("transaction.detach_source", transaction, changes)
+                .await;
         }
         let current = self.tx.get_transaction(transaction).await?;
         if current.user_state().is_empty() {
+            let listing = self.tx.listed_as_candidate(transaction).await?;
             self.tx.delete_transaction(transaction).await?;
             let changes = AuditChanges::new()
                 .unset("account", current.account)
@@ -695,6 +773,9 @@ impl Apply<'_> {
             self.audit("transaction.delete", transaction, changes)
                 .await?;
             self.report.deleted += 1;
+            for other in listing {
+                self.candidate_removed(other, transaction).await?;
+            }
         } else if !current.flags.contains(&TransactionFlag::SourceRemoved) {
             self.tx
                 .set_flag(transaction, TransactionFlag::SourceRemoved, true)

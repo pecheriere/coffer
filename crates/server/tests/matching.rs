@@ -487,7 +487,28 @@ async fn pending_to_posted_keeps_transaction_id_without_user_state() {
     assert_eq!(posted.sources[0].provider_txn_id, "posted-9");
     assert!(posted.flags.is_empty(), "{:?}", posted.flags);
     let actions = actions_for(&world, posted.id).await;
-    assert_eq!(actions, ["transaction.import", "transaction.attach_source"]);
+    assert_eq!(
+        actions,
+        [
+            "transaction.import",
+            "transaction.attach_source",
+            "transaction.detach_source"
+        ]
+    );
+    let detach = transaction_audit(&world).await.remove(0);
+    assert_eq!(
+        detach.actor,
+        AuditActor::System {
+            reason: "system:sync".into()
+        }
+    );
+    let (field, change) = detach.changes.iter().next().unwrap();
+    assert_eq!(field, "source");
+    assert_eq!(
+        change.before,
+        AuditValue::Text(pending.sources[0].id.to_string())
+    );
+    assert_eq!(change.after, AuditValue::Null);
 }
 
 #[tokio::test]
@@ -965,6 +986,152 @@ async fn deleting_a_candidate_cascades() {
     let left = only_transaction(&world, checking.id).await;
     assert_eq!(left.id, flagged.id);
     assert!(left.duplicate_candidates.is_empty(), "the row went with it");
+    assert_eq!(left.flags, Vec::new(), "no candidate is left to review");
+    assert_eq!(
+        actions_for(&world, left.id)
+            .await
+            .last()
+            .map(String::as_str),
+        Some("transaction.candidate_removed")
+    );
+}
+
+/// Exactly two transactions, one flagged as a possible duplicate of the
+/// other.
+fn assert_flagged_pair(all: &[TransactionRecord]) {
+    assert_eq!(all.len(), 2, "{all:#?}");
+    let flagged: Vec<&TransactionRecord> = all
+        .iter()
+        .filter(|t| t.flags == [TransactionFlag::PossibleDuplicate])
+        .collect();
+    assert_eq!(flagged.len(), 1, "{all:#?}");
+    let other = all.iter().find(|t| t.id != flagged[0].id).unwrap();
+    assert_eq!(flagged[0].duplicate_candidates, [other.id]);
+    assert_eq!(other.flags, Vec::new());
+}
+
+#[tokio::test]
+async fn posted_then_pending_in_one_new_batch_flagged() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    let batch = vec![
+        record("posted-1", 11, -1_250, "CORNER SHOP 0042", false),
+        record("pending-1", 10, -1_250, "CORNER SHOP", true),
+    ];
+    apply(&world, &link, batch, &[], window()).await;
+    assert_flagged_pair(&transactions(&world, checking.id).await);
+}
+
+#[tokio::test]
+async fn pending_then_posted_in_one_new_batch_flagged() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    let batch = vec![
+        record("pending-1", 10, -1_250, "CORNER SHOP", true),
+        record("posted-1", 11, -1_250, "CORNER SHOP 0042", false),
+    ];
+    apply(&world, &link, batch, &[], window()).await;
+    assert_flagged_pair(&transactions(&world, checking.id).await);
+}
+
+#[tokio::test]
+async fn pending_reported_after_its_stored_posted_form_flagged() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    let posted = record("posted-1", 11, -4_600, "BISTRO CENTRAL", false);
+    apply(&world, &link, vec![posted.clone()], &[], window()).await;
+    advance(&world);
+
+    let pending = record("pending-1", 10, -4_000, "BISTRO CENTRAL", true);
+    apply(&world, &link, vec![posted, pending], &[], window()).await;
+    assert_flagged_pair(&transactions(&world, checking.id).await);
+}
+
+#[tokio::test]
+async fn vanished_pending_beside_posted_unflags_the_posted() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    let pending = record("pending-1", 10, -1_250, "CORNER SHOP", true);
+    let posted = record("posted-1", 11, -1_250, "CORNER SHOP 0042", false);
+    apply(&world, &link, vec![pending.clone()], &[], window()).await;
+    apply(&world, &link, vec![pending, posted.clone()], &[], window()).await;
+    assert_flagged_pair(&transactions(&world, checking.id).await);
+    advance(&world);
+
+    // The next fetch no longer reports the pending form.
+    let report = apply(&world, &link, vec![posted], &[], window()).await;
+    assert_eq!(report.deleted, 1);
+    let left = only_transaction(&world, checking.id).await;
+    assert!(!left.pending);
+    assert_eq!(left.flags, Vec::new());
+    assert_eq!(left.duplicate_candidates, Vec::new());
+}
+
+#[tokio::test]
+async fn same_purchase_from_two_providers_is_one_transaction() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let first = bound_link(&world, &checking).await;
+    let second = bound_link(&world, &checking).await;
+    let purchase = || vec![record("p-1", 10, -2_999, "HARDWARE STORE 12", false)];
+    apply(&world, &first, purchase(), &[], window()).await;
+    let report = apply(&world, &second, purchase(), &[], window()).await;
+    assert_eq!(report.attached, 1);
+    let shared = only_transaction(&world, checking.id).await;
+    assert_eq!(shared.sources.len(), 2);
+    assert_ne!(shared.sources[0].connection, shared.sources[1].connection);
+    assert_eq!(shared.flags, Vec::new());
+    let audit_count = transaction_audit(&world).await.len();
+    advance(&world);
+
+    assert_eq!(
+        apply(&world, &first, purchase(), &[], window()).await,
+        ApplyReport::default()
+    );
+    assert_eq!(
+        apply(&world, &second, purchase(), &[], window()).await,
+        ApplyReport::default()
+    );
+    assert_eq!(
+        ignoring_last_seen(vec![only_transaction(&world, checking.id).await]),
+        ignoring_last_seen(vec![shared])
+    );
+    assert_eq!(transaction_audit(&world).await.len(), audit_count);
+}
+
+#[tokio::test]
+async fn malformed_records_are_skipped() {
+    let world = world().await;
+    let checking = account(&world).await;
+    let link = bound_link(&world, &checking).await;
+    let mut no_id = record("", 10, -100, "EMPTY ID", false);
+    no_id.provider_id = String::new();
+    let long_id = record(&"x".repeat(256), 10, -200, "LONG ID", false);
+    let control_id = record("id\u{0000}1", 10, -300, "CONTROL ID", false);
+    let mut bad_amount = record("bad-amount", 10, -400, "BAD AMOUNT", false);
+    bad_amount.amount_raw = "12,50".into();
+    let mut no_amount = record("no-amount", 10, -500, "NO AMOUNT", false);
+    no_amount.amount_raw = String::new();
+    let mut good = record(&"g".repeat(255), 10, -600, "GOOD", false);
+    good.amount_raw = "-6.00".into();
+    let report = apply(
+        &world,
+        &link,
+        vec![no_id, long_id, control_id, bad_amount, no_amount, good],
+        &[],
+        window(),
+    )
+    .await;
+    assert_eq!(report.skipped, 5);
+    assert_eq!(report.created, 1, "the account's other records still apply");
+    assert_eq!(
+        only_transaction(&world, checking.id).await.amount_minor,
+        -600
+    );
 }
 
 /// Sends `body` to `uri` with a fresh write token of alice's.

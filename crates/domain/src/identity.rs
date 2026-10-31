@@ -224,12 +224,15 @@ macro_rules! label_type {
         pub struct $name(String);
 
         impl $name {
+            /// The most characters it may have.
+            pub const MAX_CHARS: usize = $max;
+
             #[doc = concat!("Trims and validates `input`: 1 to ", stringify!($max), " characters, no control characters.")]
             ///
             /// # Errors
             #[doc = concat!("Returns [`", stringify!($error), "::", stringify!($variant), "`] when `input` is invalid.")]
             pub fn parse(input: &str) -> Result<Self, $error> {
-                $crate::identity::parse_label(input, $max)
+                $crate::identity::parse_label(input, Self::MAX_CHARS)
                     .map(Self)
                     .ok_or($error::$variant)
             }

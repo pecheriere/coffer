@@ -141,7 +141,7 @@ async fn connection_lifecycle() {
             created_at: at(4),
         })
         .await;
-    assert!(matches!(malformed, Err(StoreError::Conflict(_))));
+    assert!(matches!(malformed, Err(StoreError::Invalid(_))));
 }
 
 #[tokio::test]

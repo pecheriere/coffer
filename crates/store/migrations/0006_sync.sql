@@ -58,14 +58,14 @@ CREATE TABLE transaction_sources (
     id                   TEXT PRIMARY KEY,
     connection_id        TEXT NOT NULL REFERENCES connections (id),
     provider_account_ref TEXT NOT NULL REFERENCES provider_accounts (id),
-    provider_txn_id      TEXT NOT NULL CHECK (length(provider_txn_id) >= 1),
+    provider_txn_id      TEXT NOT NULL CHECK (length(provider_txn_id) BETWEEN 1 AND 255),
     transaction_id       TEXT REFERENCES transactions (id),
     posted_on            TEXT NOT NULL
         CHECK (posted_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     transacted_on        TEXT
         CHECK (transacted_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     -- The amount as the provider gave it (a decimal text).
-    amount_raw           TEXT NOT NULL,
+    amount_raw           TEXT NOT NULL CHECK (length(amount_raw) BETWEEN 1 AND 64),
     -- Every record is converted to minor units before it is stored.
     amount_minor         INTEGER NOT NULL,
     description          TEXT NOT NULL CHECK (length(description) BETWEEN 1 AND 500),

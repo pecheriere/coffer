@@ -196,14 +196,14 @@ impl StoreTx {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Conflict`] for a malformed provider name; backend
+    /// [`StoreError::Invalid`] for a malformed provider name; backend
     /// failures, including an owner that does not exist.
     pub async fn insert_connection(
         &mut self,
         new: NewConnection<'_>,
     ) -> Result<ConnectionRecord, StoreError> {
         if !valid_provider(new.provider) {
-            return Err(StoreError::Conflict("malformed provider name"));
+            return Err(StoreError::Invalid("malformed provider name"));
         }
         let id = ConnectionId::new();
         sqlx::query(
