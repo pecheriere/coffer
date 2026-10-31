@@ -240,6 +240,51 @@ label_type!(
     max = 100
 );
 
+/// The description recorded for a provider record that has none.
+pub const MISSING_DESCRIPTION: &str = "(no description)";
+
+/// Provider text brought within a label's limits: every control character
+/// becomes a space, surrounding whitespace is trimmed, and the text is cut
+/// to `max` characters (then trimmed again). `None` when nothing is left.
+fn sanitize_provider_text(raw: &str, max: usize) -> Option<String> {
+    let spaced: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cut: String = spaced.trim().chars().take(max).collect();
+    let text = cut.trim_end();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+impl Description {
+    /// A provider's description, sanitized to the limits rather than
+    /// refused: control characters become spaces, it is trimmed and cut
+    /// to 500 characters, and an empty one becomes
+    /// [`MISSING_DESCRIPTION`].
+    #[must_use]
+    pub fn from_provider(raw: &str) -> Self {
+        Self(sanitize_provider_text(raw, 500).unwrap_or_else(|| MISSING_DESCRIPTION.to_owned()))
+    }
+}
+
+impl Payee {
+    /// A provider's payee, sanitized like [`Description::from_provider`]
+    /// and cut to 200 characters; `None` when nothing is left.
+    #[must_use]
+    pub fn from_provider(raw: &str) -> Option<Self> {
+        sanitize_provider_text(raw, 200).map(Self)
+    }
+}
+
+impl Memo {
+    /// A provider's memo, sanitized like [`Description::from_provider`];
+    /// `None` when nothing is left.
+    #[must_use]
+    pub fn from_provider(raw: &str) -> Option<Self> {
+        sanitize_provider_text(raw, 500).map(Self)
+    }
+}
+
 /// A member's notes on a transaction: at most [`MAX_NOTES_CHARS`]
 /// characters, kept exactly as written; newlines are the only control
 /// characters allowed.
@@ -414,6 +459,57 @@ mod tests {
                 Notes::parse(bad),
                 Err(TransactionError::InvalidNotes),
                 "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_text_is_sanitized_to_the_limits() {
+        let long = Description::from_provider(&"é".repeat(600));
+        assert_eq!(long.as_str().chars().count(), 500);
+        assert_eq!(Description::from_provider("").as_str(), MISSING_DESCRIPTION);
+        assert_eq!(
+            Description::from_provider(" \n\t\u{0007} ").as_str(),
+            MISSING_DESCRIPTION
+        );
+        assert_eq!(
+            Description::from_provider("  CORNER\nSHOP\u{0000}42 ").as_str(),
+            "CORNER SHOP 42"
+        );
+        let cut_at_space = Description::from_provider(&format!("{} tail", "x".repeat(499)));
+        assert_eq!(
+            cut_at_space.as_str(),
+            "x".repeat(499),
+            "no trailing space after the cut"
+        );
+        for raw in ["", "  ", "\r\n"] {
+            assert_eq!(Payee::from_provider(raw), None, "{raw:?}");
+            assert_eq!(Memo::from_provider(raw), None, "{raw:?}");
+        }
+        assert_eq!(
+            Payee::from_provider(&"p".repeat(201))
+                .unwrap()
+                .as_str()
+                .chars()
+                .count(),
+            200
+        );
+        assert_eq!(
+            Memo::from_provider("ref\u{0085}1").unwrap().as_str(),
+            "ref 1"
+        );
+        for value in [
+            Description::from_provider(&"\u{0001}a".repeat(400))
+                .as_str()
+                .to_owned(),
+            Payee::from_provider(&"\u{0001}a".repeat(400))
+                .unwrap()
+                .as_str()
+                .to_owned(),
+        ] {
+            assert!(
+                Description::parse(&value).is_ok(),
+                "always within the limits"
             );
         }
     }

@@ -4,6 +4,7 @@ pub mod accounts;
 pub mod audit;
 pub mod identity;
 pub mod ids;
+pub mod matching;
 pub mod money;
 pub mod policy;
 pub mod time;
