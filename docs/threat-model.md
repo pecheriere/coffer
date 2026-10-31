@@ -41,6 +41,12 @@
   `Origin` equal to the public origin; it is enforced once, router-wide, so
   a new page route cannot forget it. `/api/` accepts bearer tokens only,
   which a browser never attaches on its own.
+- **Referrer policy:** every response sets `Referrer-Policy: same-origin`.
+  Other sites receive no referrer, so setup and invite tokens in the path
+  never leave coffer. It is not `no-referrer` because under that policy
+  browsers send `Origin: null` on plain form POSTs, which the origin rule
+  refuses; `same-origin` lets them send the real origin, and the rule stays
+  strict (it never accepts `null`).
 - Every mutation is written with its audit entry in one transaction; entries
   record the member and the agent token involved.
 
