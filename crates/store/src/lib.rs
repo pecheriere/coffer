@@ -7,6 +7,7 @@ mod audit;
 mod backup;
 mod balances;
 mod categories;
+mod connections;
 mod convert;
 mod error;
 mod household;
@@ -14,7 +15,9 @@ mod idempotency;
 mod invites;
 mod members;
 mod passkeys;
+mod provider_accounts;
 mod sessions;
+mod sources;
 mod transactions;
 
 use std::path::Path;
@@ -31,12 +34,18 @@ pub use categories::{
     CategoryChanges, CategoryGroupChanges, CategoryGroupRecord, CategoryRecord, NewCategory,
     NewCategoryGroup,
 };
+pub use connections::{
+    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection,
+    UnknownConnectionStatus,
+};
 pub use error::StoreError;
 pub use idempotency::Reservation;
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
+pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
+pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
 pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,

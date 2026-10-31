@@ -106,6 +106,20 @@ async fn fetch_account<'e>(
     account_from_row(&row)
 }
 
+/// Whether some provider account is bound to `account`.
+async fn is_linked<'e>(
+    executor: impl SqliteExecutor<'e>,
+    account: AccountId,
+) -> Result<bool, StoreError> {
+    let (linked,): (bool,) =
+        sqlx::query_as("SELECT EXISTS (SELECT 1 FROM provider_accounts WHERE account_id = ?)")
+            .bind(account.to_string())
+            .fetch_one(executor)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+    Ok(linked)
+}
+
 impl StoreTx {
     /// Create an account.
     ///
@@ -199,6 +213,16 @@ impl StoreTx {
     pub async fn get_account(&mut self, id: AccountId) -> Result<AccountRecord, StoreError> {
         fetch_account(&mut *self.tx, id).await
     }
+
+    /// Whether some provider account is bound to `account`, as seen by this
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn account_is_linked(&mut self, account: AccountId) -> Result<bool, StoreError> {
+        is_linked(&mut *self.tx, account).await
+    }
 }
 
 impl Store {
@@ -249,5 +273,14 @@ impl Store {
             .await
             .map_err(StoreError::from_sqlx)?;
         rows.iter().map(account_from_row).collect()
+    }
+
+    /// Whether some provider account is bound to `account`.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn account_is_linked(&self, account: AccountId) -> Result<bool, StoreError> {
+        is_linked(&self.pool, account).await
     }
 }

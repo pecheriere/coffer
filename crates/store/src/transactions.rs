@@ -16,6 +16,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time, time_opt};
 use crate::members::expect_one;
+use crate::sources::{SourceRecord, candidates_by_transaction, sources_by_transaction};
 use crate::{Page, PageRequest, Store, StoreError, StoreTx};
 
 macro_rules! columns {
@@ -75,6 +76,12 @@ pub struct TransactionRecord {
     /// Set flags, in [`TransactionFlag`] declaration order.
     pub flags: Vec<TransactionFlag>,
     pub splits: Vec<SplitRecord>,
+    /// The provider records it was imported from, oldest posting day first;
+    /// empty for a manual transaction.
+    pub sources: Vec<SourceRecord>,
+    /// The transactions it may duplicate, when flagged
+    /// [`TransactionFlag::PossibleDuplicate`].
+    pub duplicate_candidates: Vec<TransactionId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -199,7 +206,7 @@ pub struct TransactionFilter {
 }
 
 /// The column holding `flag`.
-fn flag_column(flag: TransactionFlag) -> &'static str {
+pub(crate) fn flag_column(flag: TransactionFlag) -> &'static str {
     match flag {
         TransactionFlag::PossibleDuplicate => "flag_possible_duplicate",
         TransactionFlag::SourceRemoved => "flag_source_removed",
@@ -402,6 +409,8 @@ fn transaction_from_row(row: &SqliteRow) -> Result<TransactionRecord, StoreError
         )?,
         flags,
         splits: Vec::new(),
+        sources: Vec::new(),
+        duplicate_candidates: Vec::new(),
         created_at: time(row, "created_at")?,
         updated_at: time(row, "updated_at")?,
     })
@@ -421,14 +430,15 @@ async fn fetch_transaction(
     .await
     .map_err(StoreError::from_sqlx)?;
     let mut records = vec![transaction_from_row(&row)?];
-    attach_splits(conn, &mut records).await?;
+    attach_children(conn, &mut records).await?;
     let [record] = <[TransactionRecord; 1]>::try_from(records)
         .map_err(|_| corrupt("one transaction became several"))?;
     Ok(record)
 }
 
-/// Loads the splits of every record in `records`, each in order.
-async fn attach_splits(
+/// Loads the splits (in order), source records and duplicate candidates of
+/// every record in `records`.
+async fn attach_children(
     conn: &mut SqliteConnection,
     records: &mut [TransactionRecord],
 ) -> Result<(), StoreError> {
@@ -460,8 +470,13 @@ async fn attach_splits(
                 minor_units: row.try_get("minor_units").map_err(StoreError::from_sqlx)?,
             });
     }
+    let ids: Vec<TransactionId> = records.iter().map(|record| record.id).collect();
+    let mut sources = sources_by_transaction(conn, &ids).await?;
+    let mut candidates = candidates_by_transaction(conn, &ids).await?;
     for record in records {
         record.splits = splits.remove(&record.id).unwrap_or_default();
+        record.sources = sources.remove(&record.id).unwrap_or_default();
+        record.duplicate_candidates = candidates.remove(&record.id).unwrap_or_default();
     }
     Ok(())
 }
@@ -727,7 +742,7 @@ impl Store {
         } else {
             None
         };
-        attach_splits(&mut read, &mut items).await?;
+        attach_children(&mut read, &mut items).await?;
         Ok(Page { items, next })
     }
 }
