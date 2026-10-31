@@ -260,7 +260,7 @@ async fn set_appearance(
 /// One agent token in a list: its name and `meta`, chips for its scope and
 /// status (quiet once it no longer works), and a revoke form posting to
 /// `revoke` while it is active.
-pub fn token_item(
+pub(super) fn token_item(
     token: &AgentTokenRecord,
     now: Timestamp,
     csrf: &str,
