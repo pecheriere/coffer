@@ -12,7 +12,7 @@ commands read the same configuration; `healthcheck` reads only
 | `COFFER_PUBLIC_URL` | required | The externally visible origin, also the WebAuthn origin: `https://<domain>[:port]` with nothing after the host but an optional `/`. `http://localhost[:port]` is accepted for local development only. Rejected: IP addresses (IPv4 or IPv6, over https too) because passkeys need a domain; a path (coffer cannot be served under a sub-path); user information, a query or a fragment. Changing the domain later invalidates every registered passkey. |
 | `COFFER_DATA_DIR` | required | Directory holding `coffer.db` and the server key. Created with mode 0700 if missing; an existing directory that group or others can access (any of mode 0077 set) is refused at startup by every command, with the fix (`chmod 700 <dir>`) in the error. Must be persistent and backed up. |
 | `COFFER_LISTEN` | `127.0.0.1:8080` | `host:port` socket address to bind. |
-| `COFFER_SECRET_KEY_FILE` | `$COFFER_DATA_DIR/secret.key` | 32-byte server key, created with mode 0600 on first start. A file readable by group or others is refused. Losing it invalidates all sessions, agent tokens and outstanding links; passkeys are unaffected. |
+| `COFFER_SECRET_KEY_FILE` | `$COFFER_DATA_DIR/secret.key` | 32-byte server key, created with mode 0600 on first start. A file readable by group or others is refused. Losing it invalidates all sessions, agent tokens and outstanding links, and makes the stored provider credentials unreadable, so every provider connection must be reconnected; passkeys are unaffected. |
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
@@ -83,4 +83,6 @@ directory or the server key.
 public keys, token hashes and all financial data, so store it as carefully as
 the live data directory. The server key (`secret.key`) is not part of the
 backup; without it, restored agent tokens and sessions no longer validate and
-must be recreated, while passkeys keep working.
+must be recreated, and provider credentials (sealed under a key derived from
+it) cannot be opened, so every provider connection must be reconnected, while
+passkeys keep working.

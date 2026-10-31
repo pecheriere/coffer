@@ -3,8 +3,8 @@
 ## Assets
 
 - Household financial data (accounts, balances, transactions, plan).
-- Credentials: passkey public keys, session cookies, agent tokens, the
-  server key.
+- Credentials: passkey public keys, session cookies, agent tokens, provider
+  credentials (a SimpleFin access URL, a Plaid access token), the server key.
 - The audit log, whose value is that it is trustworthy.
 
 ## Trust boundaries
@@ -26,6 +26,16 @@
   database stores only a keyed BLAKE3 hash, domain-separated per token kind,
   so a stolen database or backup cannot be replayed without the server key.
   Secrets are shown once and never logged; errors never echo credentials.
+- **Provider credentials are stored only sealed.** They are encrypted with
+  XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
+  the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider
+  credentials v1`). The connection id is the associated data, so a sealed
+  value copied to another connection's row does not open; any altered byte
+  fails authentication. A leading version byte allows a dedicated key later.
+  In clear they exist only in memory, in buffers wiped after use, and never
+  appear in logs, errors, the audit log or responses. A stolen database or
+  backup does not reveal them without the server key; losing the server key
+  means reconnecting every provider.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
