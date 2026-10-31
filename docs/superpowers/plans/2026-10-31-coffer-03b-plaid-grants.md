@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-30-coffer-design.md`, especially §8.2 (per-account authorization) and §8.6 (Plaid) added by plan 2a Task 1; §6.2, §6.5, §6.6, §6.11. Issues #2 (Plaid) and #5 (grants).
 
-**Depends on:** plan 2a (`2026-10-31-coffer-03-accounts-providers.md`) merged.
+**Depends on:** plan 2a (`2026-10-31-coffer-03-accounts-providers.md`) merged, and through it the design-system plan: pages use `layout::{page, Frame, Nav}`, tests use `testkit::browser::Browser` and `crates/server/src/testkit/mod.rs`, scripts are content-hashed assets under `crates/server/assets/`, and `security_headers` is the top-level layer in `http/mod.rs`. Migrations continue from 2a's last (`0006`), so this plan's is `0007`.
 
 **Why grants come here, not in 2a:** 2a already routes every account-scoped decision through `authorize_account` with an `AccountAccess` from `AccessResolver`, filters every account-scoped query by `AccountScope`, answers 404 for hidden and 403 (naming the level) for insufficient access, and returns `{ items }` lists that can be filtered. Grants therefore add data and a resolver branch, not a new API shape. 2a was already 13 tasks; grants bring a UI, a migration and a leak property test that deserve their own review.
 
@@ -60,12 +60,12 @@ All of plan 2a's Global Constraints apply unchanged. In addition:
 ### Task 2: Grants on tokens, enforced everywhere **[security]**
 
 **Files:**
-- Create: `crates/store/migrations/0006_token_grants.sql`, `crates/store/src/token_grants.rs`
-- Modify: `crates/server/src/auth/{agent_tokens,access}.rs`, `crates/server/src/http/pages/account.rs`, `crates/server/src/http/api/{me,audit,accounts,transactions,provider_accounts,connections}.rs`, `crates/server/src/ledger/*.rs`, `crates/server/src/sync/engine.rs`, `docs/api/openapi.json`, `docs/agent-usage.md`, `docs/threat-model.md`
+- Create: `crates/store/migrations/0007_token_grants.sql`, `crates/store/src/token_grants.rs`
+- Modify: `crates/server/src/auth/{agent_tokens,access}.rs`, `crates/server/src/http/pages/account.rs`, `crates/server/src/http/api/{me,audit,accounts,transactions,provider_accounts,connections}.rs`, `crates/server/src/ledger/*.rs`, `crates/server/src/sync/connections.rs`, `docs/api/openapi.json`, `docs/agent-usage.md`, `docs/threat-model.md`
 - Test: `crates/server/tests/grants.rs`
 
 **Interfaces:**
-- Schema `0006`: `agent_token_grants(token_id FK, target TEXT NOT NULL /* 'all' or account id */, level CHECK IN ('balances','transactions','write'), PRIMARY KEY (token_id, target))`.
+- Schema `0007`: `agent_token_grants(token_id FK, target TEXT NOT NULL /* 'all' or account id */, level CHECK IN ('balances','transactions','write'), PRIMARY KEY (token_id, target))`.
 - Store: `StoreTx::replace_token_grants(AgentTokenId, &[TokenGrant])`, `Store::token_grants(AgentTokenId) -> Vec<TokenGrant>`.
 - `AgentTokens::create(&self, actor, name, scope, expires_at, grants: Vec<TokenGrant>)` (validated with `validate_grants` when non-empty; each `Account` target must exist); `AgentTokens::replace_grants(&self, actor, AgentTokenId, Vec<TokenGrant>)` (passkey session; own token, or any with `ManageMembers`; audit `token.grants` with `before`/`after` as a canonical text form `all=balances,<id>=write`).
 - `AccessResolver::resolve`: session → `Uniform`; agent → `account_access_with_grants(actor, store.token_grants(token))`.
@@ -116,36 +116,37 @@ All of plan 2a's Global Constraints apply unchanged. In addition:
 
 **Files:**
 - Create: `crates/server/src/sync/plaid/provider.rs`
-- Modify: `crates/server/src/sync/provider.rs` (`ProviderKind::Plaid`, `ConnectInput::PlaidPublicToken`), `crates/server/src/sync/engine.rs` (registration when `Config.plaid` is set), `crates/server/src/testkit.rs` (`TestServer::with_plaid`)
+- Modify: `crates/server/src/sync/provider.rs` (`ProviderKind::Plaid`, `ConnectInput::PlaidPublicToken`), `ProviderRegistry::from_config` in the same file (registers Plaid when `Config.plaid` is set; the single registration point), `crates/server/src/testkit/mod.rs` (`TestServer::with_plaid`)
 - Test: `crates/server/tests/plaid_sync.rs`
 
 **Interfaces:**
 - Consumes: `PlaidClient` (Task 3); 2a's `Provider`, `FetchRequest`, `FetchResult`, `ProviderAccountData`, `ProviderTransaction`, `Coverage::Delta`, `apply_account_batch` (removals by id, `replaces_provider_id`).
 - Produces: `ProviderKind::Plaid` (`"plaid"`); `ConnectInput::PlaidPublicToken(SecretString)`; `struct Plaid { client: PlaidClient }` implementing `Provider` with `Capabilities { pending: true, mode: Cursor, min_interval: 15 min, min_scheduled_interval: 1 h, daily_budget: 48 }`.
   - `connect(PlaidPublicToken)` → `exchange`; the credential is the JSON `{"access_token": ..., "item_id": ...}` (a private serde struct, sealed by the engine).
-  - `fetch`: `accounts`, then `sync_page` from `request.cursor` until `has_more` is false. On `MutationDuringPagination`, discard everything gathered and restart from `request.cursor`, at most 3 passes, then `ProviderError::Unavailable("Plaid data changed during sync; try again")`. Returns `cursor = next_cursor` of the last page, every account with `coverage: Delta`, its `added`+`modified` as transactions and its `removed` ids. Mapping: `amount` → `DecimalAmount::negated`; `date` → `posted_on`; `authorized_date` → `transacted_on`; `merchant_name` → `payee`; `name` → `description`; `pending_transaction_id` → `replaces_provider_id`; currency from `iso_currency_code`, else the `unofficial_currency_code` text (which 2a's engine rejects as an account error); balance `current` on today's date in `request.timezone`, negated for `type` `credit` and `loan`. `kind_hint`: depository/checking → checking, depository/savings → savings, credit → credit_card, loan/mortgage → mortgage, other loan → loan, investment/brokerage → brokerage, investment with a retirement subtype (`401k`, `403b`, `ira`, `roth`, `pension`) → retirement, otherwise none.
+  - `fetch`: `accounts`, then `sync_page` from `request.cursor` until `has_more` is false. On `MutationDuringPagination`, discard everything gathered and restart from `request.cursor`, at most 3 passes, then `ProviderError::Unavailable("Plaid data changed during sync; try again")`. Returns `cursor = next_cursor` of the last page, every account with `coverage: Delta`, its `added`+`modified` as transactions and its `removed` ids. Mapping: `amount` → `DecimalAmount::negated`; `date` → `posted_on`; `authorized_date` → `transacted_on`; `merchant_name` → `payee`; `name` → `description`; `pending_transaction_id` → `replaces_provider_id`; currency from `iso_currency_code`, else the `unofficial_currency_code` text (which 2a's engine rejects as an account error); balance `current` dated `request.today`, negated for `type` `credit` and `loan`. `kind_hint`: depository/checking → checking, depository/savings → savings, credit → credit_card, loan/mortgage → mortgage, other loan → loan, investment/brokerage → brokerage, investment with a retirement subtype (`401k`, `403b`, `ira`, `roth`, `pension`) → retirement, otherwise none.
   - `ItemLoginRequired` → `ProviderError::ReauthRequired`; `RateLimited` → `ProviderError::RateLimited`.
   - `disconnect` → `remove_item`; a failure is returned, so `remove_connection` (2a) fails without changing anything and the member can retry (Plaid bills Items until removed).
 
-- [ ] **Step 1: Write failing tests** (against `MockUpstream`, `TestServer::with_plaid`): `first_sync_pages_until_done_and_saves_cursor` (two pages; second request carries page 1's `next_cursor`; connection `provider_state` = final cursor); `next_sync_starts_from_saved_cursor`; `plaid_amount_sign_inverted` (Plaid `12` → -1200 minor units USD); `liability_balances_are_negative`; `posted_successor_attaches_via_pending_transaction_id` (categorize the pending transaction; next sync's posted record with a different amount and a new id attaches to it, user state kept); `removed_ids_remove_sources`; `mutation_during_pagination_restarts` (page 2 fails once with the mutation error → restart from the original cursor; only the second pass's data committed); `item_login_required_marks_reauth` (status `reauth_required`; the scheduler's `due` skips it); `disconnect_removes_item_or_fails_cleanly` (mock `/item/remove` 500 → `DELETE /api/v1/connections/{id}` 502 `provider_error`, connection unchanged; then 200 → removed).
+- [ ] **Step 1: Write failing tests** (against `MockUpstream`, `TestServer::with_plaid`): `first_sync_pages_until_done_and_saves_cursor` (two pages; second request carries page 1's `next_cursor`; connection `provider_state` = final cursor); `next_sync_starts_from_saved_cursor`; `plaid_amount_sign_inverted` (Plaid `12` → -1200 minor units USD); `liability_balances_are_negative`; `posted_successor_attaches_via_pending_transaction_id` (categorize the pending transaction; next sync's posted record with a different amount and a new id attaches to it, user state kept); `removed_ids_remove_sources`; `mutation_during_pagination_restarts` (page 2 fails once with the mutation error → restart from the original cursor; only the second pass's data committed); `item_login_required_marks_reauth` (status `reauth_required`; 2a's `scheduler::due` skips it); `disconnect_removes_item_or_fails_cleanly` (mock `/item/remove` 500 → `DELETE /api/v1/connections/{id}` (2a Task 15) 502 `provider_error`, connection unchanged (2a Task 13 `remove_connection`); then 200 → removed).
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** full gate → PASS.
 - [ ] **Step 5: Commit** `feat(sync): plaid provider`.
 
 ### Task 5: Plaid Link page **[security]**
 
 **Files:**
-- Create: `crates/server/src/http/pages/plaid.rs`, `crates/server/src/http/pages/plaid-link.js`
-- Modify: `crates/server/src/http/pages/{mod,connections}.rs`
+- Create: `crates/server/src/http/pages/plaid.rs`, `crates/server/assets/js/plaid-link.js` (served by the design system's asset pipeline at its hashed URL, `assets::JS_PLAID_LINK_JS`)
+- Modify: `crates/server/src/http/pages/{mod,connections}.rs`, `crates/server/src/http/mod.rs` (`security_headers` keeps a page-set CSP), `crates/server/src/sync/connections.rs` (`confirm_reauthorized`)
 - Test: `crates/server/tests/plaid_link.rs`
 
 **Interfaces:**
 - Routes (registered only when `Config.plaid` is set; otherwise 404), all session-authenticated:
+  - Both pages render with `layout::page` (`Frame { current: Some(Nav::Connections), .. }`) and load `assets::JS_PLAID_LINK_JS.url` plus Plaid's script.
   - `GET /connections/plaid/new` → page with a label field and a "Connect with Plaid" button; the link token is created server-side and placed in a `data-link-token` attribute; the CSRF token as on every page.
   - `GET /connections/{id}/plaid/reconnect` → same page in update mode (link token created with the connection's access token; only for Plaid connections the actor may manage).
   - `POST /connections/plaid/exchange` (JSON `{ label, public_token }`, CSRF header) → `SyncService::create_connection(.., ProviderKind::Plaid, .., ConnectInput::PlaidPublicToken)`; response `{ redirect: "/connections" }`.
-  - `POST /connections/{id}/plaid/reconnected` (CSRF) → status back to `active`, enqueue a manual sync; audit `connection.reconnect`.
-  - `GET /static/plaid-link.js`: loads nothing itself; calls `Plaid.create({ token, onSuccess, onExit })` and posts the result with `fetch` (same origin, CSRF header). No inline script.
-- CSP for these two pages only (`const PLAID_LINK_CSP`), set by the handler and preserved by `security_headers` (which sets the default only when the response has none): `default-src 'self'; script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; frame-src https://cdn.plaid.com; connect-src 'self' https://<environment host>; style-src 'self'; img-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'`. Exchange endpoints keep the default CSP. The `/connections` page links to the Plaid page when Plaid is configured and shows "Reconnect" for `reauth_required` Plaid connections.
+  - `POST /connections/{id}/plaid/reconnected` (CSRF) → `SyncService::confirm_reauthorized(actor, ConnectionId)` (new; `RemoveConnection { owner }`; Plaid update mode keeps the same access token, so nothing is resealed; status `active`, a manual run queued, audit `connection.reconnect`).
+  - `plaid-link.js`: loads nothing itself; calls `Plaid.create({ token, onSuccess, onExit })` and posts the result with `fetch` (same origin, CSRF header). No inline script.
+- CSP for these two pages only (`const PLAID_LINK_CSP`), set by the handler and preserved by the top-level `security_headers` layer (which now sets the default only when the response has none; a test keeps every other route on the default): `default-src 'self'; script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; frame-src https://cdn.plaid.com; connect-src 'self' https://<environment host>; style-src 'self'; img-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'`. Exchange endpoints keep the default CSP. The `/connections` page links to the Plaid page when Plaid is configured and shows "Reconnect" for `reauth_required` Plaid connections.
 - Manual check (in the PR description, not CI): Link opens in a real browser against sandbox with no CSP violation in the console; adjust only by adding exact Plaid origins.
 
 - [ ] **Step 1: Write failing tests.** `plaid_pages_absent_without_config` (404); `link_page_has_plaid_csp_only_there` (Link page CSP equals `PLAID_LINK_CSP`; `/connections`, `/account`, `/login` keep the default CSP without `plaid`); `link_page_has_no_inline_script` (every `<script>` has a `src`); `exchange_requires_session_and_csrf` (bearer → 401; no CSRF → 403; cross-origin → 403); `exchange_stores_sealed_access_token` (mock exchange returns `access-sandbox-SECRET`; DB bytes, audit, `captured_log_text()` and response lack it; a sync is queued); `public_token_never_echoed_on_error`; `reconnect_uses_update_mode` (mock sees `access_token` and no `products` in `/link/token/create`); `member_cannot_reconnect_others_connection`.
