@@ -414,7 +414,10 @@ impl Apply<'_> {
         account: &AccountRecord,
         record: Record,
     ) -> Result<(), SyncError> {
-        // Same connection and provider id: the same transaction.
+        // Same connection and provider id: the same transaction. Only a
+        // record whose reported fields changed changes it: a transaction
+        // holding several records (as after a merge) shows whichever one it
+        // last applied, and records re-reported unchanged never rewrite it.
         if let Some(existing) = self
             .tx
             .find_source(self.connection, &record.provider_id)
@@ -427,6 +430,7 @@ impl Apply<'_> {
                 .update_source(existing.id, record.update(self.now))
                 .await?;
             return match existing.transaction {
+                Some(_) if existing.fields == record.fields => Ok(()),
                 Some(transaction) => {
                     let current = self.tx.get_transaction(transaction).await?;
                     let changes = self

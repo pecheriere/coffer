@@ -1039,6 +1039,54 @@ async fn read_token_cannot_merge() {
 }
 
 #[tokio::test]
+async fn merged_records_of_two_connections_stay_put_through_resyncs() {
+    let world = world().await;
+    let checking = account(&world, "Checking").await;
+    let first = link(&world, &checking).await;
+    let second = link(&world, &checking).await;
+    // The same purchase, reported differently enough not to match.
+    let one = || vec![record("a-1", 10, -2_999, "HARDWARE STORE", false)];
+    let other = || vec![record("b-1", 13, -3_010, "HDW STORE 12 CITY", false)];
+    apply(&world, &first, one()).await;
+    apply(&world, &second, other()).await;
+    let target = holding(&world, &first, "a-1").await.id;
+    let duplicate = holding(&world, &second, "b-1").await.id;
+    let tools = category(&world, "Tools").await;
+    patch(
+        &world,
+        target,
+        TransactionPatch {
+            splits: Some(vec![SplitInput {
+                category: tools,
+                minor_units: -2_999,
+            }]),
+            ..TransactionPatch::default()
+        },
+    )
+    .await;
+    let (status, body) = merge(&world, target, json!({ "duplicate": duplicate })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let merged = get(&world, target).await;
+    let audit_count = transaction_audit(&world).await.len();
+
+    for _ in 0..2 {
+        world
+            .server
+            .clock
+            .advance(jiff::SignedDuration::from_secs(60));
+        apply(&world, &first, one()).await;
+        apply(&world, &second, other()).await;
+    }
+    let after = get(&world, target).await;
+    assert_eq!(transaction_audit(&world).await.len(), audit_count);
+    assert_eq!(after.amount_minor, merged.amount_minor);
+    assert_eq!(after.posted_on, merged.posted_on);
+    assert_eq!(after.raw_description, merged.raw_description);
+    assert_eq!(after.splits, merged.splits);
+    assert_eq!(after.updated_at, merged.updated_at);
+}
+
+#[tokio::test]
 async fn merge_refuses_purchases_one_connection_reported_apart() {
     let world = world().await;
     let checking = account(&world, "Checking").await;
