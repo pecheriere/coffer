@@ -9,8 +9,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 ## Crate map
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
-  audit entry types, money, accounts, transactions, matching, clock). No
-  I/O.
+  audit entry types, money, accounts, transactions, matching, sync run
+  triggers and statuses, clock). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate.
@@ -23,7 +23,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   HTTPS client: per-provider host allow-lists, public-address resolver,
   `HTTPS_PROXY`, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
-  server key, bound to their connection id); `sync` (the provider-agnostic apply step
+  server key, bound to their connection id); `sync` (the provider interface
+  and the `ProviderRegistry`, the one place providers are registered; the
+  engine that performs sync runs; the provider-agnostic apply step
   matching provider records onto transactions); `canonical` (changes to
   canonical transactions shared by `sync` and `ledger`: imported fields and
   duplicate candidates); `cli` and

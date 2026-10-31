@@ -351,8 +351,13 @@ async fn backup(store: &Store, dest: &Path) -> Result<(), CliError> {
 }
 
 /// `RUST_LOG` filter (default `info`); JSON lines when `COFFER_LOG_FORMAT`
-/// is `json`. Logs go to stderr.
+/// is `json`. Logs go to stderr. A process that already installed its own
+/// global subscriber before calling [`run`] (a test harness capturing logs)
+/// keeps it.
 fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
+    if tracing::dispatcher::has_been_set() {
+        return Ok(());
+    }
     let filter = env("RUST_LOG")
         .and_then(|spec| EnvFilter::try_new(spec).ok())
         .unwrap_or_else(|| EnvFilter::new("info"));

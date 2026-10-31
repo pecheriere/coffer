@@ -34,6 +34,17 @@ pub enum ProblemCode {
     IdempotencyKeyReuse,
     /// A request with this `Idempotency-Key` is still being performed.
     IdempotencyInProgress,
+    /// The data provider failed or refused the request.
+    ProviderError,
+    /// The provider refuses the connection's credentials: reconnect it.
+    ReauthRequired,
+    /// Too many syncs of this connection; `Retry-After` says when to retry.
+    SyncRateLimited,
+    /// A sync of this connection is already queued or running.
+    SyncInProgress,
+    /// The provider account's currency is not the account's, or is not a
+    /// supported ISO 4217 currency.
+    CurrencyMismatch,
     Internal,
 }
 
@@ -58,6 +69,11 @@ impl ProblemCode {
             Self::PasskeyRejected => "passkey_rejected",
             Self::IdempotencyKeyReuse => "idempotency_key_reuse",
             Self::IdempotencyInProgress => "idempotency_in_progress",
+            Self::ProviderError => "provider_error",
+            Self::ReauthRequired => "reauth_required",
+            Self::SyncRateLimited => "sync_rate_limited",
+            Self::SyncInProgress => "sync_in_progress",
+            Self::CurrencyMismatch => "currency_mismatch",
             Self::Internal => "internal",
         }
     }
@@ -381,6 +397,11 @@ mod tests {
             ProblemCode::PasskeyRejected,
             ProblemCode::IdempotencyKeyReuse,
             ProblemCode::IdempotencyInProgress,
+            ProblemCode::ProviderError,
+            ProblemCode::ReauthRequired,
+            ProblemCode::SyncRateLimited,
+            ProblemCode::SyncInProgress,
+            ProblemCode::CurrencyMismatch,
             ProblemCode::Internal,
         ] {
             assert_eq!(

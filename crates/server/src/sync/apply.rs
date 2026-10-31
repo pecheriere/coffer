@@ -315,7 +315,7 @@ pub async fn apply_held(
 }
 
 /// Who the sync's audit entries are attributed to.
-fn sync_actor() -> AuditActor {
+pub(crate) fn sync_actor() -> AuditActor {
     AuditActor::System {
         reason: SYNC_REASON.to_owned(),
     }

@@ -1,6 +1,7 @@
 //! Test helpers: a temporary server with a manual clock, software passkeys
-//! that drive identity ceremonies without HTTP, and a signal for when code
-//! under test logs a given event.
+//! that drive identity ceremonies without HTTP, a scripted data provider,
+//! a capture of every log event, and a signal for when code under test logs
+//! a given event.
 //!
 //! Compiled only with the `testkit` feature; never part of a release build.
 
@@ -11,16 +12,20 @@
 
 pub mod browser;
 
-use std::collections::HashMap;
-use std::fmt;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::identity::{DisplayName, TokenName, Username};
-use coffer_domain::ids::MemberId;
+use coffer_domain::ids::{ConnectionId, MemberId};
 use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
-use coffer_store::Store;
-use jiff::Timestamp;
+pub use coffer_store::INJECTED_FAILURE_RECORD_ID;
+use coffer_store::{NewConnection, Store};
+use jiff::civil::Date;
+use jiff::{SignedDuration, Timestamp};
+use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tracing::field::{Field, Visit};
@@ -38,9 +43,16 @@ use webauthn_rs::prelude::{
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
+use crate::egress::Egress;
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
 use crate::secrets::{SecretToken, ServerKey};
+use crate::sync::engine::SyncService;
+use crate::sync::provider::{
+    Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider, ProviderError,
+    ProviderFuture, ProviderKind, ProviderRegistry,
+};
+use crate::vault::CredentialVault;
 
 /// Public URL (and `WebAuthn` origin) of the test server.
 pub const TEST_PUBLIC_URL: &str = "https://coffer.test";
@@ -69,6 +81,10 @@ pub struct TestServer {
     pub appearance: Arc<Appearance>,
     /// The account access resolver.
     pub access: Arc<AccessResolver>,
+    /// The provider credential vault, under the server key.
+    pub vault: Arc<CredentialVault>,
+    /// The sync engine, over the providers registered so far.
+    pub sync: Arc<SyncService>,
     _dir: Option<TempDir>,
 }
 
@@ -80,10 +96,102 @@ impl TestServer {
     /// If the temporary directory, database, key or service cannot be
     /// created.
     pub async fn new() -> Self {
+        Self::with_env(&[]).await
+    }
+
+    /// A fresh, empty server whose configuration also reads `vars`, such
+    /// as `COFFER_TIMEZONE`.
+    ///
+    /// # Panics
+    ///
+    /// If the temporary directory, database, key or service cannot be
+    /// created, or `vars` make the configuration invalid.
+    pub async fn with_env(vars: &[(&str, &str)]) -> Self {
         let dir = tempfile::tempdir().expect("temporary directory");
         let clock = ManualClock::new(Timestamp::from_second(TEST_START).expect("valid start time"));
         let path = dir.path().to_owned();
-        Self::build(&path, Some(dir), clock).await
+        Self::build(&path, Some(dir), clock, vars).await
+    }
+
+    /// A fresh, empty server whose sync engine uses a [`FakeProvider`] for
+    /// [`ProviderKind::SimpleFin`] connections.
+    ///
+    /// # Panics
+    ///
+    /// As [`TestServer::new`].
+    pub async fn with_fake_provider() -> (Self, Arc<FakeProvider>) {
+        let mut server = Self::new().await;
+        let fake = server.use_fake_provider();
+        (server, fake)
+    }
+
+    /// Registers a new [`FakeProvider`] with the sync engine, replacing any
+    /// provider of its kind, and returns it for scripting.
+    pub fn use_fake_provider(&mut self) -> Arc<FakeProvider> {
+        let fake = Arc::new(FakeProvider::new());
+        self.use_provider(Arc::clone(&fake) as Arc<dyn Provider>);
+        fake
+    }
+
+    /// Registers `provider` with the sync engine, replacing any provider of
+    /// its kind.
+    pub fn use_provider(&mut self, provider: Arc<dyn Provider>) {
+        let registry = registry(&self.config).with(provider);
+        self.sync = Arc::new(SyncService::new(
+            self.store.clone(),
+            self.clock.clone(),
+            Arc::clone(&self.vault),
+            Arc::new(registry),
+            self.config.clone(),
+        ));
+    }
+
+    /// Creates a connection to `kind` owned by `owner`, with `plaintext`
+    /// sealed as its credentials under this server's vault.
+    ///
+    /// # Panics
+    ///
+    /// If the label is invalid or a write fails.
+    pub async fn seed_connection(
+        &self,
+        kind: ProviderKind,
+        label: &str,
+        owner: MemberId,
+        plaintext: &str,
+    ) -> ConnectionId {
+        let mut tx = self.store.begin().await.expect("begin");
+        let connection = tx
+            .insert_connection(NewConnection {
+                provider: kind.as_str(),
+                label: ConnectionLabel::parse(label).expect("valid connection label"),
+                owner,
+                credentials: Vec::new(),
+                created_at: self.clock.now(),
+            })
+            .await
+            .expect("insert connection");
+        let sealed = self
+            .vault
+            .seal(connection.id, &SecretString::from(plaintext))
+            .expect("seal credentials");
+        tx.set_connection_credentials(connection.id, Some(sealed.into()))
+            .await
+            .expect("store sealed credentials");
+        tx.commit().await.expect("commit");
+        connection.id
+    }
+
+    /// Makes every later write of a provider record with the id
+    /// [`INJECTED_FAILURE_RECORD_ID`] fail, as a storage failure would.
+    ///
+    /// # Panics
+    ///
+    /// If the failure cannot be installed.
+    pub async fn inject_source_insert_failure(&self) {
+        self.store
+            .inject_source_insert_failure_for_tests()
+            .await
+            .expect("install the injected failure");
     }
 
     /// A server over an existing data directory (for example one a CLI
@@ -95,17 +203,24 @@ impl TestServer {
     /// If the database, key or service cannot be opened.
     pub async fn open_at(data_dir: &Path) -> Self {
         let now = SystemClock.now();
-        Self::build(data_dir, None, ManualClock::new(now)).await
+        Self::build(data_dir, None, ManualClock::new(now), &[]).await
     }
 
-    async fn build(data_dir: &Path, dir: Option<TempDir>, clock: ManualClock) -> Self {
-        let vars = HashMap::from([
+    async fn build(
+        data_dir: &Path,
+        dir: Option<TempDir>,
+        clock: ManualClock,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        capture_logs();
+        let mut vars = HashMap::from([
             ("COFFER_PUBLIC_URL", TEST_PUBLIC_URL.to_owned()),
             (
                 "COFFER_DATA_DIR",
                 data_dir.to_str().expect("UTF-8 temp path").to_owned(),
             ),
         ]);
+        vars.extend(extra.iter().map(|&(name, value)| (name, value.to_owned())));
         let config = Config::from_env(|name| vars.get(name).cloned()).expect("test config");
         let store = Store::open(&config.database_path())
             .await
@@ -133,6 +248,14 @@ impl TestServer {
             clock.clone(),
         ));
         let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
+        let vault = Arc::new(CredentialVault::new(&key));
+        let sync = Arc::new(SyncService::new(
+            store.clone(),
+            clock.clone(),
+            Arc::clone(&vault),
+            Arc::new(registry(&config)),
+            config.clone(),
+        ));
         Self {
             clock,
             store,
@@ -143,6 +266,8 @@ impl TestServer {
             agent_tokens,
             appearance,
             access: Arc::new(AccessResolver::new()),
+            vault,
+            sync,
             _dir: dir,
         }
     }
@@ -215,6 +340,137 @@ impl TestServer {
             Arc::clone(&self.sessions),
             false,
         )
+    }
+}
+
+/// The providers the configuration registers, as in production, over a
+/// test egress client.
+fn registry(config: &Config) -> ProviderRegistry {
+    ProviderRegistry::from_config(config, &Egress::for_tests()).expect("provider registry")
+}
+
+/// One fetch a [`FakeProvider`] received.
+#[derive(Debug, Clone)]
+pub struct FakeFetch {
+    /// The opened credentials it was given.
+    pub credentials: SecretString,
+    pub window_start: Option<Date>,
+    pub cursor: Option<String>,
+    pub today: Date,
+    /// The IANA name of the time zone it was given.
+    pub timezone: String,
+}
+
+/// A [`ProviderKind::SimpleFin`] provider that answers fetches from a
+/// script and records each request. Its capabilities are those of a
+/// windowed provider: 90 days at most, 14 days of overlap.
+pub struct FakeProvider {
+    capabilities: Capabilities,
+    responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
+    requests: Mutex<Vec<FakeFetch>>,
+}
+
+impl fmt::Debug for FakeProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FakeProvider").finish_non_exhaustive()
+    }
+}
+
+impl Default for FakeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FakeProvider {
+    /// A provider with an empty script.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_capabilities(Capabilities {
+            pending: true,
+            mode: FetchMode::Window {
+                max_days: 90,
+                overlap_days: 14,
+            },
+            min_interval: SignedDuration::from_hours(1),
+            min_scheduled_interval: SignedDuration::from_hours(2),
+            daily_budget: 16,
+        })
+    }
+
+    /// A provider with an empty script and `capabilities`.
+    #[must_use]
+    pub fn with_capabilities(capabilities: Capabilities) -> Self {
+        Self {
+            capabilities,
+            responses: Mutex::new(VecDeque::new()),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Adds the answer to the next fetch not yet scripted.
+    pub fn push(&self, response: Result<FetchResult, ProviderError>) {
+        self.responses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(response);
+    }
+
+    /// Every fetch received so far, oldest first.
+    #[must_use]
+    pub fn requests(&self) -> Vec<FakeFetch> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Provider for FakeProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::SimpleFin
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities
+    }
+
+    fn connect(
+        &self,
+        input: ConnectInput,
+    ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
+        let ConnectInput::SimpleFinSetupToken(token) = input;
+        Box::pin(std::future::ready(Ok(token)))
+    }
+
+    fn fetch<'a>(
+        &'a self,
+        request: FetchRequest<'a>,
+    ) -> ProviderFuture<'a, Result<FetchResult, ProviderError>> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(FakeFetch {
+                credentials: request.credentials.clone(),
+                window_start: request.window_start,
+                cursor: request.cursor.map(str::to_owned),
+                today: request.today,
+                timezone: request.timezone.iana_name().unwrap_or_default().to_owned(),
+            });
+        let response = self
+            .responses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())));
+        Box::pin(std::future::ready(response))
+    }
+
+    fn disconnect<'a>(
+        &'a self,
+        _credentials: &'a SecretString,
+    ) -> ProviderFuture<'a, Result<(), ProviderError>> {
+        Box::pin(std::future::ready(Ok(())))
     }
 }
 
@@ -339,8 +595,8 @@ impl SoftAuthenticator {
 /// that identifies the record under test keeps tests running in parallel
 /// from tripping each other's signals.
 ///
-/// The first call installs a process-wide subscriber that only watches for
-/// these events. It is global rather than attached to the future under test
+/// It relies on the process-wide subscriber [`capture_logs`] installs
+/// (installing it if needed). It is global rather than attached to the future under test
 /// because tracing caches whether a log statement is enabled the first time
 /// any thread reaches it: a scoped subscriber can miss statements first
 /// reached by another test. Each call also rebuilds that cache, so a
@@ -355,11 +611,7 @@ pub fn event_signal(
     field: &'static str,
     value: impl fmt::Display,
 ) -> Arc<Notify> {
-    static INSTALLED: OnceLock<()> = OnceLock::new();
-    INSTALLED.get_or_init(|| {
-        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(Signals))
-            .expect("no other global subscriber in a test process");
-    });
+    capture_logs();
     let reached = Arc::new(Notify::new());
     waiters().push(Waiter {
         message,
@@ -369,6 +621,34 @@ pub fn event_signal(
     });
     tracing::callsite::rebuild_interest_cache();
     reached
+}
+
+/// Installs, once per process, the global subscriber that captures every
+/// log event (read with [`captured_log_text`]) and fires
+/// [`event_signal`]s. Every [`TestServer`] constructor calls it.
+///
+/// # Panics
+///
+/// If another global subscriber was installed in this process.
+pub fn capture_logs() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(Signals))
+            .expect("no other global subscriber in a test process");
+    });
+}
+
+/// Every event logged in this process since [`capture_logs`] ran, one per
+/// line: its level, its message and its other fields. Tests running in
+/// parallel share it, so a test looks for what identifies its own records.
+#[must_use]
+pub fn captured_log_text() -> String {
+    captured().clone()
+}
+
+fn captured() -> MutexGuard<'static, String> {
+    static CAPTURED: Mutex<String> = Mutex::new(String::new());
+    CAPTURED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// An [`event_signal`] not yet fired.
@@ -384,17 +664,29 @@ fn waiters() -> MutexGuard<'static, Vec<Waiter>> {
     WAITERS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Fires the [`Waiter`]s an event matches, then forgets them.
+/// Appends every event to the capture, then fires the [`Waiter`]s it
+/// matches and forgets them.
 struct Signals;
 
 impl<S: Subscriber> Layer<S> for Signals {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut fields = Fields(HashMap::new());
+        event.record(&mut fields);
+        {
+            let mut captured = captured();
+            let message = fields.0.get("message").map_or("", String::as_str);
+            let _ = write!(captured, "{} {message}", event.metadata().level());
+            for (name, value) in &fields.0 {
+                if *name != "message" {
+                    let _ = write!(captured, " {name}={value}");
+                }
+            }
+            captured.push('\n');
+        }
         let mut waiters = waiters();
         if waiters.is_empty() {
             return;
         }
-        let mut fields = Fields(HashMap::new());
-        event.record(&mut fields);
         waiters.retain(|waiter| {
             let matched = fields.0.get("message").map(String::as_str) == Some(waiter.message)
                 && fields.0.get(waiter.field) == Some(&waiter.value);

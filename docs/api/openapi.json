@@ -4035,6 +4035,11 @@
           "passkey_rejected",
           "idempotency_key_reuse",
           "idempotency_in_progress",
+          "provider_error",
+          "reauth_required",
+          "sync_rate_limited",
+          "sync_in_progress",
+          "currency_mismatch",
           "internal"
         ]
       },
