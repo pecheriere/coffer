@@ -21,6 +21,7 @@ use axum::Router;
 use coffer_domain::time::Clock;
 use coffer_store::Store;
 
+use crate::appearance::Appearance;
 use crate::auth::{AgentTokens, Identity, Sessions};
 use crate::config::Config;
 
@@ -30,6 +31,7 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     pub agent_tokens: Arc<AgentTokens>,
     pub identity: Arc<Identity>,
+    pub appearance: Arc<Appearance>,
     pub store: Store,
     pub config: Config,
     pub clock: Arc<dyn Clock>,

@@ -35,6 +35,7 @@ use webauthn_rs::prelude::{
     RequestChallengeResponse,
 };
 
+use crate::appearance::Appearance;
 use crate::auth::{AgentTokens, Identity, Sessions};
 use crate::config::Config;
 use crate::secrets::{SecretToken, ServerKey};
@@ -62,6 +63,8 @@ pub struct TestServer {
     pub sessions: Arc<Sessions>,
     /// The agent token service.
     pub agent_tokens: Arc<AgentTokens>,
+    /// The appearance service.
+    pub appearance: Arc<Appearance>,
     _dir: Option<TempDir>,
 }
 
@@ -125,6 +128,7 @@ impl TestServer {
             Arc::clone(&key),
             clock.clone(),
         ));
+        let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
         Self {
             clock,
             store,
@@ -133,6 +137,7 @@ impl TestServer {
             identity,
             sessions,
             agent_tokens,
+            appearance,
             _dir: dir,
         }
     }
@@ -144,10 +149,28 @@ impl TestServer {
             sessions: Arc::clone(&self.sessions),
             agent_tokens: Arc::clone(&self.agent_tokens),
             identity: Arc::clone(&self.identity),
+            appearance: Arc::clone(&self.appearance),
             store: self.store.clone(),
             config: self.config.clone(),
             clock: self.clock.clone(),
         }
+    }
+
+    /// Stores a theme name the schema would refuse (`Mochi`, upper case)
+    /// for `member`, as a database edited with constraint checks off could
+    /// hold.
+    ///
+    /// # Panics
+    ///
+    /// If the write fails.
+    pub async fn corrupt_member_theme(&self, member: MemberId) {
+        self.store
+            .execute_unchecked_for_tests(
+                "UPDATE members SET theme = 'Mochi' WHERE id = ?",
+                &member.to_string(),
+            )
+            .await
+            .expect("write an unchecked theme");
     }
 
     /// A software passkey that verifies the user, as Face ID would.

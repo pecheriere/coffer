@@ -19,6 +19,7 @@ vendored-openssl = ["dep:openssl", "openssl/vendored"]
 # crate's integration tests. Never part of a release build.
 testkit = [
     "coffer-domain/testkit",
+    "coffer-store/testkit",
     "dep:http-body-util",
     "dep:tower",
     "dep:webauthn-authenticator-rs",
