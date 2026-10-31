@@ -36,13 +36,15 @@ use super::provider::{
     FetchMode, FetchRequest, FetchResult, MAX_PROVIDER_MESSAGE_CHARS, ProviderAccountData,
     ProviderError, ProviderKind, ProviderRegistry, sanitize_provider_message,
 };
+use crate::auth::AccessResolver;
 use crate::config::Config;
 use crate::ledger::transactions::AttributionView;
 use crate::vault::{CredentialVault, SealedCredentials};
 
 const RUN_FINISHED: &str = "the sync run has already finished";
-const CONNECTION_REMOVED: &str = "the connection is removed";
-const PROVIDER_NOT_OFFERED: &str = "the connection's provider is not offered by this server";
+pub(super) const CONNECTION_REMOVED: &str = "the connection is removed";
+pub(super) const PROVIDER_NOT_OFFERED: &str =
+    "the connection's provider is not offered by this server";
 const ACCOUNT_ERROR: &str = "the provider reported an error for this account";
 const UNSUPPORTED_CURRENCY: &str =
     "the provider reported a currency that is not a supported ISO 4217 code";
@@ -94,13 +96,16 @@ impl From<SyncRunRecord> for SyncRunView {
     }
 }
 
-/// Performs sync runs.
+/// Performs sync runs and manages connections and their provider accounts
+/// (see [`super::connections`]).
 pub struct SyncService {
-    store: Store,
-    clock: Arc<dyn Clock>,
-    vault: Arc<CredentialVault>,
-    registry: Arc<ProviderRegistry>,
-    config: Config,
+    pub(super) store: Store,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) vault: Arc<CredentialVault>,
+    pub(super) registry: Arc<ProviderRegistry>,
+    /// The only source of account access.
+    pub(super) access: Arc<AccessResolver>,
+    pub(super) config: Config,
 }
 
 impl std::fmt::Debug for SyncService {
@@ -115,6 +120,9 @@ impl std::fmt::Debug for SyncService {
 enum AccountOutcome {
     Applied(ApplyReport),
     Failed,
+    /// The connection was removed before the account could be applied:
+    /// nothing of it was written.
+    ConnectionRemoved,
 }
 
 /// Why a run could not use its connection's provider.
@@ -136,10 +144,16 @@ struct Totals {
     accounts: u32,
     failed_accounts: u32,
     report: ApplyReport,
+    /// Whether the connection was removed while the run applied its data.
+    connection_removed: bool,
 }
 
 impl Totals {
     fn add(&mut self, outcome: &AccountOutcome) {
+        if matches!(outcome, AccountOutcome::ConnectionRemoved) {
+            self.connection_removed = true;
+            return;
+        }
         self.accounts += 1;
         match outcome {
             AccountOutcome::Applied(report) => {
@@ -154,6 +168,7 @@ impl Totals {
                 total.skipped += report.skipped;
             }
             AccountOutcome::Failed => self.failed_accounts += 1,
+            AccountOutcome::ConnectionRemoved => {}
         }
     }
 
@@ -179,14 +194,16 @@ impl Totals {
 }
 
 impl SyncService {
-    /// The service over `store`, opening credentials with `vault` and
-    /// reaching providers through `registry`.
+    /// The service over `store`, opening credentials with `vault`,
+    /// reaching providers through `registry` and resolving account access
+    /// with `access`.
     #[must_use]
     pub fn new(
         store: Store,
         clock: Arc<dyn Clock>,
         vault: Arc<CredentialVault>,
         registry: Arc<ProviderRegistry>,
+        access: Arc<AccessResolver>,
         config: Config,
     ) -> Self {
         Self {
@@ -194,6 +211,7 @@ impl SyncService {
             clock,
             vault,
             registry,
+            access,
             config,
         }
     }
@@ -288,7 +306,7 @@ impl SyncService {
     }
 
     /// The household's current day.
-    fn today(&self) -> Date {
+    pub(super) fn today(&self) -> Date {
         self.clock
             .now()
             .to_zoned(self.config.timezone.clone())
@@ -400,6 +418,11 @@ impl SyncService {
         for data in result.accounts {
             let outcome = self.apply_account(connection.id, data, today).await;
             totals.add(&outcome);
+            if totals.connection_removed {
+                // Removed while the run was fetching or applying: nothing
+                // more is written for it.
+                break;
+            }
         }
         if totals.report.skipped > 0 {
             tracing::warn!(
@@ -417,18 +440,42 @@ impl SyncService {
         }
 
         let connection_errors = joined_errors(&result.connection_errors);
-        let status = if connection_errors.is_some()
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let removed = totals.connection_removed
+            || tx.get_connection(connection.id).await?.status == ConnectionStatus::Removed;
+        let (status, detail) = if removed {
+            // The accounts applied before the removal committed stay; the
+            // run says the rest was abandoned.
+            let status = if totals.accounts == 0 {
+                SyncRunStatus::Failed
+            } else {
+                SyncRunStatus::Partial
+            };
+            let detail = if totals.accounts == 0 {
+                CONNECTION_REMOVED.to_owned()
+            } else {
+                format!(
+                    "{}; {CONNECTION_REMOVED}",
+                    totals.detail(connection_errors.is_some())
+                )
+            };
+            (status, detail)
+        } else if connection_errors.is_some()
             || totals.failed_accounts > 0
             || totals.report.skipped > 0
         {
-            SyncRunStatus::Partial
+            (
+                SyncRunStatus::Partial,
+                totals.detail(connection_errors.is_some()),
+            )
         } else {
-            SyncRunStatus::Succeeded
+            (
+                SyncRunStatus::Succeeded,
+                totals.detail(connection_errors.is_some()),
+            )
         };
-        let detail = totals.detail(connection_errors.is_some());
-        let now = self.clock.now();
-        let mut tx = self.store.begin().await?;
-        if tx.get_connection(connection.id).await?.status != ConnectionStatus::Removed {
+        if !removed {
             tx.update_connection_status(
                 connection.id,
                 ConnectionStatusChange {
@@ -513,6 +560,11 @@ impl SyncService {
             amount_raw: amount.as_str().to_owned(),
         });
         let mut tx = self.store.begin().await?;
+        // Checked in the transaction that writes, so a removal that commits
+        // first is always seen and a removal that comes later waits for it.
+        if tx.get_connection(connection).await?.status == ConnectionStatus::Removed {
+            return Ok(AccountOutcome::ConnectionRemoved);
+        }
         let record = tx.upsert_provider_account(upsert).await?;
 
         let checked = check_account(&mut tx, &record, &data).await?;
@@ -568,11 +620,27 @@ impl SyncService {
         upsert: ProviderAccountUpsert,
     ) -> Result<(), StoreError> {
         let mut tx = self.store.begin().await?;
+        if tx.get_connection(upsert.connection).await?.status == ConnectionStatus::Removed {
+            return Ok(());
+        }
         let record = tx.upsert_provider_account(upsert).await?;
         tx.set_provider_account_error(record.id, Some(ACCOUNT_NOT_STORED.to_owned()))
             .await?;
         tx.commit().await
     }
+}
+
+/// Refuses, with [`SyncError::Conflict`] and [`CONNECTION_REMOVED`], a
+/// connection that is removed.
+pub(super) async fn ensure_not_removed(
+    tx: &mut StoreTx,
+    connection: ConnectionId,
+) -> Result<ConnectionRecord, SyncError> {
+    let record = tx.get_connection(connection).await?;
+    if record.status == ConnectionStatus::Removed {
+        return Err(SyncError::Conflict(CONNECTION_REMOVED));
+    }
+    Ok(record)
 }
 
 /// Maps a provider-call error to the failure recorded for it.

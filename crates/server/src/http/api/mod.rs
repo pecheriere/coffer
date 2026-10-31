@@ -9,6 +9,7 @@ pub mod extract;
 mod me;
 mod members;
 pub mod openapi;
+mod provider_accounts;
 mod router;
 mod transactions;
 
@@ -54,6 +55,9 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(provider_accounts::list))
+        .op(routes!(provider_accounts::bind))
+        .op(routes!(provider_accounts::create_account))
         .op(routes!(openapi::serve))
 }
 

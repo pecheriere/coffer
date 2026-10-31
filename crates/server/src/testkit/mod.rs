@@ -82,6 +82,8 @@ pub struct TestServer {
     pub appearance: Arc<Appearance>,
     /// The account access resolver.
     pub access: Arc<AccessResolver>,
+    /// The ledger service.
+    pub ledger: Arc<Ledger>,
     /// The provider credential vault, under the server key.
     pub vault: Arc<CredentialVault>,
     /// The sync engine, over the providers registered so far.
@@ -143,6 +145,7 @@ impl TestServer {
             self.clock.clone(),
             Arc::clone(&self.vault),
             Arc::new(registry),
+            Arc::clone(&self.access),
             self.config.clone(),
         ));
     }
@@ -250,11 +253,18 @@ impl TestServer {
         ));
         let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
         let vault = Arc::new(CredentialVault::new(&key));
+        let access = Arc::new(AccessResolver::new());
+        let ledger = Arc::new(Ledger::new(
+            store.clone(),
+            clock.clone(),
+            Arc::clone(&access),
+        ));
         let sync = Arc::new(SyncService::new(
             store.clone(),
             clock.clone(),
             Arc::clone(&vault),
             Arc::new(registry(&config)),
+            Arc::clone(&access),
             config.clone(),
         ));
         Self {
@@ -266,7 +276,8 @@ impl TestServer {
             sessions,
             agent_tokens,
             appearance,
-            access: Arc::new(AccessResolver::new()),
+            access,
+            ledger,
             vault,
             sync,
             _dir: dir,
@@ -281,12 +292,9 @@ impl TestServer {
             agent_tokens: Arc::clone(&self.agent_tokens),
             identity: Arc::clone(&self.identity),
             appearance: Arc::clone(&self.appearance),
-            ledger: Arc::new(Ledger::new(
-                self.store.clone(),
-                self.clock.clone(),
-                Arc::clone(&self.access),
-            )),
+            ledger: Arc::clone(&self.ledger),
             access: Arc::clone(&self.access),
+            sync: Arc::clone(&self.sync),
             idempotency: Arc::new(RequestHasher::new(&self.key)),
             store: self.store.clone(),
             config: self.config.clone(),
@@ -369,6 +377,29 @@ pub struct FakeProvider {
     capabilities: Capabilities,
     responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
     requests: Mutex<Vec<FakeFetch>>,
+    gate: Mutex<Option<FetchGate>>,
+    disconnect_error: Mutex<Option<ProviderError>>,
+    disconnects: Mutex<Vec<SecretString>>,
+}
+
+/// Holds the next fetch of a [`FakeProvider`] until released (see
+/// [`FakeProvider::hold_next_fetch`]).
+#[derive(Debug, Clone)]
+pub struct FetchGate {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl FetchGate {
+    /// Waits until the held fetch has started.
+    pub async fn entered(&self) {
+        self.entered.notified().await;
+    }
+
+    /// Lets the held fetch answer.
+    pub fn release(&self) {
+        self.release.notify_one();
+    }
 }
 
 impl fmt::Debug for FakeProvider {
@@ -406,7 +437,33 @@ impl FakeProvider {
             capabilities,
             responses: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
+            gate: Mutex::new(None),
+            disconnect_error: Mutex::new(None),
+            disconnects: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Makes the next fetch wait, once it has started, until the returned
+    /// gate is released, so a test can act while a sync is mid-fetch.
+    #[must_use]
+    pub fn hold_next_fetch(&self) -> FetchGate {
+        let gate = FetchGate {
+            entered: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        };
+        *lock(&self.gate) = Some(gate.clone());
+        gate
+    }
+
+    /// Makes the next `disconnect` fail with `error`.
+    pub fn fail_next_disconnect(&self, error: ProviderError) {
+        *lock(&self.disconnect_error) = Some(error);
+    }
+
+    /// The credentials of every `disconnect` received so far, oldest first.
+    #[must_use]
+    pub fn disconnects(&self) -> Vec<SecretString> {
+        lock(&self.disconnects).clone()
     }
 
     /// Adds the answer to the next fetch not yet scripted.
@@ -464,15 +521,32 @@ impl Provider for FakeProvider {
             .unwrap_or_else(PoisonError::into_inner)
             .pop_front()
             .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())));
-        Box::pin(std::future::ready(response))
+        let gate = lock(&self.gate).take();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+            response
+        })
     }
 
     fn disconnect<'a>(
         &'a self,
-        _credentials: &'a SecretString,
+        credentials: &'a SecretString,
     ) -> ProviderFuture<'a, Result<(), ProviderError>> {
-        Box::pin(std::future::ready(Ok(())))
+        lock(&self.disconnects).push(credentials.clone());
+        let result = match lock(&self.disconnect_error).take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
+        Box::pin(std::future::ready(result))
     }
+}
+
+/// Locks `mutex`, recovering the data of a test that panicked holding it.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The token at the end of a setup, invite or re-enroll link.

@@ -106,6 +106,18 @@ async fn fetch_provider_account<'e>(
 }
 
 impl StoreTx {
+    /// Fetch a provider account inside the transaction.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if there is no such provider account.
+    pub async fn get_provider_account(
+        &mut self,
+        id: ProviderAccountId,
+    ) -> Result<ProviderAccountRecord, StoreError> {
+        fetch_provider_account(&mut *self.tx, id).await
+    }
+
     /// Create or refresh a provider account, keyed by its connection and
     /// provider id.
     ///

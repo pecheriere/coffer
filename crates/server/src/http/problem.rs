@@ -122,6 +122,20 @@ pub enum CommonProblems {
     Internal(ProblemBody),
 }
 
+/// The `429 sync_rate_limited` answer of an operation that queues a sync,
+/// for its OpenAPI `responses`. Never constructed: handlers return
+/// [`Problem`].
+#[derive(IntoResponses)]
+pub enum RateLimitedProblem {
+    /// Too many syncs of this connection; retry after `Retry-After`.
+    #[response(
+        status = 429,
+        content_type = "application/problem+json",
+        headers(("Retry-After" = u32, description = "Whole seconds until a sync is allowed."))
+    )]
+    RateLimited(ProblemBody),
+}
+
 /// An HTTP error. Neither field ever carries a presented credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {

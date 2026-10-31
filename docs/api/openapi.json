@@ -1747,6 +1747,370 @@
         }
       }
     },
+    "/api/v1/provider-accounts": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "The provider accounts the token may see.",
+        "description": "The accounts every connection reports, oldest first; only those not yet bound to an account with `unbound=true`. Needs `read`.",
+        "operationId": "listProviderAccounts",
+        "parameters": [
+          {
+            "name": "unbound",
+            "in": "query",
+            "description": "Only those not bound to an account (default `false`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The provider accounts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/{provider_account_id}/bind": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Binds a provider account to an account.",
+        "description": "Binds an unbound provider account to an open account in the same currency. The records synced while it was unbound become the account's transactions, and later syncs bring the rest. Needs `write` on the account.",
+        "operationId": "bindProviderAccount",
+        "parameters": [
+          {
+            "name": "provider_account_id",
+            "in": "path",
+            "description": "The provider account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderAccountId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider account, now bound.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`currency_mismatch` when the currencies differ; `conflict` when the provider account is already bound, its connection is removed or the account is closed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/{provider_account_id}/create-account": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Creates an account for a provider account and binds it.",
+        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions. Needs `write`.",
+        "operationId": "createAccountForProviderAccount",
+        "parameters": [
+          {
+            "name": "provider_account_id",
+            "in": "path",
+            "description": "The provider account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderAccountId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLinkedAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The account and the provider account bound to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkedAccountView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`currency_mismatch` when the provider's currency is not a supported ISO 4217 code; `conflict` when the provider account is already bound or its connection is removed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/transactions": {
       "get": {
         "tags": [
@@ -3422,6 +3786,20 @@
         },
         "additionalProperties": false
       },
+      "BindRequest": {
+        "type": "object",
+        "description": "The account to bind a provider account to.",
+        "required": [
+          "account"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId",
+            "description": "An open account in the provider account's currency."
+          }
+        },
+        "additionalProperties": false
+      },
       "CategoryGroupId": {
         "type": "string",
         "format": "uuid",
@@ -3695,6 +4073,22 @@
         },
         "additionalProperties": false
       },
+      "LinkedAccountView": {
+        "type": "object",
+        "description": "An account created for a provider account, and the provider account\nbound to it.",
+        "required": [
+          "account",
+          "provider_account"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountView"
+          },
+          "provider_account": {
+            "$ref": "#/components/schemas/ProviderAccountView"
+          }
+        }
+      },
       "LiquidityClass": {
         "type": "string",
         "description": "How quickly an account's balance can be spent, or must be repaid.",
@@ -3868,6 +4262,56 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewLinkedAccountRequest": {
+        "type": "object",
+        "description": "An account to create for a provider account.",
+        "properties": {
+          "include_in_forecast": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Count the account in the forecast (default `true`)."
+          },
+          "include_in_net_worth": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Count the account in net worth (default `true`)."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountKind",
+                "description": "By default the kind the provider suggests; required when it suggests\nnone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "liquidity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityClass",
+                "description": "A chosen liquidity class; by default the kind's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 100 characters, without control characters; by default the\nprovider account's name."
           }
         },
         "additionalProperties": false
@@ -4047,6 +4491,121 @@
         "type": "string",
         "format": "uuid",
         "description": "UUIDv7"
+      },
+      "ProviderAccountList": {
+        "type": "object",
+        "description": "The provider accounts the token may see.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAccountView"
+            }
+          }
+        }
+      },
+      "ProviderAccountView": {
+        "type": "object",
+        "description": "An account as a provider reports it.",
+        "required": [
+          "id",
+          "connection",
+          "name",
+          "institution",
+          "currency",
+          "kind_hint",
+          "account",
+          "balance",
+          "error",
+          "last_seen_at"
+        ],
+        "properties": {
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "The coffer account it is bound to; `null` while unbound."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RawBalanceView",
+                "description": "The last balance the provider reported."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connection": {
+            "$ref": "#/components/schemas/ConnectionId"
+          },
+          "currency": {
+            "type": "string",
+            "description": "The currency as the provider gave it."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's last error for this account, sanitized."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ProviderAccountId"
+          },
+          "institution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountKind",
+                "description": "The kind the provider suggests, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RawBalanceView": {
+        "type": "object",
+        "description": "A balance as the provider reported it, unconverted.",
+        "required": [
+          "on",
+          "amount_raw"
+        ],
+        "properties": {
+          "amount_raw": {
+            "type": "string",
+            "description": "The amount as the provider's decimal text."
+          },
+          "on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day it describes (ISO 8601)."
+          }
+        }
       },
       "ReviewStatus": {
         "type": "string",
@@ -4469,6 +5028,10 @@
     {
       "name": "transactions",
       "description": "Transactions, their splits into categories, and their review: listing, search, single changes and atomic batches."
+    },
+    {
+      "name": "connections",
+      "description": "Connections to data providers, their syncs, and the provider accounts they report, which are bound to accounts."
     },
     {
       "name": "audit",

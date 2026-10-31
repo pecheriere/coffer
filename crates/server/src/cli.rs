@@ -20,10 +20,14 @@ use tracing_subscriber::EnvFilter;
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
+use crate::egress::{Egress, EgressError};
 use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
 use crate::ledger::Ledger;
 use crate::secrets::{SecretError, ServerKey};
+use crate::sync::engine::SyncService;
+use crate::sync::provider::ProviderRegistry;
+use crate::vault::CredentialVault;
 
 mod healthcheck;
 
@@ -110,7 +114,13 @@ macro_rules! from_error {
         }
     )*};
 }
-from_error!(StoreError, AuthError, SecretError, std::io::Error);
+from_error!(
+    StoreError,
+    AuthError,
+    SecretError,
+    EgressError,
+    std::io::Error
+);
 
 /// Runs `coffer` with `args` (the first is the program name) and the
 /// environment seen through `env`. Results go to `out`, diagnostics to
@@ -286,6 +296,7 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         config.clone(),
     ));
     let idempotency = Arc::new(RequestHasher::new(&key));
+    let vault = Arc::new(CredentialVault::new(&key));
     let agent_tokens = Arc::new(AgentTokens::new(store.clone(), key, clock.clone()));
     let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
     let access = Arc::new(AccessResolver::new());
@@ -294,6 +305,16 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         clock.clone(),
         Arc::clone(&access),
     ));
+    let egress = Egress::new(config.https_proxy.as_ref())?;
+    let registry = Arc::new(ProviderRegistry::from_config(&config, &egress)?);
+    let sync = Arc::new(SyncService::new(
+        store.clone(),
+        clock.clone(),
+        vault,
+        registry,
+        Arc::clone(&access),
+        config.clone(),
+    ));
     Ok(AppState {
         sessions,
         agent_tokens,
@@ -301,6 +322,7 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         appearance,
         ledger,
         access,
+        sync,
         idempotency,
         store,
         config,

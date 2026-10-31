@@ -27,6 +27,7 @@ use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
 use crate::ledger::Ledger;
+use crate::sync::engine::SyncService;
 
 /// Shared state of every handler.
 #[derive(Clone)]
@@ -38,6 +39,8 @@ pub struct AppState {
     pub ledger: Arc<Ledger>,
     /// The only source of account access.
     pub access: Arc<AccessResolver>,
+    /// Connections, sync runs and provider accounts.
+    pub sync: Arc<SyncService>,
     /// Hashes requests made with an `Idempotency-Key`.
     pub idempotency: Arc<RequestHasher>,
     pub store: Store,

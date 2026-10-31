@@ -336,7 +336,13 @@ async fn sync_run_counts_queue_and_interruption() {
     let connection = add_connection(&store, owner).await;
     let other = add_connection(&store, owner).await;
     assert_eq!(
-        store.sync_run_counts(connection, at(0)).await.unwrap(),
+        store
+            .begin()
+            .await
+            .unwrap()
+            .sync_run_counts(connection, at(0))
+            .await
+            .unwrap(),
         RunCounts {
             started_or_pending: 0,
             last_started_at: None,
@@ -359,7 +365,13 @@ async fn sync_run_counts_queue_and_interruption() {
         .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(
-        store.sync_run_counts(connection, at(50)).await.unwrap(),
+        store
+            .begin()
+            .await
+            .unwrap()
+            .sync_run_counts(connection, at(50))
+            .await
+            .unwrap(),
         RunCounts {
             started_or_pending: 1,
             last_started_at: Some(at(101)),
@@ -369,7 +381,13 @@ async fn sync_run_counts_queue_and_interruption() {
     let pending = queue(&store, connection, SyncTrigger::Manual, Some(owner), 200).await;
     let elsewhere = queue(&store, other, SyncTrigger::Manual, None, 150).await;
     assert_eq!(
-        store.sync_run_counts(connection, at(50)).await.unwrap(),
+        store
+            .begin()
+            .await
+            .unwrap()
+            .sync_run_counts(connection, at(50))
+            .await
+            .unwrap(),
         RunCounts {
             started_or_pending: 2,
             last_started_at: Some(at(101)),
@@ -447,4 +465,41 @@ async fn sync_runs_list_newest_first() {
             .await,
         Err(StoreError::InvalidCursor)
     ));
+}
+
+#[tokio::test]
+async fn sync_run_start_since_counts_from_the_earliest() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let other = add_connection(&store, owner).await;
+    let first = queue(&store, connection, SyncTrigger::Initial, None, 1).await;
+    let second = queue(&store, connection, SyncTrigger::Schedule, None, 100).await;
+    queue(&store, connection, SyncTrigger::Manual, None, 200).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(first, at(2)).await.unwrap();
+    tx.finish_sync_run(first, SyncRunStatus::Succeeded, None, at(3))
+        .await
+        .unwrap();
+    tx.start_sync_run(second, at(101)).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = store.begin().await.unwrap();
+    for (since, skip, expected) in [
+        (0, 0, Some(at(2))),
+        (0, 1, Some(at(101))),
+        (0, 2, None),
+        (50, 0, Some(at(101))),
+    ] {
+        assert_eq!(
+            tx.sync_run_start_since(connection, at(since), skip)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        tx.sync_run_start_since(other, at(0), 0).await.unwrap(),
+        None
+    );
 }

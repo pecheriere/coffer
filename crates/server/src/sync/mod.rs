@@ -3,6 +3,7 @@
 //! §8.4).
 
 pub mod apply;
+pub mod connections;
 pub mod engine;
 pub mod provider;
 
@@ -11,8 +12,9 @@ use coffer_domain::policy::Denied;
 use coffer_store::StoreError;
 use jiff::SignedDuration;
 
-use crate::auth::denied_message;
+use crate::auth::{AuthError, denied_message};
 use crate::http::problem::{Problem, ProblemCode};
+use crate::ledger::LedgerError;
 use crate::vault::VaultError;
 use provider::ProviderError;
 
@@ -30,6 +32,12 @@ pub enum SyncError {
     /// A value is not acceptable; the message says which.
     #[error("{0}")]
     Invalid(&'static str),
+    /// The change conflicts with the current state; the message says how.
+    #[error("{0}")]
+    Conflict(&'static str),
+    /// A ledger operation (creating an account) failed.
+    #[error(transparent)]
+    Ledger(LedgerError),
     /// The database failed.
     #[error("storage error")]
     Store(#[source] StoreError),
@@ -64,8 +72,27 @@ impl From<StoreError> for SyncError {
     fn from(err: StoreError) -> Self {
         match err {
             StoreError::NotFound => Self::NotFound,
+            StoreError::Conflict(message) => Self::Conflict(message),
             other => Self::Store(other),
         }
+    }
+}
+
+impl From<LedgerError> for SyncError {
+    fn from(err: LedgerError) -> Self {
+        match err {
+            LedgerError::Denied(denied) => Self::Denied(denied),
+            LedgerError::NotFound => Self::NotFound,
+            LedgerError::Invalid(message) => Self::Invalid(message),
+            LedgerError::Store(store) => Self::from(store),
+            other => Self::Ledger(other),
+        }
+    }
+}
+
+impl From<AuthError> for SyncError {
+    fn from(err: AuthError) -> Self {
+        Self::from(LedgerError::from(err))
     }
 }
 
@@ -87,6 +114,11 @@ impl From<SyncError> for Problem {
                 "Invalid value",
             )
             .with_detail(message),
+            SyncError::Conflict(_) => {
+                Self::new(StatusCode::CONFLICT, ProblemCode::Conflict, "Conflict")
+                    .with_detail(message)
+            }
+            SyncError::Ledger(ledger) => Self::from(ledger),
             SyncError::Provider(ProviderError::ReauthRequired) => Self::new(
                 StatusCode::CONFLICT,
                 ProblemCode::ReauthRequired,
@@ -165,6 +197,11 @@ mod tests {
                 SyncError::CurrencyMismatch,
                 StatusCode::CONFLICT,
                 ProblemCode::CurrencyMismatch,
+            ),
+            (
+                SyncError::Conflict("the provider account is already bound"),
+                StatusCode::CONFLICT,
+                ProblemCode::Conflict,
             ),
             (
                 SyncError::Vault(VaultError::Decrypt),

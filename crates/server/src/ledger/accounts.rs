@@ -8,7 +8,9 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{AccountLevel, Action, authorize, authorize_account};
-use coffer_store::{AccountChanges, AccountRecord, BalanceSnapshot, NewAccount, PageRequest};
+use coffer_store::{
+    AccountChanges, AccountRecord, BalanceSnapshot, NewAccount, PageRequest, StoreTx,
+};
 use jiff::Timestamp;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
@@ -81,7 +83,11 @@ pub struct AccountView {
 }
 
 impl AccountView {
-    fn new(record: &AccountRecord, latest: Option<&BalanceSnapshot>, linked: bool) -> Self {
+    pub(crate) fn new(
+        record: &AccountRecord,
+        latest: Option<&BalanceSnapshot>,
+        linked: bool,
+    ) -> Self {
         Self {
             id: record.id,
             name: record.name.as_str().to_owned(),
@@ -172,13 +178,34 @@ impl Ledger {
         slot: Option<IdempotencySlot>,
     ) -> Result<AccountView, LedgerError> {
         authorize(actor, Action::WriteHousehold)?;
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let (record, opening) = Self::insert_account(&mut tx, now, actor, input).await?;
+        let view = AccountView::new(&record, opening.as_ref(), false);
+        complete_created(&mut tx, slot, &view).await?;
+        tx.commit().await?;
+        Ok(view)
+    }
+
+    /// Creates a manual account inside `tx`, with its opening balance if
+    /// given, and audits it as `account.create`: the one path every
+    /// account is created by. The caller has authorized
+    /// [`Action::WriteHousehold`].
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Invalid`] for an invalid name; storage failures.
+    pub(crate) async fn insert_account(
+        tx: &mut StoreTx,
+        now: Timestamp,
+        actor: &Actor,
+        input: NewAccountInput,
+    ) -> Result<(AccountRecord, Option<BalanceSnapshot>), LedgerError> {
         let name = parse_name(&input.name)?;
         let (liquidity, liquidity_overridden) = match input.liquidity {
             Some(chosen) => (chosen, true),
             None => (default_liquidity(input.kind), false),
         };
-        let now = self.clock.now();
-        let mut tx = self.store.begin().await?;
         let record = tx
             .insert_account(NewAccount {
                 id: AccountId::new(),
@@ -218,7 +245,7 @@ impl Ledger {
             None => None,
         };
         audit(
-            &mut tx,
+            tx,
             now,
             actor,
             "account.create",
@@ -227,10 +254,7 @@ impl Ledger {
             changes,
         )
         .await?;
-        let view = AccountView::new(&record, opening.as_ref(), false);
-        complete_created(&mut tx, slot, &view).await?;
-        tx.commit().await?;
-        Ok(view)
+        Ok((record, opening))
     }
 
     /// Changes an account. Setting `kind` without `liquidity` re-defaults

@@ -26,6 +26,7 @@ pub(super) mod tags {
     pub const ACCOUNTS: &str = "accounts";
     pub const CATEGORIES: &str = "categories";
     pub const TRANSACTIONS: &str = "transactions";
+    pub const CONNECTIONS: &str = "connections";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
 }
@@ -119,6 +120,11 @@ pub(super) fn base() -> OpenApi {
                 tags::TRANSACTIONS,
                 "Transactions, their splits into categories, and their review: listing, \
                  search, single changes and atomic batches.",
+            ),
+            tag(
+                tags::CONNECTIONS,
+                "Connections to data providers, their syncs, and the provider accounts they \
+                 report, which are bound to accounts.",
             ),
             tag(tags::AUDIT, "The append-only log of every change."),
             tag(tags::META, "This API's own description."),
