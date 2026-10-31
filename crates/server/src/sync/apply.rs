@@ -21,12 +21,13 @@ use coffer_domain::transactions::{
 };
 use coffer_store::{
     AccountRecord, Attribution, CandidateRow, ImportedFields, NewSource, NewTransaction,
-    ProviderAccountRecord, SourceRecord, SourceUpdate, StoreTx, TransactionRecord,
+    ProviderAccountRecord, SourceRecord, SourceUpdate, StoreError, StoreTx, TransactionRecord,
 };
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 
 use super::SyncError;
+use crate::ledger::duplicates::drop_candidate;
 
 /// The reason every sync change is attributed to.
 pub const SYNC_REASON: &str = "system:sync";
@@ -315,6 +316,13 @@ pub async fn apply_held(
     Ok(apply.report)
 }
 
+/// Who the sync's audit entries are attributed to.
+fn sync_actor() -> AuditActor {
+    AuditActor::System {
+        reason: SYNC_REASON.to_owned(),
+    }
+}
+
 /// Who changes splits on the sync's behalf.
 fn sync_attribution(at: Timestamp) -> Attribution {
     Attribution {
@@ -336,9 +344,7 @@ impl Apply<'_> {
             .append_audit(
                 self.now,
                 &AuditEntry {
-                    actor: AuditActor::System {
-                        reason: SYNC_REASON.to_owned(),
-                    },
+                    actor: sync_actor(),
                     action: action.to_owned(),
                     entity_type: "transaction".to_owned(),
                     entity_id: transaction.to_string(),
@@ -614,143 +620,24 @@ impl Apply<'_> {
 
     /// Applies `fields` to `current`'s imported fields, appending what
     /// changed to `changes`. A pending record never overwrites a posted
-    /// transaction. User fields never change, except that a single split
-    /// follows a new amount; several splits stay, and the transaction is
-    /// flagged `SplitMismatch` while they no longer sum to it.
+    /// transaction.
     async fn imported_changes(
         &mut self,
         current: &TransactionRecord,
         fields: &ImportedFields,
-        mut changes: AuditChanges,
+        changes: AuditChanges,
     ) -> Result<AuditChanges, SyncError> {
         if !current.pending && fields.pending {
             return Ok(changes);
         }
-        let unchanged = current.posted_on == fields.posted_on
-            && current.transacted_on == fields.transacted_on
-            && current.pending == fields.pending
-            && current.amount_minor == fields.amount_minor
-            && current.raw_description == fields.description
-            && current.imported_payee == fields.payee
-            && current.memo == fields.memo;
-        if unchanged {
-            return Ok(changes);
-        }
-        if current.posted_on != fields.posted_on {
-            changes = changes.change("posted_on", current.posted_on, fields.posted_on);
-        }
-        if current.transacted_on != fields.transacted_on {
-            changes = changes.change("transacted_on", current.transacted_on, fields.transacted_on);
-        }
-        if current.pending != fields.pending {
-            changes = changes.change("pending", current.pending, fields.pending);
-        }
-        if current.amount_minor != fields.amount_minor {
-            changes = changes.change("amount_minor", current.amount_minor, fields.amount_minor);
-        }
-        if current.raw_description != fields.description {
-            changes = changes.change(
-                "description",
-                current.raw_description.as_str(),
-                fields.description.as_str(),
-            );
-        }
-        if current.imported_payee != fields.payee {
-            let new_payee = fields.payee.as_ref().map(Payee::as_str);
-            changes = changes.change(
-                "imported_payee",
-                current.imported_payee.as_ref().map(Payee::as_str),
-                new_payee,
-            );
-            if !current.payee_edited {
-                changes = changes.change(
-                    "payee",
-                    current.payee.as_ref().map(Payee::as_str),
-                    new_payee,
-                );
-            }
-        }
-        if current.memo != fields.memo {
-            changes = changes.change(
-                "memo",
-                current.memo.as_ref().map(Memo::as_str),
-                fields.memo.as_ref().map(Memo::as_str),
-            );
-        }
-        self.tx
-            .update_imported_fields(current.id, fields, self.now)
-            .await?;
-        if current.amount_minor != fields.amount_minor {
-            changes = self
-                .follow_amount(current, fields.amount_minor, changes)
-                .await?;
-        }
-        Ok(changes)
-    }
-
-    /// Keeps the splits of `current` consistent with its new amount.
-    async fn follow_amount(
-        &mut self,
-        current: &TransactionRecord,
-        amount_minor: i64,
-        mut changes: AuditChanges,
-    ) -> Result<AuditChanges, SyncError> {
-        let mismatch = match current.splits.as_slice() {
-            [] => false,
-            // A split is never zero: a single split cannot follow a zero
-            // amount, so it stays and the transaction is flagged.
-            [only] if amount_minor != 0 => {
-                self.tx
-                    .replace_splits(
-                        current.id,
-                        &[SplitInput {
-                            category: only.category,
-                            minor_units: amount_minor,
-                        }],
-                        sync_attribution(self.now),
-                    )
-                    .await?;
-                changes = changes.change("split_minor_units", only.minor_units, amount_minor);
-                false
-            }
-            splits => {
-                let sum: i128 = splits
-                    .iter()
-                    .map(|split| i128::from(split.minor_units))
-                    .sum();
-                sum != i128::from(amount_minor)
-            }
-        };
-        let flagged = current.flags.contains(&TransactionFlag::SplitMismatch);
-        if mismatch != flagged {
-            self.tx
-                .set_flag(current.id, TransactionFlag::SplitMismatch, mismatch)
-                .await?;
-            changes = changes.change("split_mismatch", flagged, mismatch);
-        }
-        Ok(changes)
-    }
-
-    /// Records that `removed`, a deleted transaction, is no longer a
-    /// candidate of `transaction`, whose `PossibleDuplicate` flag clears
-    /// once it has no candidate left.
-    async fn candidate_removed(
-        &mut self,
-        transaction: TransactionId,
-        removed: TransactionId,
-    ) -> Result<(), SyncError> {
-        let current = self.tx.get_transaction(transaction).await?;
-        let mut changes = AuditChanges::new().unset("duplicate_candidate", removed);
-        if current.duplicate_candidates.is_empty()
-            && current.flags.contains(&TransactionFlag::PossibleDuplicate)
-        {
-            self.tx
-                .set_flag(transaction, TransactionFlag::PossibleDuplicate, false)
-                .await?;
-            changes = changes.change("possible_duplicate", true, false);
-        }
-        self.audit("transaction.candidate_removed", transaction, changes)
-            .await
+        Ok(apply_imported_fields(
+            self.tx,
+            current,
+            fields,
+            changes,
+            &sync_attribution(self.now),
+        )
+        .await?)
     }
 
     /// Step 3 for one vanished record: deletes it; a transaction left
@@ -782,7 +669,7 @@ impl Apply<'_> {
                 .await?;
             self.report.deleted += 1;
             for other in listing {
-                self.candidate_removed(other, transaction).await?;
+                drop_candidate(self.tx, self.now, &sync_actor(), other, transaction).await?;
             }
         } else if !current.flags.contains(&TransactionFlag::SourceRemoved) {
             self.tx
@@ -799,4 +686,122 @@ impl Apply<'_> {
         }
         Ok(())
     }
+}
+
+/// Replaces `current`'s imported fields with `fields`, appending what
+/// changed to `changes`; a transaction whose fields already match writes
+/// nothing. User fields never change, except that a single split follows a
+/// new amount, recorded as categorized by `split_by`; several splits stay,
+/// and the transaction is flagged `SplitMismatch` while they no longer sum
+/// to it. Shared by the sync and by merge and unmerge.
+///
+/// # Errors
+///
+/// Storage failures.
+pub(crate) async fn apply_imported_fields(
+    tx: &mut StoreTx,
+    current: &TransactionRecord,
+    fields: &ImportedFields,
+    mut changes: AuditChanges,
+    split_by: &Attribution,
+) -> Result<AuditChanges, StoreError> {
+    let unchanged = current.posted_on == fields.posted_on
+        && current.transacted_on == fields.transacted_on
+        && current.pending == fields.pending
+        && current.amount_minor == fields.amount_minor
+        && current.raw_description == fields.description
+        && current.imported_payee == fields.payee
+        && current.memo == fields.memo;
+    if unchanged {
+        return Ok(changes);
+    }
+    if current.posted_on != fields.posted_on {
+        changes = changes.change("posted_on", current.posted_on, fields.posted_on);
+    }
+    if current.transacted_on != fields.transacted_on {
+        changes = changes.change("transacted_on", current.transacted_on, fields.transacted_on);
+    }
+    if current.pending != fields.pending {
+        changes = changes.change("pending", current.pending, fields.pending);
+    }
+    if current.amount_minor != fields.amount_minor {
+        changes = changes.change("amount_minor", current.amount_minor, fields.amount_minor);
+    }
+    if current.raw_description != fields.description {
+        changes = changes.change(
+            "description",
+            current.raw_description.as_str(),
+            fields.description.as_str(),
+        );
+    }
+    if current.imported_payee != fields.payee {
+        let new_payee = fields.payee.as_ref().map(Payee::as_str);
+        changes = changes.change(
+            "imported_payee",
+            current.imported_payee.as_ref().map(Payee::as_str),
+            new_payee,
+        );
+        if !current.payee_edited {
+            changes = changes.change(
+                "payee",
+                current.payee.as_ref().map(Payee::as_str),
+                new_payee,
+            );
+        }
+    }
+    if current.memo != fields.memo {
+        changes = changes.change(
+            "memo",
+            current.memo.as_ref().map(Memo::as_str),
+            fields.memo.as_ref().map(Memo::as_str),
+        );
+    }
+    tx.update_imported_fields(current.id, fields, split_by.at)
+        .await?;
+    if current.amount_minor != fields.amount_minor {
+        changes = follow_amount(tx, current, fields.amount_minor, changes, split_by).await?;
+    }
+    Ok(changes)
+}
+
+/// Keeps the splits of `current` consistent with its new amount.
+async fn follow_amount(
+    tx: &mut StoreTx,
+    current: &TransactionRecord,
+    amount_minor: i64,
+    mut changes: AuditChanges,
+    split_by: &Attribution,
+) -> Result<AuditChanges, StoreError> {
+    let mismatch = match current.splits.as_slice() {
+        [] => false,
+        // A split is never zero: a single split cannot follow a zero
+        // amount, so it stays and the transaction is flagged.
+        [only] if amount_minor != 0 => {
+            tx.replace_splits(
+                current.id,
+                &[SplitInput {
+                    category: only.category,
+                    minor_units: amount_minor,
+                }],
+                split_by.clone(),
+            )
+            .await?;
+            changes = changes.change("split_minor_units", only.minor_units, amount_minor);
+            false
+        }
+        splits => {
+            let sum: i128 = splits
+                .iter()
+                .map(|split| i128::from(split.minor_units))
+                .sum();
+            sum != i128::from(amount_minor)
+        }
+    };
+    let flagged = current.flags.contains(&TransactionFlag::SplitMismatch);
+    if mismatch != flagged {
+        tx.set_flag(current.id, TransactionFlag::SplitMismatch, mismatch)
+            .await?;
+        changes = changes.change("split_mismatch", flagged, mismatch);
+    }
+    Ok(changes)
 }

@@ -2548,6 +2548,382 @@
           }
         ]
       }
+    },
+    "/api/v1/transactions/{transaction_id}/dismiss-duplicate": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Dismisses a possible duplicate.",
+        "description": "Clears the `possible_duplicate` flag and forgets the duplicate candidates: the transaction is not a duplicate of them. Dismissing a transaction that is not flagged changes and records nothing. Needs `write` on the account.",
+        "operationId": "dismissDuplicate",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transaction as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/{transaction_id}/merge": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Merges a duplicate into a transaction.",
+        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Needs `write` on the account.",
+        "operationId": "mergeTransactions",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The merged transaction as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`merge_conflict`: the duplicate has user state and `discard_duplicate_state` is not `true`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/{transaction_id}/unmerge": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Moves a source record into a transaction of its own.",
+        "description": "Moves one of this transaction's source records into a new imported transaction of the same account, with the record's fields and no notes, splits, review, assignee or flags. This transaction keeps its user state and shows the fields of its remaining records; a single split follows a new amount. Later syncs keep them apart. Needs `write` on the account. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
+        "operationId": "unmergeTransaction",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this request, unique per member for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnmergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new transaction, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The record is the transaction's only one, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -3401,6 +3777,24 @@
           }
         }
       },
+      "MergeRequest": {
+        "type": "object",
+        "description": "A transaction to merge into the one named in the path.",
+        "required": [
+          "duplicate"
+        ],
+        "properties": {
+          "discard_duplicate_state": {
+            "type": "boolean",
+            "description": "Merge even though the duplicate has notes, splits, a review, an\nassignee or an edited payee, discarding them (default `false`)."
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "An imported transaction of the same account; it is deleted."
+          }
+        },
+        "additionalProperties": false
+      },
       "Money": {
         "type": "object",
         "description": "An amount: an integer number of minor units plus its ISO 4217 currency\ncode. `{\"minor_units\": -1234, \"currency\": \"USD\"}` is -12.34 USD; negative\nis money out of the account. Never a floating-point number.",
@@ -3634,6 +4028,7 @@
           "invalid",
           "invalid_cursor",
           "conflict",
+          "merge_conflict",
           "invite_unusable",
           "ceremony_expired",
           "busy",
@@ -4024,6 +4419,20 @@
             "format": "date-time"
           }
         }
+      },
+      "UnmergeRequest": {
+        "type": "object",
+        "description": "A source record to move into a transaction of its own.",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/SourceRecordId",
+            "description": "One of the transaction's `sources`, not its only one."
+          }
+        },
+        "additionalProperties": false
       }
     },
     "securitySchemes": {

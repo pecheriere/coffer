@@ -596,6 +596,28 @@ impl StoreTx {
             .collect()
     }
 
+    /// Forget `candidate` as one `transaction` may duplicate. Forgetting a
+    /// pair that is not recorded does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn remove_duplicate_candidate(
+        &mut self,
+        transaction: TransactionId,
+        candidate: TransactionId,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "DELETE FROM duplicate_candidates WHERE transaction_id = ? AND candidate_id = ?",
+        )
+        .bind(transaction.to_string())
+        .bind(candidate.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
     /// Forget every duplicate candidate of `transaction`.
     ///
     /// # Errors

@@ -18,7 +18,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`); `ledger` (accounts and balances, categories,
-  transactions and their splits); `sync` (the provider-agnostic apply step
+  transactions and their splits, merging, un-merging and dismissing possible
+  duplicates); `sync` (the provider-agnostic apply step
   matching provider records onto transactions); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
 

@@ -1,5 +1,6 @@
 //! `/api/v1/transactions`: listing and searching transactions, creating
-//! manual ones, and reviewing them one at a time or in atomic batches.
+//! manual ones, reviewing them one at a time or in atomic batches, and
+//! resolving possible duplicates (merge, unmerge, dismiss).
 
 use std::str::FromStr;
 
@@ -7,7 +8,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::Response;
-use coffer_domain::ids::{AccountId, CategoryId, MemberId, TransactionId};
+use coffer_domain::ids::{AccountId, CategoryId, MemberId, SourceRecordId, TransactionId};
 use coffer_domain::policy::AccountLevel;
 use coffer_domain::transactions::{ReviewStatus, TransactionFlag};
 use coffer_store::{AssigneeFilter, PageRequest};
@@ -192,6 +193,26 @@ pub struct NewTransactionRequest {
 pub struct BatchRequest {
     /// 1 to 200 operations, each naming a different transaction.
     pub operations: Vec<BatchOperation>,
+}
+
+/// A transaction to merge into the one named in the path.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MergeRequest {
+    /// An imported transaction of the same account; it is deleted.
+    pub duplicate: TransactionId,
+    /// Merge even though the duplicate has notes, splits, a review, an
+    /// assignee or an edited payee, discarding them (default `false`).
+    #[serde(default)]
+    pub discard_duplicate_state: bool,
+}
+
+/// A source record to move into a transaction of its own.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnmergeRequest {
+    /// One of the transaction's `sources`, not its only one.
+    pub source: SourceRecordId,
 }
 
 /// Transactions, in the order of the request's operations.
@@ -409,4 +430,144 @@ pub(super) async fn batch(
 ) -> Result<Json<TransactionList>, Problem> {
     let items = state.ledger.apply_batch(&actor, body.operations).await?;
     Ok(Json(TransactionList { items }))
+}
+
+/// Merges a duplicate into a transaction.
+#[utoipa::path(
+    post,
+    path = "/api/v1/transactions/{transaction_id}/merge",
+    operation_id = "mergeTransactions",
+    tag = tags::TRANSACTIONS,
+    description = "Merges `duplicate` into this transaction, both imported and of the same \
+                   account: the duplicate's source records move here and the duplicate is \
+                   deleted. This transaction keeps its notes, splits, review, assignee and \
+                   payee, so choose the one holding them as the target; a pending target \
+                   merged with a posted duplicate takes its posted fields. The duplicate's \
+                   own user state is never combined: unless `discard_duplicate_state` is \
+                   `true`, a duplicate that has any is refused with `merge_conflict`, and \
+                   discarded values are recorded in the audit log. Its candidacies move \
+                   here, and `possible_duplicate` clears once no candidate is left. Needs \
+                   `write` on the account.",
+    security(("bearer" = [])),
+    params(TransactionPath),
+    request_body = MergeRequest,
+    responses(
+        (status = 200, description = "The merged transaction as it now is.",
+         body = TransactionView),
+        (status = 409, description = "`merge_conflict`: the duplicate has user state and \
+                                      `discard_duplicate_state` is not `true`.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn merge(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<TransactionPath>,
+    TypedJson(body): TypedJson<MergeRequest>,
+) -> Result<Json<TransactionView>, Problem> {
+    Ok(Json(
+        state
+            .ledger
+            .merge(
+                &actor,
+                path.transaction_id,
+                body.duplicate,
+                body.discard_duplicate_state,
+            )
+            .await?,
+    ))
+}
+
+/// Moves a source record into a transaction of its own.
+#[utoipa::path(
+    post,
+    path = "/api/v1/transactions/{transaction_id}/unmerge",
+    operation_id = "unmergeTransaction",
+    tag = tags::TRANSACTIONS,
+    description = "Moves one of this transaction's source records into a new imported \
+                   transaction of the same account, with the record's fields and no notes, \
+                   splits, review, assignee or flags. This transaction keeps its user state \
+                   and shows the fields of its remaining records; a single split follows a \
+                   new amount. Later syncs keep them apart. Needs `write` on the account. \
+                   With an `Idempotency-Key`, a retry of the same request within 24 hours \
+                   returns the first response.",
+    security(("bearer" = [])),
+    params(
+        TransactionPath,
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "1 to 128 visible ASCII characters naming this request, unique per \
+                        member for 24 hours."),
+    ),
+    request_body = UnmergeRequest,
+    responses(
+        (status = 201, description = "The new transaction, created now or by an earlier \
+                                      request with the same `Idempotency-Key`.",
+         body = TransactionView),
+        (status = 409, description = "The record is the transaction's only one, or a \
+                                      request with this `Idempotency-Key` is still in \
+                                      progress.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn unmerge(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<TransactionPath>,
+    method: Method,
+    uri: Uri,
+    key: Option<IdempotencyKey>,
+    TypedJsonBytes { value, bytes }: TypedJsonBytes<UnmergeRequest>,
+) -> Result<Response, Problem> {
+    let transaction = path.transaction_id;
+    let request = CreateRequest {
+        key,
+        method: &method,
+        uri: &uri,
+        body: &bytes,
+    };
+    let authorize = async || {
+        Ok(state
+            .ledger
+            .authorize_transaction_access(&actor, transaction, AccountLevel::Write)
+            .await?)
+    };
+    idempotency::create(&state, &actor, request, authorize, async |slot| {
+        state
+            .ledger
+            .unmerge(&actor, transaction, value.source, slot)
+            .await
+    })
+    .await
+}
+
+/// Dismisses a possible duplicate.
+#[utoipa::path(
+    post,
+    path = "/api/v1/transactions/{transaction_id}/dismiss-duplicate",
+    operation_id = "dismissDuplicate",
+    tag = tags::TRANSACTIONS,
+    description = "Clears the `possible_duplicate` flag and forgets the duplicate \
+                   candidates: the transaction is not a duplicate of them. Dismissing a \
+                   transaction that is not flagged changes and records nothing. Needs \
+                   `write` on the account.",
+    security(("bearer" = [])),
+    params(TransactionPath),
+    responses(
+        (status = 200, description = "The transaction as it now is.", body = TransactionView),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn dismiss_duplicate(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<TransactionPath>,
+) -> Result<Json<TransactionView>, Problem> {
+    Ok(Json(
+        state
+            .ledger
+            .dismiss_duplicate(&actor, path.transaction_id)
+            .await?,
+    ))
 }

@@ -204,7 +204,7 @@ pub struct TransactionView {
 }
 
 impl TransactionView {
-    fn new(record: &TransactionRecord) -> Self {
+    pub(super) fn new(record: &TransactionRecord) -> Self {
         let money = |minor_units| Money {
             minor_units,
             currency: record.currency,
@@ -319,7 +319,7 @@ fn notes(input: &str) -> Result<Option<Notes>, LedgerError> {
     Ok((!notes.is_empty()).then_some(notes))
 }
 
-fn attribution(actor: &Actor, at: Timestamp) -> Attribution {
+pub(super) fn attribution(actor: &Actor, at: Timestamp) -> Attribution {
     Attribution {
         member: Some(actor.member),
         agent: match actor.via {
@@ -332,13 +332,13 @@ fn attribution(actor: &Actor, at: Timestamp) -> Attribution {
 }
 
 /// The splits as an audited value: their JSON array.
-fn splits_value(splits: &[SplitInput]) -> Result<AuditValue, LedgerError> {
+pub(super) fn splits_value(splits: &[SplitInput]) -> Result<AuditValue, LedgerError> {
     serde_json::to_string(splits)
         .map(AuditValue::Text)
         .map_err(|_| LedgerError::Internal("split serialization failed"))
 }
 
-fn current_splits(record: &TransactionRecord) -> Vec<SplitInput> {
+pub(super) fn current_splits(record: &TransactionRecord) -> Vec<SplitInput> {
     record
         .splits
         .iter()
@@ -696,6 +696,26 @@ impl Ledger {
         let record = self.store.get_transaction(id).await?;
         authorize_account(actor, &access, record.account, AccountLevel::Transactions)?;
         Ok(TransactionView::new(&record))
+    }
+
+    /// Whether `actor` may use transaction `id` at `level`, decided before
+    /// a create that derives from it reserves its idempotency key.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::NotFound`] for an unknown transaction or one in a
+    /// hidden account; [`LedgerError::Denied`] when its account is visible
+    /// below `level`; storage failures.
+    pub async fn authorize_transaction_access(
+        &self,
+        actor: &Actor,
+        id: TransactionId,
+        level: AccountLevel,
+    ) -> Result<(), LedgerError> {
+        let access = self.access.resolve(actor).await?;
+        let record = self.store.get_transaction(id).await?;
+        authorize_account(actor, &access, record.account, level)?;
+        Ok(())
     }
 
     /// The transactions in accounts the actor may see at

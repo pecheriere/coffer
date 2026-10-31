@@ -46,6 +46,9 @@ fn routes() -> ApiRouter {
         .op(routes!(categories::update_group))
         .op(routes!(transactions::list, transactions::create))
         .op(routes!(transactions::batch))
+        .op(routes!(transactions::merge))
+        .op(routes!(transactions::unmerge))
+        .op(routes!(transactions::dismiss_duplicate))
         .op(routes!(
             transactions::get,
             transactions::update,

@@ -23,6 +23,9 @@ pub enum ProblemCode {
     Invalid,
     InvalidCursor,
     Conflict,
+    /// A merge would discard the duplicate's user state, and the request
+    /// did not ask to.
+    MergeConflict,
     InviteUnusable,
     CeremonyExpired,
     Busy,
@@ -48,6 +51,7 @@ impl ProblemCode {
             Self::Invalid => "invalid",
             Self::InvalidCursor => "invalid_cursor",
             Self::Conflict => "conflict",
+            Self::MergeConflict => "merge_conflict",
             Self::InviteUnusable => "invite_unusable",
             Self::CeremonyExpired => "ceremony_expired",
             Self::Busy => "busy",
@@ -370,6 +374,7 @@ mod tests {
             ProblemCode::Invalid,
             ProblemCode::InvalidCursor,
             ProblemCode::Conflict,
+            ProblemCode::MergeConflict,
             ProblemCode::InviteUnusable,
             ProblemCode::CeremonyExpired,
             ProblemCode::Busy,
