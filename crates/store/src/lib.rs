@@ -18,6 +18,7 @@ mod passkeys;
 mod provider_accounts;
 mod sessions;
 mod sources;
+mod sync_runs;
 mod transactions;
 
 use std::path::Path;
@@ -46,6 +47,7 @@ pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
+pub use sync_runs::{NewSyncRun, RunCounts, SyncRunRecord};
 pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,
@@ -157,6 +159,44 @@ impl Store {
         }
         result.map_err(StoreError::from_sqlx)?;
         restored.map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+}
+
+// The literal behind `INJECTED_FAILURE_RECORD_ID`, for SQL text.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! injected_failure_record_id {
+    () => {
+        "injected-store-failure"
+    };
+}
+
+/// The provider record id whose insertion fails once
+/// [`Store::inject_source_insert_failure_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_FAILURE_RECORD_ID: &str = injected_failure_record_id!();
+
+#[cfg(any(test, feature = "testkit"))]
+impl Store {
+    /// Make every later insertion of a source record with the provider id
+    /// [`INJECTED_FAILURE_RECORD_ID`] fail with a backend error, so tests
+    /// can prove that a failure mid-way through a write leaves nothing
+    /// behind.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_source_insert_failure \
+             BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
+            injected_failure_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         Ok(())
     }
 }

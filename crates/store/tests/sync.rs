@@ -1,4 +1,4 @@
-//! Connections, provider accounts and their bindings.
+//! Connections, provider accounts, their bindings and sync runs.
 
 #![expect(
     clippy::unwrap_used,
@@ -7,11 +7,12 @@
 
 use coffer_domain::accounts::{AccountKind, AccountName, ConnectionLabel, LiquidityClass};
 use coffer_domain::identity::{DisplayName, Role, Username};
-use coffer_domain::ids::{AccountId, MemberId};
+use coffer_domain::ids::{AccountId, ConnectionId, MemberId, SyncRunId};
 use coffer_domain::money::Currency;
+use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_store::{
-    ConnectionStatus, ConnectionStatusChange, NewAccount, NewConnection, NewMember,
-    ProviderAccountUpsert, RawBalance, Store, StoreError,
+    ConnectionStatus, ConnectionStatusChange, NewAccount, NewConnection, NewMember, NewSyncRun,
+    PageRequest, ProviderAccountUpsert, RawBalance, RunCounts, Store, StoreError,
 };
 use jiff::Timestamp;
 use jiff::civil::date;
@@ -220,4 +221,230 @@ async fn provider_account_refresh_keeps_binding_and_balance() {
         store.list_provider_accounts(None).await.unwrap(),
         [refreshed]
     );
+}
+
+async fn add_connection(store: &Store, owner: MemberId) -> ConnectionId {
+    let mut tx = store.begin().await.unwrap();
+    let connection = tx
+        .insert_connection(NewConnection {
+            provider: "testbank",
+            label: ConnectionLabel::parse("Bank").unwrap(),
+            owner,
+            credentials: vec![1],
+            created_at: at(0),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    connection.id
+}
+
+async fn queue(
+    store: &Store,
+    connection: ConnectionId,
+    trigger: SyncTrigger,
+    requested_by: Option<MemberId>,
+    queued: i64,
+) -> SyncRunId {
+    let mut tx = store.begin().await.unwrap();
+    let run = tx
+        .insert_sync_run(NewSyncRun {
+            connection,
+            trigger,
+            requested_by: requested_by.map(|member| (member, None)),
+            queued_at: at(queued),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    run.id
+}
+
+#[tokio::test]
+async fn sync_run_lifecycle() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let id = queue(&store, connection, SyncTrigger::Manual, Some(owner), 10).await;
+
+    let queued = store.get_sync_run(id).await.unwrap();
+    assert_eq!(queued.connection, connection);
+    assert_eq!(queued.trigger, SyncTrigger::Manual);
+    assert_eq!(queued.status, SyncRunStatus::Queued);
+    assert_eq!(queued.requested_by, Some((owner, None)));
+    assert_eq!(queued.queued_at, at(10));
+    assert_eq!((queued.started_at, queued.finished_at), (None, None));
+    assert_eq!(queued.detail, None);
+
+    let mut tx = store.begin().await.unwrap();
+    let running = tx.start_sync_run(id, at(11)).await.unwrap();
+    assert_eq!(running.status, SyncRunStatus::Running);
+    assert_eq!(running.started_at, Some(at(11)));
+    assert!(
+        matches!(
+            tx.start_sync_run(id, at(12)).await,
+            Err(StoreError::Conflict(_))
+        ),
+        "a run starts once"
+    );
+    assert!(
+        matches!(
+            tx.finish_sync_run(id, SyncRunStatus::Running, None, at(12))
+                .await,
+            Err(StoreError::Invalid(_))
+        ),
+        "a run finishes with an outcome"
+    );
+    let finished = tx
+        .finish_sync_run(
+            id,
+            SyncRunStatus::Partial,
+            Some("2 accounts".into()),
+            at(13),
+        )
+        .await
+        .unwrap();
+    assert_eq!(finished.status, SyncRunStatus::Partial);
+    assert_eq!(finished.detail.as_deref(), Some("2 accounts"));
+    assert_eq!(finished.finished_at, Some(at(13)));
+    assert!(
+        matches!(
+            tx.finish_sync_run(id, SyncRunStatus::Failed, None, at(14))
+                .await,
+            Err(StoreError::Conflict(_))
+        ),
+        "a run finishes once"
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(store.get_sync_run(id).await.unwrap(), finished);
+    assert!(matches!(
+        store.get_sync_run(SyncRunId::new()).await,
+        Err(StoreError::NotFound)
+    ));
+
+    let unattributed = queue(&store, connection, SyncTrigger::Schedule, None, 20).await;
+    assert_eq!(
+        store.get_sync_run(unattributed).await.unwrap().requested_by,
+        None
+    );
+}
+
+#[tokio::test]
+async fn sync_run_counts_queue_and_interruption() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let other = add_connection(&store, owner).await;
+    assert_eq!(
+        store.sync_run_counts(connection, at(0)).await.unwrap(),
+        RunCounts {
+            started_or_pending: 0,
+            last_started_at: None,
+            in_flight: false,
+        }
+    );
+    assert_eq!(store.next_queued_run().await.unwrap(), None);
+
+    // An old finished run, a recent finished one, then a queued one.
+    let old = queue(&store, connection, SyncTrigger::Initial, None, 1).await;
+    let recent = queue(&store, connection, SyncTrigger::Schedule, None, 100).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(old, at(2)).await.unwrap();
+    tx.finish_sync_run(old, SyncRunStatus::Succeeded, None, at(3))
+        .await
+        .unwrap();
+    tx.start_sync_run(recent, at(101)).await.unwrap();
+    tx.finish_sync_run(recent, SyncRunStatus::Failed, None, at(102))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        store.sync_run_counts(connection, at(50)).await.unwrap(),
+        RunCounts {
+            started_or_pending: 1,
+            last_started_at: Some(at(101)),
+            in_flight: false,
+        }
+    );
+    let pending = queue(&store, connection, SyncTrigger::Manual, Some(owner), 200).await;
+    let elsewhere = queue(&store, other, SyncTrigger::Manual, None, 150).await;
+    assert_eq!(
+        store.sync_run_counts(connection, at(50)).await.unwrap(),
+        RunCounts {
+            started_or_pending: 2,
+            last_started_at: Some(at(101)),
+            in_flight: true,
+        }
+    );
+    assert_eq!(
+        store.next_queued_run().await.unwrap().map(|run| run.id),
+        Some(elsewhere),
+        "the oldest queued run, of any connection"
+    );
+
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(elsewhere, at(201)).await.unwrap();
+    assert_eq!(
+        tx.fail_running_runs("interrupted", at(300)).await.unwrap(),
+        1
+    );
+    tx.commit().await.unwrap();
+    let interrupted = store.get_sync_run(elsewhere).await.unwrap();
+    assert_eq!(interrupted.status, SyncRunStatus::Failed);
+    assert_eq!(interrupted.detail.as_deref(), Some("interrupted"));
+    assert_eq!(interrupted.finished_at, Some(at(300)));
+    assert_eq!(
+        store.get_sync_run(pending).await.unwrap().status,
+        SyncRunStatus::Queued,
+        "queued runs stay queued"
+    );
+    assert_eq!(
+        store.next_queued_run().await.unwrap().map(|run| run.id),
+        Some(pending)
+    );
+}
+
+#[tokio::test]
+async fn sync_runs_list_newest_first() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let other = add_connection(&store, owner).await;
+    let mut ids = Vec::new();
+    for queued in 0..5 {
+        ids.push(queue(&store, connection, SyncTrigger::Schedule, None, queued).await);
+    }
+    queue(&store, other, SyncTrigger::Schedule, None, 9).await;
+    let page = PageRequest {
+        after: None,
+        limit: 3,
+    };
+    let first = store.list_sync_runs(connection, &page).await.unwrap();
+    let listed: Vec<_> = first.items.iter().map(|run| run.id).collect();
+    assert_eq!(listed, [ids[4], ids[3], ids[2]]);
+    let second = store
+        .list_sync_runs(
+            connection,
+            &PageRequest {
+                after: first.next,
+                limit: 3,
+            },
+        )
+        .await
+        .unwrap();
+    let listed: Vec<_> = second.items.iter().map(|run| run.id).collect();
+    assert_eq!(listed, [ids[1], ids[0]]);
+    assert_eq!(second.next, None);
+    assert!(matches!(
+        store
+            .list_sync_runs(
+                connection,
+                &PageRequest {
+                    after: Some("nope".into()),
+                    limit: 3,
+                },
+            )
+            .await,
+        Err(StoreError::InvalidCursor)
+    ));
 }

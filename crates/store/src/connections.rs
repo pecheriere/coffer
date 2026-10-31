@@ -192,6 +192,18 @@ async fn fetch_connection<'e>(
 }
 
 impl StoreTx {
+    /// Fetch a connection inside the transaction.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if there is no such connection.
+    pub async fn get_connection(
+        &mut self,
+        id: ConnectionId,
+    ) -> Result<ConnectionRecord, StoreError> {
+        fetch_connection(&mut *self.tx, id).await
+    }
+
     /// Create an `active` connection.
     ///
     /// # Errors

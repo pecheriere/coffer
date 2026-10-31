@@ -7,5 +7,6 @@ pub mod ids;
 pub mod matching;
 pub mod money;
 pub mod policy;
+pub mod sync;
 pub mod time;
 pub mod transactions;
