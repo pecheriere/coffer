@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use jiff::SignedDuration;
+use jiff::tz::{TimeZone, TimeZoneDatabase};
 use thiserror::Error;
 use url::{Host, Url};
 
@@ -12,6 +13,7 @@ const DEFAULT_LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOS
 const DEFAULT_INVITE_TTL_MINUTES: i64 = 30;
 const DEFAULT_SESSION_IDLE_HOURS: i64 = 168;
 const DEFAULT_SESSION_ABSOLUTE_DAYS: i64 = 30;
+const DEFAULT_SYNC_INTERVAL_HOURS: i64 = 6;
 
 /// A configuration problem. Messages name the offending variable and never
 /// echo its value, which may be sensitive.
@@ -53,6 +55,14 @@ pub struct Config {
     /// Proxy for every outbound https request, from `HTTPS_PROXY` (else
     /// `https_proxy`). It may carry credentials, which `Debug` redacts.
     pub https_proxy: Option<Url>,
+    /// The household's time zone, from `COFFER_TIMEZONE` (an IANA name,
+    /// default `UTC`): provider timestamps become calendar days in it, and
+    /// it decides which day is today.
+    pub timezone: TimeZone,
+    /// How often each connection syncs on schedule, from
+    /// `COFFER_SYNC_INTERVAL_HOURS` (1 to 24, default 6). A provider's own
+    /// minimum interval can lengthen it.
+    pub sync_interval: SignedDuration,
 }
 
 impl fmt::Debug for Config {
@@ -67,6 +77,8 @@ impl fmt::Debug for Config {
             .field("session_idle", &self.session_idle)
             .field("session_absolute", &self.session_absolute)
             .field("https_proxy", &https_proxy)
+            .field("timezone", &self.timezone.iana_name())
+            .field("sync_interval", &self.sync_interval)
             .finish()
     }
 }
@@ -146,6 +158,12 @@ impl Config {
             DEFAULT_SESSION_ABSOLUTE_DAYS,
             1..=365,
         )?;
+        let sync_hours = bounded(
+            &vars,
+            "COFFER_SYNC_INTERVAL_HOURS",
+            DEFAULT_SYNC_INTERVAL_HOURS,
+            1..=24,
+        )?;
 
         Ok(Self {
             listen,
@@ -156,6 +174,8 @@ impl Config {
             session_idle: SignedDuration::from_hours(idle_hours),
             session_absolute: SignedDuration::from_hours(absolute_days * 24),
             https_proxy: parse_https_proxy(&vars)?,
+            timezone: parse_timezone(&vars)?,
+            sync_interval: SignedDuration::from_hours(sync_hours),
         })
     }
 
@@ -240,6 +260,32 @@ fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Ur
         return Err(invalid("must not have a query or fragment"));
     }
     Ok(Some(url))
+}
+
+/// Reads `COFFER_TIMEZONE`, an IANA time zone name; unset means `UTC`. The
+/// name is looked up in the system database when there is one, else in the
+/// copy built into the binary, so a container without `/usr/share/zoneinfo`
+/// still knows every zone.
+fn parse_timezone(vars: &impl Fn(&str) -> Option<String>) -> Result<TimeZone, ConfigError> {
+    const VAR: &str = "COFFER_TIMEZONE";
+    let Some(name) = vars(VAR) else {
+        return Ok(TimeZone::UTC);
+    };
+    lookup_timezone(&name).ok_or(ConfigError::Invalid {
+        var: VAR,
+        reason: "not a known IANA time zone name",
+    })
+}
+
+/// The zone called `name` in the system database, else in the bundled one.
+fn lookup_timezone(name: &str) -> Option<TimeZone> {
+    if name.is_empty() {
+        return None;
+    }
+    jiff::tz::db()
+        .get(name)
+        .or_else(|_| TimeZoneDatabase::bundled().get(name))
+        .ok()
 }
 
 fn bounded(
@@ -482,6 +528,68 @@ mod tests {
                     .https_proxy
                     .is_none(),
                 "{var}"
+            );
+        }
+    }
+
+    fn with_var(var: &str, value: &str) -> Result<Config, ConfigError> {
+        Config::from_env(vars(&[
+            ("COFFER_PUBLIC_URL", "https://coffer.example"),
+            ("COFFER_DATA_DIR", "/data"),
+            (var, value),
+        ]))
+    }
+
+    #[test]
+    fn timezone_defaults_to_utc_and_reads_iana_names() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(config.timezone, TimeZone::UTC);
+        let config = with_var("COFFER_TIMEZONE", "Pacific/Auckland").unwrap();
+        assert_eq!(config.timezone.iana_name(), Some("Pacific/Auckland"));
+        assert!(format!("{config:?}").contains("Pacific/Auckland"));
+        for bad in ["", "Not/AZone", "../../etc/passwd", "UTC+25"] {
+            let err = with_var("COFFER_TIMEZONE", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_TIMEZONE",
+                        ..
+                    }
+                ),
+                "{bad:?}: {err:?}"
+            );
+        }
+    }
+
+    /// The zone data is built into the binary, so the container image
+    /// needs no `/usr/share/zoneinfo`.
+    #[test]
+    fn bundled_timezone_database_is_built_in() {
+        let bundled = TimeZoneDatabase::bundled();
+        assert!(!bundled.is_definitively_empty());
+        for name in ["Pacific/Auckland", "America/Los_Angeles", "Europe/Paris"] {
+            assert!(bundled.get(name).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn sync_interval_bounds() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(config.sync_interval, SignedDuration::from_hours(6));
+        let config = with_var("COFFER_SYNC_INTERVAL_HOURS", "24").unwrap();
+        assert_eq!(config.sync_interval, SignedDuration::from_hours(24));
+        for bad in ["0", "25", "six"] {
+            let err = with_var("COFFER_SYNC_INTERVAL_HOURS", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_SYNC_INTERVAL_HOURS",
+                        ..
+                    }
+                ),
+                "{bad}: {err:?}"
             );
         }
     }
