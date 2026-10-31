@@ -1,5 +1,6 @@
 //! Server configuration read from `COFFER_*` environment variables.
 
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -33,7 +34,7 @@ pub enum ConfigError {
 }
 
 /// Validated server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Address the HTTP server binds to.
     pub listen: SocketAddr,
@@ -49,6 +50,44 @@ pub struct Config {
     pub session_idle: SignedDuration,
     /// Session lifetime regardless of activity.
     pub session_absolute: SignedDuration,
+    /// Proxy for every outbound https request, from `HTTPS_PROXY` (else
+    /// `https_proxy`). It may carry credentials, which `Debug` redacts.
+    pub https_proxy: Option<Url>,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let https_proxy = self.https_proxy.as_ref().map(RedactedProxy);
+        f.debug_struct("Config")
+            .field("listen", &self.listen)
+            .field("public_url", &self.public_url)
+            .field("data_dir", &self.data_dir)
+            .field("secret_key_file", &self.secret_key_file)
+            .field("invite_ttl", &self.invite_ttl)
+            .field("session_idle", &self.session_idle)
+            .field("session_absolute", &self.session_absolute)
+            .field("https_proxy", &https_proxy)
+            .finish()
+    }
+}
+
+/// Shows a proxy URL as scheme, host and port, never its user information.
+struct RedactedProxy<'a>(&'a Url);
+
+impl fmt::Debug for RedactedProxy<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.0;
+        let host = url.host_str().unwrap_or_default();
+        let credentials = if url.username().is_empty() && url.password().is_none() {
+            ""
+        } else {
+            "<credentials redacted>@"
+        };
+        match url.port() {
+            Some(port) => write!(f, "\"{}://{credentials}{host}:{port}\"", url.scheme()),
+            None => write!(f, "\"{}://{credentials}{host}\"", url.scheme()),
+        }
+    }
 }
 
 impl Config {
@@ -116,6 +155,7 @@ impl Config {
             invite_ttl: SignedDuration::from_mins(invite_minutes),
             session_idle: SignedDuration::from_hours(idle_hours),
             session_absolute: SignedDuration::from_hours(absolute_days * 24),
+            https_proxy: parse_https_proxy(&vars)?,
         })
     }
 
@@ -173,6 +213,33 @@ fn parse_public_url(vars: &impl Fn(&str) -> Option<String>) -> Result<Url, Confi
         return Err(invalid("must not have a query or fragment"));
     }
     Ok(url)
+}
+
+/// Reads `HTTPS_PROXY`, else `https_proxy`; an empty value counts as unset.
+/// No other proxy variable (`HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) is read.
+fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Url>, ConfigError> {
+    let Some((var, raw)) = ["HTTPS_PROXY", "https_proxy"].into_iter().find_map(|var| {
+        vars(var)
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| (var, raw))
+    }) else {
+        return Ok(None);
+    };
+    let invalid = |reason| ConfigError::Invalid { var, reason };
+    let url = Url::parse(&raw).map_err(|_| invalid("not a valid URL"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(invalid("must use http or https"));
+    }
+    if url.host().is_none() {
+        return Err(invalid("must name a host"));
+    }
+    if url.path() != "/" {
+        return Err(invalid("must not have a path"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid("must not have a query or fragment"));
+    }
+    Ok(Some(url))
 }
 
 fn bounded(
@@ -335,6 +402,88 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("COFFER_PUBLIC_URL"));
         assert!(!msg.contains("hunter2"));
+    }
+
+    #[test]
+    fn proxy_config_validation() {
+        let base = [
+            ("COFFER_PUBLIC_URL", "https://coffer.example"),
+            ("COFFER_DATA_DIR", "/data"),
+        ];
+        let with = |var: &str, value: &str| {
+            let mut pairs = base.to_vec();
+            pairs.push((var, value));
+            Config::from_env(vars(&pairs))
+        };
+
+        assert!(
+            with_public_url("https://coffer.example")
+                .unwrap()
+                .https_proxy
+                .is_none()
+        );
+
+        let config = with("HTTPS_PROXY", "http://user:SECRETPW@proxy:3128").unwrap();
+        let proxy = config.https_proxy.as_ref().unwrap();
+        assert_eq!(proxy.host_str(), Some("proxy"));
+        assert_eq!(proxy.port(), Some(3128));
+        assert_eq!(proxy.password(), Some("SECRETPW"));
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("SECRETPW"), "{debug}");
+        assert!(!debug.contains("user:"), "{debug}");
+        assert!(debug.contains("proxy:3128"), "{debug}");
+
+        // The lowercase spelling is read when the uppercase one is unset.
+        let config = with("https_proxy", "https://proxy.example").unwrap();
+        assert_eq!(
+            config.https_proxy.as_ref().and_then(Url::host_str),
+            Some("proxy.example")
+        );
+        // The uppercase spelling wins when both are set.
+        let mut pairs = base.to_vec();
+        pairs.push(("HTTPS_PROXY", "http://upper:3128"));
+        pairs.push(("https_proxy", "http://lower:3128"));
+        let config = Config::from_env(vars(&pairs)).unwrap();
+        assert_eq!(
+            config.https_proxy.as_ref().and_then(Url::host_str),
+            Some("upper")
+        );
+        // An empty value counts as unset.
+        assert!(with("HTTPS_PROXY", "").unwrap().https_proxy.is_none());
+
+        for (var, value) in [
+            ("HTTPS_PROXY", "ftp://proxy:21"),
+            ("HTTPS_PROXY", "http://proxy/path"),
+            ("HTTPS_PROXY", "http://proxy/?a=b"),
+            ("HTTPS_PROXY", "http://proxy/#top"),
+            ("HTTPS_PROXY", "socks5://proxy:1080"),
+            ("HTTPS_PROXY", "not a url"),
+            ("https_proxy", "http://proxy/path"),
+        ] {
+            let err = with(var, value).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::Invalid { var: v, .. } if v == var),
+                "{var}={value}: {err:?}"
+            );
+            assert!(!err.to_string().contains("proxy:"), "{err}");
+        }
+
+        // The other proxy variables have no effect.
+        for var in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+        ] {
+            assert!(
+                with(var, "http://proxy:3128")
+                    .unwrap()
+                    .https_proxy
+                    .is_none(),
+                "{var}"
+            );
+        }
     }
 
     #[test]
