@@ -446,8 +446,9 @@ pub(super) async fn batch(
                    own user state is never combined: unless `discard_duplicate_state` is \
                    `true`, a duplicate that has any is refused with `merge_conflict`, and \
                    discarded values are recorded in the audit log. Its candidacies move \
-                   here, and `possible_duplicate` clears once no candidate is left. Needs \
-                   `write` on the account.",
+                   here, and `possible_duplicate` clears once no candidate is left. Two \
+                   transactions that each hold a posted record of the same connection are \
+                   distinct purchases and are refused. Needs `write` on the account.",
     security(("bearer" = [])),
     params(TransactionPath),
     request_body = MergeRequest,
@@ -549,7 +550,8 @@ pub(super) async fn unmerge(
     operation_id = "dismissDuplicate",
     tag = tags::TRANSACTIONS,
     description = "Clears the `possible_duplicate` flag and forgets the duplicate \
-                   candidates: the transaction is not a duplicate of them. Dismissing a \
+                   candidates: the transaction is not a duplicate of them, and a candidate \
+                   listing it back forgets it too. Dismissing a \
                    transaction that is not flagged changes and records nothing. Needs \
                    `write` on the account.",
     security(("bearer" = [])),

@@ -673,17 +673,21 @@ async fn merge_carries_the_duplicates_candidacies_to_the_target() {
         link(&world, &checking).await,
         link(&world, &checking).await,
     ];
+    let fifth = link(&world, &checking).await;
     let ids = one_each(
         &world,
-        &[&links[0], &links[1], &links[2], &links[3]],
-        &[-1, -2, -3, -4],
+        &[&links[0], &links[1], &links[2], &links[3], &fifth],
+        &[-1, -2, -3, -4, -5],
     )
     .await;
     let (target, duplicate, candidate, lister) = (ids[0], ids[1], ids[2], ids[3]);
+    let both = ids[4];
     // The duplicate may itself duplicate `candidate`, and `lister` may
-    // duplicate it: both now concern the target.
+    // duplicate it: both now concern the target. `both` already listed the
+    // target: it only loses the duplicate.
     flag_with(&world, duplicate, &[target, candidate]).await;
     flag_with(&world, lister, &[duplicate]).await;
+    flag_with(&world, both, &[duplicate, target]).await;
 
     let (status, body) = merge(&world, target, json!({ "duplicate": duplicate })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -696,6 +700,19 @@ async fn merge_carries_the_duplicates_candidacies_to_the_target() {
     by_write_token(
         &world,
         &last_event(&world, lister, "transaction.candidate_replaced").await,
+    );
+    assert_eq!(get(&world, both).await.duplicate_candidates, [target]);
+    let removed = last_event(&world, both, "transaction.candidate_removed").await;
+    by_write_token(&world, &removed);
+    assert_eq!(
+        before(&removed, "duplicate_candidate"),
+        AuditValue::Text(duplicate.to_string())
+    );
+    assert!(
+        !transaction_audit(&world).await.iter().any(|event| {
+            event.entity_id == both.to_string() && event.action == "transaction.candidate_replaced"
+        }),
+        "nothing was replaced"
     );
 }
 
@@ -1001,6 +1018,10 @@ async fn read_token_cannot_merge() {
             Some(json!({ "duplicate": pending })),
         ),
         (
+            format!("/api/v1/transactions/{posted}/merge"),
+            Some(json!({ "duplicate": posted })),
+        ),
+        (
             format!("/api/v1/transactions/{posted}/unmerge"),
             Some(json!({ "source": source })),
         ),
@@ -1015,4 +1036,64 @@ async fn read_token_cannot_merge() {
     }
     assert_eq!(transactions(&world, checking.id).await.len(), 2);
     assert_eq!(transaction_audit(&world).await.len(), audit_count);
+}
+
+#[tokio::test]
+async fn merge_refuses_purchases_one_connection_reported_apart() {
+    let world = world().await;
+    let checking = account(&world, "Checking").await;
+    let link = link(&world, &checking).await;
+    apply(
+        &world,
+        &link,
+        vec![
+            record("p-1", 10, -500, "MARKET", false),
+            record("p-2", 10, -700, "MARKET", false),
+        ],
+    )
+    .await;
+    let one = holding(&world, &link, "p-1").await.id;
+    let two = holding(&world, &link, "p-2").await.id;
+    let audit_count = transaction_audit(&world).await.len();
+
+    let (status, body) = merge(&world, one, json!({ "duplicate": two })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "invalid");
+    assert!(!body.to_string().contains(&two.to_string()));
+    assert_eq!(transactions(&world, checking.id).await.len(), 2);
+    assert_eq!(transaction_audit(&world).await.len(), audit_count);
+}
+
+#[tokio::test]
+async fn dismiss_drops_the_reverse_link_of_a_mutual_pair() {
+    let world = world().await;
+    let checking = account(&world, "Checking").await;
+    let first = link(&world, &checking).await;
+    let second = link(&world, &checking).await;
+    let third = link(&world, &checking).await;
+    let ids = one_each(&world, &[&first, &second, &third], &[-1, -2, -3]).await;
+    let (dismissed, mutual, other) = (ids[0], ids[1], ids[2]);
+    flag_with(&world, dismissed, &[mutual]).await;
+    flag_with(&world, mutual, &[dismissed, other]).await;
+
+    let (status, body) = dismiss(&world, dismissed).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let after = get(&world, mutual).await;
+    assert_eq!(after.duplicate_candidates, [other], "its other pair stays");
+    assert_eq!(after.flags, [TransactionFlag::PossibleDuplicate]);
+    let event = last_event(&world, mutual, "transaction.candidate_removed").await;
+    by_write_token(&world, &event);
+    assert_eq!(
+        before(&event, "duplicate_candidate"),
+        AuditValue::Text(dismissed.to_string())
+    );
+
+    // Dismissing `other`'s only lister side leaves `mutual` with no
+    // candidate once its last pair goes the same way.
+    flag_with(&world, other, &[mutual]).await;
+    let (status, _) = dismiss(&world, other).await;
+    assert_eq!(status, StatusCode::OK);
+    let after = get(&world, mutual).await;
+    assert_eq!(after.duplicate_candidates, Vec::new());
+    assert_eq!(after.flags, Vec::new());
 }

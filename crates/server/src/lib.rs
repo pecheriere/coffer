@@ -3,6 +3,7 @@
 pub mod appearance;
 pub mod assets;
 pub mod auth;
+pub mod canonical;
 pub mod cli;
 pub mod config;
 pub mod http;

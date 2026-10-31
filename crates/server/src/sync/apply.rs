@@ -16,18 +16,16 @@ use coffer_domain::matching::{
     Candidate, DATE_TOLERANCE_DAYS, Incoming, MatchDecision, decide, description_key,
     pending_counterparts, posted_counterparts,
 };
-use coffer_domain::transactions::{
-    Description, Memo, Payee, SplitInput, TransactionFlag, TransactionOrigin,
-};
+use coffer_domain::transactions::{Description, Memo, Payee, TransactionFlag, TransactionOrigin};
 use coffer_store::{
     AccountRecord, Attribution, CandidateRow, ImportedFields, NewSource, NewTransaction,
-    ProviderAccountRecord, SourceRecord, SourceUpdate, StoreError, StoreTx, TransactionRecord,
+    ProviderAccountRecord, SourceRecord, SourceUpdate, StoreTx, TransactionRecord,
 };
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 
 use super::SyncError;
-use crate::ledger::duplicates::{drop_candidate, drop_stale_candidates};
+use crate::canonical::{apply_imported_fields, drop_candidate, drop_stale_candidates};
 
 /// The reason every sync change is attributed to.
 pub const SYNC_REASON: &str = "system:sync";
@@ -335,7 +333,7 @@ fn sync_attribution(at: Timestamp) -> Attribution {
 
 impl Apply<'_> {
     /// Forgets the stale candidate pairs of `transaction`, which just
-    /// gained a posted record (see [`crate::ledger::duplicates`]). Records
+    /// gained a posted record (see [`crate::canonical`]). Records
     /// about to vanish do not count.
     async fn drop_stale_candidates(&mut self, transaction: TransactionId) -> Result<(), SyncError> {
         Ok(drop_stale_candidates(
@@ -703,122 +701,4 @@ impl Apply<'_> {
         }
         Ok(())
     }
-}
-
-/// Replaces `current`'s imported fields with `fields`, appending what
-/// changed to `changes`; a transaction whose fields already match writes
-/// nothing. User fields never change, except that a single split follows a
-/// new amount, recorded as categorized by `split_by`; several splits stay,
-/// and the transaction is flagged `SplitMismatch` while they no longer sum
-/// to it. Shared by the sync and by merge and unmerge.
-///
-/// # Errors
-///
-/// Storage failures.
-pub(crate) async fn apply_imported_fields(
-    tx: &mut StoreTx,
-    current: &TransactionRecord,
-    fields: &ImportedFields,
-    mut changes: AuditChanges,
-    split_by: &Attribution,
-) -> Result<AuditChanges, StoreError> {
-    let unchanged = current.posted_on == fields.posted_on
-        && current.transacted_on == fields.transacted_on
-        && current.pending == fields.pending
-        && current.amount_minor == fields.amount_minor
-        && current.raw_description == fields.description
-        && current.imported_payee == fields.payee
-        && current.memo == fields.memo;
-    if unchanged {
-        return Ok(changes);
-    }
-    if current.posted_on != fields.posted_on {
-        changes = changes.change("posted_on", current.posted_on, fields.posted_on);
-    }
-    if current.transacted_on != fields.transacted_on {
-        changes = changes.change("transacted_on", current.transacted_on, fields.transacted_on);
-    }
-    if current.pending != fields.pending {
-        changes = changes.change("pending", current.pending, fields.pending);
-    }
-    if current.amount_minor != fields.amount_minor {
-        changes = changes.change("amount_minor", current.amount_minor, fields.amount_minor);
-    }
-    if current.raw_description != fields.description {
-        changes = changes.change(
-            "description",
-            current.raw_description.as_str(),
-            fields.description.as_str(),
-        );
-    }
-    if current.imported_payee != fields.payee {
-        let new_payee = fields.payee.as_ref().map(Payee::as_str);
-        changes = changes.change(
-            "imported_payee",
-            current.imported_payee.as_ref().map(Payee::as_str),
-            new_payee,
-        );
-        if !current.payee_edited {
-            changes = changes.change(
-                "payee",
-                current.payee.as_ref().map(Payee::as_str),
-                new_payee,
-            );
-        }
-    }
-    if current.memo != fields.memo {
-        changes = changes.change(
-            "memo",
-            current.memo.as_ref().map(Memo::as_str),
-            fields.memo.as_ref().map(Memo::as_str),
-        );
-    }
-    tx.update_imported_fields(current.id, fields, split_by.at)
-        .await?;
-    if current.amount_minor != fields.amount_minor {
-        changes = follow_amount(tx, current, fields.amount_minor, changes, split_by).await?;
-    }
-    Ok(changes)
-}
-
-/// Keeps the splits of `current` consistent with its new amount.
-async fn follow_amount(
-    tx: &mut StoreTx,
-    current: &TransactionRecord,
-    amount_minor: i64,
-    mut changes: AuditChanges,
-    split_by: &Attribution,
-) -> Result<AuditChanges, StoreError> {
-    let mismatch = match current.splits.as_slice() {
-        [] => false,
-        // A split is never zero: a single split cannot follow a zero
-        // amount, so it stays and the transaction is flagged.
-        [only] if amount_minor != 0 => {
-            tx.replace_splits(
-                current.id,
-                &[SplitInput {
-                    category: only.category,
-                    minor_units: amount_minor,
-                }],
-                split_by.clone(),
-            )
-            .await?;
-            changes = changes.change("split_minor_units", only.minor_units, amount_minor);
-            false
-        }
-        splits => {
-            let sum: i128 = splits
-                .iter()
-                .map(|split| i128::from(split.minor_units))
-                .sum();
-            sum != i128::from(amount_minor)
-        }
-    };
-    let flagged = current.flags.contains(&TransactionFlag::SplitMismatch);
-    if mismatch != flagged {
-        tx.set_flag(current.id, TransactionFlag::SplitMismatch, mismatch)
-            .await?;
-        changes = changes.change("split_mismatch", flagged, mismatch);
-    }
-    Ok(changes)
 }

@@ -20,7 +20,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `pages/`); `ledger` (accounts and balances, categories,
   transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `sync` (the provider-agnostic apply step
-  matching provider records onto transactions); `cli` and
+  matching provider records onto transactions); `canonical` (changes to
+  canonical transactions shared by `sync` and `ledger`: imported fields and
+  duplicate candidates); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
 
 ## Commands

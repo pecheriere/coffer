@@ -2555,7 +2555,7 @@
           "transactions"
         ],
         "summary": "Dismisses a possible duplicate.",
-        "description": "Clears the `possible_duplicate` flag and forgets the duplicate candidates: the transaction is not a duplicate of them. Dismissing a transaction that is not flagged changes and records nothing. Needs `write` on the account.",
+        "description": "Clears the `possible_duplicate` flag and forgets the duplicate candidates: the transaction is not a duplicate of them, and a candidate listing it back forgets it too. Dismissing a transaction that is not flagged changes and records nothing. Needs `write` on the account.",
         "operationId": "dismissDuplicate",
         "parameters": [
           {
@@ -2663,7 +2663,7 @@
           "transactions"
         ],
         "summary": "Merges a duplicate into a transaction.",
-        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Needs `write` on the account.",
+        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Two transactions that each hold a posted record of the same connection are distinct purchases and are refused. Needs `write` on the account.",
         "operationId": "mergeTransactions",
         "parameters": [
           {
