@@ -23,6 +23,7 @@ pub(super) const BEARER: &str = "bearer";
 pub(super) mod tags {
     pub const IDENTITY: &str = "identity";
     pub const MEMBERS: &str = "members";
+    pub const ACCOUNTS: &str = "accounts";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
 }
@@ -102,6 +103,11 @@ pub(super) fn base() -> OpenApi {
         .tags(Some([
             tag(tags::IDENTITY, "Who the token belongs to."),
             tag(tags::MEMBERS, "The household's members."),
+            tag(
+                tags::ACCOUNTS,
+                "Accounts and their daily balances. Amounts are integer minor units of the \
+                 account's currency.",
+            ),
             tag(tags::AUDIT, "The append-only log of every change."),
             tag(tags::META, "This API's own description."),
         ]))

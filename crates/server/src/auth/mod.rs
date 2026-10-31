@@ -1,6 +1,7 @@
 //! Authentication and identity: passkey ceremonies, invites, enrollment,
 //! login and member management.
 
+pub mod access;
 pub mod agent_tokens;
 pub mod identity;
 pub mod passkeys;
@@ -13,6 +14,7 @@ use coffer_store::{StoreError, StoreTx};
 use jiff::Timestamp;
 use webauthn_rs::prelude::WebauthnError;
 
+pub use access::AccessResolver;
 pub use agent_tokens::AgentTokens;
 pub use identity::{Identity, InvitePreview};
 pub use passkeys::{CeremonyId, Passkeys};

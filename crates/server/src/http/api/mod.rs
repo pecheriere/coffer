@@ -2,6 +2,7 @@
 //! Every route is added through `ApiRouter` (`router.rs`), so the OpenAPI
 //! document describes exactly what is routed.
 
+mod accounts;
 mod audit;
 pub mod extract;
 mod me;
@@ -33,6 +34,10 @@ fn routes() -> ApiRouter {
         .op(routes!(me::me))
         .op(routes!(members::list))
         .op(routes!(audit::list))
+        .op(routes!(accounts::list, accounts::create))
+        .op(routes!(accounts::get, accounts::update))
+        .op(routes!(accounts::list_balances))
+        .op(routes!(accounts::set_balance))
         .op(routes!(openapi::serve))
 }
 

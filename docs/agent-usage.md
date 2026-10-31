@@ -25,7 +25,7 @@ session, never with another token.
 | Scope | Allows |
 |---|---|
 | `read` | Read household data: `me`, `members`, `audit`. |
-| `write` | Everything in `read`, plus changes to household data (as features arrive). |
+| `write` | Everything in `read`, plus changes to household data: creating and changing accounts and recording balances. |
 | `admin` | Everything in `write`, plus household administration. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -48,8 +48,8 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 
 ## Endpoints
 
-`GET /api/v1/openapi.json` needs no token. Every other operation needs
-`read`:
+`GET /api/v1/openapi.json` needs no token. Every other operation needs at
+least `read`:
 
 - `GET /api/v1/me` identifies the member and token behind the request.
 - `GET /api/v1/members` returns `{"items": [{id, username, display_name, role, disabled_at}]}`.
@@ -67,6 +67,39 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
   `null` for a field the action set, `after` is `null` for one it removed.
   Entries recorded before this format (bare `{"from", "to"}` objects) are
   returned in it too.
+
+### Accounts
+
+Amounts are integers in the minor units of the account's ISO 4217 currency
+(`{"minor_units": -1234, "currency": "USD"}` is -12.34 USD); negative is
+money owed or going out.
+
+- `GET /api/v1/accounts` lists accounts with their latest balance;
+  `include_closed=true` adds closed ones.
+- `POST /api/v1/accounts` (`write`) creates a manual account from `name`,
+  `kind`, `currency` and optionally `liquidity` (by default the kind's: a
+  credit card is a `short_term_liability`), `include_in_net_worth`,
+  `include_in_forecast` (both default `true`) and `opening_balance`
+  (`{"on": "YYYY-MM-DD", "minor_units": n}`). Answers 201.
+- `GET` and `PATCH /api/v1/accounts/{account_id}` read and change an
+  account. The currency never changes (sending it is a 400 `invalid`); a
+  new `kind` re-defaults the liquidity class unless one was chosen;
+  `closed: true` closes the account.
+- `GET /api/v1/accounts/{account_id}/balances` pages the daily balances,
+  newest first (`from` inclusive, `to` exclusive, `after`, `limit`).
+- `PUT /api/v1/accounts/{account_id}/balances/{on}` (`write`) records
+  `{"minor_units": n}` as that day's balance. A day holds one balance: the
+  last write wins, so a linked account's next sync replaces a manual value
+  for the same day.
+
+### Retrying creates
+
+Send an `Idempotency-Key` header (1 to 128 visible ASCII characters) with a
+create. A retry with the same key and the same request within 24 hours gets
+the first response back instead of creating again. The same key with a
+different request is a 422 `idempotency_key_reuse`; while the first request
+is still running, a retry is a 409 `idempotency_in_progress` (retry later).
+Keys belong to your member, so use a fresh key per intended create.
 
 ## Errors
 
@@ -87,7 +120,9 @@ Errors are `application/problem+json` bodies (RFC 9457):
 `not_found` (404, including `/api`, `/api/v1` and unknown `/api/v1/*` paths),
 `method_not_allowed` (405, with an `Allow` header), `invalid` (400: a bad
 query or path parameter, or a body that is not valid JSON for the
-operation), `invalid_cursor` (400), `internal` (500). `detail`, when
+operation), `invalid` (422: a value the operation does not accept, such as
+an empty account name), `invalid_cursor` (400), `idempotency_key_reuse`
+(422), `idempotency_in_progress` (409), `internal` (500). `detail`, when
 present, names at most the documented parameter at fault and never echoes
 what you sent. A problem may carry a `Retry-After` header (seconds): wait
 that long before retrying. Request bodies are limited to 256 KiB.

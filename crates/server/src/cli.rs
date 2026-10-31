@@ -18,9 +18,11 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use crate::appearance::Appearance;
-use crate::auth::{AgentTokens, AuthError, Identity, Sessions};
+use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
+use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
+use crate::ledger::Ledger;
 use crate::secrets::{SecretError, ServerKey};
 
 mod healthcheck;
@@ -283,13 +285,23 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         clock.clone(),
         config.clone(),
     ));
+    let idempotency = Arc::new(RequestHasher::new(&key));
     let agent_tokens = Arc::new(AgentTokens::new(store.clone(), key, clock.clone()));
     let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
+    let access = Arc::new(AccessResolver::new());
+    let ledger = Arc::new(Ledger::new(
+        store.clone(),
+        clock.clone(),
+        Arc::clone(&access),
+    ));
     Ok(AppState {
         sessions,
         agent_tokens,
         identity,
         appearance,
+        ledger,
+        access,
+        idempotency,
         store,
         config,
         clock,

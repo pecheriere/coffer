@@ -15,7 +15,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   type, so a different database backend changes only this crate.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
-  extractors, problem bodies, `api/` JSON v1, `health`, `pages/`); `cli` and
+  extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
+  `pages/`); `ledger` (accounts and balances); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
 
 ## Commands

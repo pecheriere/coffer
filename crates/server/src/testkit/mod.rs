@@ -36,8 +36,10 @@ use webauthn_rs::prelude::{
 };
 
 use crate::appearance::Appearance;
-use crate::auth::{AgentTokens, Identity, Sessions};
+use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
+use crate::http::idempotency::RequestHasher;
+use crate::ledger::Ledger;
 use crate::secrets::{SecretToken, ServerKey};
 
 /// Public URL (and `WebAuthn` origin) of the test server.
@@ -65,6 +67,8 @@ pub struct TestServer {
     pub agent_tokens: Arc<AgentTokens>,
     /// The appearance service.
     pub appearance: Arc<Appearance>,
+    /// The account access resolver.
+    pub access: Arc<AccessResolver>,
     _dir: Option<TempDir>,
 }
 
@@ -138,6 +142,7 @@ impl TestServer {
             sessions,
             agent_tokens,
             appearance,
+            access: Arc::new(AccessResolver::new()),
             _dir: dir,
         }
     }
@@ -150,6 +155,13 @@ impl TestServer {
             agent_tokens: Arc::clone(&self.agent_tokens),
             identity: Arc::clone(&self.identity),
             appearance: Arc::clone(&self.appearance),
+            ledger: Arc::new(Ledger::new(
+                self.store.clone(),
+                self.clock.clone(),
+                Arc::clone(&self.access),
+            )),
+            access: Arc::clone(&self.access),
+            idempotency: Arc::new(RequestHasher::new(&self.key)),
             store: self.store.clone(),
             config: self.config.clone(),
             clock: self.clock.clone(),

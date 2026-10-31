@@ -10,6 +10,7 @@
 pub mod api;
 pub mod extract;
 mod health;
+pub mod idempotency;
 mod pages;
 pub mod problem;
 mod static_files;
@@ -21,9 +22,11 @@ use axum::Router;
 use coffer_domain::time::Clock;
 use coffer_store::Store;
 
+use self::idempotency::RequestHasher;
 use crate::appearance::Appearance;
-use crate::auth::{AgentTokens, Identity, Sessions};
+use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
+use crate::ledger::Ledger;
 
 /// Shared state of every handler.
 #[derive(Clone)]
@@ -32,6 +35,11 @@ pub struct AppState {
     pub agent_tokens: Arc<AgentTokens>,
     pub identity: Arc<Identity>,
     pub appearance: Arc<Appearance>,
+    pub ledger: Arc<Ledger>,
+    /// The only source of account access.
+    pub access: Arc<AccessResolver>,
+    /// Hashes requests made with an `Idempotency-Key`.
+    pub idempotency: Arc<RequestHasher>,
     pub store: Store,
     pub config: Config,
     pub clock: Arc<dyn Clock>,

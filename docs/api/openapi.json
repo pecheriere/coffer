@@ -26,6 +26,743 @@
     }
   ],
   "paths": {
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Every account the token may see.",
+        "description": "Every account, oldest first, each with its latest balance. Closed accounts are listed only with `include_closed=true`. Needs `read`.",
+        "operationId": "listAccounts",
+        "parameters": [
+          {
+            "name": "include_closed",
+            "in": "query",
+            "description": "Also list closed accounts (default `false`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The accounts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Creates a manual account.",
+        "description": "Creates a manual account, with an opening balance if given. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "operationId": "createAccount",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The account, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "One account.",
+        "description": "One account with its latest balance. Needs `read`.",
+        "operationId": "getAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AccountId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Changes an account.",
+        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. Needs `write` on the account.",
+        "operationId": "updateAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AccountId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/balances": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "An account's balances.",
+        "description": "An account's daily balances, newest day first: one per day, the last write winning. Needs `read`. Pages with the opaque `next` cursor.",
+        "operationId": "listBalances",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AccountId"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only days on or after this one (ISO 8601).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Only days before this one (ISO 8601).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next` cursor of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most balances to return, clamped to 1 to 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of balances.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalancePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/balances/{on}": {
+      "put": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Records a manual balance.",
+        "description": "Records the account's balance at the end of `on`, replacing that day's balance whatever its source. A linked account's next sync replaces it in turn. Needs `write` on the account.",
+        "operationId": "setBalance",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AccountId"
+            }
+          },
+          {
+            "name": "on",
+            "in": "path",
+            "description": "The calendar day (ISO 8601).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BalanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The recorded balance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "tags": [
@@ -420,6 +1157,173 @@
   },
   "components": {
     "schemas": {
+      "AccountId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "AccountKind": {
+        "type": "string",
+        "description": "What an account is.",
+        "enum": [
+          "checking",
+          "savings",
+          "credit_card",
+          "loan",
+          "mortgage",
+          "brokerage",
+          "retirement",
+          "equity_comp",
+          "property",
+          "vehicle",
+          "other_asset",
+          "other_liability"
+        ]
+      },
+      "AccountList": {
+        "type": "object",
+        "description": "Every account the token may see.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountView"
+            }
+          }
+        }
+      },
+      "AccountPatch": {
+        "type": "object",
+        "description": "Changes to an account; absent (or `null`) fields stay as they are. The\ncurrency cannot change.",
+        "properties": {
+          "closed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` closes the account, `false` reopens it."
+          },
+          "include_in_forecast": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "include_in_net_worth": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountKind",
+                "description": "A new kind; a defaulted liquidity class follows it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "liquidity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityClass",
+                "description": "A chosen liquidity class, kept from then on whatever the kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 100 characters, without control characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AccountSource": {
+        "type": "string",
+        "description": "Where an account's data comes from.",
+        "enum": [
+          "manual"
+        ]
+      },
+      "AccountView": {
+        "type": "object",
+        "description": "An account.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "currency",
+          "liquidity",
+          "liquidity_overridden",
+          "include_in_net_worth",
+          "include_in_forecast",
+          "source",
+          "closed",
+          "latest_balance",
+          "created_at"
+        ],
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "description": "Fixed when the account is created."
+          },
+          "id": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "include_in_forecast": {
+            "type": "boolean"
+          },
+          "include_in_net_worth": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "latest_balance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BalanceView",
+                "description": "The most recent snapshot; `null` when there is none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "liquidity": {
+            "$ref": "#/components/schemas/LiquidityClass"
+          },
+          "liquidity_overridden": {
+            "type": "boolean",
+            "description": "Whether `liquidity` was chosen rather than defaulted from `kind`. A\ndefaulted class follows a change of `kind`; a chosen one stays."
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AccountSource"
+          }
+        }
+      },
       "AgentTokenId": {
         "type": "string",
         "format": "uuid",
@@ -599,6 +1503,79 @@
         ],
         "description": "One audited value: a JSON scalar. Ids, instants (RFC 3339) and calendar days (ISO 8601) are recorded as text."
       },
+      "BalancePage": {
+        "type": "object",
+        "description": "One page of an account's balances, newest day first.",
+        "required": [
+          "items",
+          "next"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BalanceView"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last page."
+          }
+        }
+      },
+      "BalanceRequest": {
+        "type": "object",
+        "description": "A manual balance for one day.",
+        "required": [
+          "minor_units"
+        ],
+        "properties": {
+          "minor_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The balance in the account currency's minor units; negative is owed."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BalanceSource": {
+        "type": "string",
+        "description": "Where a balance snapshot came from. A day holds one snapshot, whichever\nwas written last.",
+        "enum": [
+          "sync",
+          "manual"
+        ]
+      },
+      "BalanceView": {
+        "type": "object",
+        "description": "An account's balance at the end of one day.",
+        "required": [
+          "on",
+          "balance",
+          "source"
+        ],
+        "properties": {
+          "balance": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day (ISO 8601)."
+          },
+          "source": {
+            "$ref": "#/components/schemas/BalanceSource"
+          }
+        }
+      },
+      "Currency": {
+        "type": "string",
+        "description": "An active ISO 4217 currency code; its exponent gives the minor unit (USD 2, JPY 0).",
+        "pattern": "^[A-Z]{3}$"
+      },
       "FieldChange": {
         "type": "object",
         "description": "One field's value before and after a change; `null` on the side where\nthe field did not exist.",
@@ -615,6 +1592,17 @@
           }
         },
         "additionalProperties": false
+      },
+      "LiquidityClass": {
+        "type": "string",
+        "description": "How quickly an account's balance can be spent, or must be repaid.",
+        "enum": [
+          "cash",
+          "short_term_liability",
+          "invested",
+          "illiquid",
+          "long_term_liability"
+        ]
       },
       "MeResponse": {
         "type": "object",
@@ -687,6 +1675,83 @@
           }
         }
       },
+      "Money": {
+        "type": "object",
+        "description": "An amount: an integer number of minor units plus its ISO 4217 currency\ncode. `{\"minor_units\": -1234, \"currency\": \"USD\"}` is -12.34 USD; negative\nis money out of the account. Never a floating-point number.",
+        "required": [
+          "minor_units",
+          "currency"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "minor_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount in the currency's minor units: `-1234` USD is -12.34 USD."
+          }
+        }
+      },
+      "NewAccountRequest": {
+        "type": "object",
+        "description": "A manual account to create.",
+        "required": [
+          "name",
+          "kind",
+          "currency"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "description": "Fixed for the account's life."
+          },
+          "include_in_forecast": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Count the account in the forecast (default `true`)."
+          },
+          "include_in_net_worth": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Count the account in net worth (default `true`)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "liquidity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityClass",
+                "description": "A chosen liquidity class; by default the kind's (a credit card is a\n`short_term_liability`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters, without control characters."
+          },
+          "opening_balance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpeningBalance",
+                "description": "A manual balance snapshot to record with the account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "OpenApiDocument": {
         "type": "object",
         "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
@@ -720,6 +1785,27 @@
             }
           }
         }
+      },
+      "OpeningBalance": {
+        "type": "object",
+        "description": "A balance to record on the day an account is created from.",
+        "required": [
+          "on",
+          "minor_units"
+        ],
+        "properties": {
+          "minor_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The balance in the account currency's minor units; negative is owed."
+          },
+          "on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day (ISO 8601)."
+          }
+        },
+        "additionalProperties": false
       },
       "ProblemBody": {
         "type": "object",
@@ -774,6 +1860,8 @@
           "ceremony_expired",
           "busy",
           "passkey_rejected",
+          "idempotency_key_reuse",
+          "idempotency_in_progress",
           "internal"
         ]
       },
@@ -812,6 +1900,10 @@
     {
       "name": "members",
       "description": "The household's members."
+    },
+    {
+      "name": "accounts",
+      "description": "Accounts and their daily balances. Amounts are integer minor units of the account's currency."
     },
     {
       "name": "audit",

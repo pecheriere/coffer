@@ -1,0 +1,155 @@
+//! The ledger: accounts and their balances. Every operation authorizes
+//! through the policy, with account access from the [`AccessResolver`], and
+//! writes its audit entry in the same transaction as its change.
+
+pub mod accounts;
+
+use std::sync::Arc;
+
+use axum::http::StatusCode;
+use coffer_domain::audit::{AuditChanges, AuditEntry};
+use coffer_domain::identity::Actor;
+use coffer_domain::policy::Denied;
+use coffer_domain::time::Clock;
+use coffer_store::{Store, StoreError, StoreTx};
+use jiff::Timestamp;
+
+use crate::auth::{AccessResolver, AuthError, denied_message};
+use crate::http::problem::{Problem, ProblemCode};
+
+/// The ledger service.
+pub struct Ledger {
+    store: Store,
+    clock: Arc<dyn Clock>,
+    access: Arc<AccessResolver>,
+}
+
+impl std::fmt::Debug for Ledger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ledger").finish_non_exhaustive()
+    }
+}
+
+impl Ledger {
+    /// The service over `store`.
+    #[must_use]
+    pub fn new(store: Store, clock: Arc<dyn Clock>, access: Arc<AccessResolver>) -> Self {
+        Self {
+            store,
+            clock,
+            access,
+        }
+    }
+}
+
+/// Why a ledger operation failed. Every message is safe to show the
+/// requester: none echoes input.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LedgerError {
+    /// The actor may not perform the action.
+    #[error("{}", denied_message(*.0))]
+    Denied(Denied),
+    /// No such resource.
+    #[error("not found")]
+    NotFound,
+    /// A submitted value is not acceptable; the message says which.
+    #[error("{0}")]
+    Invalid(&'static str),
+    /// The change conflicts with the current state.
+    #[error("{1}")]
+    Conflict(ProblemCode, &'static str),
+    /// Resolving the actor's access failed.
+    #[error(transparent)]
+    Auth(AuthError),
+    /// A local step (such as serializing a response) failed.
+    #[error("internal error")]
+    Internal(&'static str),
+    /// The database failed.
+    #[error("storage error")]
+    Store(#[source] StoreError),
+}
+
+impl From<StoreError> for LedgerError {
+    fn from(err: StoreError) -> Self {
+        match err {
+            StoreError::NotFound => Self::NotFound,
+            other => Self::Store(other),
+        }
+    }
+}
+
+impl From<Denied> for LedgerError {
+    fn from(denied: Denied) -> Self {
+        Self::Denied(denied)
+    }
+}
+
+impl From<AuthError> for LedgerError {
+    fn from(err: AuthError) -> Self {
+        match err {
+            AuthError::Denied(denied) => Self::Denied(denied),
+            AuthError::NotFound => Self::NotFound,
+            AuthError::Store(store) => Self::Store(store),
+            other => Self::Auth(other),
+        }
+    }
+}
+
+impl From<LedgerError> for Problem {
+    fn from(err: LedgerError) -> Self {
+        let message = err.to_string();
+        match err {
+            LedgerError::Denied(denied) => Self::from(denied),
+            LedgerError::NotFound => Self::not_found(),
+            LedgerError::Invalid(_) => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ProblemCode::Invalid,
+                "Invalid value",
+            )
+            .with_detail(message),
+            LedgerError::Conflict(code, _) => {
+                Self::new(StatusCode::CONFLICT, code, "Conflict").with_detail(message)
+            }
+            LedgerError::Auth(auth) => Self::from(auth),
+            LedgerError::Store(StoreError::InvalidCursor) => Self::new(
+                StatusCode::BAD_REQUEST,
+                ProblemCode::InvalidCursor,
+                "Invalid pagination cursor",
+            ),
+            LedgerError::Internal(_) | LedgerError::Store(_) => {
+                tracing::error!(error = ?err, "request failed");
+                Self::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ProblemCode::Internal,
+                    "Internal error",
+                )
+            }
+        }
+    }
+}
+
+/// Appends one audit entry by `actor` inside `tx`, so it commits or rolls
+/// back with the change it records.
+async fn audit(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    actor: &Actor,
+    action: &str,
+    entity_type: &str,
+    entity_id: impl std::fmt::Display,
+    changes: AuditChanges,
+) -> Result<(), LedgerError> {
+    tx.append_audit(
+        now,
+        &AuditEntry {
+            actor: actor.into(),
+            action: action.to_owned(),
+            entity_type: entity_type.to_owned(),
+            entity_id: entity_id.to_string(),
+            changes,
+        },
+    )
+    .await?;
+    Ok(())
+}

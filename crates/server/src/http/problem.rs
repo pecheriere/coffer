@@ -27,6 +27,10 @@ pub enum ProblemCode {
     CeremonyExpired,
     Busy,
     PasskeyRejected,
+    /// The `Idempotency-Key` was used before for a different request.
+    IdempotencyKeyReuse,
+    /// A request with this `Idempotency-Key` is still being performed.
+    IdempotencyInProgress,
     Internal,
 }
 
@@ -48,6 +52,8 @@ impl ProblemCode {
             Self::CeremonyExpired => "ceremony_expired",
             Self::Busy => "busy",
             Self::PasskeyRejected => "passkey_rejected",
+            Self::IdempotencyKeyReuse => "idempotency_key_reuse",
+            Self::IdempotencyInProgress => "idempotency_in_progress",
             Self::Internal => "internal",
         }
     }
@@ -368,6 +374,8 @@ mod tests {
             ProblemCode::CeremonyExpired,
             ProblemCode::Busy,
             ProblemCode::PasskeyRejected,
+            ProblemCode::IdempotencyKeyReuse,
+            ProblemCode::IdempotencyInProgress,
             ProblemCode::Internal,
         ] {
             assert_eq!(

@@ -174,7 +174,9 @@ impl ServerKey {
         }
     }
 
-    fn derived(&self, context: &str) -> Zeroizing<[u8; KEY_LEN]> {
+    /// A key for one purpose, derived from the server key with BLAKE3
+    /// `derive_key` under `context` (`coffer <yyyy-mm> <purpose>`).
+    pub(crate) fn derived(&self, context: &str) -> Zeroizing<[u8; KEY_LEN]> {
         Zeroizing::new(blake3::derive_key(context, self.0.as_slice()))
     }
 
