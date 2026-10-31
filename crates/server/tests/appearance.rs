@@ -330,6 +330,29 @@ async fn member_with_a_corrupt_theme_still_signs_in() {
 }
 
 #[tokio::test]
+async fn member_with_a_corrupt_color_scheme_still_signs_in() {
+    let (server, _browser, mut auth) = with_admin().await;
+    let alice = server
+        .store
+        .list_members()
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .id;
+    server.corrupt_member_color_scheme(alice).await;
+
+    let mut browser = Browser::new(&server);
+    let signed_in = browser.login(&mut auth, "alice").await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{}", signed_in.body);
+    let account = browser.get("/account").await;
+    assert_eq!(account.status, StatusCode::OK, "{}", account.body);
+    assert!(account.body.contains("Alice"));
+    assert_eq!(member_scheme(&server, alice).await, ColorScheme::System);
+}
+
+#[tokio::test]
 async fn unknown_stored_theme_falls_back() {
     let (server, _alice, bob) = household().await;
     let retired = theme("retired");

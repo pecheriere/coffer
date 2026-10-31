@@ -173,6 +173,22 @@ impl TestServer {
             .expect("write an unchecked theme");
     }
 
+    /// Stores a colour scheme the schema would refuse (`purple`) for
+    /// `member`, as a database edited with constraint checks off could hold.
+    ///
+    /// # Panics
+    ///
+    /// If the write fails.
+    pub async fn corrupt_member_color_scheme(&self, member: MemberId) {
+        self.store
+            .execute_unchecked_for_tests(
+                "UPDATE members SET color_scheme = 'purple' WHERE id = ?",
+                &member.to_string(),
+            )
+            .await
+            .expect("write an unchecked colour scheme");
+    }
+
     /// A software passkey that verifies the user, as Face ID would.
     #[must_use]
     pub fn authenticator(&self) -> SoftAuthenticator {

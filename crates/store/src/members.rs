@@ -59,6 +59,15 @@ pub(crate) fn theme_from_row(
     Ok(text_opt(row, column)?.and_then(|name| ThemeName::parse(&name).ok()))
 }
 
+/// Decode a stored colour scheme. A value [`ColorScheme`] does not know
+/// reads as [`ColorScheme::System`], for the reason [`theme_from_row`] gives:
+/// failing would lock that member out of every page, sign-in included.
+fn color_scheme_from_row(row: &SqliteRow, column: &str) -> Result<ColorScheme, StoreError> {
+    Ok(text_opt(row, column)?
+        .and_then(|scheme| scheme.parse().ok())
+        .unwrap_or_default())
+}
+
 pub(crate) fn member_from_row(row: &SqliteRow) -> Result<Member, StoreError> {
     Ok(Member {
         id: parsed(row, "id")?,
@@ -69,7 +78,7 @@ pub(crate) fn member_from_row(row: &SqliteRow) -> Result<Member, StoreError> {
         created_at: time(row, "created_at")?,
         disabled_at: time_opt(row, "disabled_at")?,
         theme: theme_from_row(row, "theme")?,
-        color_scheme: parsed(row, "color_scheme")?,
+        color_scheme: color_scheme_from_row(row, "color_scheme")?,
     })
 }
 
@@ -384,5 +393,31 @@ mod tests {
             .execute(&store.pool)
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn unparseable_color_scheme_reads_as_system() {
+        let (_dir, store, member) = store_with_member().await;
+        store
+            .execute_unchecked_for_tests(
+                "UPDATE members SET color_scheme = 'purple' WHERE id = ?",
+                &member.to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_member(member).await.unwrap().color_scheme,
+            ColorScheme::System
+        );
+        assert_eq!(
+            store.list_members().await.unwrap()[0].color_scheme,
+            ColorScheme::System
+        );
+        let mut tx = store.begin().await.unwrap();
+        assert_eq!(
+            tx.get_member(member).await.unwrap().color_scheme,
+            ColorScheme::System
+        );
     }
 }
