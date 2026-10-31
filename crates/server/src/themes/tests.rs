@@ -572,3 +572,23 @@ fn motion_runs_only_when_allowed() {
         );
     }
 }
+
+/// At 360 px every control stays in view: components wrap instead of
+/// hiding content behind a sideways scroll a visitor may never notice.
+#[test]
+fn nothing_hides_behind_a_sideways_scroll() {
+    let scrolling: Vec<String> = base_declarations()
+        .iter()
+        .filter(|d| matches!(d.property.as_str(), "overflow" | "overflow-x"))
+        .filter(|d| {
+            d.value
+                .split_whitespace()
+                .any(|v| v == "auto" || v == "scroll")
+        })
+        .map(|d| format!("{}: {}", d.property, d.value))
+        .collect();
+    assert!(
+        scrolling.is_empty(),
+        "base.css scrolls sideways: {scrolling:?}"
+    );
+}
