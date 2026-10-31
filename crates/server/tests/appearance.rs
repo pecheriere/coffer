@@ -348,10 +348,10 @@ async fn unknown_stored_theme_falls_back() {
     assert_eq!(server.appearance.household_theme().await.name, DEFAULT.name);
 
     let mut tx = server.store.begin().await.unwrap();
-    tx.set_household_theme(&theme("mochi")).await.unwrap();
+    tx.set_household_theme(&theme("fjord")).await.unwrap();
     tx.commit().await.unwrap();
     let look = server.appearance.look(Some(&stored)).await;
-    assert_eq!(look.theme.name, "mochi");
+    assert_eq!(look.theme.name, "fjord");
 }
 
 // Pages: the member's appearance card and the household page.
@@ -635,4 +635,67 @@ async fn account_page_survives_a_retired_theme() {
         page.body
             .contains(&format!("href=\"{}\"", DEFAULT.stylesheet.url))
     );
+}
+
+/// The URL of the registered theme `name`'s stylesheet.
+fn stylesheet(name: &str) -> &'static str {
+    themes::find(name).unwrap().stylesheet.url
+}
+
+fn links(body: &str, name: &str) -> bool {
+    body.contains(&format!("href=\"{}\"", stylesheet(name)))
+}
+
+#[tokio::test]
+async fn household_default_applies_to_everyone_without_a_choice() {
+    let (server, mut alice, mut bob, _) = browsers().await;
+    let csrf = alice.get("/admin/household").await.csrf();
+    let saved = alice
+        .post_form("/admin/household", &[("csrf", &csrf), ("theme", "fjord")])
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+
+    let mut anonymous = Browser::new(&server);
+    for path in ["/login", "/nope"] {
+        let page = anonymous.get(path).await;
+        assert!(links(&page.body, "fjord"), "{path}: {}", page.body);
+        assert!(!links(&page.body, "mochi"), "{path}");
+    }
+    let account = bob.get("/account").await;
+    assert!(links(&account.body, "fjord"));
+    assert!(!links(&account.body, "mochi"));
+    assert!(account.body.contains("Household default (Fjord)"));
+    assert!(checked(&account.body, "theme", ""));
+}
+
+#[tokio::test]
+async fn member_override_beats_the_household_default() {
+    let (_server, mut alice, mut bob, _) = browsers().await;
+    let csrf = alice.get("/admin/household").await.csrf();
+    let saved = alice
+        .post_form("/admin/household", &[("csrf", &csrf), ("theme", "fjord")])
+        .await;
+    assert_eq!(saved.status, StatusCode::SEE_OTHER, "{}", saved.body);
+
+    let csrf = bob.get("/account").await.csrf();
+    let chosen = bob
+        .post_form(
+            "/account/appearance",
+            &[
+                ("csrf", &csrf),
+                ("theme", "mochi"),
+                ("color_scheme", "system"),
+            ],
+        )
+        .await;
+    assert_eq!(chosen.status, StatusCode::SEE_OTHER, "{}", chosen.body);
+
+    for path in ["/account", "/nope"] {
+        let page = bob.get(path).await;
+        assert!(links(&page.body, "mochi"), "{path}");
+        assert!(!links(&page.body, "fjord"), "{path}");
+    }
+    let admin = alice.get("/admin/household").await;
+    assert!(links(&admin.body, "fjord"));
+    assert!(!links(&admin.body, "mochi"));
 }

@@ -32,8 +32,16 @@ const MOCHI: Theme = Theme {
     illustrations: &NUGGET,
 };
 
+/// Calm and Scandinavian: cool air, slate blue, generous room.
+const FJORD: Theme = Theme {
+    name: "fjord",
+    label: "Fjord",
+    stylesheet: assets::THEMES_FJORD_CSS,
+    illustrations: &NUGGET,
+};
+
 /// Every theme a household or member may choose.
-pub const THEMES: &[Theme] = &[MOCHI];
+pub const THEMES: &[Theme] = &[MOCHI, FJORD];
 
 /// The theme used when none is chosen or the chosen one is not registered.
 pub const DEFAULT: &Theme = &THEMES[0];

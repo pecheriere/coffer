@@ -255,6 +255,13 @@ fn every_theme_file_is_registered() {
 }
 
 #[test]
+fn fjord_is_registered_after_the_default() {
+    let names: Vec<&str> = THEMES.iter().map(|theme| theme.name).collect();
+    assert_eq!(names, ["mochi", "fjord"]);
+    assert_eq!(DEFAULT.name, "mochi");
+}
+
+#[test]
 fn look_defaults_to_the_default_theme_following_the_system() {
     let look = super::Look::default();
     assert_eq!(look.theme.name, DEFAULT.name);
