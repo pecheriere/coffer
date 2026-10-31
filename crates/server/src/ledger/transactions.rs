@@ -778,14 +778,14 @@ impl Ledger {
         if !(1..=MAX_BATCH_OPERATIONS).contains(&operations.len()) {
             return Err(LedgerError::Invalid(BATCH_SIZE_INVALID));
         }
-        let mut seen = HashSet::with_capacity(operations.len());
+        let mut seen = HashSet::new();
         if !operations.iter().all(|operation| seen.insert(operation.id)) {
             return Err(LedgerError::Invalid(BATCH_REPEATED));
         }
         let access = self.access.resolve(actor).await?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let mut views = Vec::with_capacity(operations.len());
+        let mut views = Vec::new();
         for (index, operation) in operations.into_iter().enumerate() {
             let record = apply_patch(&mut tx, actor, &access, now, operation.id, operation.patch)
                 .await
