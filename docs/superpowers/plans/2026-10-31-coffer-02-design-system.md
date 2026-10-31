@@ -10,7 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-30-coffer-design.md` (§5 constraints, §6.3 role matrix "Household settings", §6.4 pages, §6.6 audit, §6.14 dev practices) and the owner's decision on issue #1 (direction Mochi, mascot Nugget, themes as data, household default plus member override, the Mochi negative-colour fix).
 
-**Coordination:** plan 2 (accounts) is being written at the same time. This plan's migration is `0002_appearance.sql`. If another `0002_*` lands first, renumber this one to the next free number. It also adds `Action::ManageHousehold` and the `/admin/household` page. If plan 2 has already added a household-settings action or page, reuse that one instead of adding a second.
+**Owner decisions (rulings of 2026-10-31):**
+- D1: Mochi negatives are indigo, `#4B5BB5` light and `#9DB4FF` dark (Task 3 explains why).
+- D2: Broadsheet is deferred. IBM Plex declares the Reserved Font Name "Plex", so a subset could not keep the name. Fjord proves the mechanism instead (Task 8).
+- D3: Fjord keeps Nugget. Per-theme illustrations stay possible through `Theme.illustrations`.
+- D4: this plan executes first and owns migration `0002_appearance.sql`, `Action::ManageHousehold` and `/admin/household`. Plan 2a renumbers its migrations after it and reuses that page and action.
+- D5: the `light-dark()` browser floor (Safari 17.5, Chrome 123, Firefox 120) is accepted.
 
 ## Global Constraints
 
@@ -24,14 +29,14 @@
 - Components read only tokens. `assets/css/base.css` contains no colour literal and no font name. A theme file contains only `@font-face` rules and one `:root` block.
 - WCAG AA: 4.5:1 for every declared text pair (large text is held to 4.5:1 too, since no pair is reserved for large text) and 3:1 for UI boundaries and the focus ring. Every interactive element shows a visible `:focus-visible` outline. Motion runs only under `prefers-reduced-motion: no-preference`.
 - Hashed static URLs are served `Cache-Control: public, max-age=31536000, immutable`. HTML stays `no-store`. A URL whose hash does not match the current content is 404, never the current content.
-- Fonts are SIL OFL 1.1, self-hosted as woff2, with each family's `OFL.txt` committed next to it and served. Never subset a font whose licence declares a Reserved Font Name.
+- Fonts are SIL OFL 1.1, self-hosted as woff2, with each family's `OFL.txt` committed next to it and served. Never subset a font that declares a Reserved Font Name. A font declares one in its copyright header, the lines before `This Font Software is licensed under the SIL Open Font License, Version 1.1.`; every OFL text also defines the term further down, and that definition does not count. The Python tool and the Rust test apply this same header rule.
 - Mutations go through a `StoreTx` together with their audit entry; handlers authorize through `coffer_domain::policy::authorize`.
 - The repository is public and generic: nothing about the owner's hosts, network or households.
 - Commits: conventional-commit subject, no `Co-Authored-By`, `Claude-Session` or "Generated with" trailers.
 
 ## Review Focus
 
-1. **A stored theme name that is no longer registered** (a theme renamed or removed in a later release, or a hand-edited row): pages render with the household default, or with Mochi if that name is unknown too. The account page still loads and shows "Household default" selected. → Task 4 `unknown_stored_theme_falls_back`, Task 7 `account_page_survives_a_retired_theme`.
+1. **A stored theme name that is no longer registered** (a theme renamed or removed in a later release, or a hand-edited row): pages render with the household default, or with Mochi if that name is unknown too. The account page still loads and shows "Household default" selected. → Task 4 `unknown_stored_theme_falls_back`, `invalid_theme_values_are_refused_by_the_schema`, `unparseable_stored_theme_reads_as_none` and `member_with_a_corrupt_theme_still_signs_in`; Task 7 `account_page_survives_a_retired_theme`.
 2. **A browser holding a hashed URL from before an upgrade**: the old URL is 404, never today's file under a year-long immutable cache. Changed content always changes the URL. → Task 1 `stale_or_unknown_static_paths_are_404` and `hashed_url_embeds_a_content_hash`.
 3. **Forged appearance form values** (`theme="x\"><script>"`, an unregistered name, a 10,000-character string, `color_scheme=purple`): 422, nothing stored, no audit event, and never echoed into `<link href>` or `data-scheme`. → Task 7 `appearance_rejects_unknown_values`.
 4. **An error page requested with a stale, garbage or disabled member's session cookie**: renders the themed error page with the household theme. No 500, no redirect loop. → Task 6 `error_page_with_a_stale_cookie_still_renders`.
@@ -44,7 +49,7 @@
 **Files:**
 - Create: `crates/server/build.rs`, `crates/server/build_support/pipeline.rs`, `crates/server/src/assets.rs`, `crates/server/src/http/static_files.rs`, `crates/server/src/testkit/browser.rs`, `crates/server/tests/assets.rs`
 - Move: `crates/server/src/http/pages/coffer.js` → `crates/server/assets/js/coffer.js` (unchanged); `crates/server/src/http/pages/coffer.css` → `crates/server/assets/css/base.css` (unchanged here; rewritten in Task 5)
-- Modify: `crates/server/Cargo.toml` (`[build-dependencies] blake3.workspace = true`; `tower` and `http-body-util` become optional dependencies enabled by `testkit`), `crates/server/src/lib.rs` (`pub mod assets;`), `crates/server/src/testkit.rs` → `crates/server/src/testkit/mod.rs` (adds `pub mod browser;`), `crates/server/src/http/mod.rs` (merge `static_files::router()`), `crates/server/src/http/pages/mod.rs` (drop `SCRIPT`, `STYLE` and the `/static/coffer.*` routes), `crates/server/src/http/pages/layout.rs` (link the generated URLs), `crates/server/tests/pages.rs` (use `testkit::browser`; drop `static_assets_are_served`)
+- Modify: `crates/server/Cargo.toml` (`[build-dependencies] blake3.workspace = true`; `tower` and `http-body-util` become optional dependencies enabled by `testkit`), `crates/server/src/lib.rs` (`pub mod assets;`), `crates/server/src/testkit.rs` → `crates/server/src/testkit/mod.rs` (adds `pub mod browser;`), `crates/server/src/http/mod.rs` (merge `static_files::router()`; the `security_headers` layer moves here), `crates/server/src/http/pages/mod.rs` (drop `SCRIPT`, `STYLE` and the `/static/coffer.*` routes; `security_headers` becomes `pub(super)` and leaves `pages::router()`), `crates/server/src/http/pages/layout.rs` (link the generated URLs), `crates/server/tests/pages.rs` (use `testkit::browser`; drop `static_assets_are_served`)
 
 **Interfaces:**
 - Produces (`build_support/pipeline.rs`, compiled into `build.rs` with `#[path = "build_support/pipeline.rs"] mod pipeline;` and into the library's tests with `#[cfg(test)] #[path = "../build_support/pipeline.rs"] mod pipeline;` in `src/assets.rs`):
@@ -53,10 +58,11 @@
   - `pub fn hashed_url(logical: &str, body: &[u8]) -> String`: `/static/<dir>/<stem>.<h>.<ext>`, where `<h>` is the first 16 lowercase hex characters of `blake3::hash(body)` and `<dir>/` is omitted for top-level files.
   - `pub fn const_name(logical: &str) -> String`: ASCII uppercase, every non-alphanumeric character becomes `_` (`fonts/nunito-400-800.woff2` → `FONTS_NUNITO_400_800_WOFF2`).
   - `pub fn rewrite_references(text: &str, url_of: &dyn Fn(&str) -> Option<String>) -> Result<String, String>`: replaces each `asset:<path>` (path characters `[a-z0-9._/-]`) with `url_of(path)`. An unknown path is `Err` naming it.
-- Produces (`build.rs`): walks `assets/` recursively in sorted order. A file without a content type is a build error, and so are two files with the same `const_name`. Files that don't rewrite references are hashed first, then CSS and manifests are rewritten (a reference from one rewritable file to another is a build error) and hashed. Every processed body is written to `$OUT_DIR/assets/<logical>`, and `$OUT_DIR/assets.rs` gets one `pub const <NAME>: Asset = Asset { url, content_type, body: include_bytes!(concat!(env!("OUT_DIR"), "/assets/<logical>")) };` per file plus `pub const ALL: &[Asset] = &[...];`. It emits `cargo::rerun-if-changed=assets` and `cargo::rerun-if-changed=build_support`. `main` returns `Result<(), Box<dyn std::error::Error>>`. The function that prints the directives carries `#[expect(clippy::print_stdout, reason = "cargo reads build-script directives from stdout")]`.
+- Produces (`build.rs`): walks `assets/` recursively in sorted order and skips every file or directory whose name starts with `.` (`.DS_Store`, editor swap files). Any other file without a content type is a build error whose message names the file and says to remove it or add its extension to `pipeline::content_type`, and so are two files with the same `const_name`. Files that don't rewrite references are hashed first, then CSS and manifests are rewritten (a reference from one rewritable file to another is a build error) and hashed. Every processed body is written to `$OUT_DIR/assets/<logical>`, and `$OUT_DIR/assets.rs` gets one `pub const <NAME>: Asset = Asset { url, content_type, body: include_bytes!(concat!(env!("OUT_DIR"), "/assets/<logical>")) };` per file plus `pub const ALL: &[Asset] = &[...];`. It emits `cargo::rerun-if-changed=assets` and `cargo::rerun-if-changed=build_support`. `main` returns `Result<(), Box<dyn std::error::Error>>`. The function that prints the directives carries `#[expect(clippy::print_stdout, reason = "cargo reads build-script directives from stdout")]`.
 - Produces (`src/assets.rs`): `#[derive(Debug, Clone, Copy)] pub struct Asset { pub url: &'static str, pub content_type: &'static str, pub body: &'static [u8] }`, then `include!(concat!(env!("OUT_DIR"), "/assets.rs"));`. Code refers to an asset only by its constant (`assets::CSS_BASE_CSS.url`), never by a literal URL.
+- Produces (`http::router` layer order, innermost first): routes → `require_same_origin` → `map_response(pages::security_headers)` → `api::problem_bodies`. Static files, health and API responses get the CSP, `nosniff` and `Referrer-Policy` too; `no-store` stays limited to `text/html`. Task 6 inserts one layer into this order.
 - Produces (`http/static_files.rs`): `pub(super) fn router() -> Router<AppState>` with `GET /static/{*path}`: look up `"/static/" + path` in `assets::ALL`; 200 with `Content-Type` and `Cache-Control: public, max-age=31536000, immutable`, otherwise a bare 404. HEAD comes from axum's `get`.
-- Produces (`testkit::browser`): `Browser` and `Reply`, moved unchanged from `tests/pages.rs` and made `pub` (`Browser::new(&TestServer)`, `get`, `post_form`, `post_form_from`, `post_json`, `post_json_with`, `send`, `enroll`, `login`; `Reply { status, headers, body }` with `json`, `header`, `csrf`, `between`), plus `pub async fn with_admin() -> (TestServer, Browser, SoftAuthenticator)`. Tasks 2 to 8 use these.
+- Produces (`testkit::browser`): `Browser` and `Reply`, moved from `tests/pages.rs` and made `pub`. The module is library code under the `testkit` feature, not `cfg(test)`, so the move adjusts it: `unwrap()` becomes `expect("…")` under a module-level `#![expect(clippy::expect_used, reason = "test harness: a setup step that fails must abort the test that called it")]`, and the public functions get `# Panics` docs and `#[must_use]` where clippy pedantic asks (`Browser::new(&TestServer)`, `get`, `post_form`, `post_form_from`, `post_json`, `post_json_with`, `send`, `enroll`, `login`; `Reply { status, headers, body }` with `json`, `header`, `csrf`, `between`), plus `pub async fn with_admin() -> (TestServer, Browser, SoftAuthenticator)`. Tasks 2 to 8 use these.
 
 - [ ] **Step 1: Write the failing tests.** In `build_support/pipeline.rs` (`#[cfg(test)] mod tests`):
   - `hashed_url_embeds_a_content_hash`: `hashed_url("css/base.css", b"a") == format!("/static/css/base.{}.css", &blake3::hash(b"a").to_hex()[..16])`; `b"b"` gives a different URL; `hashed_url("manifest.webmanifest", b"a")` starts with `/static/manifest.` and ends with `.webmanifest`.
@@ -72,7 +78,7 @@
   - `pages_reference_only_served_assets`: on `/login`, every `href="/static/…"` and `src="/static/…"` is in `ALL` and fetches with 200.
 - [ ] **Step 2: Run** `cargo test -p coffer-server --all-features` → FAIL (no `pipeline`, no `assets`, old routes).
 - [ ] **Step 3: Implement** the files above. `layout::page` links `assets::CSS_BASE_CSS.url` and loads `assets::JS_COFFER_JS.url` with `defer`.
-- [ ] **Step 4: Run** the full gate → PASS. `cargo tree -p coffer-server -e build` shows `blake3` as the only build-dependency, at the version already in `Cargo.lock`; `git diff Cargo.lock` is empty.
+- [ ] **Step 4: Run** the full gate → PASS. `cargo tree -p coffer-server -e build --depth 1` shows `blake3` as the only build-dependency, at the version already in `Cargo.lock`; `git diff Cargo.lock` is empty.
 - [ ] **Step 5: Commit** `feat(server): serve static assets at content-hashed urls`.
 
 ### Task 2: Icons, favicon and web manifest
@@ -85,12 +91,12 @@
 **Interfaces:**
 - Consumes: Task 1 `assets::ALL`, generated constants, `testkit::browser`.
 - Produces: `GET /favicon.ico` → `assets::ICONS_FAVICON_ICO` with `Cache-Control: public, max-age=86400` (the URL is unhashed, so the cache is short).
-- Produces (`tools/regenerate_assets.py`, standard library only): `def ico_bytes(pngs: list[tuple[int, bytes]]) -> bytes` (ICONDIR `reserved=0, type=1, count`, then one 16-byte ICONDIRENTRY per PNG: width and height bytes, `0` meaning 256, colour count 0, planes 1, bpp 32, size, offset, followed by the PNG bytes in order). `def verified(path: Path, sha256: str) -> Path` raises `SystemExit` naming the file on a mismatch. `icons` checks that `resvg --version` prints `0.48.1`, then renders `favicon.svg` at 16, 32 and 48 px into `favicon.ico`; `tools/icons/app-icon.svg` at 180 (`apple-touch-icon.png`), 192 and 512; and `tools/icons/maskable.svg` at 512 (`icon-maskable-512.png`).
+- Produces (`tools/regenerate_assets.py`, standard library only): `def ico_bytes(pngs: list[tuple[int, bytes]]) -> bytes` (ICONDIR `reserved=0, type=1, count`, then one 16-byte ICONDIRENTRY per PNG: width and height bytes, `0` meaning 256, colour count 0, planes 1, bpp 32, size, offset, followed by the PNG bytes in order). `icons` checks that `resvg --version` prints `0.48.1`, then renders `favicon.svg` at 16, 32 and 48 px into `favicon.ico`; `tools/icons/app-icon.svg` at 180 (`apple-touch-icon.png`), 192 and 512; and `tools/icons/maskable.svg` at 512 (`icon-maskable-512.png`).
 
 - [ ] **Step 1: Source files** (exact copy).
   - `crates/server/assets/icons/favicon.svg`: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` + the **glyph** fragment (Appendix A) + `</svg>`.
   - `tools/icons/app-icon.svg`: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 24 132 132"><rect x="14" y="24" width="132" height="132" fill="#FBE4EC"/>` + the **welcome** fragment + `</svg>`.
-  - `tools/icons/maskable.svg`: the same, with `viewBox="-2.5 7.5 165 165"` and the rect at `x="-2.5" y="7.5" width="165" height="165"`. That keeps Nugget inside the central 80% safe zone.
+  - `tools/icons/maskable.svg`: the same, with `viewBox="-8.5 1.5 177 177"` and the rect at `x="-8.5" y="1.5" width="177" height="177"`. The centre is (80, 90) and the maskable safe zone is a circle of radius 0.4 × 177 = 70.8. The farthest point of Nugget, the outer edge of an ear (centre (46, 46), r 15), is 70.6 from the centre, so all of Nugget stays inside.
   - `crates/server/assets/manifest.webmanifest`:
     ```json
     {
@@ -108,7 +114,7 @@
       ]
     }
     ```
-- [ ] **Step 2: Write the failing tests.** `tools/test_regenerate_assets.py` (unittest): `test_ico_header_and_directory` (three fake PNGs of 16, 32 and 48 px: bytes 0..6 are `00 00 01 00 03 00`; each entry's width byte, size and offset match, and offsets follow one another); `test_checksum_mismatch_is_refused` (a temp file with the wrong digest → `SystemExit`). In `tests/assets.rs`:
+- [ ] **Step 2: Write the failing tests.** `tools/test_regenerate_assets.py` (unittest): `test_ico_header_and_directory` (three fake PNGs of 16, 32 and 48 px: bytes 0..6 are `00 00 01 00 03 00`; each entry's width byte, size and offset match, and offsets follow one another). In `tests/assets.rs`:
   - `favicon_is_served_at_the_root`: `/favicon.ico` gives 200, `image/x-icon`, `public, max-age=86400`, a body equal to `ICONS_FAVICON_ICO.body` and starting with `[0, 0, 1, 0]`.
   - `manifest_lists_served_icons`: parse `MANIFEST_WEBMANIFEST.body` as JSON. `start_url == "/"`, and each `icons[].src` fetches with 200 and `image/png`.
   - Extend `pages_reference_only_served_assets`: `/login` has `rel="icon"` with `type="image/svg+xml"` → `ICONS_FAVICON_SVG.url`, `rel="icon"` → `/favicon.ico` with `sizes="48x48"`, `rel="apple-touch-icon"` → `ICONS_APPLE_TOUCH_ICON_PNG.url`, and `rel="manifest"` → `MANIFEST_WEBMANIFEST.url`.
@@ -123,23 +129,22 @@
 - Create: `crates/server/src/themes/mod.rs`, `themes/illustrations.rs`, `themes/contract.rs` (`#[cfg(test)]`), `themes/tests.rs` (`#[cfg(test)]`), `themes/nugget/welcome.svg`, `themes/nugget/resting.svg`, `themes/nugget/glyph.svg` (Appendix A)
 - Create: `crates/server/assets/themes/mochi.css` (exact copy below)
 - Create (from the tool): `crates/server/assets/fonts/fredoka-600.woff2`, `nunito-400-800.woff2`, `ofl-fredoka.txt`, `ofl-nunito.txt`
-- Modify: `tools/regenerate_assets.py` (`fonts` subcommand), `crates/server/src/lib.rs` (`pub mod themes;`), `crates/domain/src/identity.rs`, `crates/server/src/http/pages/layout.rs` (links the default theme before `base.css`), `AGENTS.md`, `README.md`
+- Modify: `tools/regenerate_assets.py` (`fonts` subcommand, `verified`, `declares_reserved_font_name`), `tools/test_regenerate_assets.py`, `crates/server/src/lib.rs` (`pub mod themes;`), `crates/domain/src/identity.rs`, `crates/server/src/http/pages/layout.rs` (links the default theme before `base.css`), `AGENTS.md`, `README.md`
 
 **Interfaces:**
 - Produces (`coffer_domain::identity`):
-  - `ThemeName(String)`: `ThemeName::parse(&str) -> Result<ThemeName, IdentityError>`, 1..=32 characters of `[a-z0-9-]`; `as_str()`; `Display`.
-  - `#[derive(Default)] enum ColorScheme { #[default] System, Light, Dark }`: `as_str()` → `"system" | "light" | "dark"`; `FromStr`; serde lowercase.
+  - `#[derive(Debug, Clone, PartialEq, Eq, Hash)] ThemeName(String)`: `ThemeName::parse(&str) -> Result<ThemeName, IdentityError>`, 1..=32 characters of `[a-z0-9-]`; `as_str()`; `Display`.
+  - `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)] enum ColorScheme { #[default] System, Light, Dark }`: `as_str()` → `"system" | "light" | "dark"`; `FromStr`; serde lowercase.
   - New `IdentityError` variants: `InvalidThemeName` ("theme name must be 1 to 32 characters of a-z, 0-9 or '-'"), `UnknownColorScheme` ("unknown colour scheme"), `UnknownTheme` ("unknown theme").
 - Produces (`coffer_server::themes`):
   - `#[derive(Debug)] pub struct Theme { pub name: &'static str, pub label: &'static str, pub stylesheet: Asset, pub illustrations: &'static Illustrations }`
-  - `pub const THEMES: &[Theme]` (the registry: `[MOCHI]` here; Task 8 adds Fjord); `pub const DEFAULT: &Theme` (Mochi); `pub fn find(name: &str) -> Option<&'static Theme>`.
+  - `pub const THEMES: &[Theme]` (the registry: `[MOCHI]` here; Task 8 adds Fjord); `pub const DEFAULT: &Theme` (Mochi); `pub fn find(name: &str) -> Option<&'static Theme>`. Themes are compared by `name` (tests assert `look.theme.name == DEFAULT.name`); `Theme` has no `PartialEq`.
   - `#[derive(Debug, Clone, Copy)] pub struct Look { pub theme: &'static Theme, pub scheme: ColorScheme }` with `impl Default` (`DEFAULT`, `System`).
   - `illustrations.rs`: `#[derive(Debug)] pub struct Illustration { pub view_box: &'static str, pub body: &'static str }`; `#[derive(Debug)] pub struct Illustrations { pub welcome: Illustration, pub empty: Illustration, pub error: Illustration, pub glyph: Illustration }`; `pub const NUGGET: Illustrations`. `welcome` = `nugget/welcome.svg`, `empty` and `error` = `nugget/resting.svg` (`view_box` `0 0 160 160`), `glyph` = `nugget/glyph.svg` (`0 0 32 32`), all via `include_str!`. A theme overrides the mascot by pointing `illustrations` at its own `Illustrations`.
-- Produces (`themes/contract.rs`, test-only; Task 5's base-stylesheet tests use it too):
+- Produces (`themes/contract.rs`, test-only; Task 5 adds `declarations` for the base-stylesheet tests and reuses the token lists):
   - `pub(crate) enum Scheme { Light, Dark }`; `pub(crate) struct Tokens` (token name without `--` → raw value).
   - `pub(crate) fn parse_theme(css: &str) -> Result<Tokens, String>`: strips comments. `Err` on any top-level rule other than `:root` and `@font-face`, on a second `:root`, on a duplicate token, or on unbalanced braces.
   - `Tokens::resolve(&self, name: &str, scheme: Scheme) -> Result<String, String>`: substitutes `var(--x)` recursively (a cycle is `Err`) and picks the matching `light-dark(a, b)` arm (split at the top-level comma, so `rgba(…)` arms survive). `Tokens::references(&self) -> Vec<String>` lists every `var()` name used.
-  - `pub(crate) fn declarations(css: &str) -> Vec<Declaration>` with `Declaration { context: String /* enclosing @media prelude or "" */, property: String, value: String }`.
   - `pub(crate) fn contrast_ratio(a: Rgb, b: Rgb) -> f64`, using WCAG 2.x relative luminance with the sRGB linearisation threshold 0.04045; `pub(crate) fn oklab_distance(a: Rgb, b: Rgb) -> f64` (Euclidean distance in Björn Ottosson's OKLab); `Rgb::parse(&str) -> Option<Rgb>` for `#RRGGBB`.
   - `pub(crate) const COLOUR_TOKENS: &[&str]`, values that must resolve to a colour (`#RRGGBB`, `rgba(…)` or `transparent`) in both schemes: `bg surface text muted accent on-accent accent-soft positive negative warning warn-soft border control-border shadow card-bg card-border-color input-bg input-border-color button-primary-bg button-primary-fg button-secondary-bg button-secondary-fg button-secondary-border nav-bg nav-border-color nav-active-bg nav-active-fg`.
   - `pub(crate) const OTHER_TOKENS: &[&str]`, any non-empty value: `font-head font-body font-num font-mono weight-head weight-button tracking-head style-display radius radius-sm radius-btn radius-chip icon-stroke card-border-width card-shadow input-border-width button-primary-shadow nav-active-shadow illustration-animation`.
@@ -235,11 +240,12 @@
   - `negative_amounts_stand_apart_from_the_accent`: `oklab_distance(negative, accent) >= NEGATIVE_ACCENT_MIN_DISTANCE` in both schemes for every theme. The mockup's `#B3410C`/`#C2386A` must fail it: add that pair as a second assertion.
   - `every_theme_file_is_registered`: the set of `ALL` URLs under `/static/themes/` equals the set of `THEMES[].stylesheet.url`. Names are unique and `ThemeName::parse` accepts each one; `DEFAULT.name == "mochi"`.
   - `illustrations_are_inert_svg_fragments`: for every theme's four illustrations, the body contains none of `<script`, `style`, `href`, `javascript:`, `<foreignObject`, ` on` followed by a letter and `=`, or `<svg`. Fragments only: the wrapper is rendered by the layout.
-  - `every_font_ships_with_its_licence`: for each `/static/fonts/<family>-*.woff2` in `ALL`, a `/static/fonts/ofl-<family>.<hash>.txt` exists and its body starts with `Copyright` and contains `SIL Open Font License, Version 1.1` but not `Reserved Font Name`.
+  - `every_font_ships_with_its_licence`: for each `/static/fonts/<family>-*.woff2` in `ALL`, a `/static/fonts/ofl-<family>.<hash>.txt` exists and its body starts with `Copyright` and contains `SIL Open Font License, Version 1.1`, and its copyright header does not contain `Reserved Font Name`. The header is every line before `This Font Software is licensed under the SIL Open Font License, Version 1.1.`; a licence without that line fails the test. The licence's own definition of the term, further down, is ignored.
+  - `wcag_check_reports_a_broken_theme`: copy Mochi's stylesheet text, replace `--text: light-dark(#2A2833` with `--text: light-dark(#F3F6F1`, and parse it. The pair checker used by `every_theme_meets_wcag_aa` (`fn wcag_failures(name: &str, tokens: &Tokens) -> Vec<String>` in `themes/tests.rs`) reports at least `text/bg` in Light. This proves the AA test is not vacuous.
 
   In `crates/domain/src/identity.rs`: `theme_name_validates` (`"mochi"` and `"a-1"` accepted; `""`, 33 characters, `"Mochi"` and `"a b"` rejected) and `color_scheme_roundtrips` (`"dark".parse()` → `Dark`, `Dark.as_str() == "dark"`, `"purple"` → `Err(UnknownColorScheme)`).
-- [ ] **Step 2: Run** `cargo test -p coffer-domain && cargo test -p coffer-server --all-features themes` → FAIL.
-- [ ] **Step 3: Fonts.** Add the `fonts` subcommand. It downloads each source from `https://raw.githubusercontent.com/google/fonts/<commit>/ofl/<dir>/<file>` into a fresh temporary directory, runs `verified()` on it, then, with `uvx --from fonttools==4.67.0 --with brotli==1.2.1`, runs `fonttools varLib.instancer <src> <axes> -o <tmp>.ttf` and `pyftsubset <tmp>.ttf --unicodes=<the unicode-range above, comma-joined without spaces> --layout-features='kern,liga,calt,tnum,lnum,case,ccmp,locl,mark,mkmk' --flavor=woff2 --name-IDs='*' --name-languages='*' --output-file=crates/server/assets/fonts/<out>`. It copies each verified `OFL.txt` to `crates/server/assets/fonts/ofl-<family>.txt` and refuses (`SystemExit`) any licence containing `Reserved Font Name`. Sources:
+- [ ] **Step 2: Run** `cargo test -p coffer-domain && cargo test -p coffer-server --all-features themes` and `python3 -I -m unittest discover -s tools -p 'test_*.py'` → FAIL.
+- [ ] **Step 3: Fonts.** Add the `fonts` subcommand. Add `def verified(path: Path, sha256: str) -> Path` (raises `SystemExit` naming the file on a mismatch) and `def declares_reserved_font_name(licence: str) -> bool` (true when the copyright header contains `Reserved Font Name`; the header is the lines before `This Font Software is licensed under the SIL Open Font License, Version 1.1.`, and a licence without that line also counts as true, since it can't be checked). Test them first in `tools/test_regenerate_assets.py`: `test_checksum_mismatch_is_refused` (a temp file with the wrong digest → `SystemExit`); `test_plain_ofl_has_no_reserved_name` (a copyright line, the licensed-under line, then the OFL definitions paragraph that mentions `"Reserved Font Name" refers to…` → false); `test_reserved_name_in_header_is_found` (`Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"` before the licensed-under line → true). The subcommand downloads each source from `https://raw.githubusercontent.com/google/fonts/<commit>/ofl/<dir>/<file>` into a fresh temporary directory, runs `verified()` on it, then, with `uvx --from fonttools==4.67.0 --with brotli==1.2.1` and `SOURCE_DATE_EPOCH=0` in the environment (fontTools then writes a fixed `head.modified`, so rerunning on unchanged inputs leaves `git diff` empty), runs `fonttools varLib.instancer <src> <axes> -o <tmp>.ttf` and `pyftsubset <tmp>.ttf --unicodes=<the unicode-range above, comma-joined without spaces> --layout-features=kern,liga,calt,tnum,lnum,case,ccmp,locl,mark,mkmk --flavor=woff2 --name-IDs=* --name-languages=* --output-file=crates/server/assets/fonts/<out>`. The tool runs a fixed argv with no shell, so those arguments carry no quotes. It refuses (`SystemExit`) a licence for which `declares_reserved_font_name` is true, before any subsetting, and copies each verified `OFL.txt` to `crates/server/assets/fonts/ofl-<family>.txt`. Before committing, run the subcommand twice and confirm that the second run changes nothing. Sources:
 
   | Family | Commit | File | sha256 | Axes | Output |
   |---|---|---|---|---|---|
@@ -265,8 +271,10 @@
     `assets/fonts/`), then one `Theme` entry in `crates/server/src/themes/mod.rs`.
     The theme tests check every token in both schemes and WCAG AA contrast.
   - Fonts and icons come from `tools/regenerate_assets.py` (pinned sources and
-    tools); never edit them by hand. Fonts with a Reserved Font Name are not
-    subset.
+    tools); never edit them by hand. Fonts whose copyright header declares a
+    Reserved Font Name are not subset.
+  - The web manifest's `theme_color` and `background_color` are Mochi's
+    values for every theme: the manifest is static and cached by the device.
   ```
   README gets a short "Fonts" section: coffer bundles Fredoka and Nunito under the SIL Open Font License 1.1; the licences are in `crates/server/assets/fonts/`.
 - [ ] **Step 5: Run** the full gate → PASS.
@@ -276,22 +284,25 @@
 
 **Files:**
 - Create: `crates/store/migrations/0002_appearance.sql`, `crates/server/src/appearance.rs`, `crates/server/tests/appearance.rs`
-- Modify: `crates/domain/src/policy.rs`, `crates/store/src/members.rs`, `crates/store/src/lib.rs` (new `household` module and exports), create `crates/store/src/household.rs`, `crates/store/tests/identity.rs`, `crates/server/src/lib.rs` (`pub mod appearance;`), `crates/server/src/http/mod.rs` (`AppState.appearance: Arc<Appearance>`), `crates/server/src/cli.rs` and `crates/server/src/testkit/mod.rs` (build it; `TestServer.appearance`)
+- Modify: `crates/domain/src/policy.rs`, `crates/store/Cargo.toml` (feature `testkit`, enabled by `coffer-server`'s `testkit`), `crates/store/src/members.rs`, `crates/store/src/lib.rs` (new `household` module and exports), create `crates/store/src/household.rs`, `crates/store/tests/identity.rs`, `crates/server/src/lib.rs` (`pub mod appearance;`), `crates/server/src/http/mod.rs` (`AppState.appearance: Arc<Appearance>`), `crates/server/src/cli.rs` and `crates/server/src/testkit/mod.rs` (build it; `TestServer.appearance`; `corrupt_member_theme`), `crates/server/Cargo.toml` (`testkit` also enables `coffer-store/testkit`)
 
 **Interfaces:**
 - Consumes: `ThemeName`, `ColorScheme`, `IdentityError::UnknownTheme`, `themes::{find, DEFAULT, Look, Theme}`.
 - Schema (`0002_appearance.sql`):
   ```sql
-  ALTER TABLE members ADD COLUMN theme TEXT;
+  ALTER TABLE members ADD COLUMN theme TEXT
+      CHECK (theme IS NULL OR (length(theme) BETWEEN 1 AND 32 AND theme NOT GLOB '*[^a-z0-9-]*'));
   ALTER TABLE members ADD COLUMN color_scheme TEXT NOT NULL DEFAULT 'system'
       CHECK (color_scheme IN ('system', 'light', 'dark'));
 
   CREATE TABLE household_appearance (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       theme TEXT NOT NULL
+          CHECK (length(theme) BETWEEN 1 AND 32 AND theme NOT GLOB '*[^a-z0-9-]*')
   ) STRICT;
   ```
-  `members.theme` NULL means "household default". No `household_appearance` row means the registry default.
+  `members.theme` NULL means "household default". No `household_appearance` row means the registry default. The CHECKs mirror `ThemeName::parse`.
+- Reading a stored theme never fails a member lookup. `member_from_row` and `household_theme` map a value that `ThemeName::parse` rejects to `None`. The CHECKs make that unreachable unless constraint checks were disabled, and the store crate has no logging, so the doc comment says why there is no warning. Otherwise one bad row would turn every request by that member, sign-in included, into a 500. An unknown but well-formed name is the service's concern (`look` falls back).
 - Produces (store): `Member` gains `pub theme: Option<ThemeName>, pub color_scheme: ColorScheme` (`NewMember` unchanged; `insert_member` returns `None`/`System`). `StoreTx::set_member_appearance(&mut self, id: MemberId, theme: Option<&ThemeName>, scheme: ColorScheme) -> Result<(), StoreError>` (`NotFound` if no row). `Store::household_theme(&self) -> Result<Option<ThemeName>, StoreError>` and the same on `StoreTx`. `StoreTx::set_household_theme(&mut self, theme: &ThemeName) -> Result<(), StoreError>` (upsert on `id = 1`).
 - Produces (policy): `Action::ManageOwnPreferences` → `Scope(Write)`; `Action::ManageHousehold` → `Scope(Admin)` (spec §6.3 "Household settings").
 - Produces (`coffer_server::appearance::Appearance`):
@@ -303,7 +314,9 @@
 
 - [ ] **Step 1: Write the failing tests.** `crates/store/tests/identity.rs`:
   - `member_appearance_defaults_and_updates`: a new member is `None`/`System`; after `set_member_appearance(Some(mochi), Dark)` and commit, `get_member` returns them; on an unknown id it is `NotFound`.
-  - `household_theme_upserts`: `None` at first, `Some("a")` after the first set and `Some("b")` after the second (still one row).
+  - `household_theme_upserts`: `None` at first, `Some("a")` after the first set and `Some("b")` after the second.
+  - `invalid_theme_values_are_refused_by_the_schema` (unit test in `crates/store/src/members.rs`, which can reach the pool, like `audit_is_append_only`): raw `UPDATE members SET theme = 'Mochi'`, `'a b'` and 33 × `'a'`, and `INSERT INTO household_appearance (id, theme) VALUES (1, 'X')`, all return an error; `'mochi'` and `'a-1'` succeed.
+  - `unparseable_stored_theme_reads_as_none` (same module): on one connection, `PRAGMA ignore_check_constraints = ON`, write `theme = 'Mochi'` for a member, then `PRAGMA ignore_check_constraints = OFF`. `get_member` and `list_members` succeed with `theme == None`; the same holds for the household row through `household_theme`.
 
   `crates/server/tests/appearance.rs` (service, with `TestServer` and enrolled members):
   - `new_member_sees_the_household_default`: `look(Some(&bob))` → `DEFAULT`, `System`; `look(None)` → `DEFAULT`.
@@ -311,6 +324,7 @@
   - `unregistered_theme_is_rejected`: `ThemeName::parse("no-such-theme")` → `AuthError::Invalid(IdentityError::UnknownTheme)`; nothing stored, no event.
   - `household_theme_requires_admin`: a member session gets `Denied`; an admin setting `mochi` → event `household.theme` with `{"from": null, "to": "mochi"}`.
   - `read_token_cannot_change_preferences`: an `Actor` via `Agent { scope: Read }` gets `Denied`.
+  - `member_with_a_corrupt_theme_still_signs_in` (page level, in `tests/appearance.rs`): after the raw write above, made through a helper `TestServer::corrupt_member_theme(&self, member: MemberId)` added to `testkit` (it uses the store's test-only hook `Store::execute_unchecked_for_tests(&self, sql: &str, bind: &str)`, behind the store's own `testkit` feature), `Browser::login` for that member returns 200, and `/account` renders.
   - `unknown_stored_theme_falls_back`: with `retired` stored through the store API for both the household and bob, `look(Some(&bob))` is `DEFAULT`. With the household set to `mochi` and bob still on `retired`, it is Mochi.
   
   In `policy.rs`: `preferences_need_write_and_household_needs_admin` (Member+Session may `ManageOwnPreferences` but not `ManageHousehold`; Admin+Agent(Write) may not `ManageHousehold`).
@@ -322,10 +336,11 @@
 ### Task 5: Component stylesheet and every page restyled
 
 **Files:**
-- Modify: `crates/server/assets/css/base.css` (replaced, exact copy below), `crates/server/src/http/pages/layout.rs`, `pages/mod.rs` (`PageSession` loads the member), `pages/login.rs`, `pages/setup.rs`, `pages/account.rs`, `pages/admin.rs`, `crates/server/src/themes/tests.rs`, `crates/server/tests/pages.rs`
+- Modify: `crates/server/assets/css/base.css` (replaced, exact copy below), `crates/server/src/themes/contract.rs` (`declarations`), `crates/server/src/http/pages/layout.rs`, `pages/mod.rs` (`PageSession` loads the member), `pages/login.rs`, `pages/setup.rs`, `pages/account.rs`, `pages/admin.rs`, `crates/server/src/themes/tests.rs`, `crates/server/tests/pages.rs`
 
 **Interfaces:**
-- Consumes: `Look`, `Appearance::look`, `Illustrations`, generated asset constants.
+- Consumes: `Look`, `Appearance::look`, `Illustrations`, generated asset constants, `contract::{COLOUR_TOKENS, OTHER_TOKENS}`.
+- Produces (`themes/contract.rs`, test-only): `pub(crate) fn declarations(css: &str) -> Vec<Declaration>` with `pub(crate) struct Declaration { context: String /* enclosing @media prelude, or "" */, property: String, value: String /* trimmed, with any trailing `!important` removed */ }`.
 - Produces (`pages::PageSession`): also holds `member: Member`, loaded in `from_request_parts`. `pub(super) async fn look(&self, state: &AppState) -> Look` = `state.appearance.look(Some(&self.member))`. `account::viewer` becomes `pub fn viewer(state: &AppState, session: &PageSession) -> Viewer` (no second member query).
 - Produces (`layout.rs`):
   - `pub enum Nav { Account, Members, Invites }` (Task 7 adds `Household`).
@@ -365,7 +380,7 @@ code { font: 500 .9em/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .who form { margin: 0; }
 .nav { order: 3; flex-basis: 100%; display: flex; gap: .25rem; overflow-x: auto; }
 .nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 .9rem; border-radius: var(--radius-btn); color: var(--muted); font-weight: 700; text-decoration: none; white-space: nowrap; }
-.nav a[aria-current="page"] { background: var(--nav-active-bg); color: var(--nav-active-fg); box-shadow: var(--nav-active-shadow); }
+.nav a[aria-current="page"] { background: var(--nav-active-bg); color: var(--nav-active-fg); box-shadow: var(--nav-active-shadow); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
 
 .page { max-width: 52rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
 .page-narrow { max-width: 28rem; }
@@ -430,27 +445,32 @@ Page content (the copy is fixed here; element ids that `coffer.js` and the tests
 - **Login:** `auth_card(look, "Welcome home", …)` holding `label.field` "Username" with `input#username.input` (attributes unchanged), `button#login.btn.btn-primary.btn-block` = `key_icon()` + "Sign in with a passkey", `p#result role=status`, `p.fine` "No passwords. Face ID, Touch ID, Windows Hello or a security key."
 - **Setup / invite / re-enroll:** `auth_card(look, "Create your passkey", …)`. The intro is "Choose how you sign in to coffer." (new member) or "Add a new passkey to your existing account." (re-enroll), followed by the existing fields as `label.field` + `.input`, `button#enroll.btn.btn-primary.btn-block` = `key_icon()` + "Create passkey", and `#result`.
 - **Account** (`current: Account`): `h1` "Account"; the `once` box; `#result`; then cards. `h2` "Passkeys": `ul.items`, one `li.item` per passkey with `.item-title` label, `.item-meta` "Added <created_at> · Last used <last_used_at|never>", and a Remove form (`button.btn`); then the new-passkey `label.field` and `button#add-passkey.btn` (unchanged `data-csrf`). `h2` "Agent tokens": items with `.item-title` name, chips for scope and status (`chip-quiet` when revoked or expired), `.item-meta` with `code` prefix "…" and "Expires <date|never>", and a Revoke form; or `empty_state(look, "No agent tokens yet. Create one below to let an agent use coffer on your behalf.")`. `h3` "Create a token": the existing form with `label.field`/`.input` and `button.btn.btn-primary`.
-- **Members** (`current: Members`): `h1` "Members"; the `once` box; card `h2` "People", one item per member with `.item-title` username, `.item-meta` display name, role and status chips, and in `.item-actions` the role `select.input` + "Set role", "Re-enroll link" and "Disable" forms. Card `h2` "Agent tokens": the existing columns as item title, chips and meta, or `empty_state(look, "No agent tokens in this household.")`.
+- **Members** (`current: Members`): `h1` "Members"; the `once` box; card `h2` "People", one item per member with `.item-title` username, `.item-meta` display name, role and status chips, and in `.item-actions` the role `select.input` with `aria-label="Role for <username>"` + "Set role", "Re-enroll link" and "Disable" forms. Card `h2` "Agent tokens": the existing columns as item title, chips and meta, or `empty_state(look, "No agent tokens in this household.")`.
 - **Invites** (`current: Invites`): `h1` "Invites"; the `once` box; card `h2` "Invite someone" (existing form restyled); card `h2` "Pending invites": items, or `empty_state(look, "No pending invites.")`.
 
 - [ ] **Step 1: Write the failing tests.** In `themes/tests.rs`, using `contract::declarations(CSS_BASE_CSS.body)`:
   - `components_read_only_tokens`: every `var(--x)` names a `COLOUR_TOKENS`/`OTHER_TOKENS` entry. No value contains `#` followed by a hex digit, `rgb(`, `rgba(`, `hsl(`, `hwb(`, `lab(`, `lch(`, `oklch(`, `color(` or `light-dark(`. `font`/`font-family` values contain no `"`. For colour-bearing properties (`color`, `background`, `background-color`, `border`, `border-top`, `border-bottom`, `border-color`, `outline`, `box-shadow`, `accent-color`), the value with `var(…)` calls removed holds only numbers, lengths, `,`, `!important` and the keywords `transparent`, `currentColor`, `none`, `inherit`, `solid`, `dashed`, `inset`.
-  - `motion_runs_only_when_allowed`: every `animation` declaration with a value other than `none` has context `@media (prefers-reduced-motion: no-preference)`.
+  - `motion_runs_only_when_allowed`: every `animation` declaration whose `value` (already stripped of `!important`) is not `none` has context `@media (prefers-reduced-motion: no-preference)`. The reduced-motion rule's `animation: none !important` therefore passes.
 
   In `tests/pages.rs`:
   - `every_page_is_themed_and_inline_free`: for `/login`, a bootstrap `/setup/…` link, a new-member `/invite/…` link, `/account`, `/admin/members` and `/admin/invites` (signed-in admin where needed), the response is 200. The body contains `href="<DEFAULT.stylesheet.url>"`, then `href="<CSS_BASE_CSS.url>"`, `meta name="color-scheme" content="light dark"`, `href="#main"` and `<main id="main"`, and contains neither `style=` nor `<style` nor `<script>` (an inline opening tag without `src`).
   - `sign_in_page_greets_with_the_mascot`: `/login` contains `illustration-welcome`, `id="login"` and "Sign in with a passkey".
   - `empty_states_show_the_resting_mascot`: a fresh admin's `/account` contains "No agent tokens yet" and `illustration-empty`; `/admin/invites` contains "No pending invites."
+  - `every_form_control_has_an_accessible_name`: on the same pages, every `<select` and every `<input` whose `type` is not `hidden` has an accessible name, through one of:
+    - an `aria-label`;
+    - an `id` matched by a `for="<id>"` on a `<label`;
+    - an enclosing label: the last `<label` before the control has no `</label>` between it and the control.
+    The failure message names the page and the control's `name` or `id`. On `/admin/members`, the role select carries `aria-label="Role for bob"`.
   - `nav_marks_the_current_page`: `/account` has `aria-current="page"` on the Account link only; `/admin/invites` on Invites only.
 - [ ] **Step 2: Run** `cargo test -p coffer-server --all-features` → FAIL.
-- [ ] **Step 3: Implement** the stylesheet, layout components and pages. Every existing test in `tests/pages.rs` keeps passing unchanged apart from its `Browser` import (`full_journey` locates `id="new-token"` and `id="new-link"`, so keep `once` rendering `code id=…`).
+- [ ] **Step 3: Implement** the stylesheet, layout components and pages. Existing tests in `tests/pages.rs` keep their assertions, with one exception: `members_page_manages_members_and_reenroll_links` slices the page at `"<td>bob</td>"`, which no longer exists. Change that locator to `"class=\"item-title\">bob<"`, so the slice starts at bob's item and the following `between("action=\"/admin/members/", "/role\"")` still finds bob's id. No other assertion changes. `full_journey` locates `id="new-token"` and `id="new-link"`, so keep `once` rendering `code id=…`.
 - [ ] **Step 4: Run** the full gate → PASS. Then serve locally (`COFFER_PUBLIC_URL=http://localhost:8080 COFFER_DATA_DIR=$(mktemp -d) cargo run -p coffer-server -- serve`), open every page in light and dark (the browser's emulated `prefers-color-scheme`) and confirm that the browser console reports no CSP violation.
 - [ ] **Step 5: Commit** `feat(server): mochi components and restyled pages`.
 
 ### Task 6: Themed error and not-found pages
 
 **Files:**
-- Modify: `crates/server/src/http/mod.rs` (fallback and layer order), `crates/server/src/http/pages/mod.rs` (`PageError::into_response`, `ErrorPage`, `render_error_pages`, `fallback`; `security_headers` moves to the top-level router), `crates/server/src/http/pages/layout.rs` (`error_body`), `crates/server/tests/pages.rs`
+- Modify: `crates/server/src/http/mod.rs` (fallback and layer order), `crates/server/src/http/pages/mod.rs` (`PageError::into_response`, `ErrorPage`, `render_error_pages`, `fallback`), `crates/server/src/http/pages/layout.rs` (`error_body`), `crates/server/tests/pages.rs`
 
 **Interfaces:**
 - Consumes: `Appearance::look`, `Sessions::resolve`, `session_cookie_value`, `layout::{page, illustration}`.
@@ -459,7 +479,8 @@ Page content (the copy is fixed here; element ids that `coffer.js` and the tests
   - `pub(super) async fn render_error_pages(State(state): State<AppState>, request: Request, next: Next) -> Response`. It takes the session cookie value before `next.run`. If the response carries an `ErrorPage`, it resolves the look: the cookie → `sessions.resolve` → `store.get_member` → `appearance.look(Some(&member))`; any failure → `appearance.look(None)`. It then renders `page(&Frame { look, viewer: None, current: None, narrow: true }, &title, &layout::error_body(look, &title, detail.as_deref()))`, keeping status and headers and setting `Content-Type: text/html; charset=utf-8`.
   - `pub fn error_body(look: Look, title: &str, detail: Option<&str>) -> Markup`: `section.card.welcome` with the error illustration (120 px, slot `error`), `h1` title, `p` detail, `a.btn.btn-primary href="/account"` "Back to coffer".
   - `pub(super) async fn fallback(uri: Uri) -> Response`: a path of `/api` or under `/api/` → bare `StatusCode::NOT_FOUND` (`api::problem_bodies` turns it into a problem); anything else → `PageError::not_found()`.
-  - Router layers, innermost first: routes and `.fallback(pages::fallback)` → `require_same_origin` → `render_error_pages` → `map_response(security_headers)` → `api::problem_bodies`. The same-origin rejection is a `PageError` too, so it gets the themed page.
+  - Router layers, innermost first: routes and `.fallback(pages::fallback)` → `require_same_origin` → `render_error_pages` (new, inserted into Task 1's order) → `map_response(security_headers)` → `api::problem_bodies`. The same-origin rejection is a `PageError` too, so it gets the themed page. Delete the temporary `layout::error_page`.
+  - Resolving the cookie on an error response goes through `Sessions::resolve`, which may slide the session's idle expiry (at most one write a minute), exactly as any page load does. That is accepted and documented in the function's doc comment.
 
 - [ ] **Step 1: Write the failing tests** in `tests/pages.rs`:
   - `unknown_page_renders_a_themed_not_found`: `GET /nope` → 404, `text/html`, `no-store`, the CSP header as in `security_headers_present`, the body contains `DEFAULT.stylesheet.url`, `illustration-error`, `Not found` and `href="/account"`. `HEAD /nope` → 404.
@@ -489,6 +510,7 @@ Page content (the copy is fixed here; element ids that `coffer.js` and the tests
   - `forcing_a_scheme_is_rendered_without_script`: posting `theme=""`, `color_scheme=dark` → 303 `/account`; the reloaded `/account` contains `<html lang="en" data-scheme="dark">` and `content="dark"`; the dark radio is checked. Posting `system` → no `data-scheme`, `content="light dark"`.
   - `appearance_rejects_unknown_values`: `theme="x\"><script>"`, `theme="nope"`, a 10,000-character `theme`, `color_scheme=purple` → 422 `text/html` each. Afterwards bob is still `None`/`System`, there is no `member.appearance` event, and no response body contains `<script>"`. A request without `csrf` → 403.
   - `household_page_is_admin_only`: bob gets 403 for `GET` and `POST /admin/household`. An admin gets 200 with `value="mochi"` checked; posting `theme=mochi` → 303 and a `household.theme` event (actor = admin, `{"from": null, "to": "mochi"}`); the admin nav shows the Household link and bob's does not.
+  - `household_form_rejects_forged_values`: as admin, `POST /admin/household` with `theme="x\"><script>"`, `theme=nope` and an empty `theme` → 422 each; without `csrf` → 403. Afterwards `household_theme()` is still `None`, there is no `household.theme` event, and no response body contains `<script>"`.
   - `account_page_survives_a_retired_theme`: store `retired` for bob through the store API; `/account` → 200 with the household default radio checked and the Mochi stylesheet linked.
 - [ ] **Step 2: Run** `cargo test -p coffer-server --all-features --test appearance` → FAIL.
 - [ ] **Step 3: Implement.**
@@ -497,7 +519,7 @@ Page content (the copy is fixed here; element ids that `coffer.js` and the tests
 
 ### Task 8: Fjord, the second theme, proves the mechanism
 
-Adding Fjord touches no template, component or route: one token file, its font and one registry entry. Broadsheet is not in this plan (see the open question about IBM Plex's Reserved Font Name).
+Adding Fjord touches no template, component or route: one token file, its font and one registry entry. Broadsheet is deferred by owner ruling D2 (IBM Plex's Reserved Font Name).
 
 **Files:**
 - Create: `crates/server/assets/themes/fjord.css` (exact copy below); from the tool: `crates/server/assets/fonts/manrope-400-800.woff2`, `ofl-manrope.txt`
@@ -578,7 +600,7 @@ These values pass every pair; the tightest are control-border on bg at 3.27 (lig
 - [ ] **Step 1: Write the failing tests** in `tests/appearance.rs`:
   - `household_default_applies_to_everyone_without_a_choice`: the admin sets `fjord` → anonymous `/login` and `/nope` link `THEMES_FJORD_CSS.url` and not Mochi's; bob (no choice) gets Fjord on `/account`, whose default radio reads "Household default (Fjord)".
   - `member_override_beats_the_household_default`: with the household on `fjord`, bob picks `mochi` → bob's `/account` and his `/nope` link Mochi, while the admin's pages link Fjord.
-  - The theme unit tests from Task 3 now cover Fjord without changes. Confirm that they run over two themes, for example by temporarily changing one Fjord colour to fail AA, seeing the named failure, then reverting.
+  - `fjord_is_registered_after_the_default` (in `themes/tests.rs`): `THEMES` names are exactly `["mochi", "fjord"]` and `DEFAULT.name == "mochi"`. The contract tests of Task 3 iterate `THEMES`, and `wcag_check_reports_a_broken_theme` proves the checker is not vacuous, so Fjord is checked with no further test.
 - [ ] **Step 2: Run** `cargo test -p coffer-server --all-features --test appearance` → FAIL (`fjord` unknown).
 - [ ] **Step 3: Implement.** Add Manrope to the tool and run `python3 -I tools/regenerate_assets.py fonts`. Add `fjord.css` and the `FJORD` entry. `git diff --stat` must show no change under `src/http/` or `assets/css/`.
 - [ ] **Step 4: Run** the full gate → PASS.
