@@ -183,8 +183,9 @@ pub(super) struct ErrorPage {
     detail: Option<String>,
 }
 
-/// Draws the HTML of every [`ErrorPage`] response in the visitor's look: the
-/// member's when the request carries a live session, else the household's.
+/// Draws the HTML of every [`ErrorPage`] response (and of a bare page 405,
+/// see [`error_page`]) in the visitor's look: the member's when the request
+/// carries a live session, else the household's.
 ///
 /// Reading the session goes through `Sessions::resolve`, so an error
 /// response slides the session's idle expiry (at most one write a minute)
@@ -197,8 +198,9 @@ pub(super) async fn render_error_pages(
     next: Next,
 ) -> Response {
     let cookie = session_cookie_value(request.headers()).map(str::to_owned);
+    let in_api = in_api(request.uri());
     let response = next.run(request).await;
-    let Some(error) = response.extensions().get::<ErrorPage>().cloned() else {
+    let Some(error) = error_page(&response, in_api) else {
         return response;
     };
     let member = match cookie {
@@ -225,6 +227,28 @@ pub(super) async fn render_error_pages(
     Response::from_parts(parts, Body::from(body.into_string()))
 }
 
+/// What the error page of `response` says: the [`ErrorPage`] a handler
+/// attached, or "Method not allowed" for the bare 405 the router sends when
+/// a page URL is visited with the wrong method (`/api` paths get a problem
+/// from `problem_bodies` instead).
+fn error_page(response: &Response, in_api: bool) -> Option<ErrorPage> {
+    if let Some(error) = response.extensions().get::<ErrorPage>() {
+        return Some(error.clone());
+    }
+    let bare_405 = response.status() == StatusCode::METHOD_NOT_ALLOWED
+        && !response.headers().contains_key(header::CONTENT_TYPE);
+    (bare_405 && !in_api).then(|| ErrorPage {
+        title: "Method not allowed".to_owned(),
+        detail: None,
+    })
+}
+
+/// Whether `uri` is under `/api`, where errors are problems, not pages.
+fn in_api(uri: &Uri) -> bool {
+    let path = uri.path();
+    path == "/api" || path.starts_with("/api/")
+}
+
 /// The member behind a session cookie, if it is live.
 async fn member_for(state: &AppState, cookie: &str) -> Option<Member> {
     let actor = state.sessions.resolve(cookie).await.ok()?;
@@ -234,8 +258,7 @@ async fn member_for(state: &AppState, cookie: &str) -> Option<Member> {
 /// Unmatched paths: a problem under `/api` (`problem_bodies` fills in the
 /// body), the themed not-found page anywhere else.
 pub(super) async fn fallback(uri: Uri) -> Response {
-    let path = uri.path();
-    if path == "/api" || path.starts_with("/api/") {
+    if in_api(&uri) {
         StatusCode::NOT_FOUND.into_response()
     } else {
         PageError::not_found().into_response()

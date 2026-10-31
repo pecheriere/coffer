@@ -968,6 +968,22 @@ async fn unknown_page_renders_a_themed_not_found() {
     assert_eq!(head.status, StatusCode::NOT_FOUND);
 }
 
+/// A page URL revisited with the wrong method (the token-created page is
+/// drawn at `/account/tokens`, so history or a bookmark sends a GET) gets
+/// the themed error page, not a blank one.
+#[tokio::test]
+async fn wrong_method_on_a_page_renders_a_themed_error() {
+    let (_server, mut admin, _) = with_admin().await;
+
+    for path in ["/account/tokens", "/logout"] {
+        let reply = admin.get(path).await;
+
+        assert_themed_error(&reply, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(reply.body.contains("Method not allowed"), "{path}");
+        assert_eq!(reply.header(header::ALLOW), "POST", "{path}");
+    }
+}
+
 #[tokio::test]
 async fn error_page_with_a_stale_cookie_still_renders() {
     let (server, mut admin, _) = with_admin().await;
