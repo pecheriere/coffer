@@ -15,14 +15,15 @@ mod layout;
 mod login;
 mod setup;
 
+use axum::body::Body;
 use axum::extract::rejection::{FormRejection, JsonRejection};
 use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, MatchedPath, Request, State};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::{Form, Json, Router};
+use axum::{Extension, Form, Json, Router};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::MemberId;
 use coffer_store::Member;
@@ -33,6 +34,7 @@ use super::extract::session_cookie_value;
 use super::problem::Problem;
 use crate::auth::{AuthError, session_cookie};
 use crate::themes::Look;
+use layout::Frame;
 
 /// Content Security Policy of every response.
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
@@ -166,7 +168,75 @@ impl IntoResponse for PageError {
         if status == StatusCode::UNAUTHORIZED {
             return Redirect::to("/login").into_response();
         }
-        (status, layout::error_page(&title, detail.as_deref())).into_response()
+        // The body is drawn by `render_error_pages`, which knows the look.
+        (status, Extension(ErrorPage { title, detail })).into_response()
+    }
+}
+
+/// What a failed page request says. Carried on the response until
+/// [`render_error_pages`] turns it into HTML.
+#[derive(Debug, Clone)]
+pub(super) struct ErrorPage {
+    title: String,
+    detail: Option<String>,
+}
+
+/// Draws the HTML of every [`ErrorPage`] response in the visitor's look: the
+/// member's when the request carries a live session, else the household's.
+///
+/// Reading the session goes through `Sessions::resolve`, so an error
+/// response slides the session's idle expiry (at most one write a minute)
+/// exactly as any page load does. Every failure to resolve a look (no
+/// cookie, a stale or disabled session, a storage error) falls back to the
+/// default look: an error page never fails for want of a theme.
+pub(super) async fn render_error_pages(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let cookie = session_cookie_value(request.headers()).map(str::to_owned);
+    let response = next.run(request).await;
+    let Some(error) = response.extensions().get::<ErrorPage>().cloned() else {
+        return response;
+    };
+    let member = match cookie {
+        Some(cookie) => member_for(&state, &cookie).await,
+        None => None,
+    };
+    let look = state.appearance.look(member.as_ref()).await;
+    let body = layout::page(
+        &Frame {
+            look,
+            viewer: None,
+            current: None,
+            narrow: true,
+        },
+        &error.title,
+        &layout::error_body(look, &error.title, error.detail.as_deref()),
+    );
+    let (mut parts, _) = response.into_parts();
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    Response::from_parts(parts, Body::from(body.into_string()))
+}
+
+/// The member behind a session cookie, if it is live.
+async fn member_for(state: &AppState, cookie: &str) -> Option<Member> {
+    let actor = state.sessions.resolve(cookie).await.ok()?;
+    state.store.get_member(actor.member).await.ok()
+}
+
+/// Unmatched paths: a problem under `/api` (`problem_bodies` fills in the
+/// body), the themed not-found page anywhere else.
+pub(super) async fn fallback(uri: Uri) -> Response {
+    let path = uri.path();
+    if path == "/api" || path.starts_with("/api/") {
+        StatusCode::NOT_FOUND.into_response()
+    } else {
+        PageError::not_found().into_response()
     }
 }
 

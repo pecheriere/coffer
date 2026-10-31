@@ -926,3 +926,99 @@ async fn nav_marks_the_current_page() {
         assert_eq!(page.body.matches("aria-current=").count(), 1, "{path}");
     }
 }
+
+/// The security headers and the themed body every error page carries.
+fn assert_themed_error(reply: &Reply, status: StatusCode) {
+    assert_eq!(reply.status, status, "{}", reply.body);
+    assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
+    assert_eq!(reply.header(header::CACHE_CONTROL), "no-store");
+    assert_eq!(
+        reply.header(header::CONTENT_SECURITY_POLICY),
+        "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
+         form-action 'self'; base-uri 'none'"
+    );
+    assert!(
+        reply
+            .body
+            .contains(&format!("href=\"{}\"", themes::DEFAULT.stylesheet.url))
+    );
+    assert!(reply.body.contains("illustration-error"));
+    assert!(reply.body.contains("href=\"/account\""));
+}
+
+#[tokio::test]
+async fn unknown_page_renders_a_themed_not_found() {
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+
+    let [get, head] = get_and_head(&mut browser, "/nope").await;
+
+    assert_themed_error(&get, StatusCode::NOT_FOUND);
+    assert!(get.body.contains("Not found"));
+    assert_eq!(head.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn error_page_with_a_stale_cookie_still_renders() {
+    let (server, mut admin, _) = with_admin().await;
+    let invite = server
+        .identity
+        .create_invite(
+            &server
+                .sessions
+                .resolve(admin.cookie.as_deref().unwrap())
+                .await
+                .unwrap(),
+            Role::Member,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&server);
+    let mut bob_key = server.authenticator();
+    assert_eq!(
+        bob.enroll(&mut bob_key, &invite, "bob", "Bob").await.status,
+        StatusCode::OK
+    );
+    let members = admin.get("/admin/members").await;
+    let csrf = members.csrf();
+    let bob_row = Reply {
+        body: members.body[members.body.find("class=\"item-title\">bob<").unwrap()..].to_owned(),
+        ..members
+    };
+    let bob_id = bob_row.between("action=\"/admin/members/", "/role\"");
+    let disabled = admin
+        .post_form(
+            &format!("/admin/members/{bob_id}/disable"),
+            &[("csrf", &csrf)],
+        )
+        .await;
+    assert_eq!(disabled.status, StatusCode::SEE_OTHER);
+    let mut garbage = Browser::new(&server);
+    garbage.cookie = Some("garbage".to_owned());
+
+    for visitor in [&mut garbage, &mut bob] {
+        let reply = visitor.get("/nope").await;
+        assert_themed_error(&reply, StatusCode::NOT_FOUND);
+        let account = visitor.get("/account").await;
+        assert_eq!(account.status, StatusCode::SEE_OTHER);
+        assert_eq!(account.header(header::LOCATION), "/login");
+    }
+}
+
+#[tokio::test]
+async fn conflict_pages_are_themed() {
+    let (_server, mut admin, _) = with_admin().await;
+    let account = admin.get("/account").await;
+    let id = account.between("action=\"/account/passkeys/", "/remove\"");
+
+    let reply = admin
+        .post_form(
+            &format!("/account/passkeys/{id}/remove"),
+            &[("csrf", &account.csrf())],
+        )
+        .await;
+
+    assert_themed_error(&reply, StatusCode::CONFLICT);
+    assert!(reply.body.contains("last passkey"));
+}

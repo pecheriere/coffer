@@ -153,22 +153,19 @@ pub fn key_icon() -> Markup {
     }
 }
 
-/// A generic error page. `detail` is a message safe to show, never input.
-pub fn error_page(title: &str, detail: Option<&str>) -> Markup {
-    let content = html! {
-        h1 { (title) }
-        @if let Some(detail) = detail {
-            p { (detail) }
+/// The card of an error page. `detail` is a message safe to show, never
+/// input.
+pub fn error_body(look: Look, title: &str, detail: Option<&str>) -> Markup {
+    html! {
+        section.card.welcome {
+            (illustration(&look.theme.illustrations.error, 120, "error"))
+            h1 { (title) }
+            @if let Some(detail) = detail {
+                p { (detail) }
+            }
+            a.btn.btn-primary href="/account" { "Back to coffer" }
         }
-        p { a href="/account" { "Back to coffer" } }
-    };
-    let frame = Frame {
-        look: Look::default(),
-        viewer: None,
-        current: None,
-        narrow: true,
-    };
-    page(&frame, title, &content)
+    }
 }
 
 /// A secret shown once, with a copy button.

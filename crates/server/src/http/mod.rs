@@ -50,9 +50,14 @@ pub fn router(state: AppState) -> Router {
         .merge(health::router())
         .merge(pages::router())
         .merge(static_files::router())
+        .fallback(pages::fallback)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             pages::require_same_origin,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            pages::render_error_pages,
         ))
         .layer(axum::middleware::map_response(pages::security_headers))
         .layer(axum::middleware::from_fn(api::problem_bodies))
