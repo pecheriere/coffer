@@ -4,6 +4,7 @@
 
 mod accounts;
 mod audit;
+mod categories;
 pub mod extract;
 mod me;
 mod members;
@@ -38,6 +39,10 @@ fn routes() -> ApiRouter {
         .op(routes!(accounts::get, accounts::update))
         .op(routes!(accounts::list_balances))
         .op(routes!(accounts::set_balance))
+        .op(routes!(categories::list, categories::create))
+        .op(routes!(categories::update))
+        .op(routes!(categories::create_group))
+        .op(routes!(categories::update_group))
         .op(routes!(openapi::serve))
 }
 

@@ -24,6 +24,7 @@ pub(super) mod tags {
     pub const IDENTITY: &str = "identity";
     pub const MEMBERS: &str = "members";
     pub const ACCOUNTS: &str = "accounts";
+    pub const CATEGORIES: &str = "categories";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
 }
@@ -107,6 +108,11 @@ pub(super) fn base() -> OpenApi {
                 tags::ACCOUNTS,
                 "Accounts and their daily balances. Amounts are integer minor units of the \
                  account's currency.",
+            ),
+            tag(
+                tags::CATEGORIES,
+                "The household's category groups and categories, which transaction splits \
+                 use.",
             ),
             tag(tags::AUDIT, "The append-only log of every change."),
             tag(tags::META, "This API's own description."),

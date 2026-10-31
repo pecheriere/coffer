@@ -9,14 +9,15 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 ## Crate map
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
-  audit entry types, clock). No I/O.
+  audit entry types, money, accounts, transactions, clock). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
-  `pages/`); `ledger` (accounts and balances); `cli` and
+  `pages/`); `ledger` (accounts and balances, categories,
+  transactions and their splits); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
 
 ## Commands

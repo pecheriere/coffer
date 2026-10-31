@@ -25,7 +25,7 @@ session, never with another token.
 | Scope | Allows |
 |---|---|
 | `read` | Read household data: `me`, `members`, `audit`. |
-| `write` | Everything in `read`, plus changes to household data: creating and changing accounts and recording balances. |
+| `write` | Everything in `read`, plus changes to household data: creating and changing accounts, recording balances, and creating and changing categories. |
 | `admin` | Everything in `write`, plus household administration. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -92,6 +92,30 @@ money owed or going out.
   last write wins, so a linked account's next sync replaces a manual value
   for the same day.
 
+### Categories
+
+Categories are household-wide, grouped and ordered: groups and the
+categories within a group are listed by `position` (0 to 10000; lower
+first, ties oldest first). A category's `kind` is `expense`, `income` or
+`transfer`. A household starts with no categories.
+
+- `GET /api/v1/categories` returns `{"items": [{id, name, position,
+  archived, categories: [{id, group, name, kind, position, archived}]}]}`,
+  archived groups and categories included.
+- `POST /api/v1/category-groups` (`write`) creates a group from `name` and
+  optionally `position` (by default after the last group). Answers 201.
+- `PATCH /api/v1/category-groups/{group_id}` (`write`) changes `name`,
+  `position` or `archived`.
+- `POST /api/v1/categories` (`write`) creates a category from `group`,
+  `name`, `kind` and optionally `position` (by default last in its group).
+  Answers 201; an unknown `group` is a 422 `invalid`.
+- `PATCH /api/v1/categories/{category_id}` (`write`) changes `name`, `kind`,
+  `position`, `archived`, or `group` (moving it).
+
+Archiving never deletes: an archived category, or any category of an
+archived group, takes no new splits, and the splits it already has stay.
+Names are 1 to 100 characters without control characters.
+
 ### Retrying creates
 
 Send an `Idempotency-Key` header (1 to 128 visible ASCII characters) with a
@@ -121,7 +145,8 @@ Errors are `application/problem+json` bodies (RFC 9457):
 `method_not_allowed` (405, with an `Allow` header), `invalid` (400: a bad
 query or path parameter, or a body that is not valid JSON for the
 operation), `invalid` (422: a value the operation does not accept, such as
-an empty account name), `invalid_cursor` (400), `idempotency_key_reuse`
+an empty account name), `conflict` (409: the change does not fit the
+current state), `invalid_cursor` (400), `idempotency_key_reuse`
 (422), `idempotency_in_progress` (409), `internal` (500). `detail`, when
 present, names at most the documented parameter at fault and never echoes
 what you sent. A problem may carry a `Retry-After` header (seconds): wait

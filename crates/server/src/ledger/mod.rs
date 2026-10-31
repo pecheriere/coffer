@@ -1,9 +1,11 @@
 //! The ledger: accounts and their balances, categories and transactions.
-//! Every operation authorizes
-//! through the policy, with account access from the [`AccessResolver`], and
-//! writes its audit entry in the same transaction as its change.
+//! Every operation authorizes through the policy, with account access from
+//! the [`AccessResolver`], and writes its audit entry in the same
+//! transaction as its change.
 
 pub mod accounts;
+pub mod categories;
+pub mod transactions;
 
 use std::sync::Arc;
 
