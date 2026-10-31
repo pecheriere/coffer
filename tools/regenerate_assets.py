@@ -149,6 +149,16 @@ FONT_SOURCES = (
         axes=("wght=400:800",),
         output="nunito-400-800.woff2",
     ),
+    FontSource(
+        family="manrope",
+        commit="b31870aff700ab7a1d74fa0c6887d95beb9e0037",
+        directory="manrope",
+        file="Manrope[wght].ttf",
+        sha256="3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6",
+        licence_sha256="58172e0c0fac2cda8a37b348164bb55e44b0e69051e557e92b1d3f6910141f7b",
+        axes=("wght=400:800",),
+        output="manrope-400-800.woff2",
+    ),
 )
 
 
