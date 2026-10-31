@@ -411,7 +411,7 @@ async fn security_headers_present() {
 async fn referrer_policy_lets_forms_send_their_origin() {
     let server = TestServer::new().await;
     let mut browser = Browser::new(&server);
-    for path in ["/login", CSS_BASE_CSS.url] {
+    for path in ["/login", "/static/coffer.css"] {
         let reply = browser.get(path).await;
         assert_eq!(reply.status, StatusCode::OK, "{path}");
         assert_eq!(
