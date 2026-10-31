@@ -525,13 +525,13 @@ async fn path_rejection_does_not_echo() {
     assert!(!body.to_string().contains("SECRET"), "{body}");
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum Kind {
     Plain,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct Body1 {
     count: u32,
@@ -540,12 +540,7 @@ struct Body1 {
 
 #[tokio::test]
 async fn json_rejection_does_not_echo() {
-    for body in [
-        r#"{"count": 1, "kind": "plain", "SECRETNAME": 1}"#,
-        r#"{"count": "SECRETVALUE", "kind": "plain"}"#,
-        r#"{"count": 1, "kind": "SECRETVALUE"}"#,
-        r#"{"SECRETVALUE"#,
-    ] {
+    for body in SECRET_BODIES {
         let request = Request::post("/")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body))
@@ -569,6 +564,81 @@ async fn json_rejection_does_not_echo() {
         .unwrap();
     assert_eq!(parsed.count, 1);
     assert!(matches!(parsed.kind, Kind::Plain));
+}
+
+/// Bodies whose rejection must not put `SECRET` in a log: as a value, an
+/// unknown field name, an unknown enum variant and inside broken JSON.
+const SECRET_BODIES: [&str; 5] = [
+    r#"{"count": 1, "kind": "plain", "SECRETNAME": 1}"#,
+    r#"{"count": "SECRETVALUE", "kind": "plain"}"#,
+    r#"{"count": 1, "kind": "SECRETVALUE"}"#,
+    r#"{"SECRETVALUE"#,
+    r#"{"count": 1, "kind": {"SECRETVALUE": 1}}"#,
+];
+
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn rejected_body_logs_no_input() {
+    use tracing::instrument::WithSubscriber as _;
+
+    let log = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(log.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .finish();
+    async {
+        tracing::debug!("capture-check-KNOWN-MARKER");
+        for body in SECRET_BODIES {
+            let request = Request::post("/")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            assert!(
+                TypedJson::<Body1>::from_request(request, &())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    .with_subscriber(subscriber)
+    .await;
+
+    let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("capture-check-KNOWN-MARKER"), "{text}");
+    assert_eq!(
+        text.matches("request body rejected").count(),
+        SECRET_BODIES.len(),
+        "{text}"
+    );
+    assert!(
+        text.contains("path=count"),
+        "a documented field is named: {text}"
+    );
+    assert!(text.contains("category=data"), "{text}");
+    assert!(text.contains("category=eof"), "{text}");
+    assert!(!text.contains("SECRET"), "{text}");
 }
 
 #[tokio::test]
