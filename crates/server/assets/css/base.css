@@ -18,7 +18,7 @@ code { font: 500 .9em/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .icon { stroke-width: var(--icon-stroke); flex: none; }
 
 .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .75rem 1rem; background: var(--nav-bg); border-bottom: 1px solid var(--nav-border-color); }
-.brand { display: inline-flex; align-items: center; gap: .5rem; font: var(--weight-head) 1.25rem/1 var(--font-head); color: var(--text); text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; font: var(--weight-head) 1.25rem/1 var(--font-head); color: var(--text); text-decoration: none; }
 .who { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; color: var(--muted); font-weight: 700; font-size: .875rem; }
 .who form { margin: 0; }
 .nav { order: 3; flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .25rem; }
