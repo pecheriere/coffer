@@ -135,6 +135,42 @@ id_type!(
     /// Identifies an audit log entry.
     AuditEventId
 );
+id_type!(
+    /// Identifies an account: a place money is held or owed.
+    AccountId
+);
+id_type!(
+    /// Identifies a group of categories.
+    CategoryGroupId
+);
+id_type!(
+    /// Identifies a spending or income category.
+    CategoryId
+);
+id_type!(
+    /// Identifies a canonical transaction.
+    TransactionId
+);
+id_type!(
+    /// Identifies one categorized split of a transaction.
+    SplitId
+);
+id_type!(
+    /// Identifies a connection to a data provider.
+    ConnectionId
+);
+id_type!(
+    /// Identifies an account as a provider reports it.
+    ProviderAccountId
+);
+id_type!(
+    /// Identifies a transaction record as a provider reported it.
+    SourceRecordId
+);
+id_type!(
+    /// Identifies one run of a provider sync.
+    SyncRunId
+);
 
 #[cfg(test)]
 mod tests {

@@ -206,26 +206,32 @@ impl FromStr for ColorScheme {
     }
 }
 
-fn parse_label(input: &str) -> Option<String> {
+/// Trims `input` and accepts it when it has 1 to `max` characters and no
+/// control characters.
+pub(crate) fn parse_label(input: &str, max: usize) -> Option<String> {
     let trimmed = input.trim();
     let valid =
-        (1..=64).contains(&trimmed.chars().count()) && !trimmed.chars().any(char::is_control);
+        (1..=max).contains(&trimmed.chars().count()) && !trimmed.chars().any(char::is_control);
     valid.then(|| trimmed.to_owned())
 }
 
+/// Defines a human-readable label: trimmed, 1 to `max` characters, no
+/// control characters. Rejection is the given error variant.
 macro_rules! label_type {
-    ($(#[$meta:meta])* $name:ident, $err:ident) => {
+    ($(#[$meta:meta])* $name:ident, $error:ident::$variant:ident, max = $max:literal) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         pub struct $name(String);
 
         impl $name {
-            /// Trims and validates `input`: 1 to 64 characters, no control characters.
+            #[doc = concat!("Trims and validates `input`: 1 to ", stringify!($max), " characters, no control characters.")]
             ///
             /// # Errors
-            /// Returns the matching [`IdentityError`] when `input` is invalid.
-            pub fn parse(input: &str) -> Result<Self, IdentityError> {
-                parse_label(input).map(Self).ok_or(IdentityError::$err)
+            #[doc = concat!("Returns [`", stringify!($error), "::", stringify!($variant), "`] when `input` is invalid.")]
+            pub fn parse(input: &str) -> Result<Self, $error> {
+                $crate::identity::parse_label(input, $max)
+                    .map(Self)
+                    .ok_or($error::$variant)
             }
 
             #[must_use]
@@ -234,23 +240,50 @@ macro_rules! label_type {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.write_str(&self.0)
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                use utoipa::openapi::schema::{ObjectBuilder, Type};
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .min_length(Some(1))
+                    .max_length(Some($max))
+                    .description(Some(concat!(
+                        "1 to ",
+                        stringify!($max),
+                        " characters without control characters; surrounding whitespace is trimmed."
+                    )))
+                    .into()
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::ToSchema for $name {
+            fn name() -> std::borrow::Cow<'static, str> {
+                std::borrow::Cow::Borrowed(stringify!($name))
             }
         }
     };
 }
+pub(crate) use label_type;
 
 label_type!(
     /// A member's human-readable name.
     DisplayName,
-    InvalidDisplayName
+    IdentityError::InvalidDisplayName,
+    max = 64
 );
 label_type!(
     /// A human-readable name for an agent token.
     TokenName,
-    InvalidTokenName
+    IdentityError::InvalidTokenName,
+    max = 64
 );
 
 /// How an actor authenticated.

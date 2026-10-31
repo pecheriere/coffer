@@ -110,6 +110,15 @@ pub(crate) fn denied_message(denied: Denied) -> String {
             format!("this action requires {} rights", needed.as_str())
         }
         DenyReason::ScopeAboveRole => "requested scope exceeds your role".to_owned(),
+        // Worded like a missing resource, so it reveals nothing even where
+        // it is shown (logs, a CLI) instead of the 404 problem.
+        DenyReason::AccountHidden => "not found".to_owned(),
+        DenyReason::AccountLevel { needed } => {
+            format!(
+                "this action needs {} access to this account",
+                needed.as_str()
+            )
+        }
     }
 }
 

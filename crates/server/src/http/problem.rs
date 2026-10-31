@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use coffer_domain::policy::Denied;
+use coffer_domain::policy::{Denied, DenyReason};
 use serde::Serialize;
 use utoipa::{IntoResponses, ToSchema};
 
@@ -176,11 +176,21 @@ impl Problem {
     }
 }
 
-/// The single place a policy denial becomes an HTTP error.
+/// The single place a policy denial becomes an HTTP error. A hidden
+/// account answers exactly like a missing resource, so its existence never
+/// leaks; every other denial is 403 with the reason.
 impl From<Denied> for Problem {
     fn from(denied: Denied) -> Self {
-        Self::new(StatusCode::FORBIDDEN, ProblemCode::Forbidden, "Forbidden")
-            .with_detail(denied_message(denied))
+        match denied.reason {
+            DenyReason::AccountHidden => Self::not_found(),
+            DenyReason::SessionRequired
+            | DenyReason::InsufficientScope { .. }
+            | DenyReason::ScopeAboveRole
+            | DenyReason::AccountLevel { .. } => {
+                Self::new(StatusCode::FORBIDDEN, ProblemCode::Forbidden, "Forbidden")
+                    .with_detail(denied_message(denied))
+            }
+        }
     }
 }
 
@@ -273,7 +283,74 @@ impl IntoResponse for Problem {
 
 #[cfg(test)]
 mod tests {
-    use super::ProblemCode;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use coffer_domain::policy::{AccountLevel, Action, Denied, DenyReason};
+
+    use super::{Problem, ProblemCode};
+    use crate::auth::AuthError;
+
+    async fn response_bytes(problem: Problem) -> (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>) {
+        let response = problem.into_response();
+        let status = response.status();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+            .collect();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, headers, body)
+    }
+
+    /// A hidden account must be indistinguishable from a missing one.
+    #[tokio::test]
+    async fn hidden_account_problem_equals_not_found() {
+        let not_found = Problem::from(AuthError::NotFound);
+        for needed in [
+            AccountLevel::Balances,
+            AccountLevel::Transactions,
+            AccountLevel::Write,
+        ] {
+            let denied = Denied {
+                action: Action::AccessAccount { needed },
+                reason: DenyReason::AccountHidden,
+            };
+            for hidden in [
+                Problem::from(denied),
+                Problem::from(AuthError::Denied(denied)),
+            ] {
+                assert_eq!(
+                    serde_json::to_vec(&hidden.body()).unwrap(),
+                    serde_json::to_vec(&not_found.body()).unwrap()
+                );
+                assert_eq!(
+                    response_bytes(hidden).await,
+                    response_bytes(not_found.clone()).await
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn account_level_problem_is_forbidden_naming_the_level() {
+        let problem = Problem::from(Denied {
+            action: Action::AccessAccount {
+                needed: AccountLevel::Transactions,
+            },
+            reason: DenyReason::AccountLevel {
+                needed: AccountLevel::Transactions,
+            },
+        });
+        assert_eq!(problem.status, StatusCode::FORBIDDEN);
+        assert_eq!(problem.code, ProblemCode::Forbidden);
+        assert_eq!(
+            problem.detail.as_deref(),
+            Some("this action needs transactions access to this account")
+        );
+    }
 
     #[test]
     fn codes_serialize_as_their_str() {
