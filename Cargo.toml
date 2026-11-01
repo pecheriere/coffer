@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/domain", "crates/store", "crates/server"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -28,9 +28,9 @@ print_stderr = "deny"
 
 [workspace.dependencies]
 # Internal crates
-coffer-domain = { path = "crates/domain", version = "0.1.0" }
-coffer-store = { path = "crates/store", version = "0.1.0" }
-coffer-server = { path = "crates/server", version = "0.1.0" }
+coffer-domain = { path = "crates/domain", version = "0.2.0" }
+coffer-store = { path = "crates/store", version = "0.2.0" }
+coffer-server = { path = "crates/server", version = "0.2.0" }
 
 # Async runtime and web
 tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
