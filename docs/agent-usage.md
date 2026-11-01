@@ -33,6 +33,38 @@ disabled the token loses power at the next request. Tokens can never create,
 list or revoke tokens, nor issue enrollment links; those need a passkey
 session.
 
+## Account grants
+
+A token may also be limited to chosen accounts. Each grant gives a level on
+one account, or on `all` accounts (including ones created later):
+
+| Level | Allows on the account |
+|---|---|
+| `balances` | The account and its balances. |
+| `transactions` | Also its transactions and their source records. |
+| `write` | Also every change to them. |
+
+The token's level on an account is the best grant naming it, capped by its
+scope: a `read` token's grants never exceed `transactions`. An account no
+grant names is hidden from the token. A token without grants sees every
+account at its scope's level, as before.
+
+- A hidden account, its transactions and its provider accounts answer
+  exactly like ones that do not exist: 404 `not_found`, never listed, never
+  named in an error (a batch names the failing operation by index only).
+- A visible account below the level needed is a 403 `forbidden` whose
+  detail names the level: "this action needs transactions access to this
+  account". `GET /api/v1/transactions` silently leaves out the accounts the
+  token sees only at `balances`; naming one in `account=` is the 403.
+- Actions that span every account need an `all` grant: reading the audit
+  log and a connection's sync runs need `all` at `transactions`; creating
+  an account, binding a provider account, requesting a sync and
+  reconnecting or removing a connection need `all` at `write`. Without it
+  they are a 403 whose detail says "this action needs write access to
+  every account" (or `transactions`). Unbound provider accounts are listed
+  (in `GET /api/v1/provider-accounts` and in connections) only with `all`
+  at `transactions`; bound ones follow their account.
+
 ## First call
 
 ```sh
@@ -282,7 +314,9 @@ create. A retry with the same key and the same request within 24 hours gets
 the first response back instead of creating again. The same key with a
 different request is a 422 `idempotency_key_reuse`; while the first request
 is still running, a retry is a 409 `idempotency_in_progress` (retry later).
-Keys belong to your member, so use a fresh key per intended create.
+Keys belong to the token that sent them (or to your passkey session): the
+same key from another token is a separate request, never a replay. Use a
+fresh key per intended create.
 
 ## Errors
 

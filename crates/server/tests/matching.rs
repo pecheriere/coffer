@@ -1160,6 +1160,7 @@ async fn call(
             TokenName::parse("claude").unwrap(),
             Scope::Write,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

@@ -64,6 +64,7 @@ async fn server_with_token() -> (TestServer, SecretToken) {
             TokenName::parse("claude").unwrap(),
             Scope::Read,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

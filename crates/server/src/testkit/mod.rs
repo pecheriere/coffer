@@ -293,7 +293,7 @@ impl TestServer {
         ));
         let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
         let vault = Arc::new(CredentialVault::new(&key));
-        let access = Arc::new(AccessResolver::new());
+        let access = Arc::new(AccessResolver::new(store.clone()));
         let ledger = Arc::new(Ledger::new(
             store.clone(),
             clock.clone(),

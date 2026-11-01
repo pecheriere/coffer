@@ -335,7 +335,7 @@ async fn create_token(
     let expires_at = expiry(&state, &form.expires_days)?;
     let (record, secret) = state
         .agent_tokens
-        .create(&actor, name, scope, expires_at)
+        .create(&actor, name, scope, expires_at, Vec::new())
         .await?;
     let created = Created {
         name: record.name.to_string(),

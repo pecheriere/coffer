@@ -56,6 +56,7 @@ async fn token(world: &World, scope: Scope) -> SecretToken {
             TokenName::parse("claude").unwrap(),
             scope,
             None,
+            Vec::new(),
         )
         .await
         .unwrap()
@@ -388,7 +389,13 @@ async fn disabled_members_token_is_401() {
     let (_, bob_token) = world
         .server
         .agent_tokens
-        .create(&bob, TokenName::parse("bobs").unwrap(), Scope::Read, None)
+        .create(
+            &bob,
+            TokenName::parse("bobs").unwrap(),
+            Scope::Read,
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let (status, _) = get(&world.server, "/api/v1/members", Some(&bob_token)).await;

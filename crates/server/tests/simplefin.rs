@@ -185,6 +185,7 @@ async fn world_with_env(vars: &[(&str, &str)]) -> World {
             TokenName::parse("planner").unwrap(),
             Scope::Write,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -1138,6 +1139,7 @@ async fn connect_needs_manage_connections() {
             TokenName::parse("reader").unwrap(),
             Scope::Read,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

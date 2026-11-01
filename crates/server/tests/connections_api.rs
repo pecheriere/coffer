@@ -139,6 +139,7 @@ impl World {
                 TokenName::parse("claude").unwrap(),
                 scope,
                 None,
+                Vec::new(),
             )
             .await
             .unwrap();

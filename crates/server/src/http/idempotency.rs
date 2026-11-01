@@ -1,7 +1,9 @@
 //! Idempotent creates. A client may send `Idempotency-Key` with a create:
 //! the first request with a key is performed, a retry with the same key and
 //! request gets the first response back, and a different request with the
-//! same key is refused.
+//! same key is refused. A key belongs to the credential that sent it (the
+//! session or one agent token): tokens of one member may see different
+//! accounts, so one never replays another's response.
 //!
 //! [`reserve`] records the key as pending in its own transaction; the
 //! service that creates the resource completes it (with the response) in
@@ -13,10 +15,9 @@ use axum::extract::OptionalFromRequestParts;
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse as _, Response};
-use coffer_domain::identity::Actor;
-use coffer_domain::ids::MemberId;
+use coffer_domain::identity::{Actor, Via};
 use coffer_domain::policy::{Action, authorize};
-use coffer_store::Reservation;
+use coffer_store::{IdempotencyOwner, Reservation};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
@@ -78,8 +79,19 @@ fn header_key(parts: &Parts) -> Result<Option<IdempotencyKey>, Problem> {
 /// one; the creating service completes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdempotencySlot {
-    pub(crate) member: MemberId,
+    pub(crate) owner: IdempotencyOwner,
     pub(crate) key: String,
+}
+
+/// The credential `actor` acts through: its session or its agent token.
+fn owner(actor: &Actor) -> IdempotencyOwner {
+    IdempotencyOwner {
+        member: actor.member,
+        agent: match actor.via {
+            Via::Agent { token, .. } => Some(token),
+            Via::Session => None,
+        },
+    }
 }
 
 /// What [`reserve`] decided.
@@ -126,7 +138,8 @@ impl RequestHasher {
     }
 }
 
-/// Reserves `key` for `actor`'s request `method path body`.
+/// Reserves `key` for `actor`'s request `method path body`, under the
+/// credential it acts through.
 ///
 /// # Errors
 ///
@@ -151,7 +164,7 @@ pub async fn reserve(
     let reservation = async {
         let mut tx = state.store.begin().await?;
         let reservation = tx
-            .reserve_idempotency(actor.member, &key, hash, state.clock.now())
+            .reserve_idempotency(owner(actor), &key, hash, state.clock.now())
             .await?;
         tx.commit().await?;
         Ok::<_, coffer_store::StoreError>(reservation)
@@ -160,7 +173,7 @@ pub async fn reserve(
     .map_err(|err| Problem::from(AuthError::from(err)))?;
     match reservation {
         Reservation::Fresh => Ok(Reserved::Fresh(IdempotencySlot {
-            member: actor.member,
+            owner: owner(actor),
             key,
         })),
         Reservation::Replay {
@@ -199,7 +212,7 @@ pub async fn reserve(
 pub async fn release(state: &AppState, slot: &IdempotencySlot) {
     let released = async {
         let mut tx = state.store.begin().await?;
-        tx.release_idempotency(slot.member, &slot.key).await?;
+        tx.release_idempotency(slot.owner, &slot.key).await?;
         tx.commit().await
     }
     .await;

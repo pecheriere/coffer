@@ -70,6 +70,32 @@
   handler. An agent token is capped by its scope and by its member's role,
   and the member is re-read on every request, so disabling a member or
   changing a role takes effect immediately.
+- **Account grants narrow an agent token.** A token may carry grants: a
+  level (`balances`, `transactions`, `write`) on chosen accounts, or on
+  `all` accounts including ones created later. Its level on an account is
+  the best grant naming it, capped by its scope (a `read` token never
+  writes); an account no grant names is hidden. A token without grants,
+  and every session, has uniform access at its scope. Grants are read on
+  every request from the store by the one access resolver; a grant that no
+  longer parses fails the request rather than being dropped, since
+  dropping the last one would widen the token. The side channels are
+  closed:
+  - A hidden account, its transactions and the provider account bound to
+    it answer exactly like missing ones (the same 404 body), in single
+    reads, list filters, batch operations (the error names the operation's
+    index, never an id), merges and creates. Lists and their cursors are
+    filtered in the query, so hidden rows neither appear nor shorten a page.
+  - Whatever spans every account needs an `all` grant at `transactions` to
+    read (the audit log, unbound provider accounts, a connection's sync
+    runs, whose counts and errors cover all its accounts) or at `write` to
+    change (creating an account, binding a provider account, requesting a
+    sync, reconnecting or removing a connection), and is refused with a 403
+    that names no account otherwise.
+  - Connections list only the provider accounts the token may see.
+  - Idempotency keys belong to the credential that sent them, so a token
+    never receives a stored response another token (or the member's
+    session) earned, and a create is authorized before its key is
+    reserved, so a refused request leaves nothing behind.
 - **Agent tokens can never create, list or revoke tokens, nor issue
   enrollment links.** Those actions require a passkey session, so a leaked
   token cannot be used to mint more access or to enroll a new passkey.
@@ -128,6 +154,12 @@
   of with `url::Url`, trading a well-tested parser for a home-made one on
   input an attacker can shape; reading them needs access to the server's
   memory, which already exposes the server key.
+- **A restricted token still sees household-wide data.** Grants limit
+  accounts, not the rest of the household: a token with grants still reads
+  members, categories and connections (label, status, last error, owner),
+  and with `write` changes categories and adds connections. A connection's
+  last error is the provider's sanitized text and could name an account
+  the token cannot see.
 - **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
   infeasible; password-style guessing does not exist. Network access control
   is the defense against abuse volume.

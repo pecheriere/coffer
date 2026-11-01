@@ -14,7 +14,9 @@ use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
 use coffer_domain::money::Currency;
-use coffer_domain::policy::{AccountAccess, AccountLevel, Action, authorize, authorize_account};
+use coffer_domain::policy::{
+    AccountAccess, AccountLevel, Action, authorize, authorize_account, authorize_every_account,
+};
 use coffer_domain::sync::SyncTrigger;
 use coffer_store::{
     ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection, NewSyncRun, Page,
@@ -182,12 +184,15 @@ pub struct LinkedAccountView {
     pub provider_account: ProviderAccountView,
 }
 
-/// Whether an actor holding `access` may see `provider_account`: unbound
-/// ones are household data; bound ones follow their account.
+/// Whether an actor holding `access` may see `provider_account`: a bound
+/// one follows its account (visible at any level); an unbound one could be
+/// bound to any account, so only an actor seeing every account's
+/// transactions sees it.
 fn visible(access: &AccountAccess, provider_account: &ProviderAccountRecord) -> bool {
-    provider_account
-        .account
-        .is_none_or(|account| access.level_for(account).is_some())
+    match provider_account.account {
+        Some(account) => access.level_for(account).is_some(),
+        None => access.sees_every_account(AccountLevel::Transactions),
+    }
 }
 
 /// Who requested a run: the member and the agent token they used.
@@ -278,7 +283,7 @@ async fn complete_created(
     if let Some(slot) = slot {
         let json = serde_json::to_string(view)
             .map_err(|_| SyncError::Ledger(LedgerError::Internal(SERIALIZATION_FAILED)))?;
-        tx.complete_idempotency(slot.member, &slot.key, 201, &json)
+        tx.complete_idempotency(slot.owner, &slot.key, 201, &json)
             .await?;
     }
     Ok(())
@@ -346,6 +351,18 @@ impl SyncService {
             next_sync_at,
             accounts,
         }
+    }
+
+    /// Checks that `actor` may perform an action needing `level` on every
+    /// account (the policy's rule table).
+    async fn authorize_every_account(
+        &self,
+        actor: &Actor,
+        level: AccountLevel,
+    ) -> Result<(), SyncError> {
+        let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, level)?;
+        Ok(())
     }
 
     /// Every connection, removed ones included, oldest first, each with the
@@ -512,7 +529,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] unless the actor may remove the connection;
+    /// [`SyncError::Denied`] unless the actor may remove the connection and
+    /// has write access to every account;
     /// [`SyncError::NotFound`] for an unknown connection;
     /// [`SyncError::Conflict`] for a removed one; [`SyncError::Invalid`]
     /// when this server does not offer its provider;
@@ -571,7 +589,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] unless the actor may remove the connection;
+    /// [`SyncError::Denied`] unless the actor may remove the connection and
+    /// has write access to every account;
     /// [`SyncError::NotFound`] for an unknown connection; storage failures.
     pub async fn authorize_reconnect(
         &self,
@@ -588,6 +607,8 @@ impl SyncService {
         id: ConnectionId,
     ) -> Result<ConnectionRecord, SyncError> {
         authorize(actor, Action::ManageConnections)?;
+        self.authorize_every_account(actor, AccountLevel::Write)
+            .await?;
         let current = self.store.get_connection(id).await?;
         authorize(
             actor,
@@ -677,7 +698,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] unless the actor may remove the connection;
+    /// [`SyncError::Denied`] unless the actor may remove the connection and
+    /// has write access to every account;
     /// [`SyncError::NotFound`] for an unknown connection;
     /// [`SyncError::Conflict`] for a removed one, or one reconnected while
     /// its credentials were given up (retry); [`SyncError::Provider`] when
@@ -689,6 +711,8 @@ impl SyncService {
         id: ConnectionId,
     ) -> Result<(), SyncError> {
         authorize(actor, Action::ManageConnections)?;
+        self.authorize_every_account(actor, AccountLevel::Write)
+            .await?;
         let current = self.store.get_connection(id).await?;
         authorize(
             actor,
@@ -784,8 +808,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] without [`Action::ManageConnections`];
-    /// [`SyncError::Invalid`] for another trigger, or when this server does
+    /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
+    /// access to every account; [`SyncError::Invalid`] for another trigger, or when this server does
     /// not offer the connection's provider; [`SyncError::NotFound`] for an
     /// unknown connection; [`SyncError::Conflict`] for a removed one;
     /// [`SyncError::InProgress`] while a run is queued or running;
@@ -798,7 +822,11 @@ impl SyncService {
         trigger: SyncTrigger,
     ) -> Result<SyncRunView, SyncError> {
         match (actor, trigger) {
-            (Some(actor), SyncTrigger::Manual) => authorize(actor, Action::ManageConnections)?,
+            (Some(actor), SyncTrigger::Manual) => {
+                authorize(actor, Action::ManageConnections)?;
+                self.authorize_every_account(actor, AccountLevel::Write)
+                    .await?;
+            }
             (None, SyncTrigger::Schedule) => {}
             _ => return Err(SyncError::Invalid(TRIGGER_INVALID)),
         }
@@ -847,7 +875,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] without [`Action::ReadHousehold`];
+    /// [`SyncError::Denied`] without [`Action::ReadHousehold`] or
+    /// transaction access to every account;
     /// [`SyncError::NotFound`] for an unknown connection;
     /// [`SyncError::Store`] with [`coffer_store::StoreError::InvalidCursor`]
     /// for a cursor this method did not issue; storage failures.
@@ -858,6 +887,9 @@ impl SyncService {
         page: &PageRequest,
     ) -> Result<Page<SyncRunView>, SyncError> {
         authorize(actor, Action::ReadHousehold)?;
+        // A run's counts and errors cover every account the connection feeds.
+        self.authorize_every_account(actor, AccountLevel::Transactions)
+            .await?;
         self.store.get_connection(id).await?;
         let page = self.store.list_sync_runs(id, page).await?;
         Ok(Page {
@@ -871,8 +903,9 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] without write access to the account or
-    /// without [`Action::ManageConnections`]; [`SyncError::NotFound`] for
+    /// [`SyncError::Denied`] without write access to the account and to
+    /// every account, or without [`Action::ManageConnections`] (a hidden
+    /// account answers like an unknown one); [`SyncError::NotFound`] for
     /// an unknown provider account or account; [`SyncError::Conflict`] when
     /// the provider account is already bound, its connection is removed or
     /// the account is closed; [`SyncError::CurrencyMismatch`] when the
@@ -885,6 +918,7 @@ impl SyncService {
     ) -> Result<ProviderAccountView, SyncError> {
         let access = self.access.resolve(actor).await?;
         authorize_account(actor, &access, account, AccountLevel::Write)?;
+        authorize_every_account(actor, &access, AccountLevel::Write)?;
         authorize(actor, Action::ManageConnections)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
@@ -902,8 +936,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] without [`Action::WriteHousehold`] or
-    /// [`Action::ManageConnections`]; [`SyncError::NotFound`] for an
+    /// [`SyncError::Denied`] without [`Action::WriteHousehold`],
+    /// [`Action::ManageConnections`] or write access to every account; [`SyncError::NotFound`] for an
     /// unknown provider account; [`SyncError::Invalid`] without a kind or
     /// for an invalid name; [`SyncError::CurrencyMismatch`] when the
     /// provider's currency is not a supported ISO 4217 code; the errors of
@@ -920,6 +954,7 @@ impl SyncService {
             parse_name(name)?;
         }
         let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, AccountLevel::Write)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_provider_account(provider_account).await?;

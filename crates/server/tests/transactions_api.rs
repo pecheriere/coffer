@@ -54,7 +54,13 @@ async fn token_for(
 ) -> (AgentTokenId, SecretToken) {
     let (record, secret) = server
         .agent_tokens
-        .create(alice, TokenName::parse("claude").unwrap(), scope, None)
+        .create(
+            alice,
+            TokenName::parse("claude").unwrap(),
+            scope,
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap();
     (record.id, secret)

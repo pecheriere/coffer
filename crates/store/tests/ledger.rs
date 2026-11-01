@@ -8,7 +8,7 @@
 
 use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
 use coffer_domain::identity::{DisplayName, Role, Username};
-use coffer_domain::ids::{AccountId, CategoryId, MemberId, TransactionId};
+use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, TransactionId};
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountScope;
 use coffer_domain::transactions::{
@@ -17,9 +17,9 @@ use coffer_domain::transactions::{
 };
 use coffer_store::{
     AccountChanges, AccountRecord, Attribution, BalanceSnapshot, CategoryChanges,
-    CategoryGroupChanges, CategoryRecord, NewAccount, NewCategory, NewCategoryGroup, NewMember,
-    NewTransaction, PageRequest, PayeeChange, Reservation, ReviewChange, Store, StoreError,
-    UserFieldChanges,
+    CategoryGroupChanges, CategoryRecord, IdempotencyOwner, NewAccount, NewCategory,
+    NewCategoryGroup, NewMember, NewTransaction, PageRequest, PayeeChange, Reservation,
+    ReviewChange, Store, StoreError, UserFieldChanges,
 };
 use jiff::civil::{Date, date};
 use jiff::{SignedDuration, Timestamp};
@@ -27,6 +27,13 @@ use tempfile::TempDir;
 
 fn at(seconds: i64) -> Timestamp {
     Timestamp::from_second(1_800_000_000 + seconds).unwrap()
+}
+
+fn session(member: MemberId) -> IdempotencyOwner {
+    IdempotencyOwner {
+        member,
+        agent: None,
+    }
 }
 
 async fn open() -> (TempDir, Store) {
@@ -292,7 +299,7 @@ async fn account_changes_apply_only_set_fields() {
 #[tokio::test]
 async fn idempotency_completion_rolls_back_with_its_tx() {
     let (_dir, store) = open().await;
-    let alice = member(&store).await;
+    let alice = session(member(&store).await);
     let hash = [7_u8; 32];
 
     let mut tx = store.begin().await.unwrap();
@@ -342,7 +349,7 @@ async fn idempotency_completion_rolls_back_with_its_tx() {
 #[tokio::test]
 async fn idempotency_keys_expire_and_abandoned_reservations_are_replaced() {
     let (_dir, store) = open().await;
-    let alice = member(&store).await;
+    let alice = session(member(&store).await);
     let hash = [1_u8; 32];
     let mut tx = store.begin().await.unwrap();
     assert_eq!(
@@ -397,7 +404,7 @@ async fn idempotency_keys_expire_and_abandoned_reservations_are_replaced() {
 #[tokio::test]
 async fn released_reservation_frees_the_key() {
     let (_dir, store) = open().await;
-    let alice = member(&store).await;
+    let alice = session(member(&store).await);
     let mut tx = store.begin().await.unwrap();
     tx.reserve_idempotency(alice, "k", [3; 32], at(0))
         .await
@@ -425,6 +432,40 @@ async fn released_reservation_frees_the_key() {
         .await
         .unwrap_err();
     assert!(matches!(err, StoreError::Conflict(_)));
+}
+
+#[tokio::test]
+async fn idempotency_keys_belong_to_their_credential() {
+    let (_dir, store) = open().await;
+    let member = member(&store).await;
+    let token = |agent| IdempotencyOwner {
+        member,
+        agent: Some(agent),
+    };
+    let (a, b) = (token(AgentTokenId::new()), token(AgentTokenId::new()));
+    let hash = [5_u8; 32];
+    let mut tx = store.begin().await.unwrap();
+    assert_eq!(
+        tx.reserve_idempotency(a, "k", hash, at(0)).await.unwrap(),
+        Reservation::Fresh
+    );
+    tx.complete_idempotency(a, "k", 201, r#"{"id":"a"}"#)
+        .await
+        .unwrap();
+    // The same key and request from another token of the same member, or
+    // from the member's session, is a request of its own.
+    for other in [b, session(member)] {
+        assert_eq!(
+            tx.reserve_idempotency(other, "k", hash, at(1))
+                .await
+                .unwrap(),
+            Reservation::Fresh
+        );
+    }
+    assert!(matches!(
+        tx.reserve_idempotency(a, "k", hash, at(2)).await.unwrap(),
+        Reservation::Replay { .. }
+    ));
 }
 
 async fn category(store: &Store, group_name: &str, name: &str) -> CategoryRecord {

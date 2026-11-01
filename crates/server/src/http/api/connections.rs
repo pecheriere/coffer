@@ -127,7 +127,7 @@ fn manage_connections(actor: &Actor) -> Result<(), Problem> {
     params(
         ("Idempotency-Key" = Option<String>, Header,
          description = "1 to 128 visible ASCII characters naming this create, unique per \
-                        member for 24 hours."),
+                        token (or session) for 24 hours."),
     ),
     request_body = NewSimpleFinConnection,
     responses(
@@ -186,7 +186,8 @@ pub(super) async fn create_simplefin(
                    again, and its provider accounts and bindings stay. A sync is queued when \
                    the limits allow. A refused setup token answers \
                    `422 setup_token_invalid`. Needs `write`; reconnecting another member's \
-                   connection needs `admin`.",
+                   connection needs `admin`; a token with account grants also needs `all` at \
+                   `write`.",
     security(("bearer" = [])),
     params(ConnectionPath),
     request_body = SimpleFinReconnect,
@@ -252,7 +253,8 @@ pub(super) async fn list(
     description = "Queues a manual sync of the connection, attributed to the token; the server \
                    performs it shortly after. Follow it with \
                    `GET /api/v1/connections/{connection_id}/sync-runs`. The provider's limits \
-                   apply: a minimum interval between syncs and a daily budget. Needs `write`.",
+                   apply: a minimum interval between syncs and a daily budget. Needs `write`; a \
+                   token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ConnectionPath),
     responses(
@@ -284,7 +286,8 @@ pub(super) async fn sync(
     operation_id = "listSyncRuns",
     tag = tags::CONNECTIONS,
     description = "The connection's sync runs, newest first: who requested each, its status \
-                   and what it did. Needs `read`. Pages with the opaque `next` cursor.",
+                   and what it did. Needs `read`; a token with account grants also needs `all` at \
+                   `transactions`. Pages with the opaque `next` cursor.",
     security(("bearer" = [])),
     params(ConnectionPath, SyncRunQuery),
     responses(
@@ -324,7 +327,8 @@ pub(super) async fn list_runs(
     description = "Gives up the connection's access at the provider, erases its credentials \
                    and marks it `removed`. Its accounts, transactions and provider accounts \
                    stay; it is never synced again. Needs `write`; removing another member's \
-                   connection needs `admin`.",
+                   connection needs `admin`; a token with account grants also needs `all` at \
+                   `write`.",
     security(("bearer" = [])),
     params(ConnectionPath),
     responses(

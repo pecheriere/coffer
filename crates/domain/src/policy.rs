@@ -9,15 +9,18 @@
 //! session, has uniform access at its scope.
 //!
 //! Actions that touch more than one account, or accounts not yet granted,
-//! need an `all` grant ([`AccountAccess::sees_every_account`]):
+//! need an `all` grant ([`AccountAccess::sees_every_account`], checked by
+//! [`authorize_every_account`]):
 //!
-//! | Action                           | Needs `sees_every_account` at |
-//! |----------------------------------|-------------------------------|
-//! | Read the audit log               | `Transactions`                |
-//! | List unbound provider accounts   | `Transactions`                |
-//! | Create an account                | `Write`                       |
-//! | Bind a provider account          | `Write`                       |
-//! | Trigger a sync                   | `Write`                       |
+//! | Action                                   | Needs `sees_every_account` at |
+//! |------------------------------------------|-------------------------------|
+//! | Read the audit log                       | `Transactions`                |
+//! | List unbound provider accounts           | `Transactions`                |
+//! | Read a connection's sync runs            | `Transactions`                |
+//! | Create an account                        | `Write`                       |
+//! | Bind a provider account                  | `Write`                       |
+//! | Trigger a sync                           | `Write`                       |
+//! | Reconnect or remove a connection         | `Write`                       |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -326,6 +329,11 @@ pub enum DenyReason {
     AccountLevel {
         needed: AccountLevel,
     },
+    /// The action needs `needed` on every account, including ones created
+    /// later, and the actor's grants do not give it.
+    EveryAccount {
+        needed: AccountLevel,
+    },
 }
 
 /// An authorization failure.
@@ -406,6 +414,29 @@ pub fn authorize_account(
         action: Action::AccessAccount { needed },
         reason,
     })
+}
+
+/// Decides whether `actor`, holding `access`, may perform an action that
+/// needs `needed` on every account (the module's rule table). Capped by the
+/// actor's effective scope like [`authorize_account`].
+///
+/// # Errors
+/// Returns [`Denied`] with action [`Action::AccessAccount`] and reason
+/// [`DenyReason::EveryAccount`] unless every account is granted at least
+/// `needed`.
+pub fn authorize_every_account(
+    actor: &Actor,
+    access: &AccountAccess,
+    needed: AccountLevel,
+) -> Result<(), Denied> {
+    if access.sees_every_account(needed) && grant_ceiling(actor.effective_scope()) >= needed {
+        Ok(())
+    } else {
+        Err(Denied {
+            action: Action::AccessAccount { needed },
+            reason: DenyReason::EveryAccount { needed },
+        })
+    }
 }
 
 /// Rejects a token scope above what `role` may exercise.
@@ -1057,6 +1088,55 @@ mod tests {
     }
 
     #[test]
+    fn every_account_actions_need_an_all_grant() {
+        let actor = agent(Role::Admin, Scope::Write);
+        let denied = |needed| {
+            Err(Denied {
+                action: Action::AccessAccount { needed },
+                reason: DenyReason::EveryAccount { needed },
+            })
+        };
+        let only_one = account_access_with_grants(
+            &actor,
+            &[grant(GrantTarget::Account(account(1)), AccountLevel::Write)],
+        );
+        assert_eq!(
+            authorize_every_account(&actor, &only_one, AccountLevel::Balances),
+            denied(AccountLevel::Balances)
+        );
+        let all_transactions = account_access_with_grants(
+            &actor,
+            &[
+                grant(GrantTarget::All, AccountLevel::Transactions),
+                grant(GrantTarget::Account(account(1)), AccountLevel::Write),
+            ],
+        );
+        assert_eq!(
+            authorize_every_account(&actor, &all_transactions, AccountLevel::Transactions),
+            Ok(())
+        );
+        assert_eq!(
+            authorize_every_account(&actor, &all_transactions, AccountLevel::Write),
+            denied(AccountLevel::Write)
+        );
+        // Uniform access passes at its level, capped by the actor's scope.
+        let uniform = account_access_with_grants(&actor, &[]);
+        assert_eq!(
+            authorize_every_account(&actor, &uniform, AccountLevel::Write),
+            Ok(())
+        );
+        let reader = agent(Role::Admin, Scope::Read);
+        assert_eq!(
+            authorize_every_account(
+                &reader,
+                &AccountAccess::Uniform(AccountLevel::Write),
+                AccountLevel::Write
+            ),
+            denied(AccountLevel::Write)
+        );
+    }
+
+    #[test]
     fn grant_ceiling_follows_scope() {
         assert_eq!(grant_ceiling(Scope::Read), AccountLevel::Transactions);
         assert_eq!(grant_ceiling(Scope::Write), AccountLevel::Write);
@@ -1148,6 +1228,10 @@ mod tests {
                     if access.sees_every_account(needed) {
                         proptest::prop_assert!(allowed);
                     }
+                    proptest::prop_assert_eq!(
+                        authorize_every_account(&actor, &access, needed).is_ok(),
+                        access.sees_every_account(needed)
+                    );
                 }
             }
         }

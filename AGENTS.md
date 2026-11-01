@@ -84,8 +84,9 @@ doctests, so `cargo test` stays the gate).
 - Every mutation goes through a `StoreTx` together with its audit entry.
 - Every handler authorizes through `coffer_domain::policy`: `authorize` for
   household actions, `authorize_account` for anything tied to an account,
-  with the `AccountAccess` that `AccessResolver` resolves (never built by
-  hand). A `Denied` becomes a problem only through
+  `authorize_every_account` for what spans every account (the rule table in
+  the `policy` module docs), with the `AccountAccess` that `AccessResolver`
+  resolves (never built by hand). A `Denied` becomes a problem only through
   `impl From<Denied> for Problem`.
 - Money is an integer in minor units with its ISO 4217 currency
   (`coffer_domain::money`); negative is money out of the account. No

@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::AccountId;
-use coffer_domain::policy::{AccountLevel, Denied, authorize_account};
+use coffer_domain::policy::{AccountLevel, Denied, authorize_account, authorize_every_account};
 use coffer_domain::time::Clock;
 use coffer_store::{Store, StoreError, StoreTx};
 use jiff::Timestamp;
@@ -64,6 +64,24 @@ impl Ledger {
     ) -> Result<(), LedgerError> {
         let access = self.access.resolve(actor).await?;
         authorize_account(actor, &access, account, level)?;
+        Ok(())
+    }
+
+    /// Whether `actor` may perform an action needing `level` on every
+    /// account (the policy's rule table), decided before a create reserves
+    /// its idempotency key.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Denied`] unless every account is granted at least
+    /// `level`; a failure to resolve access.
+    pub async fn authorize_every_account_access(
+        &self,
+        actor: &Actor,
+        level: AccountLevel,
+    ) -> Result<(), LedgerError> {
+        let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, level)?;
         Ok(())
     }
 }
@@ -221,7 +239,7 @@ async fn complete_created(
     if let Some(slot) = slot {
         let json = serde_json::to_string(view)
             .map_err(|_| LedgerError::Internal("response serialization failed"))?;
-        tx.complete_idempotency(slot.member, &slot.key, StatusCode::CREATED.as_u16(), &json)
+        tx.complete_idempotency(slot.owner, &slot.key, StatusCode::CREATED.as_u16(), &json)
             .await?;
     }
     Ok(())

@@ -287,6 +287,7 @@ async fn bearer_token_does_not_authenticate_pages() {
             TokenName::parse("agent").unwrap(),
             Scope::Admin,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -596,6 +597,7 @@ async fn admin_sees_and_revokes_member_tokens() {
             TokenName::parse("bob-planner").unwrap(),
             Scope::Read,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -606,6 +608,7 @@ async fn admin_sees_and_revokes_member_tokens() {
             TokenName::parse("alice-agent").unwrap(),
             Scope::Read,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

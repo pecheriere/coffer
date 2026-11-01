@@ -19,6 +19,7 @@ mod provider_accounts;
 mod sessions;
 mod sources;
 mod sync_runs;
+mod token_grants;
 mod transactions;
 
 use std::path::Path;
@@ -40,7 +41,7 @@ pub use connections::{
     UnknownConnectionStatus,
 };
 pub use error::StoreError;
-pub use idempotency::Reservation;
+pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};

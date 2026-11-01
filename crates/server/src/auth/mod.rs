@@ -9,7 +9,7 @@ pub mod sessions;
 
 use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::identity::IdentityError;
-use coffer_domain::policy::{Denied, DenyReason};
+use coffer_domain::policy::{Denied, DenyReason, GrantError};
 use coffer_store::{StoreError, StoreTx};
 use jiff::Timestamp;
 use webauthn_rs::prelude::WebauthnError;
@@ -73,6 +73,13 @@ pub enum AuthError {
     /// A submitted value is invalid.
     #[error(transparent)]
     Invalid(IdentityError),
+    /// A token's grants break a rule; the message names the rule, never a
+    /// grant.
+    #[error(transparent)]
+    InvalidGrants(GrantError),
+    /// A grant names an account that does not exist.
+    #[error("a granted account does not exist")]
+    UnknownGrantedAccount,
     /// The authenticator's response did not verify: a client error. A
     /// failed sign-in is reported as [`AuthError::LoginFailed`] instead.
     #[error("the passkey response could not be verified; try again")]
@@ -118,6 +125,12 @@ pub(crate) fn denied_message(denied: Denied) -> String {
         DenyReason::AccountLevel { needed } => {
             format!(
                 "this action needs {} access to this account",
+                needed.as_str()
+            )
+        }
+        DenyReason::EveryAccount { needed } => {
+            format!(
+                "this action needs {} access to every account",
                 needed.as_str()
             )
         }

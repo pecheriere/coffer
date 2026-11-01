@@ -562,9 +562,15 @@ every passkey session have uniform access at their scope, as in plan 2a. An
 account created after a token is visible to it only through an `all` grant.
 
 Actions that touch more than one account, or accounts not yet granted, need
-an `all` grant at the level shown: reading the audit log and listing unbound
-provider accounts need `transactions`; creating an account, binding a
-provider account and triggering a sync need `write`. Lists of account-scoped
+an `all` grant at the level shown: reading the audit log, listing unbound
+provider accounts and reading a connection's sync runs (whose counts and
+errors cover all its accounts) need `transactions`; creating an account,
+binding a provider account, triggering a sync and reconnecting or removing
+a connection (which changes the feed of every account it serves) need
+`write`. Without it the action answers 403 `forbidden` with "this action
+needs <level> access to every account". Idempotency keys belong to the
+credential that sent them (the session or one agent token), so no token
+replays a response another credential earned. Lists of account-scoped
 data (accounts, transactions, bound provider accounts) are filtered to the
 accounts granted at the level they show, and no list, aggregate, audit entry
 or error reveals a hidden account.

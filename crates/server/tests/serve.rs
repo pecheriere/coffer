@@ -172,6 +172,7 @@ async fn production_wiring_refuses_unlisted_setup_token() {
             TokenName::parse("planner").unwrap(),
             Scope::Write,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -260,6 +261,7 @@ async fn serve_creates_account_and_transaction_end_to_end() {
             TokenName::parse("planner").unwrap(),
             Scope::Write,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
