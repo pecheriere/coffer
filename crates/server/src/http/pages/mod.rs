@@ -15,6 +15,7 @@ mod connections;
 mod household;
 mod layout;
 mod login;
+mod plaid;
 mod setup;
 
 use axum::body::Body;
@@ -35,10 +36,12 @@ use super::AppState;
 use super::extract::session_cookie_value;
 use super::problem::{Problem, ProblemCode};
 use crate::auth::{AuthError, session_cookie};
+use crate::config::Config;
 use crate::themes::Look;
 use layout::Frame;
 
-/// Content Security Policy of every response.
+/// Content Security Policy of every response without one of its own. Only
+/// the Plaid Link pages have their own (see [`plaid`]).
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
                    form-action 'self'; base-uri 'none'";
 
@@ -46,7 +49,13 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; fram
 const BODY_LIMIT: usize = 64 * 1024;
 
 /// Pages and ceremony endpoints, to be merged into the application router.
-pub fn router() -> Router<AppState> {
+/// The Plaid Link routes exist only when `config` enables Plaid.
+pub fn router(config: &Config) -> Router<AppState> {
+    let plaid = if config.plaid.is_some() {
+        plaid::routes()
+    } else {
+        Router::new()
+    };
     Router::new()
         .merge(setup::routes())
         .merge(login::routes())
@@ -54,6 +63,7 @@ pub fn router() -> Router<AppState> {
         .merge(admin::routes())
         .merge(connections::routes())
         .merge(household::routes())
+        .merge(plaid)
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
@@ -71,10 +81,12 @@ pub(super) async fn security_headers(mut response: Response) -> Response {
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/html"));
     let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
-    );
+    if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        );
+    }
     // `same-origin`, not `no-referrer`: under `no-referrer` browsers send
     // `Origin: null` on form posts, which `require_same_origin` refuses.
     // Other sites still get no referrer, so link tokens never leave coffer.
@@ -404,5 +416,39 @@ impl<T: DeserializeOwned> FromRequest<AppState> for ApiJson<T> {
                 )
                 .with_detail("the request body could not be read".to_owned())
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderValue, header};
+    use axum::response::{IntoResponse as _, Response};
+
+    use super::{CSP, security_headers};
+
+    fn policy(response: &Response) -> Vec<&HeaderValue> {
+        response
+            .headers()
+            .get_all(header::CONTENT_SECURITY_POLICY)
+            .iter()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn default_csp_only_when_the_response_has_none() {
+        let plain = security_headers("hello".into_response()).await;
+        assert_eq!(policy(&plain), [CSP]);
+
+        let set = (
+            [(header::CONTENT_SECURITY_POLICY, "script-src 'none'")],
+            "hello",
+        );
+        let kept = security_headers(set.into_response()).await;
+        assert_eq!(policy(&kept), ["script-src 'none'"]);
+        assert_eq!(
+            kept.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff",
+            "the other headers are still added"
+        );
     }
 }

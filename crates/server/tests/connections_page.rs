@@ -413,6 +413,10 @@ async fn sync_form_reports_the_wait_when_rate_limited() {
     assert_eq!(limited.header(header::RETRY_AFTER), "3600");
     assert!(limited.body.contains("role=\"alert\""));
     assert!(limited.body.contains("1 hour"));
+    assert!(
+        limited.body.contains("The provider allows another sync"),
+        "the notice fits every provider"
+    );
     assert_inline_free(&limited);
     assert_eq!(world.run_count(connection).await, 1);
 }

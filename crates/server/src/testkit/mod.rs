@@ -181,8 +181,8 @@ impl TestServer {
         self
     }
 
-    /// This server with a Plaid provider talking to `mock` only, beside the
-    /// providers registered so far.
+    /// This server configured for Plaid (sandbox), with a provider talking
+    /// to `mock` only, beside the providers registered so far.
     #[must_use]
     pub fn with_plaid(mut self, mock: &MockUpstream) -> Self {
         let config = PlaidConfig {
@@ -191,6 +191,7 @@ impl TestServer {
             environment: PlaidEnvironment::Sandbox,
             country_codes: vec!["US".to_owned()],
         };
+        self.config.plaid = Some(config.clone());
         self.use_provider(Arc::new(Plaid::new(PlaidClient::for_tests(mock, config))));
         self
     }

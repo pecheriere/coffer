@@ -289,6 +289,65 @@ async fn complete_created(
     Ok(())
 }
 
+/// Makes the connection `before` `active` with its error cleared, audits the
+/// reconnect and queues a manual run when the limits allow one.
+async fn reactivate(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    actor: &Actor,
+    before: &ConnectionRecord,
+    credentials_replaced: bool,
+    capabilities: Capabilities,
+) -> Result<(), SyncError> {
+    let id = before.id;
+    tx.update_connection_status(
+        id,
+        ConnectionStatusChange {
+            status: ConnectionStatus::Active,
+            last_error: None,
+            attempted_at: None,
+            succeeded_at: None,
+            at: now,
+        },
+    )
+    .await?;
+    let mut changes = AuditChanges::new().set("credentials_replaced", credentials_replaced);
+    if before.status != ConnectionStatus::Active {
+        changes = changes.change(
+            "status",
+            before.status.as_str(),
+            ConnectionStatus::Active.as_str(),
+        );
+    }
+    audit(
+        tx,
+        now,
+        actor,
+        "connection.reconnect",
+        ("connection", id.to_string()),
+        changes,
+    )
+    .await?;
+    match check_limits(tx, id, SyncTrigger::Manual, capabilities, now).await {
+        Ok(()) => {
+            tx.insert_sync_run(NewSyncRun {
+                connection: id,
+                trigger: SyncTrigger::Manual,
+                requested_by: Some(requester(actor)),
+                queued_at: now,
+            })
+            .await?;
+            Ok(())
+        }
+        // A queued run uses the current credentials when it starts; a
+        // running one cannot undo a reconnect that replaced them (the engine
+        // updates the status only for the credentials it used). Otherwise
+        // the schedule syncs it once the limits allow.
+        Err(SyncError::InProgress | SyncError::RateLimited { .. }) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 /// The default name of an account created for a provider account: its
 /// name, cut to the longest account name.
 fn default_account_name(provider_account: &ProviderAccountRecord) -> String {
@@ -619,6 +678,104 @@ impl SyncService {
         Ok(current)
     }
 
+    /// The Plaid connection `id`, once `actor` is authorized to reconnect it.
+    /// Any other provider's connection is not found here.
+    async fn plaid_reconnectable(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+    ) -> Result<ConnectionRecord, SyncError> {
+        let current = self.reconnectable(actor, id).await?;
+        if current.provider != ProviderKind::Plaid.as_str() {
+            return Err(SyncError::NotFound);
+        }
+        Ok(current)
+    }
+
+    /// A Plaid link token to set up a new connection for the actor.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
+    /// access to every account; [`SyncError::Invalid`] when this server does
+    /// not offer Plaid; [`SyncError::Provider`] when Plaid refuses; storage
+    /// failures.
+    pub async fn new_link_token(&self, actor: &Actor) -> Result<SecretString, SyncError> {
+        authorize(actor, Action::ManageConnections)?;
+        self.authorize_every_account(actor, AccountLevel::Write)
+            .await?;
+        let provider = self
+            .registry
+            .get(ProviderKind::Plaid)
+            .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
+        provider
+            .link_token(actor.member, None)
+            .await
+            .map_err(SyncError::Provider)
+    }
+
+    /// A Plaid link token in update mode for the connection `id`: the member
+    /// logs in to the institution again and the access token stays the same.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::confirm_reauthorized`];
+    /// [`SyncError::Vault`] when the credentials cannot be opened;
+    /// [`SyncError::Provider`] when Plaid refuses.
+    pub async fn update_link_token(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+    ) -> Result<SecretString, SyncError> {
+        let current = self.plaid_reconnectable(actor, id).await?;
+        let provider = self
+            .provider_of(&current)
+            .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
+        let sealed = current
+            .credentials
+            .ok_or(SyncError::Conflict(CONNECTION_REMOVED))?;
+        let credentials = self
+            .vault
+            .open(id, &SealedCredentials::from(sealed))
+            .map_err(SyncError::Vault)?;
+        provider
+            .link_token(actor.member, Some(&credentials))
+            .await
+            .map_err(SyncError::Provider)
+    }
+
+    /// Records that the member finished Plaid's update mode. The access
+    /// token did not change, so nothing is resealed and the saved cursor
+    /// stays valid: the connection is `active` again with its error cleared,
+    /// and a `manual` run is queued when its limits allow one, which also
+    /// shows whether the login really is back.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] unless the actor may remove the connection and
+    /// has write access to every account; [`SyncError::NotFound`] for an
+    /// unknown connection or one of another provider;
+    /// [`SyncError::Conflict`] for a removed one; [`SyncError::Invalid`] when
+    /// this server does not offer Plaid; storage failures.
+    pub async fn confirm_reauthorized(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+    ) -> Result<(), SyncError> {
+        let current = self.plaid_reconnectable(actor, id).await?;
+        let provider = self
+            .provider_of(&current)
+            .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let before = ensure_not_removed(&mut tx, id).await?;
+        reactivate(&mut tx, now, actor, &before, false, provider.capabilities()).await?;
+        tx.commit().await?;
+        self.queued.notify_one();
+        tracing::info!(connection = %id, "connection reauthorized");
+        Ok(())
+    }
+
     /// Stores reconnected `credentials` for `current`, sealed under its id,
     /// if it is neither removed nor reconnected since it was read; queues a
     /// manual run when the limits allow one.
@@ -641,51 +798,7 @@ impl SyncService {
             .await?;
         // A cursor belongs to the credentials it was given for.
         tx.set_provider_state(id, None).await?;
-        tx.update_connection_status(
-            id,
-            ConnectionStatusChange {
-                status: ConnectionStatus::Active,
-                last_error: None,
-                attempted_at: None,
-                succeeded_at: None,
-                at: now,
-            },
-        )
-        .await?;
-        let mut changes = AuditChanges::new().set("credentials_replaced", true);
-        if before.status != ConnectionStatus::Active {
-            changes = changes.change(
-                "status",
-                before.status.as_str(),
-                ConnectionStatus::Active.as_str(),
-            );
-        }
-        audit(
-            &mut tx,
-            now,
-            actor,
-            "connection.reconnect",
-            ("connection", id.to_string()),
-            changes,
-        )
-        .await?;
-        match check_limits(&mut tx, id, SyncTrigger::Manual, capabilities, now).await {
-            Ok(()) => {
-                tx.insert_sync_run(NewSyncRun {
-                    connection: id,
-                    trigger: SyncTrigger::Manual,
-                    requested_by: Some(requester(actor)),
-                    queued_at: now,
-                })
-                .await?;
-            }
-            // A queued run uses the new credentials when it starts; a
-            // running one cannot undo the reconnect (the engine updates the
-            // status only for the credentials it used). Otherwise the
-            // schedule syncs it once the limits allow.
-            Err(SyncError::InProgress | SyncError::RateLimited { .. }) => {}
-            Err(err) => return Err(err),
-        }
+        reactivate(&mut tx, now, actor, &before, true, capabilities).await?;
         let record = tx.get_connection(id).await?;
         tx.commit().await?;
         Ok(record)

@@ -15,6 +15,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
 use coffer_domain::accounts::AccountKind;
+use coffer_domain::ids::MemberId;
 use jiff::SignedDuration;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
@@ -226,6 +227,18 @@ impl Plaid {
         serde_json::to_string(&credentials)
             .map(SecretString::from)
             .map_err(|_| ProviderError::Invalid(CREDENTIALS_NOT_STORABLE.into()))
+    }
+
+    async fn create_link_token(
+        &self,
+        member: MemberId,
+        credentials: Option<&SecretString>,
+    ) -> Result<SecretString, ProviderError> {
+        let credentials = credentials.map(Credentials::open).transpose()?;
+        self.client
+            .link_token(member, credentials.as_ref().map(|open| &open.access_token))
+            .await
+            .map_err(provider_error)
     }
 
     async fn gather(
@@ -523,6 +536,14 @@ impl Provider for Plaid {
         credentials: &'a SecretString,
     ) -> ProviderFuture<'a, Result<(), ProviderError>> {
         Box::pin(self.remove_item(credentials))
+    }
+
+    fn link_token<'a>(
+        &'a self,
+        member: MemberId,
+        credentials: Option<&'a SecretString>,
+    ) -> ProviderFuture<'a, Result<SecretString, ProviderError>> {
+        Box::pin(self.create_link_token(member, credentials))
     }
 }
 

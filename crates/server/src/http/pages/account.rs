@@ -378,7 +378,7 @@ async fn revoke_token(
 
 /// The session and anti-forgery header of a ceremony request, as a
 /// JSON-style rejection.
-fn json_session(
+pub(super) fn json_session(
     session: Result<PageSession, PageError>,
     state: &AppState,
     headers: &HeaderMap,

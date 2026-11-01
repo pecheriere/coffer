@@ -15,6 +15,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use coffer_domain::accounts::AccountKind;
+use coffer_domain::ids::MemberId;
 use coffer_domain::money::DecimalAmount;
 use jiff::SignedDuration;
 use jiff::civil::Date;
@@ -31,6 +32,8 @@ use crate::egress::{Egress, EgressError};
 
 /// The longest provider message kept, in characters.
 pub const MAX_PROVIDER_MESSAGE_CHARS: usize = 500;
+
+const NO_LINK_FLOW: &str = "this provider is not set up through a browser flow";
 
 /// A data provider coffer can connect to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -280,6 +283,19 @@ pub trait Provider: Send + Sync {
         &'a self,
         credentials: &'a SecretString,
     ) -> ProviderFuture<'a, Result<(), ProviderError>>;
+
+    /// A short-lived token that opens the provider's own setup flow in
+    /// `member`'s browser: for a new connection, or with `credentials` to
+    /// log an existing one in again. A provider without such a flow refuses.
+    fn link_token<'a>(
+        &'a self,
+        _member: MemberId,
+        _credentials: Option<&'a SecretString>,
+    ) -> ProviderFuture<'a, Result<SecretString, ProviderError>> {
+        Box::pin(std::future::ready(Err(ProviderError::Invalid(
+            NO_LINK_FLOW.into(),
+        ))))
+    }
 }
 
 /// The providers this server offers, by kind.

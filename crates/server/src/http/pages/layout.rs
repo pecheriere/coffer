@@ -46,6 +46,17 @@ pub fn csrf_field(csrf: &str) -> Markup {
 
 /// A full page.
 pub fn page(frame: &Frame<'_>, title: &str, content: &Markup) -> Markup {
+    page_with_scripts(frame, title, content, &[])
+}
+
+/// A full page that also loads `scripts`, in order, after the shared script.
+/// A script from another origin must be allowed by the page's own policy.
+pub fn page_with_scripts(
+    frame: &Frame<'_>,
+    title: &str,
+    content: &Markup,
+    scripts: &[&str],
+) -> Markup {
     let look = frame.look;
     let (color_scheme, data_scheme) = match look.scheme {
         ColorScheme::System => ("light dark", None),
@@ -72,6 +83,9 @@ pub fn page(frame: &Frame<'_>, title: &str, content: &Markup) -> Markup {
                 link rel="stylesheet" href=(look.theme.stylesheet.url);
                 link rel="stylesheet" href=(assets::CSS_BASE_CSS.url);
                 script src=(assets::JS_COFFER_JS.url) defer {}
+                @for script in scripts {
+                    script src=(script) defer {}
+                }
             }
             body {
                 a.skip href="#main" { "Skip to content" }
