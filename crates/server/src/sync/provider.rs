@@ -149,6 +149,10 @@ pub struct ProviderAccountData {
     pub coverage: Coverage,
     /// The provider's error for this account; its data is then ignored.
     pub error: Option<String>,
+    /// Records the provider sent in a form that cannot be used, by their
+    /// provider id when it could be read. They are skipped, and a known
+    /// record among them still counts as reported, so it never vanishes.
+    pub unusable: Vec<Option<String>>,
 }
 
 /// One transaction record as the provider reports it.
@@ -156,7 +160,10 @@ pub struct ProviderAccountData {
 pub struct ProviderTransaction {
     /// The provider's id, unique within the connection.
     pub provider_id: String,
-    pub posted_on: Date,
+    /// The day it is dated. `None` only for a pending record the provider
+    /// gave no date for: it is dated the day it is first seen and keeps
+    /// that day afterwards; a posted record without one is unusable.
+    pub posted_on: Option<Date>,
     pub transacted_on: Option<Date>,
     /// Negative is money out of the account.
     pub amount: DecimalAmount,

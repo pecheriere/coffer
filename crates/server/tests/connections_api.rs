@@ -111,7 +111,7 @@ impl World {
                 balance: None,
                 transactions: vec![ProviderTransaction {
                     provider_id: "t-1".into(),
-                    posted_on: date(2027, 1, 10),
+                    posted_on: Some(date(2027, 1, 10)),
                     transacted_on: None,
                     amount: DecimalAmount::parse("-12.50").unwrap(),
                     description: "COFFEE SHOP PURCHASE".into(),
@@ -123,6 +123,7 @@ impl World {
                 removed: Vec::new(),
                 coverage: Coverage::Delta,
                 error: None,
+                unusable: Vec::new(),
             }],
             connection_errors: Vec::new(),
             cursor: None,

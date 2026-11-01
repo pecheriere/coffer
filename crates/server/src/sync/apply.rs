@@ -68,6 +68,9 @@ pub struct NormalizedTransaction {
     /// The provider's id, unique within the connection.
     pub provider_id: String,
     pub posted_on: Date,
+    /// `false` when the provider gave no date: `posted_on` is then the
+    /// day of the sync, and a known pending record keeps its stored day.
+    pub date_reported: bool,
     pub transacted_on: Option<Date>,
     /// Negative is money out of the account.
     pub amount_minor: i64,
@@ -102,6 +105,10 @@ pub struct AccountBatch {
     /// Provider ids of records the provider says are gone.
     pub removed: Vec<String>,
     pub coverage: Coverage,
+    /// Records left out before this step because they could not be used,
+    /// by provider id when known: counted as skipped, and a known one
+    /// still counts as reported.
+    pub unusable: Vec<Option<String>>,
 }
 
 /// What an apply did to canonical transactions.
@@ -122,7 +129,8 @@ pub struct ApplyReport {
     /// Records held for an unbound provider account.
     pub held: u32,
     /// Malformed records skipped (an empty, over-long or control-character
-    /// provider id, or an amount that is not a decimal text).
+    /// provider id, an amount that is not a decimal text, or a record the
+    /// caller could not use).
     pub skipped: u32,
 }
 
@@ -130,6 +138,8 @@ pub struct ApplyReport {
 struct Record {
     provider_id: String,
     fields: ImportedFields,
+    /// See [`NormalizedTransaction::date_reported`].
+    date_reported: bool,
     amount_raw: String,
     replaces: Option<String>,
 }
@@ -153,6 +163,7 @@ impl Record {
                 memo: normalized.memo.as_deref().and_then(Memo::from_provider),
             },
             provider_id: normalized.provider_id,
+            date_reported: normalized.date_reported,
             amount_raw: normalized.amount_raw,
             replaces: normalized.replaces_provider_id,
         })
@@ -162,8 +173,17 @@ impl Record {
         Self {
             provider_id: source.provider_txn_id,
             fields: source.fields,
+            date_reported: true,
             amount_raw: source.amount_raw,
             replaces: None,
+        }
+    }
+
+    /// A pending record re-reported without a date keeps the day its known
+    /// pending form was stored with, so it does not move every sync.
+    fn keep_known_date(&mut self, known: &SourceRecord) {
+        if !self.date_reported && self.fields.pending && known.fields.pending {
+            self.fields.posted_on = known.fields.posted_on;
         }
     }
 
@@ -215,10 +235,12 @@ pub async fn apply_account_batch(
     let present: HashSet<String> = batch
         .transactions
         .iter()
-        .filter(|normalized| valid_provider_id(&normalized.provider_id))
-        .map(|normalized| normalized.provider_id.clone())
+        .map(|normalized| &normalized.provider_id)
+        .chain(batch.unusable.iter().flatten())
+        .filter(|provider_id| valid_provider_id(provider_id))
+        .cloned()
         .collect();
-    let total = batch.transactions.len();
+    let total = batch.transactions.len() + batch.unusable.len();
     let records: Vec<Record> = batch
         .transactions
         .into_iter()
@@ -369,7 +391,7 @@ impl Apply<'_> {
 
     /// Keeps a record of an unbound provider account, without a
     /// transaction.
-    async fn hold(&mut self, record: Record) -> Result<(), SyncError> {
+    async fn hold(&mut self, mut record: Record) -> Result<(), SyncError> {
         let existing = self
             .tx
             .find_source(self.connection, &record.provider_id)
@@ -378,6 +400,7 @@ impl Apply<'_> {
             if existing.provider_account != self.provider_account {
                 return Err(SyncError::Invalid(RECORD_MOVED));
             }
+            record.keep_known_date(&existing);
             self.tx
                 .update_source(existing.id, record.update(self.now))
                 .await?;
@@ -412,7 +435,7 @@ impl Apply<'_> {
     async fn match_record(
         &mut self,
         account: &AccountRecord,
-        record: Record,
+        mut record: Record,
     ) -> Result<(), SyncError> {
         // Same connection and provider id: the same transaction. Only a
         // record whose reported fields changed changes it: a transaction
@@ -426,6 +449,7 @@ impl Apply<'_> {
             if existing.provider_account != self.provider_account {
                 return Err(SyncError::Invalid(RECORD_MOVED));
             }
+            record.keep_known_date(&existing);
             self.tx
                 .update_source(existing.id, record.update(self.now))
                 .await?;

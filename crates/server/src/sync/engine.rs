@@ -13,7 +13,7 @@ use std::sync::Arc;
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
-use coffer_domain::money::Currency;
+use coffer_domain::money::{Currency, DecimalAmount};
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
@@ -34,7 +34,7 @@ use super::apply::{
 };
 use super::provider::{
     FetchMode, FetchRequest, FetchResult, MAX_PROVIDER_MESSAGE_CHARS, ProviderAccountData,
-    ProviderError, ProviderKind, ProviderRegistry, sanitize_provider_message,
+    ProviderError, ProviderKind, ProviderRegistry, ProviderTransaction, sanitize_provider_message,
 };
 use crate::auth::AccessResolver;
 use crate::config::Config;
@@ -49,9 +49,10 @@ const ACCOUNT_ERROR: &str = "the provider reported an error for this account";
 const UNSUPPORTED_CURRENCY: &str =
     "the provider reported a currency that is not a supported ISO 4217 code";
 const CURRENCY_DIFFERS: &str = "the provider reported a currency other than the bound account's";
-const AMOUNT_UNREPRESENTABLE: &str =
-    "the provider reported an amount with more decimals than the currency allows, or too large";
-const ACCOUNT_NOT_STORED: &str = "the account's data could not be stored; it is retried next sync";
+const BALANCE_UNREPRESENTABLE: &str =
+    "the provider reported a balance with more decimals than the currency allows, or too large";
+const ACCOUNT_NOT_STORED: &str = "the account's data could not be stored; the next sync fetches \
+     it again from shortly before it was last stored";
 const INTERNAL_FAILURE: &str = "the sync failed on the server";
 
 /// A sync run, as the API shows it.
@@ -553,10 +554,17 @@ impl SyncService {
         };
         let Some(Converted {
             transactions,
+            unusable,
             balance,
-        }) = convert(&data, currency)
+        }) = convert(
+            data.transactions,
+            data.unusable,
+            data.balance,
+            currency,
+            today,
+        )
         else {
-            tx.set_provider_account_error(record.id, Some(AMOUNT_UNREPRESENTABLE.to_owned()))
+            tx.set_provider_account_error(record.id, Some(BALANCE_UNREPRESENTABLE.to_owned()))
                 .await?;
             tx.commit().await?;
             return Ok(AccountOutcome::Failed);
@@ -576,6 +584,7 @@ impl SyncService {
                 transactions,
                 removed: data.removed,
                 coverage: data.coverage,
+                unusable,
             },
         )
         .await?;
@@ -754,37 +763,55 @@ async fn check_account(
 /// An account's records and balance in its currency's minor units.
 struct Converted {
     transactions: Vec<NormalizedTransaction>,
+    /// The provider's unusable records, then the records whose amount does
+    /// not convert exactly.
+    unusable: Vec<Option<String>>,
     /// The balance and the day it describes.
     balance: Option<(Date, i64)>,
 }
 
-/// The account's records and balance in `currency`'s minor units; `None`
-/// when an amount does not convert exactly.
-fn convert(data: &ProviderAccountData, currency: Currency) -> Option<Converted> {
-    let transactions = data
-        .transactions
-        .iter()
-        .map(|record| {
-            Some(NormalizedTransaction {
-                provider_id: record.provider_id.clone(),
-                posted_on: record.posted_on,
-                transacted_on: record.transacted_on,
-                amount_minor: record.amount.to_minor_units(currency).ok()?,
-                amount_raw: record.amount.as_str().to_owned(),
-                description: record.description.clone(),
-                payee: record.payee.clone(),
-                memo: record.memo.clone(),
-                pending: record.pending,
-                replaces_provider_id: record.replaces_provider_id.clone(),
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let balance = match &data.balance {
-        Some((on, amount)) => Some((*on, amount.to_minor_units(currency).ok()?)),
+/// The account's records and balance in `currency`'s minor units, a
+/// pending record without a date dated `today`. A record whose amount does
+/// not convert exactly, or a posted one without a date, joins `unusable`;
+/// `None` when the balance does not convert.
+fn convert(
+    records: Vec<ProviderTransaction>,
+    mut unusable: Vec<Option<String>>,
+    balance: Option<(Date, DecimalAmount)>,
+    currency: Currency,
+    today: Date,
+) -> Option<Converted> {
+    let balance = match balance {
+        Some((on, amount)) => Some((on, amount.to_minor_units(currency).ok()?)),
         None => None,
     };
+    let mut transactions = Vec::with_capacity(records.len());
+    for record in records {
+        if record.posted_on.is_none() && !record.pending {
+            unusable.push(Some(record.provider_id));
+            continue;
+        }
+        let Ok(amount_minor) = record.amount.to_minor_units(currency) else {
+            unusable.push(Some(record.provider_id));
+            continue;
+        };
+        transactions.push(NormalizedTransaction {
+            provider_id: record.provider_id,
+            posted_on: record.posted_on.unwrap_or(today),
+            date_reported: record.posted_on.is_some(),
+            transacted_on: record.transacted_on,
+            amount_minor,
+            amount_raw: record.amount.as_str().to_owned(),
+            description: record.description,
+            payee: record.payee,
+            memo: record.memo,
+            pending: record.pending,
+            replaces_provider_id: record.replaces_provider_id,
+        });
+    }
     Some(Converted {
         transactions,
+        unusable,
         balance,
     })
 }

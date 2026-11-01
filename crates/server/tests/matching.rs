@@ -153,6 +153,7 @@ fn record(
     NormalizedTransaction {
         provider_id: id.into(),
         posted_on: date(2026, 10, day),
+        date_reported: true,
         transacted_on: None,
         amount_minor,
         amount_raw: format!("{amount_minor}"),
@@ -189,6 +190,7 @@ async fn apply(
             transactions,
             removed: removed.iter().map(|id| (*id).to_owned()).collect(),
             coverage,
+            unusable: Vec::new(),
         },
     )
     .await

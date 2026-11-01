@@ -286,8 +286,10 @@ struct RawAccountSet<'a> {
     accounts: Vec<&'a RawValue>,
 }
 
+/// An account, each transaction record kept raw so that one malformed
+/// record does not spoil the others.
 #[derive(Deserialize)]
-struct RawAccount {
+struct RawAccount<'a> {
     id: String,
     name: String,
     currency: String,
@@ -296,8 +298,8 @@ struct RawAccount {
     balance_date: i64,
     #[serde(default)]
     org: Option<RawOrg>,
-    #[serde(default)]
-    transactions: Vec<RawTransaction>,
+    #[serde(default, borrow)]
+    transactions: Vec<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +327,12 @@ struct RawTransaction {
 /// What can still be read of a malformed account.
 #[derive(Deserialize)]
 struct AccountId {
+    id: String,
+}
+
+/// What can still be read of a malformed transaction record.
+#[derive(Deserialize)]
+struct RecordId {
     id: String,
 }
 
@@ -360,7 +368,7 @@ fn parse_account_set(
 /// when not even its id can be read.
 fn account(raw: &str, request: &FetchRequest<'_>, start: Date) -> Option<ProviderAccountData> {
     let coverage = Coverage::Window { start };
-    if let Ok(parsed) = serde_json::from_str::<RawAccount>(raw)
+    if let Ok(parsed) = serde_json::from_str::<RawAccount<'_>>(raw)
         && let Some(account) = convert_account(&parsed, request, coverage)
     {
         return Some(account);
@@ -379,23 +387,35 @@ fn account(raw: &str, request: &FetchRequest<'_>, start: Date) -> Option<Provide
         removed: Vec::new(),
         coverage,
         error: Some(ACCOUNT_UNREADABLE.to_owned()),
+        unusable: Vec::new(),
     })
 }
 
-/// A well-formed account in the provider shape; `None` when an amount or a
-/// timestamp is unusable.
+/// A well-formed account in the provider shape; `None` when its balance or
+/// balance date is unusable. A transaction record that cannot be used is
+/// left out and listed among the account's unusable records.
 fn convert_account(
-    raw: &RawAccount,
+    raw: &RawAccount<'_>,
     request: &FetchRequest<'_>,
     coverage: Coverage,
 ) -> Option<ProviderAccountData> {
     let balance = DecimalAmount::parse(&raw.balance).ok()?;
     let balance_on = day(raw.balance_date, request.timezone)?;
-    let transactions = raw
-        .transactions
-        .iter()
-        .map(|record| transaction(record, request))
-        .collect::<Option<Vec<_>>>()?;
+    let mut transactions = Vec::with_capacity(raw.transactions.len());
+    let mut unusable = Vec::new();
+    for record in &raw.transactions {
+        match serde_json::from_str::<RawTransaction>(record.get()) {
+            Ok(parsed) => match transaction(&parsed, request) {
+                Some(converted) => transactions.push(converted),
+                None => unusable.push(Some(parsed.id)),
+            },
+            Err(_) => unusable.push(
+                serde_json::from_str::<RecordId>(record.get())
+                    .ok()
+                    .map(|record| record.id),
+            ),
+        }
+    }
     Some(ProviderAccountData {
         provider_account_id: raw.id.clone(),
         name: raw.name.clone(),
@@ -407,11 +427,13 @@ fn convert_account(
         removed: Vec::new(),
         coverage,
         error: None,
+        unusable,
     })
 }
 
 /// One transaction record. `posted` 0 or `pending: true` marks a pending
-/// one, dated by `transacted_at`, else `posted`, else today.
+/// one, dated by `transacted_at`, else `posted`, else not at all (the
+/// engine then dates it).
 fn transaction(raw: &RawTransaction, request: &FetchRequest<'_>) -> Option<ProviderTransaction> {
     let amount = DecimalAmount::parse(&raw.amount).ok()?;
     let transacted_on = match raw.transacted_at {
@@ -425,9 +447,9 @@ fn transaction(raw: &RawTransaction, request: &FetchRequest<'_>) -> Option<Provi
     };
     let pending = posted_on.is_none() || raw.pending == Some(true);
     let date = if pending {
-        transacted_on.or(posted_on).unwrap_or(request.today)
+        transacted_on.or(posted_on)
     } else {
-        posted_on?
+        Some(posted_on?)
     };
     Some(ProviderTransaction {
         provider_id: raw.id.clone(),
@@ -561,10 +583,41 @@ mod tests {
         assert_eq!(
             dated,
             vec![
-                (true, date(2027, 1, 10)),
-                (true, date(2027, 1, 12)),
-                (true, date(2027, 1, 15)),
-                (false, date(2027, 1, 12)),
+                (true, Some(date(2027, 1, 10))),
+                (true, Some(date(2027, 1, 12))),
+                (true, None),
+                (false, Some(date(2027, 1, 12))),
+            ],
+            "a pending record without any date is left undated"
+        );
+    }
+
+    /// Unusable records are left out and listed by id, or without one when
+    /// none can be read; the account keeps its usable records.
+    #[test]
+    fn unusable_records_listed_by_id() {
+        let result = parse(
+            r#"{"accounts":[{"id":"a","name":"A","currency":"USD","balance":"0",
+                "balance-date":1799992800,"transactions":[
+                {"id":"ok","posted":1799745300,"amount":"-1","description":"x"},
+                {"id":"no-amount","posted":1799745300,"description":"x"},
+                {"id":"bad-amount","posted":1799745300,"amount":"1e3","description":"x"},
+                {"id":"bad-time","posted":-99999999999999,"amount":"-1","description":"x"},
+                {"amount":"-1"},
+                7]}]}"#,
+        )
+        .unwrap();
+        let account = &result.accounts[0];
+        assert_eq!(account.error, None);
+        assert_eq!(account.transactions.len(), 1);
+        assert_eq!(
+            account.unusable,
+            vec![
+                Some("no-amount".to_owned()),
+                Some("bad-amount".to_owned()),
+                Some("bad-time".to_owned()),
+                None,
+                None,
             ]
         );
     }

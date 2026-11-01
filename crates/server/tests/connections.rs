@@ -260,7 +260,7 @@ fn setup_token(text: &str) -> ConnectInput {
 fn txn(provider_id: &str, value: &str) -> ProviderTransaction {
     ProviderTransaction {
         provider_id: provider_id.into(),
-        posted_on: date(2027, 1, 10),
+        posted_on: Some(date(2027, 1, 10)),
         transacted_on: None,
         amount: DecimalAmount::parse(value).unwrap(),
         description: "COFFEE SHOP PURCHASE".into(),
@@ -288,6 +288,7 @@ fn reported(
         removed: Vec::new(),
         coverage: Coverage::Delta,
         error: None,
+        unusable: Vec::new(),
     }
 }
 
