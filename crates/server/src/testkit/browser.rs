@@ -64,7 +64,7 @@ impl Reply {
         let from = self
             .body
             .find(start)
-            .unwrap_or_else(|| panic!("`{start}` not found in the page"))
+            .expect("the start marker is in the page")
             + start.len();
         let len = self.body[from..].find(end).expect("terminator");
         self.body[from..from + len].to_owned()

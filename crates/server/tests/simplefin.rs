@@ -86,7 +86,7 @@ impl Reply {
 #[derive(Default)]
 struct Script {
     claims: Mutex<VecDeque<Reply>>,
-    accounts: Mutex<VecDeque<Reply>>,
+    account_replies: Mutex<VecDeque<Reply>>,
 }
 
 impl Script {
@@ -95,7 +95,7 @@ impl Script {
     }
 
     fn accounts(&self, reply: Reply) {
-        self.accounts.lock().unwrap().push_back(reply);
+        self.account_replies.lock().unwrap().push_back(reply);
     }
 }
 
@@ -139,7 +139,7 @@ fn bridge(script: Arc<Script>) -> Router {
                         .get(header::AUTHORIZATION)
                         .is_some_and(|value| value.as_bytes() == expected.as_bytes());
                     if authorized {
-                        answer(&script.accounts, &headers)
+                        answer(&script.account_replies, &headers)
                     } else {
                         StatusCode::UNAUTHORIZED.into_response()
                     }
