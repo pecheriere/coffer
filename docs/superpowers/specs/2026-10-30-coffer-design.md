@@ -616,6 +616,21 @@ silent second transaction. When an imported amount changes and the transaction
 has one split, that split follows the amount (a `system:sync` change); with
 several splits they stay and the transaction is flagged.
 
+A transaction fed by several connections takes its imported fields (date,
+pending state, amount, description, payee, memo) from one of them, its owner:
+the connection of the earliest live posted source, or without a posted one, of
+the earliest live source. Earliest is by first sighting; live means not
+vanished from the current fetch and not of a removed connection. Only the
+owner's records write to the transaction. The others are kept up to date as
+sources and write nothing, so two providers describing one purchase differently
+never rewrite it in turn. Ownership moves only when a source changes: a record
+posts, a record attaches, or the owner's last record vanishes, in which case
+the transaction takes the next owner's fields once. A next owner with only
+pending records takes over too, but a pending record never overwrites a posted
+transaction, so a posted transaction keeps its fields until that owner's record
+posts. A removed connection's fields stay until the owner next reports a change. With one connection nothing
+differs: all its records write as they always did.
+
 ### 8.5 Outbound network
 
 §5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge
@@ -632,7 +647,28 @@ Plan 2b adds Plaid as a second provider behind the same interface. Link runs on
 one page whose CSP alone also allows `https://cdn.plaid.com`. The environments
 are `sandbox` and `production` (Plaid retired `development` in 2024).
 Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
-disconnect calls `/item/remove`, and 730 days of history are requested.
+disconnect calls `/item/remove`, and 730 days of history are requested. Only
+`ITEM_NOT_FOUND` counts as already gone on disconnect: any other refusal keeps
+the connection, because the Item may still be billing. A connection that needs
+a new login goes through Link's update mode, which keeps the access token and
+the cursor; it is never reconnected with new credentials, which would orphan a
+billing Item.
+
+A delta is reported once, so the cursor moves on only when every record it
+covers was stored or can never be. An account that fails while its records are
+in the fetch holds the saved cursor, and the next sync fetches them again; the
+apply step is idempotent, so the other accounts lose and repeat nothing. A
+currency coffer does not support cannot become storable by fetching again, and
+does not hold it; an account reported with no currency at all may get one, and
+does. A record that cannot be read is skipped and counted without failing its
+account.
+
+Balances are valuations, not ledger amounts, for every provider. One with more
+decimals than its currency allows is rounded half-even to minor units, and the
+provider account keeps the exact text. One that cannot be stored for any other
+reason (too large) is left out and noted on the provider account, while its
+records still apply and the cursor can move. Transaction amounts are never
+rounded: a record that does not convert exactly is unusable.
 
 ### 8.7 Household timezone
 

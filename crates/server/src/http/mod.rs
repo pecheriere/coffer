@@ -59,7 +59,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(api::router())
         .merge(health::router())
-        .merge(pages::router())
+        .merge(pages::router(&state.config))
         .merge(static_files::router())
         .fallback(pages::fallback)
         .layer(axum::middleware::from_fn_with_state(

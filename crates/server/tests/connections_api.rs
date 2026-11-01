@@ -114,6 +114,7 @@ impl World {
                     posted_on: Some(date(2027, 1, 10)),
                     transacted_on: None,
                     amount: DecimalAmount::parse("-12.50").unwrap(),
+                    amount_raw: "-12.50".to_owned(),
                     description: "COFFEE SHOP PURCHASE".into(),
                     payee: None,
                     memo: None,

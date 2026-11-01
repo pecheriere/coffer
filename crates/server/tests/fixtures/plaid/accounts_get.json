@@ -1,0 +1,54 @@
+{
+  "accounts": [
+    {
+      "account_id": "acct-checking",
+      "balances": {
+        "available": 100,
+        "current": 110.5,
+        "iso_currency_code": "USD",
+        "limit": null,
+        "unofficial_currency_code": null
+      },
+      "mask": "0000",
+      "name": "Plaid Checking",
+      "official_name": "First Platypus Bank Gold Standard Checking",
+      "subtype": "checking",
+      "type": "depository"
+    },
+    {
+      "account_id": "acct-card",
+      "balances": {
+        "available": null,
+        "current": 410,
+        "iso_currency_code": "USD",
+        "limit": 2000,
+        "unofficial_currency_code": null
+      },
+      "mask": "3333",
+      "name": "Plaid Credit Card",
+      "official_name": null,
+      "subtype": "credit card",
+      "type": "credit"
+    },
+    {
+      "account_id": "acct-crypto",
+      "balances": {
+        "available": null,
+        "current": null,
+        "iso_currency_code": null,
+        "limit": null,
+        "unofficial_currency_code": "BTC"
+      },
+      "mask": null,
+      "name": "Plaid Crypto",
+      "official_name": null,
+      "subtype": null,
+      "type": "other"
+    }
+  ],
+  "item": {
+    "item_id": "fixtureItem0001",
+    "institution_id": "ins_000000"
+  },
+  "request_id": "fixtureRequest03"
+}

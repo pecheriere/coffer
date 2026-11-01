@@ -264,6 +264,7 @@ fn txn(provider_id: &str, value: &str) -> ProviderTransaction {
         posted_on: Some(date(2027, 1, 10)),
         transacted_on: None,
         amount: DecimalAmount::parse(value).unwrap(),
+        amount_raw: value.to_owned(),
         description: "COFFEE SHOP PURCHASE".into(),
         payee: None,
         memo: None,

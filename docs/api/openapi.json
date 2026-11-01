@@ -5610,7 +5610,7 @@
         "properties": {
           "amount_raw": {
             "type": "string",
-            "description": "The amount as the provider gave it, unconverted."
+            "description": "The amount exactly as the provider wrote it, in its own sign."
           },
           "connection": {
             "$ref": "#/components/schemas/ConnectionId"

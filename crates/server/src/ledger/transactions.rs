@@ -140,7 +140,7 @@ pub struct SourceView {
     pub pending: bool,
     /// The day the provider says it posted (ISO 8601).
     pub posted_on: Date,
-    /// The amount as the provider gave it, unconverted.
+    /// The amount exactly as the provider wrote it, in its own sign.
     pub amount_raw: String,
     pub first_seen_at: Timestamp,
 }
