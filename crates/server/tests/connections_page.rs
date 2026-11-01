@@ -372,6 +372,16 @@ async fn member_cannot_remove_others_connection_via_page() {
 
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
     assert_eq!(world.status(connection).await, ConnectionStatus::Active);
+
+    // Authorization comes before the form is checked: a blank token for
+    // another member's connection is refused, not answered with a notice.
+    let blank = bob
+        .post_form(
+            &format!("/connections/{connection}/simplefin/reconnect"),
+            &[("csrf", &page.csrf()), ("setup_token", "")],
+        )
+        .await;
+    assert_eq!(blank.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

@@ -525,14 +525,7 @@ impl SyncService {
         id: ConnectionId,
         input: ConnectInput,
     ) -> Result<ConnectionView, SyncError> {
-        authorize(actor, Action::ManageConnections)?;
-        let current = self.store.get_connection(id).await?;
-        authorize(
-            actor,
-            Action::RemoveConnection {
-                owner: current.owner,
-            },
-        )?;
+        let current = self.reconnectable(actor, id).await?;
         if current.status == ConnectionStatus::Removed {
             return Err(SyncError::Conflict(CONNECTION_REMOVED));
         }
@@ -571,6 +564,38 @@ impl SyncService {
             .map(ProviderAccountView::from)
             .collect();
         Ok(self.connection_view(record, accounts))
+    }
+
+    /// Checks that `actor` may reconnect the connection `id`, so a form can
+    /// be authorized before its input is read.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] unless the actor may remove the connection;
+    /// [`SyncError::NotFound`] for an unknown connection; storage failures.
+    pub async fn authorize_reconnect(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+    ) -> Result<(), SyncError> {
+        self.reconnectable(actor, id).await.map(drop)
+    }
+
+    /// The connection `id`, once `actor` is authorized to reconnect it.
+    async fn reconnectable(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+    ) -> Result<ConnectionRecord, SyncError> {
+        authorize(actor, Action::ManageConnections)?;
+        let current = self.store.get_connection(id).await?;
+        authorize(
+            actor,
+            Action::RemoveConnection {
+                owner: current.owner,
+            },
+        )?;
+        Ok(current)
     }
 
     /// Stores reconnected `credentials` for `current`, sealed under its id,

@@ -301,24 +301,37 @@ fn wait_text(wait: SignedDuration) -> String {
     }
 }
 
+/// Which kind of form failed: only the add and reconnect forms send a
+/// setup token, so only they blame one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormKind {
+    SetupToken,
+    Action,
+}
+
 /// The notice a failed form action shows, or `None` when it deserves an
 /// error page (a denial, a missing connection, a server failure).
-fn notice_for(err: &SyncError) -> Option<Notice> {
+fn notice_for(err: &SyncError, form: FormKind) -> Option<Notice> {
     let notice = match err {
-        SyncError::Provider(provider @ ProviderError::Invalid(_)) => Notice::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "The setup token could not be used: {}.",
-                provider.record_text()
-            ),
-        ),
+        SyncError::Provider(provider @ ProviderError::Invalid(_))
+            if form == FormKind::SetupToken =>
+        {
+            Notice::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "The setup token could not be used: {}.",
+                    provider.record_text()
+                ),
+            )
+        }
         SyncError::Provider(ProviderError::ReauthRequired) => Notice::new(
             StatusCode::CONFLICT,
             "SimpleFin refused the connection's access: reconnect it with a new setup token.",
         ),
+        // Provider texts name the provider themselves.
         SyncError::Provider(provider) => Notice::new(
             StatusCode::BAD_GATEWAY,
-            format!("SimpleFin failed: {}.", provider.record_text()),
+            capitalized(&provider.record_text()),
         ),
         SyncError::RateLimited { retry_after } => Notice {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -362,8 +375,9 @@ async fn refused(
     state: &AppState,
     session: &PageSession,
     err: SyncError,
+    form: FormKind,
 ) -> Result<Response, PageError> {
-    match notice_for(&err) {
+    match notice_for(&err, form) {
         Some(notice) => render(state, session, Some(notice)).await,
         None => Err(page_error(err)),
     }
@@ -438,7 +452,7 @@ async fn add_simplefin(
         .await
     {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, err).await,
+        Err(err) => refused(&state, &session, err, FormKind::SetupToken).await,
     }
 }
 
@@ -450,6 +464,9 @@ async fn reconnect_simplefin(
 ) -> Result<Response, PageError> {
     let actor = session.verify(&state, &form.csrf)?;
     let id = connection_id(&id)?;
+    if let Err(err) = state.sync.authorize_reconnect(&actor, id).await {
+        return refused(&state, &session, err, FormKind::SetupToken).await;
+    }
     let Some(token) = present(form.setup_token) else {
         let notice = Notice::new(StatusCode::UNPROCESSABLE_ENTITY, TOKEN_MISSING);
         return render(&state, &session, Some(notice)).await;
@@ -460,7 +477,7 @@ async fn reconnect_simplefin(
         .await
     {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, err).await,
+        Err(err) => refused(&state, &session, err, FormKind::SetupToken).await,
     }
 }
 
@@ -478,7 +495,7 @@ async fn sync(
         .await
     {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, err).await,
+        Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }
 }
 
@@ -492,7 +509,7 @@ async fn remove(
     let id = connection_id(&id)?;
     match state.sync.remove_connection(&actor, id).await {
         Ok(()) => Ok(back()),
-        Err(err) => refused(&state, &session, err).await,
+        Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }
 }
 
@@ -501,7 +518,7 @@ mod tests {
     use axum::http::StatusCode;
     use jiff::SignedDuration;
 
-    use super::{capitalized, notice_for, wait_text};
+    use super::{FormKind, capitalized, notice_for, wait_text};
     use crate::sync::SyncError;
     use crate::sync::provider::ProviderError;
 
@@ -521,24 +538,59 @@ mod tests {
 
     #[test]
     fn form_failures_become_notices_or_error_pages() {
-        let limited = notice_for(&SyncError::RateLimited {
-            retry_after: SignedDuration::from_mins(90),
-        })
+        let limited = notice_for(
+            &SyncError::RateLimited {
+                retry_after: SignedDuration::from_mins(90),
+            },
+            FormKind::Action,
+        )
         .unwrap();
         assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(limited.retry_after, Some(5400));
         assert!(limited.message.contains("1 hour 30 minutes"));
-        let invalid = notice_for(&SyncError::Provider(ProviderError::Invalid(
-            "bad https://user:pw@h.example".into(),
-        )))
+        let invalid = notice_for(
+            &SyncError::Provider(ProviderError::Invalid(
+                "bad https://user:pw@h.example".into(),
+            )),
+            FormKind::SetupToken,
+        )
         .unwrap();
         assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(!invalid.message.contains("pw"));
         assert_eq!(
-            notice_for(&SyncError::InProgress).unwrap().status,
+            notice_for(&SyncError::InProgress, FormKind::Action)
+                .unwrap()
+                .status,
             StatusCode::CONFLICT
         );
-        assert!(notice_for(&SyncError::NotFound).is_none());
+        assert!(notice_for(&SyncError::NotFound, FormKind::Action).is_none());
         assert_eq!(capitalized("a sync is queued"), "A sync is queued.");
+    }
+
+    /// Only the forms that send a setup token blame it; a provider text is
+    /// shown once, without the provider's name in front of it again.
+    #[test]
+    fn provider_failures_read_per_form() {
+        let refused = SyncError::Provider(ProviderError::Invalid("refused the request".into()));
+        let on_remove = notice_for(&refused, FormKind::Action).unwrap();
+        assert_eq!(on_remove.status, StatusCode::BAD_GATEWAY);
+        assert!(!on_remove.message.contains("setup token"));
+        assert_eq!(on_remove.message, "Refused the request.");
+        let on_add = notice_for(&refused, FormKind::SetupToken).unwrap();
+        assert!(
+            on_add
+                .message
+                .starts_with("The setup token could not be used")
+        );
+
+        let unavailable = SyncError::Provider(ProviderError::Unavailable(
+            "SimpleFin answered the claim with status 503".into(),
+        ));
+        assert_eq!(
+            notice_for(&unavailable, FormKind::SetupToken)
+                .unwrap()
+                .message,
+            "SimpleFin answered the claim with status 503."
+        );
     }
 }
