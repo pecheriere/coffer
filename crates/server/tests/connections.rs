@@ -32,11 +32,11 @@ use coffer_server::sync::provider::{
     ConnectInput, FetchResult, ProviderAccountData, ProviderError, ProviderKind,
     ProviderTransaction,
 };
-use coffer_server::testkit::{FakeProvider, TestServer, captured_log_text};
+use coffer_server::testkit::{FakeProvider, INJECTED_FAILURE_LABEL, TestServer, captured_log_text};
 use coffer_server::vault::SealedCredentials;
 use coffer_store::{
     AuditEvent, AuditFilter, ConnectionStatus, ConnectionStatusChange, NewSyncRun, PageRequest,
-    ProviderAccountRecord, TransactionFilter, TransactionRecord,
+    ProviderAccountRecord, ProviderAccountUpsert, TransactionFilter, TransactionRecord,
 };
 use http_body_util::BodyExt as _;
 use jiff::civil::date;
@@ -1492,6 +1492,145 @@ async fn bind_to_a_closed_account_is_refused() {
     assert_eq!(problem["code"].as_str(), Some("conflict"));
     assert_eq!(world.provider_account("acct-1").await.account, None);
     assert_eq!(world.transactions(checking).await.len(), 0);
+}
+
+/// Two provider accounts of one connection cannot feed the same account
+/// (every record would arrive twice); another connection's binding to it
+/// is allowed.
+#[tokio::test]
+async fn second_binding_from_the_same_connection_is_refused() {
+    let world = world().await;
+    world
+        .sync_once(vec![
+            reported("acct-old", "USD", None, vec![txn("t-1", "-4.50")]),
+            reported("acct-new", "USD", None, vec![txn("t-2", "-4.50")]),
+        ])
+        .await;
+    let checking = world.account("Checking", "USD").await;
+    let writer = world.token(Scope::Write).await;
+    let bind = |provider_account: ProviderAccountId| {
+        let writer = &writer;
+        let world = &world;
+        async move {
+            world
+                .call(
+                    Method::POST,
+                    &format!("/api/v1/provider-accounts/{provider_account}/bind"),
+                    writer,
+                    Some(json!({"account": checking})),
+                )
+                .await
+        }
+    };
+    let old = world.provider_account("acct-old").await;
+    assert_eq!(bind(old.id).await.0, StatusCode::OK);
+
+    let new = world.provider_account("acct-new").await;
+    let (status, problem) = bind(new.id).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"].as_str(), Some("conflict"));
+    assert_eq!(world.provider_account("acct-new").await.account, None);
+    assert_eq!(world.transactions(checking).await.len(), 1);
+
+    // A provider account of another connection may still be bound to it.
+    let other = world
+        .server
+        .seed_connection(
+            ProviderKind::SimpleFin,
+            "Other bank",
+            world.alice.member,
+            PLAINTEXT,
+        )
+        .await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    let foreign = tx
+        .upsert_provider_account(ProviderAccountUpsert {
+            connection: other,
+            provider_account_id: "acct-other".into(),
+            name: "Other".into(),
+            institution: None,
+            currency_raw: "USD".into(),
+            kind_hint: None,
+            balance: None,
+            seen_at: world.now(),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(bind(foreign.id).await.0, StatusCode::OK);
+}
+
+/// A connection that cannot be stored gives the claimed credentials up
+/// again, as a failed reconnect does.
+#[tokio::test]
+async fn failed_create_gives_up_its_credentials() {
+    let world = world().await;
+    world.server.inject_connection_insert_failure().await;
+    let before = world.server.store.list_connections().await.unwrap().len();
+
+    let err = world
+        .server
+        .sync
+        .create_connection(
+            &world.alice,
+            ProviderKind::SimpleFin,
+            ConnectionLabel::parse(INJECTED_FAILURE_LABEL).unwrap(),
+            setup_token(RENEWED),
+            None,
+        )
+        .await
+        .err()
+        .unwrap();
+
+    assert!(matches!(err, SyncError::Store(_)));
+    let disconnects = world.fake.disconnects();
+    assert_eq!(disconnects.len(), 1);
+    let gave_up_claimed = disconnects[0].expose_secret() == RENEWED;
+    assert!(gave_up_claimed, "the claimed credentials are given up");
+    assert_eq!(
+        world.server.store.list_connections().await.unwrap().len(),
+        before
+    );
+    assert_eq!(world.audit_actions("connection.create").await.len(), 0);
+}
+
+/// The schedule never queues a run of a connection that needs
+/// reconnecting, even when its snapshot was older; a member still may.
+#[tokio::test]
+async fn schedule_refuses_a_connection_needing_reconnect() {
+    let world = world().await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.update_connection_status(
+        world.connection,
+        ConnectionStatusChange {
+            status: ConnectionStatus::ReauthRequired,
+            last_error: Some("the provider refused the credentials".into()),
+            attempted_at: None,
+            succeeded_at: None,
+            at: world.now(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let refused = world
+        .server
+        .sync
+        .request_sync(None, world.connection, SyncTrigger::Schedule)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(refused, SyncError::Conflict(_)));
+    assert!(
+        world
+            .server
+            .sync
+            .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+            .await
+            .is_ok(),
+        "a manual sync is still allowed"
+    );
 }
 
 #[tokio::test]

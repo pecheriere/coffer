@@ -176,6 +176,11 @@ macro_rules! injected_failure_record_id {
 #[cfg(any(test, feature = "testkit"))]
 pub const INJECTED_FAILURE_RECORD_ID: &str = injected_failure_record_id!();
 
+/// The connection label whose insertion fails once
+/// [`Store::inject_connection_insert_failure_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_FAILURE_LABEL: &str = injected_failure_record_id!();
+
 #[cfg(any(test, feature = "testkit"))]
 impl Store {
     /// Make every later insertion of a source record with the provider id
@@ -191,6 +196,26 @@ impl Store {
         sqlx::query(concat!(
             "CREATE TRIGGER IF NOT EXISTS injected_source_insert_failure \
              BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
+            injected_failure_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later insertion of a connection labelled
+    /// [`INJECTED_FAILURE_LABEL`] fail with a backend error.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_connection_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_connection_insert_failure \
+             BEFORE INSERT ON connections WHEN NEW.label = '",
             injected_failure_record_id!(),
             "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
         ))

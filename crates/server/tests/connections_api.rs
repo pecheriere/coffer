@@ -554,3 +554,62 @@ async fn scheduler_queues_due_connections_and_drains_them() {
     assert_eq!(run.requested_by, None);
     assert_eq!(run.status, SyncRunStatus::Succeeded);
 }
+
+/// A run whose provider panics is failed, and the worker goes on with the
+/// next queued run.
+#[tokio::test]
+async fn panicking_run_is_failed_and_the_queue_drains() {
+    let world = world().await;
+    world.fake.panic_next_fetch();
+    let panicking = world.queue_run().await;
+    world.script_one_account();
+    let next = world.queue_run().await;
+
+    let running = world.spawn_scheduler();
+    let failed = world.finished(panicking).await;
+    let drained = world.finished(next).await;
+    running.stop().await;
+
+    assert_eq!(failed.status, SyncRunStatus::Failed);
+    assert_eq!(drained.status, SyncRunStatus::Succeeded);
+}
+
+/// Runs already queued when the scheduler starts are performed.
+#[tokio::test]
+async fn runs_queued_before_start_are_drained() {
+    let world = world().await;
+    world.script_one_account();
+    let queued = world.queue_run().await;
+
+    let running = world.spawn_scheduler();
+    let run = world.finished(queued).await;
+    running.stop().await;
+
+    assert_eq!(run.trigger, SyncTrigger::Manual);
+    assert_eq!(run.status, SyncRunStatus::Succeeded);
+}
+
+/// Shutdown drops a run still fetching; it stays running until the next
+/// start marks it failed as interrupted.
+#[tokio::test]
+async fn shutdown_aborts_a_running_run() {
+    let world = world().await;
+    let gate = world.fake.hold_next_fetch();
+    world.script_one_account();
+    let held = world.queue_run().await;
+
+    let running = world.spawn_scheduler();
+    tokio::time::timeout(WAIT, gate.entered()).await.unwrap();
+    running.stop().await;
+    gate.release();
+
+    let left = world.run_record(held).await;
+    assert_eq!(left.status, SyncRunStatus::Running);
+    assert_eq!(world.transaction_count().await, 0, "nothing was applied");
+
+    let restarted = world.spawn_scheduler();
+    let run = world.finished(held).await;
+    restarted.stop().await;
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some("interrupted"));
+}

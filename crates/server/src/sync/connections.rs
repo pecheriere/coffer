@@ -39,6 +39,9 @@ use crate::vault::SealedCredentials;
 
 const ALREADY_BOUND: &str = "the provider account is already bound";
 const ACCOUNT_CLOSED: &str = "the account is closed";
+const NEEDS_RECONNECT: &str = "the connection needs reconnecting";
+const ACCOUNT_ALREADY_FED: &str =
+    "another provider account of this connection is already bound to the account";
 const KIND_REQUIRED: &str = "kind is required: the provider gives no kind for this account";
 const TRIGGER_INVALID: &str =
     "a member or agent requests manual syncs; only the schedule requests scheduled ones";
@@ -424,6 +427,39 @@ impl SyncService {
             .get(kind)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
         let credentials = provider.connect(input).await.map_err(SyncError::Provider)?;
+        let view = match self
+            .store_connection(actor, kind, label, &credentials, slot)
+            .await
+        {
+            Ok(view) => view,
+            Err(err) => {
+                // Nothing stored the credentials: give them up again rather
+                // than leave them live at the provider.
+                if let Err(disconnect) = provider.disconnect(&credentials).await {
+                    tracing::warn!(
+                        error = ?disconnect,
+                        "could not give up the credentials of a failed connection"
+                    );
+                }
+                return Err(err);
+            }
+        };
+        drop(credentials);
+        self.queued.notify_one();
+        tracing::info!(connection = %view.id, provider = kind.as_str(), "connection created");
+        Ok(view)
+    }
+
+    /// Stores a new connection of `kind` with `credentials`, sealed under
+    /// its id, and queues its `initial` run (see [`Self::create_connection`]).
+    async fn store_connection(
+        &self,
+        actor: &Actor,
+        kind: ProviderKind,
+        label: ConnectionLabel,
+        credentials: &SecretString,
+        slot: Option<IdempotencySlot>,
+    ) -> Result<ConnectionView, SyncError> {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         // Inserted without credentials, then sealed under its id, in the
@@ -439,9 +475,8 @@ impl SyncService {
             .await?;
         let sealed = self
             .vault
-            .seal(created.id, &credentials)
+            .seal(created.id, credentials)
             .map_err(SyncError::Vault)?;
-        drop(credentials);
         tx.set_connection_credentials(created.id, Some(sealed.into()))
             .await?;
         audit(
@@ -466,8 +501,6 @@ impl SyncService {
         let view = self.connection_view(record, Vec::new());
         complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
-        self.queued.notify_one();
-        tracing::info!(connection = %view.id, provider = kind.as_str(), "connection created");
         Ok(view)
     }
 
@@ -747,6 +780,13 @@ impl SyncService {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let connection = ensure_not_removed(&mut tx, id).await?;
+        // The schedule's snapshot was read outside this transaction: a
+        // connection that needs reconnecting since is refused here. A
+        // member may still try.
+        if trigger == SyncTrigger::Schedule && connection.status == ConnectionStatus::ReauthRequired
+        {
+            return Err(SyncError::Conflict(NEEDS_RECONNECT));
+        }
         let provider = self
             .provider_of(&connection)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
@@ -923,6 +963,16 @@ async fn bind_in(
     let target = tx.get_account(account).await?;
     if target.closed_at.is_some() {
         return Err(SyncError::Conflict(ACCOUNT_CLOSED));
+    }
+    // Two provider accounts of one connection feeding one account would
+    // import every record twice, and matching never pairs records of the
+    // same connection.
+    if tx
+        .connection_binding(current.connection, account)
+        .await?
+        .is_some()
+    {
+        return Err(SyncError::Conflict(ACCOUNT_ALREADY_FED));
     }
     let currency =
         Currency::parse(&current.currency_raw).map_err(|_| SyncError::CurrencyMismatch)?;

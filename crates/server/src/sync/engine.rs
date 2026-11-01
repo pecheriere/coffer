@@ -179,9 +179,14 @@ impl Totals {
     fn detail(&self, connection_errors: bool) -> String {
         let report = &self.report;
         let mut detail = format!(
-            "{} accounts, {} with errors; {} created, {} attached, {} updated, {} deleted, \
+            "{} {}, {} with errors; {} created, {} attached, {} updated, {} deleted, \
              {} held, {} skipped",
             self.accounts,
+            if self.accounts == 1 {
+                "account"
+            } else {
+                "accounts"
+            },
             self.failed_accounts,
             report.created,
             report.attached,
@@ -272,17 +277,14 @@ impl SyncService {
         }
     }
 
-    /// Marks `run` failed after a storage error, if the store allows.
+    /// Marks `run` failed after a storage error or a panic, whether it is
+    /// still queued or running, if the store allows; a run that already
+    /// finished is left as it is.
     pub(super) async fn abandon(&self, run: SyncRunId) {
         let finished = async {
             let mut tx = self.store.begin().await?;
-            tx.finish_sync_run(
-                run,
-                SyncRunStatus::Failed,
-                Some(INTERNAL_FAILURE.to_owned()),
-                self.clock.now(),
-            )
-            .await?;
+            tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
+                .await?;
             tx.commit().await
         }
         .await;
@@ -920,11 +922,18 @@ mod tests {
         assert_eq!(status, SyncRunStatus::Partial);
         assert_eq!(
             detail,
-            "1 accounts, 0 with errors; 2 created, 0 attached, 0 updated, 0 deleted, 0 held, \
+            "1 account, 0 with errors; 2 created, 0 attached, 0 updated, 0 deleted, 0 held, \
              0 skipped; the connection is removed"
         );
         assert_eq!(outcome(&totals, false, false).0, SyncRunStatus::Succeeded);
         assert_eq!(outcome(&totals, false, true).0, SyncRunStatus::Partial);
+        totals.add(&AccountOutcome::Failed);
+        assert!(
+            totals
+                .detail(false)
+                .starts_with("2 accounts, 1 with errors;"),
+            "more than one account is plural"
+        );
     }
 
     #[test]

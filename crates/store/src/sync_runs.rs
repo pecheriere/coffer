@@ -183,6 +183,36 @@ impl StoreTx {
         Ok(run)
     }
 
+    /// Mark the run `failed` with `detail` whether it is still queued or
+    /// already running, as when the task performing it ended abnormally.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the run does not exist; [`StoreError::Conflict`] if it
+    /// has already finished.
+    pub async fn fail_sync_run(
+        &mut self,
+        id: SyncRunId,
+        detail: &str,
+        at: Timestamp,
+    ) -> Result<SyncRunRecord, StoreError> {
+        let result = sqlx::query(
+            "UPDATE sync_runs SET status = 'failed', detail = ?, finished_at = ? \
+             WHERE id = ? AND status IN ('queued', 'running')",
+        )
+        .bind(detail)
+        .bind(at.as_millisecond())
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        let run = fetch_sync_run(&mut *self.tx, id).await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::Conflict("the sync run has already finished"));
+        }
+        Ok(run)
+    }
+
     /// Mark every running run `failed` with `detail`, as after a restart
     /// interrupted them, and return how many there were. Queued runs stay
     /// queued.

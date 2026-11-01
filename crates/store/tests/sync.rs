@@ -624,3 +624,34 @@ async fn connection_binding_is_per_connection() {
     );
     tx.commit().await.unwrap();
 }
+
+/// A run is failed whether still queued or running; a finished one stays.
+#[tokio::test]
+async fn fail_sync_run_fails_queued_and_running_runs() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let queued = queue(&store, connection, SyncTrigger::Manual, None, 10).await;
+    let running = queue(&store, connection, SyncTrigger::Manual, None, 11).await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(running, at(12)).await.unwrap();
+    for id in [queued, running] {
+        let failed = tx.fail_sync_run(id, "broken", at(13)).await.unwrap();
+        assert_eq!(failed.status, SyncRunStatus::Failed);
+        assert_eq!(failed.detail.as_deref(), Some("broken"));
+        assert_eq!(failed.finished_at, Some(at(13)));
+    }
+    assert!(
+        matches!(
+            tx.fail_sync_run(queued, "again", at(14)).await,
+            Err(StoreError::Conflict(_))
+        ),
+        "a finished run stays as it is"
+    );
+    assert!(matches!(
+        tx.fail_sync_run(SyncRunId::new(), "missing", at(14)).await,
+        Err(StoreError::NotFound)
+    ));
+    tx.commit().await.unwrap();
+}

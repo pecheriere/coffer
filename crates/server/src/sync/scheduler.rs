@@ -72,8 +72,9 @@ pub fn due(now: Timestamp, entries: &[ScheduleEntry]) -> Vec<ConnectionId> {
 }
 
 /// Starts the scheduler over `state`'s sync service; it stops once
-/// `shutdown` resolves, dropping a run still going. The handle finishes
-/// when it has stopped.
+/// `shutdown` resolves. The handle finishes once the worker and the ticker
+/// have stopped; a run still going is aborted, and its task is cancelled at
+/// its next await point without being waited for.
 pub fn spawn(
     state: AppState,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -93,15 +94,15 @@ pub fn spawn(
 }
 
 /// Recovers interrupted runs, then runs the worker and the ticker until
-/// `stopped`. Each runs in its own task, so a panic in one is logged and
+/// `stop_signal` says to stop. Each runs in its own task, so a panic in one is logged and
 /// leaves the other running.
-async fn run_tasks(sync: Arc<SyncService>, stopped: watch::Receiver<bool>) {
-    let mut stop = stopped.clone();
+async fn run_tasks(sync: Arc<SyncService>, stop_signal: watch::Receiver<bool>) {
+    let mut stop = stop_signal.clone();
     if !recover(&sync, &mut stop).await {
         return;
     }
-    let worker = tokio::spawn(work(Arc::clone(&sync), stopped.clone()));
-    let ticker = tokio::spawn(tick_loop(sync, stopped));
+    let worker = tokio::spawn(work(Arc::clone(&sync), stop_signal.clone()));
+    let ticker = tokio::spawn(tick_loop(sync, stop_signal));
     for (task, handle) in [("worker", worker), ("ticker", ticker)] {
         if let Err(err) = handle.await {
             tracing::error!(task, error = %err, "a sync scheduler task ended abnormally");

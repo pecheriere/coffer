@@ -21,7 +21,7 @@ use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::identity::{DisplayName, TokenName, Username};
 use coffer_domain::ids::{ConnectionId, MemberId};
 use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
-pub use coffer_store::INJECTED_FAILURE_RECORD_ID;
+pub use coffer_store::{INJECTED_FAILURE_LABEL, INJECTED_FAILURE_RECORD_ID};
 use coffer_store::{NewConnection, Store};
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp};
@@ -225,6 +225,19 @@ impl TestServer {
             .expect("install the injected failure");
     }
 
+    /// Makes every later insertion of a connection labelled
+    /// [`INJECTED_FAILURE_LABEL`] fail, as a storage failure would.
+    ///
+    /// # Panics
+    ///
+    /// If the failure cannot be installed.
+    pub async fn inject_connection_insert_failure(&self) {
+        self.store
+            .inject_connection_insert_failure_for_tests()
+            .await
+            .expect("install the injected failure");
+    }
+
     /// A server over an existing data directory (for example one a CLI
     /// command just initialised), with the clock set to the real time so
     /// that links issued by the real clock are still valid.
@@ -405,6 +418,7 @@ pub struct FakeProvider {
     responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
     requests: Mutex<Vec<FakeFetch>>,
     fetch_gate: Mutex<Option<CallGate>>,
+    fetch_panics: Mutex<bool>,
     connect_gate: Mutex<Option<CallGate>>,
     disconnect_gate: Mutex<Option<CallGate>>,
     disconnect_error: Mutex<Option<ProviderError>>,
@@ -480,6 +494,7 @@ impl FakeProvider {
             responses: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
             fetch_gate: Mutex::new(None),
+            fetch_panics: Mutex::new(false),
             connect_gate: Mutex::new(None),
             disconnect_gate: Mutex::new(None),
             disconnect_error: Mutex::new(None),
@@ -492,6 +507,11 @@ impl FakeProvider {
     #[must_use]
     pub fn hold_next_fetch(&self) -> CallGate {
         hold(&self.fetch_gate)
+    }
+
+    /// Makes the next fetch panic, as a bug in a provider would.
+    pub fn panic_next_fetch(&self) {
+        *lock(&self.fetch_panics) = true;
     }
 
     /// Makes the next `connect` wait, once it has started, until the
@@ -574,18 +594,24 @@ impl Provider for FakeProvider {
                 today: request.today,
                 timezone: request.timezone.iana_name().unwrap_or_default().to_owned(),
             });
-        let response = self
-            .responses
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front()
-            .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())));
+        // A panicking fetch leaves the script for the next one.
+        let panics = std::mem::take(&mut *lock(&self.fetch_panics));
+        let response = (!panics).then(|| {
+            self.responses
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop_front()
+                .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())))
+        });
         let gate = lock(&self.fetch_gate).take();
         Box::pin(async move {
             if let Some(gate) = gate {
                 gate.hold().await;
             }
-            response
+            match response {
+                Some(response) => response,
+                None => panic!("scripted provider panic"),
+            }
         })
     }
 
