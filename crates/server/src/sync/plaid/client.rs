@@ -82,7 +82,7 @@ pub enum PlaidError {
     #[error("{0}")]
     Invalid(&'static str),
     /// The request was refused or failed on the way out.
-    #[error("Plaid could not be reached: {0}")]
+    #[error("Plaid could not be reached")]
     Egress(#[source] EgressError),
 }
 
@@ -553,7 +553,8 @@ impl PlaidClient {
         if response.status.is_success() {
             Ok(body)
         } else {
-            Err(error_from(response.status, &body))
+            let credentials = [self.config.client_id.as_str(), request.secret];
+            Err(error_from(response.status, &body, &credentials))
         }
     }
 }
@@ -703,8 +704,9 @@ fn read<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, PlaidError> {
     serde_json::from_slice(body).map_err(|_| PlaidError::Invalid(ANSWER_UNREADABLE))
 }
 
-/// The error an answer other than a success stands for.
-fn error_from(status: StatusCode, body: &[u8]) -> PlaidError {
+/// The error an answer other than a success stands for. `credentials` are
+/// what the request sent and must not come back in an error.
+fn error_from(status: StatusCode, body: &[u8], credentials: &[&str]) -> PlaidError {
     let rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
     let Ok(error) = serde_json::from_slice::<RawError>(body) else {
         return if rate_limited {
@@ -728,21 +730,30 @@ fn error_from(status: StatusCode, body: &[u8]) -> PlaidError {
         }
         code => PlaidError::Api {
             status: status.as_u16(),
-            error_type: code_or_unknown(&error.error_type),
-            error_code: code_or_unknown(code),
+            error_type: code_or_unknown(&error.error_type, credentials),
+            error_code: code_or_unknown(code, credentials),
         },
     }
 }
 
-/// `text` when shaped like one of Plaid's codes, else [`UNKNOWN_CODE`]: an
-/// answer cannot put an echoed credential, which holds lowercase letters or
-/// a hyphen, into an error this way.
-fn code_or_unknown(text: &str) -> String {
+/// `text` when shaped like one of Plaid's codes and holding none of
+/// `credentials`, else [`UNKNOWN_CODE`]. The shape keeps out an echoed access
+/// or public token, which holds hyphens; a client id or a secret may have any
+/// shape, so those are looked for by value.
+fn code_or_unknown(text: &str, credentials: &[&str]) -> String {
     let is_code = (1..=MAX_CODE_LEN).contains(&text.len())
         && text
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
-    if is_code { text } else { UNKNOWN_CODE }.to_owned()
+    let echoes = credentials
+        .iter()
+        .any(|credential| !credential.is_empty() && text.contains(credential));
+    if is_code && !echoes {
+        text
+    } else {
+        UNKNOWN_CODE
+    }
+    .to_owned()
 }
 
 #[cfg(test)]
@@ -890,8 +901,8 @@ mod tests {
 
     #[test]
     fn only_code_shaped_text_is_kept() {
-        assert_eq!(code_or_unknown("INVALID_FIELD"), "INVALID_FIELD");
-        assert_eq!(code_or_unknown("HTTP_502"), "HTTP_502");
+        assert_eq!(code_or_unknown("INVALID_FIELD", &[]), "INVALID_FIELD");
+        assert_eq!(code_or_unknown("HTTP_502", &[]), "HTTP_502");
         for bad in [
             "",
             "access-sandbox-1234",
@@ -900,7 +911,13 @@ mod tests {
             "NEW\nLINE",
             &"A".repeat(65),
         ] {
-            assert_eq!(code_or_unknown(bad), "UNKNOWN");
+            assert_eq!(code_or_unknown(bad, &[]), "UNKNOWN");
         }
+        // A credential shaped like a code is withheld, alone or inside one.
+        let credentials = ["UPPERCLIENT1", "UPPERSECRET2", ""];
+        for echoed in ["UPPERCLIENT1", "UPPERSECRET2", "X_UPPERSECRET2_Y"] {
+            assert_eq!(code_or_unknown(echoed, &credentials), "UNKNOWN");
+        }
+        assert_eq!(code_or_unknown("OTHER", &credentials), "OTHER");
     }
 }

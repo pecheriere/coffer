@@ -22,7 +22,7 @@ const DEFAULT_SYNC_INTERVAL_HOURS: i64 = 6;
 const DEFAULT_SIMPLEFIN_HOSTS: &str = "bridge.simplefin.org,beta-bridge.simplefin.org";
 const DEFAULT_PLAID_COUNTRY_CODES: &str = "US";
 /// The longest Plaid secret file accepted, in bytes.
-const MAX_PLAID_SECRET_BYTES: usize = 4096;
+const MAX_PLAID_SECRET_BYTES: u16 = 4096;
 
 /// A configuration problem. Messages name the offending variable and never
 /// echo its value, which may be sensitive.
@@ -435,11 +435,12 @@ fn read_plaid_secret(var: &'static str, path: &str) -> Result<SecretString, Conf
     }
     // Room for one byte over the limit, so that reading never reallocates
     // and leaves a copy of the secret behind.
-    let mut text = Zeroizing::new(String::with_capacity(MAX_PLAID_SECRET_BYTES + 1));
-    file.take(u64::try_from(MAX_PLAID_SECRET_BYTES + 1).unwrap_or(u64::MAX))
+    let limit = usize::from(MAX_PLAID_SECRET_BYTES);
+    let mut text = Zeroizing::new(String::with_capacity(limit + 1));
+    file.take(u64::from(MAX_PLAID_SECRET_BYTES) + 1)
         .read_to_string(&mut text)
         .map_err(|_| invalid("the file could not be read as UTF-8 text"))?;
-    if text.len() > MAX_PLAID_SECRET_BYTES {
+    if text.len() > limit {
         return Err(invalid("the file is too long to hold a Plaid secret"));
     }
     let secret = text.trim_end_matches(['\r', '\n']);
@@ -975,6 +976,45 @@ mod tests {
                 "the secret is read without its newline"
             );
         }
+    }
+
+    /// Permissions are those of the file a symlink reaches, not the link's.
+    #[cfg(unix)]
+    #[test]
+    fn plaid_secret_file_symlink_follows_target_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let link_to = |mode: u32, name: &str| {
+            let target = secret_file(&dir, mode, b"SECRET-MARKER\n");
+            let link = dir.path().join(name);
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            link.to_str().unwrap().to_owned()
+        };
+
+        let private = link_to(0o600, "link-private");
+        let plaid = plaid_with_secret(&private, &[]).plaid.unwrap();
+        assert!(
+            plaid.secret.expose_secret() == "SECRET-MARKER",
+            "a link to a private file is read"
+        );
+
+        let shared = link_to(0o644, "link-shared");
+        let err = with_plaid(&[
+            ("COFFER_PLAID_CLIENT_ID", "id"),
+            ("COFFER_PLAID_SECRET_FILE", &shared),
+            ("COFFER_PLAID_ENV", "production"),
+        ])
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::Invalid {
+                    var: "COFFER_PLAID_SECRET_FILE",
+                    ..
+                }
+            ),
+            "a link to a file others can access is refused"
+        );
+        assert!(!err.to_string().contains("SECRET-MARKER"));
     }
 
     #[cfg(unix)]

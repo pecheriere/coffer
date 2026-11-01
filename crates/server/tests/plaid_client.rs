@@ -103,9 +103,13 @@ async fn answer(
 }
 
 fn config() -> PlaidConfig {
+    config_with(CLIENT_ID, SECRET)
+}
+
+fn config_with(client_id: &str, secret: &str) -> PlaidConfig {
     PlaidConfig {
-        client_id: CLIENT_ID.to_owned(),
-        secret: SecretString::from(SECRET),
+        client_id: client_id.to_owned(),
+        secret: SecretString::from(secret),
         environment: PlaidEnvironment::Sandbox,
         country_codes: vec!["US".to_owned(), "CA".to_owned()],
     }
@@ -114,11 +118,15 @@ fn config() -> PlaidConfig {
 /// The client under test, its mock and the mock's script. The mock stops
 /// when dropped, so the caller keeps it.
 async fn client() -> (PlaidClient, MockUpstream, Script) {
+    client_with(config()).await
+}
+
+async fn client_with(config: PlaidConfig) -> (PlaidClient, MockUpstream, Script) {
     capture_logs();
     let script = Script::default();
     let router = Router::new().fallback(answer).with_state(script.clone());
     let mock = MockUpstream::start(router).await;
-    (PlaidClient::for_tests(&mock, config()), mock, script)
+    (PlaidClient::for_tests(&mock, config), mock, script)
 }
 
 fn access_token() -> SecretString {
@@ -504,6 +512,72 @@ async fn one_bad_account_does_not_fail_the_answer() {
 }
 
 #[tokio::test]
+async fn rate_limits_mapped() {
+    let (client, _mock, script) = client().await;
+    let token = access_token();
+    let error = |status: StatusCode, body: String| {
+        let script = script.clone();
+        let client = &client;
+        let token = &token;
+        async move {
+            script.reply(status, body);
+            client.sync_page(token, None).await.unwrap_err()
+        }
+    };
+
+    let rate_limited = json!({
+        "error_type": "RATE_LIMIT_EXCEEDED",
+        "error_code": "TRANSACTIONS_SYNC_LIMIT",
+        "error_message": "rate limit exceeded",
+    })
+    .to_string();
+    assert!(matches!(
+        error(StatusCode::TOO_MANY_REQUESTS, rate_limited).await,
+        PlaidError::RateLimited
+    ));
+    let rate_limit_type = json!({
+        "error_type": "RATE_LIMIT_EXCEEDED",
+        "error_code": "SOME_LIMIT",
+    })
+    .to_string();
+    assert!(
+        matches!(
+            error(StatusCode::BAD_REQUEST, rate_limit_type).await,
+            PlaidError::RateLimited
+        ),
+        "the error type alone marks a rate limit"
+    );
+    let readable_429 = json!({
+        "error_type": "API_ERROR",
+        "error_code": "SOME_OTHER_CODE",
+    })
+    .to_string();
+    assert!(
+        matches!(
+            error(StatusCode::TOO_MANY_REQUESTS, readable_429).await,
+            PlaidError::RateLimited
+        ),
+        "the status alone marks a rate limit"
+    );
+    let rate_limit_code = json!({
+        "error_type": "API_ERROR",
+        "error_code": "RATE_LIMIT_EXCEEDED",
+    })
+    .to_string();
+    assert!(matches!(
+        error(StatusCode::BAD_REQUEST, rate_limit_code).await,
+        PlaidError::RateLimited
+    ));
+    assert!(
+        matches!(
+            error(StatusCode::TOO_MANY_REQUESTS, String::new()).await,
+            PlaidError::RateLimited
+        ),
+        "a 429 without a readable body is still a rate limit"
+    );
+}
+
+#[tokio::test]
 async fn error_body_mapped() {
     let (client, _mock, script) = client().await;
     let token = access_token();
@@ -525,33 +599,6 @@ async fn error_body_mapped() {
         error(StatusCode::BAD_REQUEST, MUTATION.to_owned()).await,
         PlaidError::MutationDuringPagination
     ));
-    let rate_limited = json!({
-        "error_type": "RATE_LIMIT_EXCEEDED",
-        "error_code": "TRANSACTIONS_SYNC_LIMIT",
-        "error_message": "rate limit exceeded",
-    })
-    .to_string();
-    assert!(matches!(
-        error(StatusCode::TOO_MANY_REQUESTS, rate_limited).await,
-        PlaidError::RateLimited
-    ));
-    let rate_limit_code = json!({
-        "error_type": "API_ERROR",
-        "error_code": "RATE_LIMIT_EXCEEDED",
-    })
-    .to_string();
-    assert!(matches!(
-        error(StatusCode::BAD_REQUEST, rate_limit_code).await,
-        PlaidError::RateLimited
-    ));
-    assert!(
-        matches!(
-            error(StatusCode::TOO_MANY_REQUESTS, String::new()).await,
-            PlaidError::RateLimited
-        ),
-        "a 429 without a readable body is still a rate limit"
-    );
-
     let other = json!({
         "error_type": "INVALID_INPUT",
         "error_code": "INVALID_FIELD",
@@ -604,6 +651,41 @@ async fn error_body_mapped() {
         ),
         "a failed removal must be reported"
     );
+}
+
+/// A client id and a secret that happen to be shaped like Plaid's codes are
+/// still withheld when an answer echoes them as its error type or code.
+#[tokio::test]
+async fn code_shaped_credentials_absent_from_errors() {
+    const UPPER_ID: &str = "UPPERCLIENTID123";
+    const UPPER_SECRET: &str = "UPPERSECRET456";
+    let (client, _mock, script) = client_with(config_with(UPPER_ID, UPPER_SECRET)).await;
+    let token = access_token();
+    for (error_type, error_code) in [
+        (UPPER_SECRET, UPPER_ID),
+        (UPPER_ID, UPPER_SECRET),
+        ("X_UPPERSECRET456_Y", "Z_UPPERCLIENTID123"),
+    ] {
+        script.reply(
+            StatusCode::BAD_REQUEST,
+            json!({ "error_type": error_type, "error_code": error_code }).to_string(),
+        );
+        let err = client.sync_page(&token, None).await.unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                PlaidError::Api { error_type, error_code, .. }
+                    if error_type == "UNKNOWN" && error_code == "UNKNOWN"
+            ),
+            "a code holding a credential must be replaced"
+        );
+        for text in [err.to_string(), format!("{err:?}")] {
+            assert!(
+                !text.contains(UPPER_ID) && !text.contains(UPPER_SECRET),
+                "an error must not show a credential"
+            );
+        }
+    }
 }
 
 /// Every way a request can fail, each with an answer that echoes every
