@@ -53,6 +53,10 @@ pub enum SyncError {
     /// Too many syncs of the connection; retry after `retry_after`.
     #[error("too many syncs of this connection")]
     RateLimited { retry_after: SignedDuration },
+    /// The member's Link pages asked Plaid too often; retry after
+    /// `retry_after`.
+    #[error("Too many requests to Plaid. Wait a few minutes.")]
+    PlaidBudgetSpent { retry_after: SignedDuration },
     /// A sync of the connection is already queued or running.
     #[error("a sync of this connection is already queued or running")]
     InProgress,
@@ -141,6 +145,13 @@ impl From<SyncError> for Problem {
                 StatusCode::TOO_MANY_REQUESTS,
                 ProblemCode::SyncRateLimited,
                 "Too many syncs",
+            )
+            .with_detail(message)
+            .with_retry_after(retry_seconds(retry_after)),
+            SyncError::PlaidBudgetSpent { retry_after } => Self::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                ProblemCode::Busy,
+                "Too many requests",
             )
             .with_detail(message)
             .with_retry_after(retry_seconds(retry_after)),
@@ -236,6 +247,16 @@ mod tests {
             assert_eq!(problem.code, ProblemCode::SyncRateLimited);
             assert_eq!(problem.retry_after, Some(seconds));
         }
+    }
+
+    #[test]
+    fn plaid_budget_problem_is_busy_with_retry_after() {
+        let problem = Problem::from(SyncError::PlaidBudgetSpent {
+            retry_after: SignedDuration::from_mins(10),
+        });
+        assert_eq!(problem.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(problem.code, ProblemCode::Busy);
+        assert_eq!(problem.retry_after, Some(600));
     }
 
     /// A provider's text reaches the problem only sanitized.
