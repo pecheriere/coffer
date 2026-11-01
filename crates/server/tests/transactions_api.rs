@@ -136,7 +136,7 @@ async fn account(world: &World, name: &str) -> String {
         Some(json!({"name": name, "kind": "checking", "currency": "USD"})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(status, StatusCode::CREATED);
     id(&created)
 }
 
@@ -149,7 +149,7 @@ async fn category(world: &World, name: &str) -> String {
         Some(json!({"name": format!("{name} group")})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{group}");
+    assert_eq!(status, StatusCode::CREATED);
     let (status, created) = call(
         &world.server,
         Method::POST,
@@ -158,7 +158,7 @@ async fn category(world: &World, name: &str) -> String {
         Some(json!({"group": id(&group), "name": name, "kind": "expense"})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(status, StatusCode::CREATED);
     id(&created)
 }
 
@@ -178,7 +178,7 @@ async fn transaction(
                     "minor_units": minor_units, "description": description})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(status, StatusCode::CREATED);
     id(&created)
 }
 
@@ -191,7 +191,7 @@ async fn patch(world: &World, transaction: &str, body: Value) -> Value {
         Some(body),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(status, StatusCode::OK);
     patched
 }
 
@@ -204,7 +204,7 @@ async fn get(world: &World, transaction: &str) -> Value {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(status, StatusCode::OK);
     fetched
 }
 
@@ -218,7 +218,7 @@ async fn list_page(world: &World, query: &str) -> Value {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{query}: {page}");
+    assert_eq!(status, StatusCode::OK, "{query}");
     page
 }
 
@@ -342,7 +342,7 @@ async fn unknown_account_filter_is_404() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["code"], "not_found");
 }
 
@@ -443,7 +443,7 @@ async fn bad_cursor_is_400_invalid_cursor() {
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{cursor}: {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{cursor}");
         assert_eq!(body["code"], "invalid_cursor", "{cursor}");
     }
 }
@@ -472,8 +472,8 @@ async fn enum_query_value_not_echoed() {
             ),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
-        assert!(!body.contains("SECRET"), "{query} echoed: {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert!(!body.contains("SECRET"), "{query} was echoed");
         let body: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["code"], "invalid");
         assert_eq!(
@@ -489,7 +489,7 @@ async fn batch_is_atomic() {
     let a = account(&world, "Checking").await;
     let live = category(&world, "Groceries").await;
     let archived = category(&world, "Old").await;
-    let (status, body) = call(
+    let (status, _) = call(
         &world.server,
         Method::PATCH,
         &format!("/api/v1/categories/{archived}"),
@@ -497,7 +497,7 @@ async fn batch_is_atomic() {
         Some(json!({"archived": true})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     let first = transaction(&world, &a, "2026-10-01", -1000, "Grocery store").await;
     let second = transaction(&world, &a, "2026-10-02", -2000, "Old habit").await;
     let before = get(&world, &first).await;
@@ -515,13 +515,16 @@ async fn batch_is_atomic() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["code"], "invalid");
     let detail = body["detail"].as_str().unwrap();
-    assert!(detail.starts_with("operations[1]: "), "{detail}");
+    assert!(
+        detail.starts_with("operations[1]: "),
+        "the detail must name the failing operation"
+    );
     assert!(
         !detail.contains(&second) && !detail.contains(&archived),
-        "{detail}"
+        "the detail must not echo the ids"
     );
     assert_eq!(
         get(&world, &first).await,
@@ -554,7 +557,7 @@ async fn batch_names_a_missing_transaction_by_index() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["detail"], "operations[1]: not found");
     assert_eq!(get(&world, &first).await["review"], "unreviewed");
 }
@@ -578,7 +581,7 @@ async fn batch_refuses_empty_oversized_and_repeated_operations() {
             Some(json!({ "operations": operations })),
         )
         .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["code"], "invalid");
     }
     assert_eq!(get(&world, &first).await["review"], "unreviewed");
@@ -606,7 +609,7 @@ async fn batch_review_and_assign_attributed_to_agent() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     let items = body["items"].as_array().unwrap();
     assert_eq!(
         items.iter().map(id).collect::<Vec<_>>(),
@@ -658,10 +661,10 @@ async fn read_token_cannot_patch() {
         Some(json!({"review": "reviewed"})),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["code"], "forbidden");
 
-    let (status, body) = call(
+    let (status, _) = call(
         &world.server,
         Method::POST,
         "/api/v1/transactions/batch",
@@ -669,12 +672,12 @@ async fn read_token_cannot_patch() {
         Some(json!({"operations": [{"id": first, "patch": {"review": "reviewed"}}]})),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
-    let (status, body) = call(&world.server, Method::DELETE, &path, &read, None).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _) = call(&world.server, Method::DELETE, &path, &read, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
-    let (status, body) = call(
+    let (status, _) = call(
         &world.server,
         Method::POST,
         "/api/v1/transactions",
@@ -685,11 +688,11 @@ async fn read_token_cannot_patch() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Reading is allowed.
-    let (status, body) = call(&world.server, Method::GET, &path, &read, None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = call(&world.server, Method::GET, &path, &read, None).await;
+    assert_eq!(status, StatusCode::OK);
     let (status, body) = call(
         &world.server,
         Method::GET,
@@ -698,7 +701,7 @@ async fn read_token_cannot_patch() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"].as_array().unwrap().len(), 1);
     assert_eq!(get(&world, &first).await["review"], "unreviewed");
 }
@@ -722,7 +725,7 @@ async fn create_get_and_delete_manual_transaction() {
         ),
     )
     .await;
-    assert_eq!(first.0, StatusCode::CREATED, "{}", first.1);
+    assert_eq!(first.0, StatusCode::CREATED);
     let created: Value = serde_json::from_str(&first.1).unwrap();
     assert_eq!(
         created["amount"],
@@ -757,6 +760,6 @@ async fn create_get_and_delete_manual_transaction() {
     let path = format!("/api/v1/transactions/{transaction}");
     let (status, _) = call(&world.server, Method::DELETE, &path, &world.write, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (status, body) = call(&world.server, Method::GET, &path, &world.write, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) = call(&world.server, Method::GET, &path, &world.write, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

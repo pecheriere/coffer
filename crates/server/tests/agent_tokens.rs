@@ -122,14 +122,20 @@ async fn token_shown_once_and_stored_hashed() {
         .unwrap();
 
     assert_eq!(listed, vec![record.clone()]);
-    assert_eq!(record.prefix, &token.expose_secret()[..12]);
+    assert!(
+        record.prefix == token.expose_secret()[..12],
+        "the stored prefix must be the first twelve characters"
+    );
     assert!(!format!("{listed:?}").contains(token.expose_secret()));
     // The store finds the token by its keyed hash, never by its bytes.
     let hash = world
         .server
         .key
         .hash(TokenKind::Agent, token.expose_secret());
-    assert_ne!(hash.as_slice(), token.expose_secret().as_bytes());
+    assert!(
+        hash.as_slice() != token.expose_secret().as_bytes(),
+        "the stored hash must not be the token"
+    );
     let now = coffer_domain::time::Clock::now(&*world.server.clock);
     assert_eq!(
         world

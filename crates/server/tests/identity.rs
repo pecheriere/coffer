@@ -86,7 +86,10 @@ async fn bootstrap_creates_first_admin_then_disappears() {
     let server = TestServer::new().await;
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     assert_eq!(link.host_str(), Some("coffer.test"));
-    assert!(link.path().starts_with("/setup/"), "{link}");
+    assert!(
+        link.path().starts_with("/setup/"),
+        "the link must point at the setup path"
+    );
 
     let alice = server.authenticator().enroll(&link, "alice", "Alice").await;
     let member = server.store.get_member(alice).await.unwrap();
@@ -135,7 +138,10 @@ async fn invite_creates_member_with_invite_role() {
         .create_invite(&session(alice, Role::Admin), Role::Member, None)
         .await
         .unwrap();
-    assert!(link.path().starts_with("/invite/"), "{link}");
+    assert!(
+        link.path().starts_with("/invite/"),
+        "the link must point at the invite path"
+    );
 
     let bob = server.authenticator().enroll(&link, "bob", "Bob").await;
     assert_eq!(
@@ -200,9 +206,18 @@ async fn invite_creates_member_with_invite_role() {
     let token = link_token(&link);
     for event in &events {
         let changes = serde_json::to_string(&event.changes).unwrap();
-        assert!(!changes.contains(&token), "{changes}");
-        assert!(!changes.contains("hash"), "{changes}");
-        assert!(!changes.contains("credential"), "{changes}");
+        assert!(
+            !changes.contains(&token),
+            "the audit changes must not hold the token"
+        );
+        assert!(
+            !changes.contains("hash"),
+            "the audit changes must not hold a hash"
+        );
+        assert!(
+            !changes.contains("credential"),
+            "the audit changes must not hold a credential"
+        );
     }
 }
 
@@ -305,7 +320,7 @@ async fn invite_consumed_once_under_race() {
         outcomes
             .iter()
             .any(|r| matches!(r, Err(AuthError::InviteUsed))),
-        "{outcomes:?}"
+        "one redemption must report the invite as used"
     );
     assert_eq!(server.store.list_members().await.unwrap().len(), 2);
 }
@@ -438,7 +453,10 @@ async fn reenroll_adds_passkey_to_existing_member() {
         .create_reenroll(&session(alice, Role::Admin), bob)
         .await
         .unwrap();
-    assert!(link.path().starts_with("/invite/"), "{link}");
+    assert!(
+        link.path().starts_with("/invite/"),
+        "the link must point at the invite path"
+    );
 
     let mut replacement = server.authenticator();
     let enrolled = replacement.enroll(&link, "ignored", "Ignored").await;

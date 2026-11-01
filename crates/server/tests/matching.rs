@@ -246,7 +246,7 @@ fn ignoring_last_seen(mut records: Vec<TransactionRecord>) -> Vec<TransactionRec
 
 async fn only_transaction(world: &World, account: AccountId) -> TransactionRecord {
     let mut all = transactions(world, account).await;
-    assert_eq!(all.len(), 1, "{all:#?}");
+    assert_eq!(all.len(), 1);
     all.remove(0)
 }
 
@@ -449,7 +449,10 @@ async fn user_state_survives_reimport() {
         }
     );
     let fields: Vec<&str> = update.changes.iter().map(|(field, _)| field).collect();
-    assert!(fields.contains(&"description"), "{fields:?}");
+    assert!(
+        fields.contains(&"description"),
+        "description must be among the changed fields"
+    );
     assert!(!fields.contains(&"payee"), "the shown payee did not change");
 }
 
@@ -487,7 +490,10 @@ async fn pending_to_posted_keeps_transaction_id_without_user_state() {
     assert_eq!(posted.posted_on, date(2026, 10, 12));
     assert_eq!(posted.sources.len(), 1);
     assert_eq!(posted.sources[0].provider_txn_id, "posted-9");
-    assert!(posted.flags.is_empty(), "{:?}", posted.flags);
+    assert!(
+        posted.flags.is_empty(),
+        "the transaction must carry no flags"
+    );
     let actions = actions_for(&world, posted.id).await;
     assert_eq!(
         actions,
@@ -553,7 +559,10 @@ async fn pending_with_tip_attaches_to_posted() {
         Some("system:sync")
     );
     assert_eq!(posted.sources.len(), 1);
-    assert!(posted.flags.is_empty(), "{:?}", posted.flags);
+    assert!(
+        posted.flags.is_empty(),
+        "the transaction must carry no flags"
+    );
 }
 
 #[tokio::test]
@@ -729,7 +738,7 @@ async fn vanished_pending_without_state_deleted_with_state_flagged() {
     .await;
     assert_eq!(report.attached, 1);
     let back = world.server.store.get_transaction(noted).await.unwrap();
-    assert!(back.flags.is_empty(), "{:?}", back.flags);
+    assert!(back.flags.is_empty(), "the transaction must carry no flags");
     assert_eq!(back.sources.len(), 1);
 }
 
@@ -1001,12 +1010,12 @@ async fn deleting_a_candidate_cascades() {
 /// Exactly two transactions, one flagged as a possible duplicate of the
 /// other.
 fn assert_flagged_pair(all: &[TransactionRecord]) {
-    assert_eq!(all.len(), 2, "{all:#?}");
+    assert_eq!(all.len(), 2);
     let flagged: Vec<&TransactionRecord> = all
         .iter()
         .filter(|t| t.flags == [TransactionFlag::PossibleDuplicate])
         .collect();
-    assert_eq!(flagged.len(), 1, "{all:#?}");
+    assert_eq!(flagged.len(), 1);
     let other = all.iter().find(|t| t.id != flagged[0].id).unwrap();
     assert_eq!(flagged[0].duplicate_candidates, [other.id]);
     assert_eq!(other.flags, Vec::new());
@@ -1184,18 +1193,18 @@ async fn linked_account_refuses_manual_transactions() {
     let checking = account(&world).await;
     let path = format!("/api/v1/accounts/{}", checking.id);
     let (status, body) = call(&world, Method::GET, &path, None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["source"], "manual");
     let create = json!({"account": checking.id, "posted_on": "2026-10-02",
                         "minor_units": -500, "description": "Coffee"});
-    let (status, body) = call(
+    let (status, _) = call(
         &world,
         Method::POST,
         "/api/v1/transactions",
         Some(create.clone()),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::CREATED);
 
     bound_link(&world, &checking).await;
     assert!(
@@ -1207,14 +1216,14 @@ async fn linked_account_refuses_manual_transactions() {
             .unwrap()
     );
     let (status, body) = call(&world, Method::GET, &path, None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["source"], "linked");
     let (status, body) = call(&world, Method::POST, "/api/v1/transactions", Some(create)).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["code"], "conflict");
 
     let (status, body) = call(&world, Method::GET, "/api/v1/transactions", None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     let items = body["items"].as_array().unwrap();
     assert_eq!(items.len(), 1, "only the earlier manual one");
     assert_eq!(items[0]["sources"], json!([]));

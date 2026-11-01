@@ -277,7 +277,10 @@ mod tests {
             assert_ne!(one.hash(kind, "same"), two.hash(kind, "same"), "{kind:?}");
         }
         let session = [7_u8; 32];
-        assert_ne!(one.csrf_token(&session), two.csrf_token(&session));
+        assert!(
+            one.csrf_token(&session) != two.csrf_token(&session),
+            "different keys must give different csrf tokens"
+        );
     }
 
     #[test]
@@ -287,7 +290,10 @@ mod tests {
         assert!(s.starts_with("coffer_"));
         assert_eq!(s.len(), 50);
         assert_eq!(agent_token_prefix(s).len(), 12);
-        assert_eq!(agent_token_prefix(s), s[..12]);
+        assert!(
+            agent_token_prefix(s) == s[..12],
+            "the prefix must be the first twelve characters"
+        );
     }
 
     #[test]
@@ -296,7 +302,10 @@ mod tests {
         let b = mint(TokenKind::Invite);
         assert_eq!(a.expose_secret().len(), 43);
         assert_eq!(b.expose_secret().len(), 43);
-        assert_ne!(a.expose_secret(), mint(TokenKind::Session).expose_secret());
+        assert!(
+            a.expose_secret() != mint(TokenKind::Session).expose_secret(),
+            "two minted tokens must differ"
+        );
     }
 
     #[test]
@@ -305,7 +314,13 @@ mod tests {
         let key = ServerKey::load_or_create(&dir.path().join("k")).unwrap();
         let h1 = key.hash(TokenKind::Session, "one");
         let h2 = key.hash(TokenKind::Session, "two");
-        assert_eq!(key.csrf_token(&h1), key.csrf_token(&h1));
-        assert_ne!(key.csrf_token(&h1), key.csrf_token(&h2));
+        assert!(
+            key.csrf_token(&h1) == key.csrf_token(&h1),
+            "the csrf token must be deterministic"
+        );
+        assert!(
+            key.csrf_token(&h1) != key.csrf_token(&h2),
+            "different sessions must give different csrf tokens"
+        );
     }
 }

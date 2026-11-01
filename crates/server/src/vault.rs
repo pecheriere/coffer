@@ -238,7 +238,10 @@ mod tests {
         let reopened = CredentialVault::new(&key)
             .open(connection, &SealedCredentials::from(stored))
             .unwrap();
-        assert_eq!(reopened.expose_secret(), PLAINTEXT);
+        assert!(
+            reopened.expose_secret() == PLAINTEXT,
+            "the reopened credentials differ from the sealed ones"
+        );
     }
 
     /// A server key of known bytes and, independently of the vault, the
@@ -454,8 +457,14 @@ mod tests {
                 .unwrap()
         ));
         for text in texts {
-            assert!(!text.contains(PLAINTEXT), "{text}");
-            assert!(!text.contains("pass-7f3a9c"), "{text}");
+            assert!(
+                !text.contains(PLAINTEXT),
+                "the text must not contain the plaintext"
+            );
+            assert!(
+                !text.contains("pass-7f3a9c"),
+                "the text must not contain the password"
+            );
         }
     }
 }

@@ -519,12 +519,7 @@ async fn appearance_rejects_unknown_values() {
         let mut all = vec![("csrf", csrf.as_str())];
         all.extend_from_slice(fields);
         let reply = bob.post_form("/account/appearance", &all).await;
-        assert_eq!(
-            reply.status,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{fields:?}: {}",
-            reply.body
-        );
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{fields:?}");
         assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
         assert!(!reply.body.contains("<script>\""), "{fields:?} echoed");
         assert!(!reply.body.contains(&long));
@@ -626,12 +621,7 @@ async fn household_form_rejects_forged_values() {
         let mut all = vec![("csrf", csrf.as_str())];
         all.extend_from_slice(fields);
         let reply = alice.post_form("/admin/household", &all).await;
-        assert_eq!(
-            reply.status,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{fields:?}: {}",
-            reply.body
-        );
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{fields:?}");
         assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
         assert!(!reply.body.contains("<script>\""), "{fields:?} echoed");
     }
