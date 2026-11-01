@@ -499,9 +499,18 @@ mod tests {
         assert_eq!(proxy.port(), Some(3128));
         assert_eq!(proxy.password(), Some("SECRETPW"));
         let debug = format!("{config:?}");
-        assert!(!debug.contains("SECRETPW"), "{debug}");
-        assert!(!debug.contains("user:"), "{debug}");
-        assert!(debug.contains("proxy:3128"), "{debug}");
+        assert!(
+            !debug.contains("SECRETPW"),
+            "the Debug output must not show the proxy password"
+        );
+        assert!(
+            !debug.contains("user:"),
+            "the Debug output must not show the proxy user"
+        );
+        assert!(
+            debug.contains("proxy:3128"),
+            "the Debug output must show the proxy host"
+        );
 
         // The lowercase spelling is read when the uppercase one is unset.
         let config = with("https_proxy", "https://proxy.example").unwrap();
@@ -535,7 +544,10 @@ mod tests {
                 matches!(err, ConfigError::Invalid { var: v, .. } if v == var),
                 "{var}={value}: {err:?}"
             );
-            assert!(!err.to_string().contains("proxy:"), "{err}");
+            assert!(
+                !err.to_string().contains("proxy:"),
+                "the error must not show the proxy URL"
+            );
         }
 
         // The other proxy variables have no effect.
