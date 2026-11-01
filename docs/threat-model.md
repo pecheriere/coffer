@@ -3,8 +3,8 @@
 ## Assets
 
 - Household financial data (accounts, balances, transactions, plan).
-- Credentials: passkey public keys, session cookies, agent tokens, the
-  server key.
+- Credentials: passkey public keys, session cookies, agent tokens, provider
+  credentials (a SimpleFin access URL, a Plaid access token), the server key.
 - The audit log, whose value is that it is trustworthy.
 
 ## Trust boundaries
@@ -19,6 +19,12 @@
    and an `Origin` equal to the public origin.
 3. **Agent to coffer.** Authenticated by a bearer token on `/api/v1` only.
 4. **Host operator to coffer.** Whoever controls the host and data directory.
+5. **coffer to data providers.** coffer makes outbound https requests to
+   provider hosts (today the SimpleFin Bridge) with the connection's
+   credentials, and treats every answer as untrusted input: amounts are
+   parsed as decimal text into integer minor units, texts are sanitized and
+   bounded before they are stored, and provider error texts are reduced to
+   fixed messages. The provider is trusted only for the data it reports.
 
 ## Design
 
@@ -26,6 +32,36 @@
   database stores only a keyed BLAKE3 hash, domain-separated per token kind,
   so a stolen database or backup cannot be replayed without the server key.
   Secrets are shown once and never logged; errors never echo credentials.
+- **Provider credentials are stored only sealed.** They are encrypted with
+  XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
+  the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider
+  credentials v1`). The connection id and the leading version byte are bound
+  as associated data, so a sealed value copied to another connection's row
+  does not open, and relabelling its version (to steer it to another key)
+  fails authentication, as does any altered byte. The version byte allows a
+  dedicated key later.
+  In clear they exist only in memory, in buffers wiped after use (except
+  the short-lived copies listed under accepted residual risks), and never
+  appear in logs, errors, the audit log or responses. A stolen database or
+  backup does not reveal them without the server key; losing the server key
+  means reconnecting every provider.
+- **Provider URLs cannot point coffer inward.** A SimpleFin setup token is
+  the base64 of a claim URL that a member pastes; the claim URL and the
+  access URL it returns must be `https` to a host in
+  `COFFER_SIMPLEFIN_HOSTS`, checked before anything is sent. The egress
+  client follows no redirect and, without a proxy, resolves the host itself
+  and connects to public addresses only (no loopback, private, link-local or
+  other special-purpose address). With an egress proxy (`HTTPS_PROXY`),
+  coffer sends `CONNECT` to the allowed host and does not resolve it, so the
+  proxy must enforce the public-address rule; the proxy's own address may be
+  private. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored, so the
+  environment cannot quietly route around the allow-list. Setup tokens, claim and access URLs and provider response
+  bodies never reach an error, a log line, the audit log or a response:
+  coffer's own provider error texts are fixed, with at most a status code.
+  Errors the bridge itself reports beside its data are shown after
+  sanitizing (user information in URLs is redacted); any that holds the
+  connection's access user or password is withheld and replaced by a fixed
+  text.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
@@ -71,6 +107,27 @@
   read the database and key, and take backups. coffer does not defend
   against its own host; protect the host, the data directory (mode 0700) and
   backups (mode 0600).
+- **A compromised SimpleFin Bridge can feed false data.** A bridge that is
+  compromised, or impersonated by someone who obtained a valid certificate
+  for its host, can report false accounts, balances and transactions, which
+  coffer imports. It cannot make coffer reach any other host (the allow-list
+  holds for every URL, redirects are never followed) and it never receives
+  more than the connection's own credentials. Members review imported
+  transactions, and removing the connection stops further imports.
+- **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
+  are refused beyond the provider's minimum interval and daily budget, so a
+  leaked `write` token can make coffer call a provider at most that budget
+  (16 times in 24 hours for SimpleFin) per connection.
+- **Some copies of provider secrets are not wiped.** While a SimpleFin
+  setup token is claimed and while a sync fetches, the claim URL, the access
+  URL and its user name pass through `url::Url` and `String` buffers (the
+  parsed URL, the user name used for basic auth, the text the JSON parser
+  produces and the percent-decoded password before it becomes a
+  `SecretString`). These copies live only for the duration of the call and
+  are freed, not zeroed. Wiping them would mean parsing URLs by hand instead
+  of with `url::Url`, trading a well-tested parser for a home-made one on
+  input an attacker can shape; reading them needs access to the server's
+  memory, which already exposes the server key.
 - **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
   infeasible; password-style guessing does not exist. Network access control
   is the defense against abuse volume.

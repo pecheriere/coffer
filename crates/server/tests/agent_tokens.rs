@@ -9,6 +9,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode, header};
 use axum::routing::get;
+use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
 use coffer_domain::policy::DenyReason;
@@ -121,14 +122,20 @@ async fn token_shown_once_and_stored_hashed() {
         .unwrap();
 
     assert_eq!(listed, vec![record.clone()]);
-    assert_eq!(record.prefix, &token.expose_secret()[..12]);
+    assert!(
+        record.prefix == token.expose_secret()[..12],
+        "the stored prefix must be the first twelve characters"
+    );
     assert!(!format!("{listed:?}").contains(token.expose_secret()));
     // The store finds the token by its keyed hash, never by its bytes.
     let hash = world
         .server
         .key
         .hash(TokenKind::Agent, token.expose_secret());
-    assert_ne!(hash.as_slice(), token.expose_secret().as_bytes());
+    assert!(
+        hash.as_slice() != token.expose_secret().as_bytes(),
+        "the stored hash must not be the token"
+    );
     let now = coffer_domain::time::Clock::now(&*world.server.clock);
     assert_eq!(
         world
@@ -560,9 +567,15 @@ async fn token_lifecycle_is_audited_without_secrets() {
     assert!(actions.contains(&"token.create"));
     assert!(actions.contains(&"token.revoke"));
     let create = events.iter().find(|e| e.action == "token.create").unwrap();
-    assert_eq!(create.changes["name"], "claude");
-    assert_eq!(create.changes["scope"], "write");
-    assert!(create.changes["expires_at"].is_string());
+    assert!(record.expires_at.is_some());
+    let recorded = AuditChanges::new()
+        .set("member", record.member)
+        .set("name", "claude")
+        .set("scope", "write")
+        .set("expires_at", record.expires_at);
+    assert_eq!(create.changes, recorded);
+    let revoke = events.iter().find(|e| e.action == "token.revoke").unwrap();
+    assert_eq!(revoke.changes, recorded);
     let dump = format!("{events:?}");
     assert!(!dump.contains(token.expose_secret()));
 }

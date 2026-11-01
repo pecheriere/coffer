@@ -15,13 +15,21 @@ use coffer_domain::identity::Username;
 use coffer_domain::time::SystemClock;
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 use crate::appearance::Appearance;
-use crate::auth::{AgentTokens, AuthError, Identity, Sessions};
+use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
+use crate::egress::{Egress, EgressError};
+use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
+use crate::ledger::Ledger;
 use crate::secrets::{SecretError, ServerKey};
+use crate::sync::engine::SyncService;
+use crate::sync::provider::ProviderRegistry;
+use crate::sync::scheduler;
+use crate::vault::CredentialVault;
 
 mod healthcheck;
 
@@ -45,6 +53,8 @@ enum Command {
     /// interface) and expects 200 within 5 seconds. Reads no other
     /// configuration, so it works without access to the data directory.
     Healthcheck,
+    /// Print the OpenAPI document of the JSON API. Reads no configuration.
+    Openapi,
 }
 
 /// The commands that read the whole configuration and use the data
@@ -106,7 +116,13 @@ macro_rules! from_error {
         }
     )*};
 }
-from_error!(StoreError, AuthError, SecretError, std::io::Error);
+from_error!(
+    StoreError,
+    AuthError,
+    SecretError,
+    EgressError,
+    std::io::Error
+);
 
 /// Runs `coffer` with `args` (the first is the program name) and the
 /// environment seen through `env`. Results go to `out`, diagnostics to
@@ -135,6 +151,7 @@ pub async fn run(
     let result = match cli.command {
         Command::Configured(command) => execute(command, &env, out).await,
         Command::Healthcheck => healthcheck(&env).await,
+        Command::Openapi => openapi(out),
     };
     match result {
         Ok(code) => code,
@@ -143,6 +160,15 @@ pub async fn run(
             error.exit_code()
         }
     }
+}
+
+/// Prints the pretty-printed OpenAPI document and a trailing newline.
+fn openapi(out: &mut dyn Write) -> Result<ExitCode, CliError> {
+    let document = http::api::openapi::document()
+        .to_pretty_json()
+        .map_err(|error| CliError::failed(&error))?;
+    writeln!(out, "{document}")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Probes the running server. Every failure, a bad `COFFER_LISTEN`
@@ -254,8 +280,15 @@ fn restrict_umask() {
     rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
 }
 
-/// Opens the database and key and builds every service.
-async fn open_state(config: Config) -> Result<AppState, CliError> {
+/// Opens the database and key and builds every service, with the providers
+/// the configuration registers over the production egress client: the
+/// application state `serve` and the other commands run on.
+///
+/// # Errors
+///
+/// [`CliError`] when the database, the key, the egress client or a
+/// provider's configuration cannot be set up.
+pub async fn open_state(config: Config) -> Result<AppState, CliError> {
     let store = open_store(&config).await?;
     let key = Arc::new(ServerKey::load_or_create(&config.secret_key_file)?);
     let clock = Arc::new(SystemClock);
@@ -271,13 +304,35 @@ async fn open_state(config: Config) -> Result<AppState, CliError> {
         clock.clone(),
         config.clone(),
     ));
+    let idempotency = Arc::new(RequestHasher::new(&key));
+    let vault = Arc::new(CredentialVault::new(&key));
     let agent_tokens = Arc::new(AgentTokens::new(store.clone(), key, clock.clone()));
     let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
+    let access = Arc::new(AccessResolver::new());
+    let ledger = Arc::new(Ledger::new(
+        store.clone(),
+        clock.clone(),
+        Arc::clone(&access),
+    ));
+    let egress = Egress::new(config.https_proxy.as_ref())?;
+    let registry = Arc::new(ProviderRegistry::from_config(&config, &egress)?);
+    let sync = Arc::new(SyncService::new(
+        store.clone(),
+        clock.clone(),
+        vault,
+        registry,
+        Arc::clone(&access),
+        config.clone(),
+    ));
     Ok(AppState {
         sessions,
         agent_tokens,
         identity,
         appearance,
+        ledger,
+        access,
+        sync,
+        idempotency,
         store,
         config,
         clock,
@@ -326,12 +381,28 @@ async fn backup(store: &Store, dest: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `RUST_LOG` filter (default `info`); JSON lines when `COFFER_LOG_FORMAT`
-/// is `json`. Logs go to stderr.
+/// `RUST_LOG` filter (default `info`; empty counts as unset); JSON lines
+/// when `COFFER_LOG_FORMAT` is `json`. Logs go to stderr. A process that
+/// already installed its own global subscriber before calling [`run`] (a
+/// test harness capturing logs) keeps it, and a debug event says so.
+///
+/// # Errors
+///
+/// [`CliError::Config`] when `RUST_LOG` is not a valid filter.
 fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
-    let filter = env("RUST_LOG")
-        .and_then(|spec| EnvFilter::try_new(spec).ok())
-        .unwrap_or_else(|| EnvFilter::new("info"));
+    let filter = match env("RUST_LOG").filter(|spec| !spec.is_empty()) {
+        Some(spec) => EnvFilter::try_new(spec).map_err(|_| ConfigError::Invalid {
+            var: "RUST_LOG",
+            reason: "not a valid tracing filter, such as info,coffer_server=debug",
+        })?,
+        None => EnvFilter::new("info"),
+    };
+    if tracing::dispatcher::has_been_set() {
+        tracing::debug!(
+            "an installed tracing subscriber is kept; RUST_LOG and COFFER_LOG_FORMAT are not applied"
+        );
+        return Ok(());
+    }
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
@@ -350,8 +421,9 @@ async fn serve(config: Config) -> Result<(), CliError> {
     serve_with(state, listener, shutdown_signal()).await
 }
 
-/// Serves `state` on `listener` until `shutdown` resolves, then drains
-/// in-flight requests and returns.
+/// Serves `state` on `listener`, with the sync scheduler running, until
+/// `shutdown` resolves; then drains in-flight requests, stops the
+/// scheduler and returns.
 ///
 /// Logs the setup link when no admin exists. That is the only place a setup
 /// link is logged: with no channel to the operator, and the link
@@ -370,9 +442,22 @@ pub async fn serve_with(
     }
     let listen = listener.local_addr()?;
     tracing::info!(%listen, public_url = %state.config.public_url, "coffer is serving");
-    axum::serve(listener, http::router(state))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    let (stop, mut stopped) = watch::channel(false);
+    let scheduler = scheduler::spawn(state.clone(), async move {
+        // An error means the server is gone, which stops the scheduler too.
+        let _ = stopped.wait_for(|stop| *stop).await;
+    });
+    let served = axum::serve(listener, http::router(state))
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            // The scheduler stops once `stop` is dropped in any case.
+            let _ = stop.send(true);
+        })
+        .await;
+    if let Err(err) = scheduler.await {
+        tracing::error!(error = %err, "the sync scheduler ended abnormally");
+    }
+    served?;
     tracing::info!("coffer stopped");
     Ok(())
 }

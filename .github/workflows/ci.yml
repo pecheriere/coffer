@@ -68,6 +68,23 @@ jobs:
       - name: Refuse crate versions published less than 7 days ago
         run: python3 -I .github/scripts/crate_age.py --base HEAD^1
 
+  openapi-lint:
+    # Lints the committed OpenAPI document; the `snapshot_matches_generated_document`
+    # test keeps it equal to the one the code generates.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the digest-pinned Spectral image
+        run: docker build -t spectral .github/spectral
+      - name: Lint docs/api/openapi.json
+        run: >-
+          docker run --rm -v "$PWD:/work:ro" -w /work spectral
+          lint docs/api/openapi.json --fail-severity warn
+
   docker-build:
     runs-on: ubuntu-latest
     steps:

@@ -6,10 +6,14 @@
 )]
 
 use axum::body::Body;
+use axum::extract::FromRequest as _;
 use axum::http::{Request, StatusCode, header};
+use axum::response::IntoResponse as _;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::MemberId;
 use coffer_server::assets::CSS_BASE_CSS;
+use coffer_server::http::api::extract::{TypedJson, TypedPath};
+use coffer_server::http::problem::{Problem, ProblemCode};
 use coffer_server::http::router;
 use coffer_server::secrets::SecretToken;
 use coffer_server::testkit::TestServer;
@@ -165,6 +169,11 @@ async fn audit_shows_agent_attribution() {
     assert_eq!(event["actor"]["kind"], "member");
     assert_eq!(event["actor"]["member"], world.alice.member.to_string());
     assert!(event["actor"]["agent"].is_null());
+    // Changes are `{field: {before, after}}`.
+    assert_eq!(
+        event["changes"]["scope"],
+        serde_json::json!({ "before": null, "after": "read" })
+    );
 
     // Filtering by the member returns only that member's actions.
     let uri = format!("/api/v1/audit?member={}", world.bob);
@@ -409,4 +418,256 @@ async fn healthz_ok() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&bytes[..], b"ok");
+}
+
+#[tokio::test]
+async fn problem_type_is_urn_of_code() {
+    let world = world().await;
+    let token = token(&world, Scope::Read).await;
+
+    for (uri, token) in [
+        ("/api/v1/members", None),
+        ("/api/v1/nope", Some(&token)),
+        ("/api/v1/audit?limit=x", Some(&token)),
+        ("/api/v1/audit?after=not-a-cursor", Some(&token)),
+    ] {
+        let (_, body) = get(&world.server, uri, token).await;
+        let code = body["code"].as_str().unwrap();
+        assert_eq!(body["type"], format!("urn:coffer:problem:{code}"), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn query_rejection_does_not_echo() {
+    let world = world().await;
+    let token = token(&world, Scope::Read).await;
+
+    for (uri, detail) in [
+        (
+            "/api/v1/audit?limit=SECRETVALUE",
+            "the `limit` parameter is not valid",
+        ),
+        (
+            "/api/v1/audit?SECRETNAME=1",
+            "a query parameter is not recognised or is repeated",
+        ),
+        (
+            "/api/v1/audit?member=SECRETVALUE",
+            "the `member` parameter is not valid",
+        ),
+        (
+            "/api/v1/audit?member=SECRETVALUE&member=SECRETVALUE",
+            "a query parameter is not recognised or is repeated",
+        ),
+    ] {
+        let (status, body) = get(&world.server, uri, Some(&token)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(body["code"], "invalid", "{uri}");
+        assert_eq!(body["detail"], detail, "{uri}");
+        assert!(!body.to_string().contains("SECRET"), "{uri}");
+    }
+}
+
+/// The body of a rejection, checked to be a fixed `400 invalid` problem.
+async fn rejection_body(problem: Problem) -> Value {
+    let response = problem.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/problem+json"
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["code"], "invalid");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
+    body
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+struct OneId {
+    /// The thing.
+    id: MemberId,
+}
+
+#[tokio::test]
+async fn path_rejection_does_not_echo() {
+    let app = axum::Router::new().route(
+        "/things/{id}",
+        axum::routing::get(|TypedPath(path): TypedPath<OneId>| async move { path.id.to_string() }),
+    );
+
+    let ok = MemberId::new();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/things/{ok}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::get("/things/SECRETVALUE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["code"], "invalid");
+    assert_eq!(body["detail"], "the `id` parameter is not valid");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum Kind {
+    Plain,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct Body1 {
+    count: u32,
+    kind: Kind,
+}
+
+#[tokio::test]
+async fn json_rejection_does_not_echo() {
+    for body in SECRET_BODIES {
+        let request = Request::post("/")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let problem = TypedJson::<Body1>::from_request(request, &())
+            .await
+            .unwrap_err();
+        let body = rejection_body(problem).await;
+        assert_eq!(
+            body["detail"],
+            "the request body is not valid JSON for this operation"
+        );
+    }
+
+    let request = Request::post("/")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"count": 1, "kind": "plain"}"#))
+        .unwrap();
+    let TypedJson(parsed) = TypedJson::<Body1>::from_request(request, &())
+        .await
+        .unwrap();
+    assert_eq!(parsed.count, 1);
+    assert!(matches!(parsed.kind, Kind::Plain));
+}
+
+/// Bodies whose rejection must not put `SECRET` in a log: as a value, an
+/// unknown field name, an unknown enum variant and inside broken JSON.
+const SECRET_BODIES: [&str; 5] = [
+    r#"{"count": 1, "kind": "plain", "SECRETNAME": 1}"#,
+    r#"{"count": "SECRETVALUE", "kind": "plain"}"#,
+    r#"{"count": 1, "kind": "SECRETVALUE"}"#,
+    r#"{"SECRETVALUE"#,
+    r#"{"count": 1, "kind": {"SECRETVALUE": 1}}"#,
+];
+
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn rejected_body_logs_no_input() {
+    use tracing::instrument::WithSubscriber as _;
+
+    let log = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(log.clone())
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .finish();
+    async {
+        tracing::debug!("capture-check-KNOWN-MARKER");
+        for body in SECRET_BODIES {
+            let request = Request::post("/")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            assert!(
+                TypedJson::<Body1>::from_request(request, &())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    .with_subscriber(subscriber)
+    .await;
+
+    let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("capture-check-KNOWN-MARKER"),
+        "the log lacks the capture marker"
+    );
+    assert_eq!(
+        text.matches("request body rejected").count(),
+        SECRET_BODIES.len()
+    );
+    assert!(
+        text.contains("path=count"),
+        "the log must name a documented field"
+    );
+    assert!(
+        text.contains("category=data"),
+        "the log lacks the data category"
+    );
+    assert!(
+        text.contains("category=eof"),
+        "the log lacks the eof category"
+    );
+    assert!(
+        !text.contains("SECRET"),
+        "the log must not contain the secret"
+    );
+}
+
+#[tokio::test]
+async fn retry_after_header_emitted() {
+    let response = Problem::new(StatusCode::TOO_MANY_REQUESTS, ProblemCode::Busy, "Busy")
+        .with_retry_after(30)
+        .into_response();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "30");
+
+    let response =
+        Problem::new(StatusCode::TOO_MANY_REQUESTS, ProblemCode::Busy, "Busy").into_response();
+    assert!(!response.headers().contains_key(header::RETRY_AFTER));
 }

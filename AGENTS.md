@@ -9,13 +9,29 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 ## Crate map
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
-  audit entry types, clock). No I/O.
+  audit entry types, money, accounts, transactions, matching, sync run
+  triggers and statuses, clock). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
-  extractors, problem bodies, `api/` JSON v1, `health`, `pages/`); `cli` and
+  extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
+  `pages/`); `ledger` (accounts and balances, categories,
+  transactions and their splits, merging, un-merging and dismissing possible
+  duplicates); `egress` (the one outbound
+  HTTPS client: per-provider host allow-lists, public-address resolver,
+  `HTTPS_PROXY`, no redirects, time and size caps); `vault` (provider
+  credentials sealed with XChaCha20-Poly1305 under a key derived from the
+  server key, bound to their connection id); `sync` (the provider interface
+  and the `ProviderRegistry`, the one place providers are registered; the
+  `SimpleFin` provider; connections, sync requests and their rate limits,
+  and provider account binding; the engine that performs sync runs; the
+  provider-agnostic apply step matching provider records onto transactions;
+  the scheduler, whose worker performs queued runs and whose ticker queues
+  scheduled ones, started by `serve`); `canonical` (changes to
+  canonical transactions shared by `sync` and `ledger`: imported fields and
+  duplicate candidates); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
 
 ## Commands
@@ -26,6 +42,7 @@ cargo run -p coffer-server -- bootstrap-link            # first-admin setup link
 cargo run -p coffer-server -- recover-admin <username>  # re-enroll link for a locked-out admin
 cargo run -p coffer-server -- backup <dest>             # consistent database copy, mode 0600
 cargo run -p coffer-server -- healthcheck               # probe GET /healthz on COFFER_LISTEN
+cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the OpenAPI snapshot
 
 cargo fmt
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -46,7 +63,8 @@ doctests, so `cargo test` stays the gate).
   third-party ones (dtolnay/rust-toolchain, Swatinem/rust-cache,
   EmbarkStudios/cargo-deny-action, zizmorcore/zizmor-action,
   ossf/scorecard-action, docker/setup-buildx-action,
-  docker/build-push-action) may be used.
+  docker/build-push-action) may be used. Spectral runs from a digest-pinned
+  image built from `.github/spectral/Dockerfile`.
 - The Dockerfile pins the Rust base image by digest (the version in
   `rust-toolchain.toml`) and its build tools by version, each a release at
   least 7 days old; Dependabot proposes base image updates.
@@ -64,7 +82,29 @@ doctests, so `cargo test` stays the gate).
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
 - Every mutation goes through a `StoreTx` together with its audit entry.
-- Every handler authorizes through `coffer_domain::policy::authorize`.
+- Every handler authorizes through `coffer_domain::policy`: `authorize` for
+  household actions, `authorize_account` for anything tied to an account,
+  with the `AccountAccess` that `AccessResolver` resolves (never built by
+  hand). A `Denied` becomes a problem only through
+  `impl From<Denied> for Problem`.
+- Money is an integer in minor units with its ISO 4217 currency
+  (`coffer_domain::money`); negative is money out of the account. No
+  floating point anywhere on a money path, provider JSON included.
+- Outbound HTTP goes only through `egress::Egress`, with a host allow-list.
+  Providers are registered only in `ProviderRegistry::from_config`. Every
+  provider text passes through `sanitize_provider_message` before it is
+  stored or shown. Provider credentials exist in clear only in memory, and
+  never in the database, a log, an error, the audit log or a response.
+- API routes are added only through `ApiRouter::op` (`http/api/router.rs`)
+  with a `#[utoipa::path]`; the application router merges nothing else under
+  `/api`. Request, query, path and response types derive `ToSchema` or
+  `IntoParams`; no `serde_json::Value` in any of them. Extract with
+  `TypedJson`, `TypedQuery` and `TypedPath` (`http/api/extract.rs`), whose
+  rejections never echo input. Errors are `Problem`s with a `ProblemCode`.
+- After any API change, regenerate the snapshot with
+  `cargo run -p coffer-server -- openapi > docs/api/openapi.json`; a test
+  compares it with the generated document and CI lints it with Spectral
+  (`.spectral.yaml`, findings fixed in code, never by disabling a rule).
 - Errors use `thiserror`; no `unwrap`/`expect` outside tests.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
@@ -95,8 +135,9 @@ coverage. Integration tests drive the real router with soft passkeys.
 
 ## Security review
 
-Required before merge for changes to auth, sessions, tokens, policy, secrets
-or outbound HTTP. Run the `security-review` skill or an equivalent review and
+Required before merge for changes to auth, sessions, tokens, policy, secrets,
+the vault, outbound HTTP (`egress`), provider code (`sync`), or the content
+security policy and other security headers. Run the `security-review` skill or an equivalent review and
 record the findings in the PR.
 
 ## Definition of done

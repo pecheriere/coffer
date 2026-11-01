@@ -295,6 +295,7 @@ async fn bearer_token_does_not_authenticate_pages() {
 
     for path in [
         "/account",
+        "/connections",
         "/admin/members",
         "/admin/invites",
         "/admin/household",
@@ -705,12 +706,7 @@ async fn unverifiable_registration_is_a_client_error() {
         )
         .await;
 
-    assert_eq!(
-        rejected.status,
-        StatusCode::BAD_REQUEST,
-        "{}",
-        rejected.body
-    );
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
     assert_eq!(rejected.json()["code"], "passkey_rejected");
     assert_eq!(server.store.list_members().await.unwrap().len(), 0);
 }
@@ -755,7 +751,7 @@ async fn root_sends_a_signed_in_member_home() {
 
 /// Every page a household sees, as (page, reply): sign-in, a bootstrap
 /// setup link, a new-member invite link, and the signed-in admin's account,
-/// members and invites pages. Bob is a member, so the members page lists
+/// connections, members, invites and household pages. Bob is a member, so the members page lists
 /// someone the admin manages.
 async fn every_page() -> Vec<(&'static str, Reply)> {
     let server = TestServer::new().await;
@@ -826,31 +822,37 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn every_page_is_themed_and_inline_free() {
-    for (page, reply) in every_page().await {
-        assert_eq!(reply.status, StatusCode::OK, "GET {page}");
+    for (_, reply) in every_page().await {
+        assert_eq!(reply.status, StatusCode::OK);
         let body = &reply.body;
         let theme = format!("href=\"{}\"", themes::DEFAULT.stylesheet.url);
         let base = format!("href=\"{}\"", CSS_BASE_CSS.url);
         let theme_at = body
             .find(&theme)
-            .unwrap_or_else(|| panic!("{page}: no theme"));
+            .unwrap_or_else(|| panic!("the page lacks the theme stylesheet"));
         let base_at = body
             .find(&base)
-            .unwrap_or_else(|| panic!("{page}: no base"));
-        assert!(theme_at < base_at, "{page}: tokens load before components");
+            .unwrap_or_else(|| panic!("the page lacks the base stylesheet"));
+        assert!(theme_at < base_at, "tokens must load before components");
         for expected in [
             "<meta name=\"color-scheme\" content=\"light dark\">",
             "href=\"#main\"",
             "<main id=\"main\"",
         ] {
-            assert!(body.contains(expected), "{page}: missing {expected}");
+            assert!(body.contains(expected), "missing {expected}");
         }
-        assert!(!body.contains("style="), "{page}: inline style attribute");
-        assert!(tags(body, "style").is_empty(), "{page}: <style> element");
+        assert!(
+            !body.contains("style="),
+            "the page has an inline style attribute"
+        );
+        assert!(
+            tags(body, "style").is_empty(),
+            "the page has a <style> element"
+        );
         for (_, script) in tags(body, "script") {
             assert!(
                 attribute(script, "src").is_some(),
-                "{page}: inline script {script}"
+                "an inline script is present"
             );
         }
     }
@@ -900,8 +902,7 @@ async fn every_form_control_has_an_accessible_name() {
             let named = attribute(tag, "aria-label").is_some()
                 || id.is_some_and(|id| labelled.contains(&id))
                 || enclosed;
-            let which = attribute(tag, "name").or(id).unwrap_or(tag);
-            assert!(named, "{page}: control {which} has no accessible name");
+            assert!(named, "a control has no accessible name");
         }
         if page == "/admin/members" {
             assert!(

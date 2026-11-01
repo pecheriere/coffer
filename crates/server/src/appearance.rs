@@ -4,11 +4,11 @@
 
 use std::sync::Arc;
 
+use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::{Actor, ColorScheme, IdentityError, ThemeName};
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::time::Clock;
 use coffer_store::{Member, Store};
-use serde_json::{Map, Value, json};
 
 use crate::auth::{AuthError, audit};
 use crate::themes::{self, DEFAULT, Look, Theme};
@@ -90,20 +90,19 @@ impl Appearance {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_member(actor.member).await?;
-        let mut changes = Map::new();
+        let mut changes = AuditChanges::new();
         if current.theme != theme {
-            changes.insert(
-                "theme".to_owned(),
-                json!({
-                    "from": current.theme.as_ref().map(ThemeName::as_str),
-                    "to": theme.as_ref().map(ThemeName::as_str),
-                }),
+            changes = changes.change(
+                "theme",
+                current.theme.as_ref().map(ThemeName::as_str),
+                theme.as_ref().map(ThemeName::as_str),
             );
         }
         if current.color_scheme != scheme {
-            changes.insert(
-                "color_scheme".to_owned(),
-                json!({ "from": current.color_scheme, "to": scheme }),
+            changes = changes.change(
+                "color_scheme",
+                current.color_scheme.as_str(),
+                scheme.as_str(),
             );
         }
         if changes.is_empty() {
@@ -118,7 +117,7 @@ impl Appearance {
             "member.appearance",
             "member",
             actor.member,
-            Value::Object(changes),
+            changes,
         )
         .await?;
         tx.commit().await?;
@@ -154,10 +153,11 @@ impl Appearance {
             "household.theme",
             "household",
             HOUSEHOLD,
-            json!({
-                "from": current.as_ref().map(ThemeName::as_str),
-                "to": theme.as_str(),
-            }),
+            AuditChanges::new().change(
+                "theme",
+                current.as_ref().map(ThemeName::as_str),
+                theme.as_str(),
+            ),
         )
         .await?;
         tx.commit().await?;

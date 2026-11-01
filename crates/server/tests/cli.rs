@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use coffer_domain::identity::{Actor, Role, Username, Via};
 use coffer_server::cli;
-use coffer_server::testkit::TestServer;
+use coffer_server::testkit::{TestServer, capture_logs, captured_log_text};
 
 struct Outcome {
     code: ExitCode,
@@ -127,7 +127,7 @@ async fn backup_cli_writes_file() {
 
     let done = run(&["backup", dest.to_str().unwrap()], &env).await;
 
-    assert_eq!(done.code, ExitCode::SUCCESS, "{}", done.err);
+    assert_eq!(done.code, ExitCode::SUCCESS);
     #[cfg(unix)]
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&dest).unwrap().permissions())
@@ -236,12 +236,8 @@ async fn commands_refuse_a_data_dir_open_to_group_or_others() {
             .await
             .unwrap_or_else(|_| panic!("{args:?} did not refuse the data directory"));
         assert_eq!(refused.code, ExitCode::from(1), "{args:?}");
-        assert!(refused.err.contains(&shown), "{args:?}: {}", refused.err);
-        assert!(
-            refused.err.contains("chmod 700"),
-            "{args:?}: {}",
-            refused.err
-        );
+        assert!(refused.err.contains(&shown), "{args:?}");
+        assert!(refused.err.contains("chmod 700"), "{args:?}");
     }
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     assert!(!dest.exists());
@@ -259,7 +255,7 @@ async fn data_dir_is_created_private_and_the_database_is_owner_only() {
 
     let done = run(&["bootstrap-link"], &env).await;
 
-    assert_eq!(done.code, ExitCode::SUCCESS, "{}", done.err);
+    assert_eq!(done.code, ExitCode::SUCCESS);
     assert_eq!(mode(&data_dir), 0o700);
     assert_eq!(mode(&data_dir.join("coffer.db")), 0o600);
     for name in ["coffer.db-wal", "coffer.db-shm"] {
@@ -268,4 +264,47 @@ async fn data_dir_is_created_private_and_the_database_is_owner_only() {
             assert_eq!(mode(&path), 0o600, "{name}");
         }
     }
+}
+
+/// A malformed `RUST_LOG` stops `serve` as bad configuration instead of
+/// silently logging at another level, and the value is never echoed.
+#[tokio::test]
+async fn invalid_rust_log_fails_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = env(&dir);
+    env.insert("RUST_LOG", "coffer_server=loudest[".to_owned());
+    env.insert("COFFER_LISTEN", "127.0.0.1:0".to_owned());
+
+    let refused = tokio::time::timeout(std::time::Duration::from_secs(10), run(&["serve"], &env))
+        .await
+        .unwrap_or_else(|_| panic!("serve did not refuse the filter"));
+    assert_eq!(refused.code, ExitCode::from(2));
+    assert!(refused.err.contains("RUST_LOG"), "names the variable");
+    assert!(!refused.err.contains("loudest"), "never echoes the value");
+}
+
+/// When the process already installed a subscriber (as this test harness
+/// does), `serve` keeps it and says so at debug level.
+#[cfg(unix)]
+#[tokio::test]
+async fn serve_keeps_an_installed_subscriber_and_says_so() {
+    capture_logs();
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = env(&dir);
+    // A data directory open to others makes serve stop right after logging
+    // is set up.
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o750),
+    )
+    .unwrap();
+    env.insert("COFFER_LISTEN", "127.0.0.1:0".to_owned());
+    let refused = tokio::time::timeout(std::time::Duration::from_secs(10), run(&["serve"], &env))
+        .await
+        .unwrap_or_else(|_| panic!("serve did not stop"));
+    assert_eq!(refused.code, ExitCode::from(1));
+    assert!(
+        captured_log_text().contains("an installed tracing subscriber is kept"),
+        "the kept subscriber is reported"
+    );
 }

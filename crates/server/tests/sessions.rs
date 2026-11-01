@@ -219,7 +219,7 @@ async fn logout_invalidates_and_audits() {
         (logout.entity_type.as_str(), logout.entity_id.clone()),
         ("member", alice.to_string())
     );
-    assert_eq!(logout.changes, serde_json::json!({}));
+    assert!(logout.changes.is_empty());
 }
 
 #[tokio::test]
@@ -351,7 +351,7 @@ async fn cookie_attributes() {
         "Path=/",
         "Max-Age=2592000",
     ] {
-        assert!(text.contains(attribute), "{text} lacks {attribute}");
+        assert!(text.contains(attribute), "the cookie lacks {attribute}");
     }
     assert!(header.is_sensitive());
 }
@@ -369,7 +369,7 @@ async fn clear_cookie_expires_immediately_with_same_attributes() {
         "Path=/",
         "Max-Age=0",
     ] {
-        assert!(text.contains(attribute), "{text} lacks {attribute}");
+        assert!(text.contains(attribute), "the cookie lacks {attribute}");
     }
 }
 

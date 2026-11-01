@@ -1,16 +1,22 @@
 //! Server configuration read from `COFFER_*` environment variables.
 
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use jiff::SignedDuration;
+use jiff::tz::{TimeZone, TimeZoneDatabase};
 use thiserror::Error;
 use url::{Host, Url};
+
+use crate::egress::HostAllowList;
 
 const DEFAULT_LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
 const DEFAULT_INVITE_TTL_MINUTES: i64 = 30;
 const DEFAULT_SESSION_IDLE_HOURS: i64 = 168;
 const DEFAULT_SESSION_ABSOLUTE_DAYS: i64 = 30;
+const DEFAULT_SYNC_INTERVAL_HOURS: i64 = 6;
+const DEFAULT_SIMPLEFIN_HOSTS: &str = "bridge.simplefin.org,beta-bridge.simplefin.org";
 
 /// A configuration problem. Messages name the offending variable and never
 /// echo its value, which may be sensitive.
@@ -33,7 +39,7 @@ pub enum ConfigError {
 }
 
 /// Validated server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Address the HTTP server binds to.
     pub listen: SocketAddr,
@@ -49,6 +55,59 @@ pub struct Config {
     pub session_idle: SignedDuration,
     /// Session lifetime regardless of activity.
     pub session_absolute: SignedDuration,
+    /// Proxy for every outbound https request, from `HTTPS_PROXY` (else
+    /// `https_proxy`). It may carry credentials, which `Debug` redacts.
+    pub https_proxy: Option<Url>,
+    /// The household's time zone, from `COFFER_TIMEZONE` (an IANA name,
+    /// default `UTC`): provider timestamps become calendar days in it, and
+    /// it decides which day is today.
+    pub timezone: TimeZone,
+    /// How often each connection syncs on schedule, from
+    /// `COFFER_SYNC_INTERVAL_HOURS` (1 to 24, default 6). A provider's own
+    /// minimum interval can lengthen it.
+    pub sync_interval: SignedDuration,
+    /// The hosts a `SimpleFin` setup token's claim URL and the access URL it
+    /// yields may name, from `COFFER_SIMPLEFIN_HOSTS` (comma-separated DNS
+    /// names, default `bridge.simplefin.org,beta-bridge.simplefin.org`).
+    pub simplefin_hosts: HostAllowList,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let https_proxy = self.https_proxy.as_ref().map(RedactedProxy);
+        f.debug_struct("Config")
+            .field("listen", &self.listen)
+            .field("public_url", &self.public_url)
+            .field("data_dir", &self.data_dir)
+            .field("secret_key_file", &self.secret_key_file)
+            .field("invite_ttl", &self.invite_ttl)
+            .field("session_idle", &self.session_idle)
+            .field("session_absolute", &self.session_absolute)
+            .field("https_proxy", &https_proxy)
+            .field("timezone", &self.timezone.iana_name())
+            .field("sync_interval", &self.sync_interval)
+            .field("simplefin_hosts", &self.simplefin_hosts)
+            .finish()
+    }
+}
+
+/// Shows a proxy URL as scheme, host and port, never its user information.
+struct RedactedProxy<'a>(&'a Url);
+
+impl fmt::Debug for RedactedProxy<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.0;
+        let host = url.host_str().unwrap_or_default();
+        let credentials = if url.username().is_empty() && url.password().is_none() {
+            ""
+        } else {
+            "<credentials redacted>@"
+        };
+        match url.port() {
+            Some(port) => write!(f, "\"{}://{credentials}{host}:{port}\"", url.scheme()),
+            None => write!(f, "\"{}://{credentials}{host}\"", url.scheme()),
+        }
+    }
 }
 
 impl Config {
@@ -107,6 +166,12 @@ impl Config {
             DEFAULT_SESSION_ABSOLUTE_DAYS,
             1..=365,
         )?;
+        let sync_hours = bounded(
+            &vars,
+            "COFFER_SYNC_INTERVAL_HOURS",
+            DEFAULT_SYNC_INTERVAL_HOURS,
+            1..=24,
+        )?;
 
         Ok(Self {
             listen,
@@ -116,6 +181,10 @@ impl Config {
             invite_ttl: SignedDuration::from_mins(invite_minutes),
             session_idle: SignedDuration::from_hours(idle_hours),
             session_absolute: SignedDuration::from_hours(absolute_days * 24),
+            https_proxy: parse_https_proxy(&vars)?,
+            timezone: parse_timezone(&vars)?,
+            sync_interval: SignedDuration::from_hours(sync_hours),
+            simplefin_hosts: parse_simplefin_hosts(&vars)?,
         })
     }
 
@@ -173,6 +242,74 @@ fn parse_public_url(vars: &impl Fn(&str) -> Option<String>) -> Result<Url, Confi
         return Err(invalid("must not have a query or fragment"));
     }
     Ok(url)
+}
+
+/// Reads `HTTPS_PROXY`, else `https_proxy`; an empty value counts as unset.
+/// No other proxy variable (`HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) is read.
+fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Url>, ConfigError> {
+    let Some((var, raw)) = ["HTTPS_PROXY", "https_proxy"].into_iter().find_map(|var| {
+        vars(var)
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| (var, raw))
+    }) else {
+        return Ok(None);
+    };
+    let invalid = |reason| ConfigError::Invalid { var, reason };
+    let url = Url::parse(&raw).map_err(|_| invalid("not a valid URL"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(invalid("must use http or https"));
+    }
+    if url.host().is_none() {
+        return Err(invalid("must name a host"));
+    }
+    if url.path() != "/" {
+        return Err(invalid("must not have a path"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid("must not have a query or fragment"));
+    }
+    Ok(Some(url))
+}
+
+/// Reads `COFFER_SIMPLEFIN_HOSTS`; unset means the public `SimpleFin`
+/// bridges.
+fn parse_simplefin_hosts(
+    vars: &impl Fn(&str) -> Option<String>,
+) -> Result<HostAllowList, ConfigError> {
+    const VAR: &str = "COFFER_SIMPLEFIN_HOSTS";
+    let raw = vars(VAR);
+    HostAllowList::parse(raw.as_deref().unwrap_or(DEFAULT_SIMPLEFIN_HOSTS)).map_err(|_| {
+        ConfigError::Invalid {
+            var: VAR,
+            reason: "expected comma-separated DNS host names",
+        }
+    })
+}
+
+/// Reads `COFFER_TIMEZONE`, an IANA time zone name; unset means `UTC`. The
+/// name is looked up in the system database when there is one, else in the
+/// copy built into the binary, so a container without `/usr/share/zoneinfo`
+/// still knows every zone.
+fn parse_timezone(vars: &impl Fn(&str) -> Option<String>) -> Result<TimeZone, ConfigError> {
+    const VAR: &str = "COFFER_TIMEZONE";
+    let Some(name) = vars(VAR) else {
+        return Ok(TimeZone::UTC);
+    };
+    lookup_timezone(&name).ok_or(ConfigError::Invalid {
+        var: VAR,
+        reason: "not a known IANA time zone name",
+    })
+}
+
+/// The zone called `name` in the system database, else in the bundled one.
+fn lookup_timezone(name: &str) -> Option<TimeZone> {
+    if name.is_empty() {
+        return None;
+    }
+    jiff::tz::db()
+        .get(name)
+        .or_else(|_| TimeZoneDatabase::bundled().get(name))
+        .ok()
 }
 
 fn bounded(
@@ -338,6 +475,162 @@ mod tests {
     }
 
     #[test]
+    fn proxy_config_validation() {
+        let base = [
+            ("COFFER_PUBLIC_URL", "https://coffer.example"),
+            ("COFFER_DATA_DIR", "/data"),
+        ];
+        let with = |var: &str, value: &str| {
+            let mut pairs = base.to_vec();
+            pairs.push((var, value));
+            Config::from_env(vars(&pairs))
+        };
+
+        assert!(
+            with_public_url("https://coffer.example")
+                .unwrap()
+                .https_proxy
+                .is_none()
+        );
+
+        let config = with("HTTPS_PROXY", "http://user:SECRETPW@proxy:3128").unwrap();
+        let proxy = config.https_proxy.as_ref().unwrap();
+        assert_eq!(proxy.host_str(), Some("proxy"));
+        assert_eq!(proxy.port(), Some(3128));
+        assert_eq!(proxy.password(), Some("SECRETPW"));
+        let debug = format!("{config:?}");
+        assert!(
+            !debug.contains("SECRETPW"),
+            "the Debug output must not show the proxy password"
+        );
+        assert!(
+            !debug.contains("user:"),
+            "the Debug output must not show the proxy user"
+        );
+        assert!(
+            debug.contains("proxy:3128"),
+            "the Debug output must show the proxy host"
+        );
+
+        // The lowercase spelling is read when the uppercase one is unset.
+        let config = with("https_proxy", "https://proxy.example").unwrap();
+        assert_eq!(
+            config.https_proxy.as_ref().and_then(Url::host_str),
+            Some("proxy.example")
+        );
+        // The uppercase spelling wins when both are set.
+        let mut pairs = base.to_vec();
+        pairs.push(("HTTPS_PROXY", "http://upper:3128"));
+        pairs.push(("https_proxy", "http://lower:3128"));
+        let config = Config::from_env(vars(&pairs)).unwrap();
+        assert_eq!(
+            config.https_proxy.as_ref().and_then(Url::host_str),
+            Some("upper")
+        );
+        // An empty value counts as unset.
+        assert!(with("HTTPS_PROXY", "").unwrap().https_proxy.is_none());
+
+        for (var, value) in [
+            ("HTTPS_PROXY", "ftp://proxy:21"),
+            ("HTTPS_PROXY", "http://proxy/path"),
+            ("HTTPS_PROXY", "http://proxy/?a=b"),
+            ("HTTPS_PROXY", "http://proxy/#top"),
+            ("HTTPS_PROXY", "socks5://proxy:1080"),
+            ("HTTPS_PROXY", "not a url"),
+            ("https_proxy", "http://proxy/path"),
+        ] {
+            let err = with(var, value).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::Invalid { var: v, .. } if v == var),
+                "{var}={value}: {err:?}"
+            );
+            assert!(
+                !err.to_string().contains("proxy:"),
+                "the error must not show the proxy URL"
+            );
+        }
+
+        // The other proxy variables have no effect.
+        for var in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+        ] {
+            assert!(
+                with(var, "http://proxy:3128")
+                    .unwrap()
+                    .https_proxy
+                    .is_none(),
+                "{var}"
+            );
+        }
+    }
+
+    fn with_var(var: &str, value: &str) -> Result<Config, ConfigError> {
+        Config::from_env(vars(&[
+            ("COFFER_PUBLIC_URL", "https://coffer.example"),
+            ("COFFER_DATA_DIR", "/data"),
+            (var, value),
+        ]))
+    }
+
+    #[test]
+    fn timezone_defaults_to_utc_and_reads_iana_names() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(config.timezone, TimeZone::UTC);
+        let config = with_var("COFFER_TIMEZONE", "Pacific/Auckland").unwrap();
+        assert_eq!(config.timezone.iana_name(), Some("Pacific/Auckland"));
+        assert!(format!("{config:?}").contains("Pacific/Auckland"));
+        for bad in ["", "Not/AZone", "../../etc/passwd", "UTC+25"] {
+            let err = with_var("COFFER_TIMEZONE", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_TIMEZONE",
+                        ..
+                    }
+                ),
+                "{bad:?}: {err:?}"
+            );
+        }
+    }
+
+    /// The zone data is built into the binary, so the container image
+    /// needs no `/usr/share/zoneinfo`.
+    #[test]
+    fn bundled_timezone_database_is_built_in() {
+        let bundled = TimeZoneDatabase::bundled();
+        assert!(!bundled.is_definitively_empty());
+        for name in ["Pacific/Auckland", "America/Los_Angeles", "Europe/Paris"] {
+            assert!(bundled.get(name).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn sync_interval_bounds() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(config.sync_interval, SignedDuration::from_hours(6));
+        let config = with_var("COFFER_SYNC_INTERVAL_HOURS", "24").unwrap();
+        assert_eq!(config.sync_interval, SignedDuration::from_hours(24));
+        for bad in ["0", "25", "six"] {
+            let err = with_var("COFFER_SYNC_INTERVAL_HOURS", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_SYNC_INTERVAL_HOURS",
+                        ..
+                    }
+                ),
+                "{bad}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn config_requires_data_dir() {
         let err =
             Config::from_env(vars(&[("COFFER_PUBLIC_URL", "https://coffer.example")])).unwrap_err();
@@ -350,5 +643,38 @@ mod tests {
             ),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn simplefin_hosts_default_to_the_public_bridges() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(
+            config.simplefin_hosts,
+            HostAllowList::parse("bridge.simplefin.org,beta-bridge.simplefin.org").unwrap()
+        );
+        let config = with_var("COFFER_SIMPLEFIN_HOSTS", "Bridge.Example.").unwrap();
+        assert_eq!(
+            config.simplefin_hosts,
+            HostAllowList::parse("bridge.example").unwrap()
+        );
+        for bad in [
+            "",
+            "10.0.0.1",
+            "*.example.org",
+            "https://bridge.example",
+            "a,,b",
+        ] {
+            let err = with_var("COFFER_SIMPLEFIN_HOSTS", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_SIMPLEFIN_HOSTS",
+                        ..
+                    }
+                ),
+                "{bad}: {err:?}"
+            );
+        }
     }
 }

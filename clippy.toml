@@ -1,3 +1,6 @@
 # Tests may unwrap: a panic is how a test reports an unexpected failure.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Proper nouns written as such in docs; the handlers' doc comments also
+# become the OpenAPI document's summaries, where backticks would show.
+doc-valid-idents = ["OpenAPI", ".."]

@@ -9,6 +9,10 @@ pub enum StoreError {
     NotFound,
     #[error("conflict: {0}")]
     Conflict(&'static str),
+    /// A value the caller should never pass, refused before it reaches
+    /// the database.
+    #[error("invalid value: {0}")]
+    Invalid(&'static str),
     /// A pagination cursor that this store did not issue or that was altered.
     #[error("invalid pagination cursor")]
     InvalidCursor,

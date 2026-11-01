@@ -1,0 +1,67 @@
+{
+  "errors": [],
+  "accounts": [
+    {
+      "org": {
+        "domain": "example.com",
+        "name": "Example Bank",
+        "sfin-url": "https://bridge.example/simplefin"
+      },
+      "id": "ACT-0001",
+      "name": "Checking",
+      "currency": "USD",
+      "balance": "2450.17",
+      "available-balance": "2400.17",
+      "balance-date": 1799992800,
+      "transactions": [
+        {
+          "id": "TRN-0001",
+          "posted": 1799595000,
+          "amount": "-42.50",
+          "description": "GROCERY MARKET 0042",
+          "payee": "Grocery Market",
+          "memo": "Card purchase",
+          "transacted_at": 1799595000
+        },
+        {
+          "id": "TRN-0002",
+          "posted": 1799745300,
+          "amount": "1500.00",
+          "description": "PAYROLL DEPOSIT",
+          "payee": "Employer"
+        },
+        {
+          "id": "TRN-0003",
+          "posted": 0,
+          "amount": "-18.25",
+          "description": "COFFEE ROASTERS",
+          "pending": true,
+          "transacted_at": 1799959500
+        }
+      ],
+      "extra": {
+        "account-open-date": 1700000000
+      }
+    },
+    {
+      "org": {
+        "domain": "example.com",
+        "name": "Example Bank",
+        "sfin-url": "https://bridge.example/simplefin"
+      },
+      "id": "ACT-0002",
+      "name": "Credit Card",
+      "currency": "USD",
+      "balance": "-312.40",
+      "balance-date": 1799992800,
+      "transactions": [
+        {
+          "id": "TRN-0101",
+          "posted": 1799863200,
+          "amount": "-64.99",
+          "description": "ONLINE BOOKSTORE"
+        }
+      ]
+    }
+  ]
+}

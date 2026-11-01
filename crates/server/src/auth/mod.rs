@@ -1,19 +1,20 @@
 //! Authentication and identity: passkey ceremonies, invites, enrollment,
 //! login and member management.
 
+pub mod access;
 pub mod agent_tokens;
 pub mod identity;
 pub mod passkeys;
 pub mod sessions;
 
-use coffer_domain::audit::{AuditActor, AuditEntry};
+use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::identity::IdentityError;
 use coffer_domain::policy::{Denied, DenyReason};
 use coffer_store::{StoreError, StoreTx};
 use jiff::Timestamp;
-use serde_json::Value;
 use webauthn_rs::prelude::WebauthnError;
 
+pub use access::AccessResolver;
 pub use agent_tokens::AgentTokens;
 pub use identity::{Identity, InvitePreview};
 pub use passkeys::{CeremonyId, Passkeys};
@@ -103,13 +104,23 @@ impl From<Denied> for AuthError {
     }
 }
 
-fn denied_message(denied: Denied) -> String {
+/// What a policy denial tells the requester.
+pub(crate) fn denied_message(denied: Denied) -> String {
     match denied.reason {
         DenyReason::SessionRequired => "this action requires signing in with a passkey".to_owned(),
         DenyReason::InsufficientScope { needed } => {
             format!("this action requires {} rights", needed.as_str())
         }
         DenyReason::ScopeAboveRole => "requested scope exceeds your role".to_owned(),
+        // Worded like a missing resource, so it reveals nothing even where
+        // it is shown (logs, a CLI) instead of the 404 problem.
+        DenyReason::AccountHidden => "not found".to_owned(),
+        DenyReason::AccountLevel { needed } => {
+            format!(
+                "this action needs {} access to this account",
+                needed.as_str()
+            )
+        }
     }
 }
 
@@ -122,7 +133,7 @@ pub(crate) async fn audit(
     action: &str,
     entity_type: &str,
     entity_id: impl std::fmt::Display,
-    changes: Value,
+    changes: AuditChanges,
 ) -> Result<(), AuthError> {
     tx.append_audit(
         now,

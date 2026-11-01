@@ -73,3 +73,17 @@ updates:
         update-types: [minor, patch]
     commit-message:
       prefix: build
+
+  # The digest-pinned Spectral image the openapi-lint job runs.
+  - package-ecosystem: docker
+    directory: /.github/spectral
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docker-spectral:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci

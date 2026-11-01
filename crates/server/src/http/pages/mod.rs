@@ -11,6 +11,7 @@
 
 mod account;
 mod admin;
+mod connections;
 mod household;
 mod layout;
 mod login;
@@ -32,7 +33,7 @@ use serde::de::DeserializeOwned;
 
 use super::AppState;
 use super::extract::session_cookie_value;
-use super::problem::Problem;
+use super::problem::{Problem, ProblemCode};
 use crate::auth::{AuthError, session_cookie};
 use crate::themes::Look;
 use layout::Frame;
@@ -51,6 +52,7 @@ pub fn router() -> Router<AppState> {
         .merge(login::routes())
         .merge(account::routes())
         .merge(admin::routes())
+        .merge(connections::routes())
         .merge(household::routes())
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -116,7 +118,7 @@ pub(super) async fn require_same_origin(
     }
     let problem = Problem::new(
         StatusCode::FORBIDDEN,
-        "cross_origin",
+        ProblemCode::CrossOrigin,
         "Cross-origin request refused",
     );
     let json = request
@@ -139,17 +141,17 @@ pub struct PageError(pub Problem);
 impl PageError {
     fn invalid(detail: &str) -> Self {
         Self(
-            Problem::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid", "Invalid value")
-                .with_detail(detail.to_owned()),
+            Problem::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ProblemCode::Invalid,
+                "Invalid value",
+            )
+            .with_detail(detail.to_owned()),
         )
     }
 
     fn not_found() -> Self {
-        Self(Problem::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "Not found",
-        ))
+        Self(Problem::not_found())
     }
 }
 
@@ -244,7 +246,7 @@ fn error_page(response: &Response, in_api: bool) -> Option<ErrorPage> {
 }
 
 /// Whether `uri` is under `/api`, where errors are problems, not pages.
-fn in_api(uri: &Uri) -> bool {
+pub(super) fn in_api(uri: &Uri) -> bool {
     let path = uri.path();
     path == "/api" || path.starts_with("/api/")
 }
@@ -373,8 +375,12 @@ impl<T: DeserializeOwned> FromRequest<AppState> for PageForm<T> {
             .map(|Form(value)| Self(value))
             .map_err(|rejection: FormRejection| {
                 PageError(
-                    Problem::new(unreadable(rejection.status()), "invalid", "Invalid request")
-                        .with_detail("the form could not be read".to_owned()),
+                    Problem::new(
+                        unreadable(rejection.status()),
+                        ProblemCode::Invalid,
+                        "Invalid request",
+                    )
+                    .with_detail("the form could not be read".to_owned()),
                 )
             })
     }
@@ -391,8 +397,12 @@ impl<T: DeserializeOwned> FromRequest<AppState> for ApiJson<T> {
             .await
             .map(|Json(value)| Self(value))
             .map_err(|rejection: JsonRejection| {
-                Problem::new(unreadable(rejection.status()), "invalid", "Invalid request")
-                    .with_detail("the request body could not be read".to_owned())
+                Problem::new(
+                    unreadable(rejection.status()),
+                    ProblemCode::Invalid,
+                    "Invalid request",
+                )
+                .with_detail("the request body could not be read".to_owned())
             })
     }
 }

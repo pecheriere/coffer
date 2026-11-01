@@ -65,7 +65,7 @@ async fn healthy_server_on_the_unspecified_address_exits_0() {
     // The server binds every interface; the probe goes to loopback.
     let probe = healthcheck(&format!("0.0.0.0:{port}")).await;
 
-    assert_eq!(probe.code, ExitCode::SUCCESS, "{}", probe.err);
+    assert_eq!(probe.code, ExitCode::SUCCESS);
     assert_eq!(probe.out, "");
     assert_eq!(probe.err, "");
     stop.send(()).unwrap();
@@ -84,7 +84,10 @@ async fn unavailable_server_exits_1() {
     let probe = healthcheck(&addr.to_string()).await;
 
     assert_eq!(probe.code, ExitCode::from(1));
-    assert!(probe.err.contains("503"), "{}", probe.err);
+    assert!(
+        probe.err.contains("503"),
+        "the probe error must mention the status"
+    );
     stub.await.unwrap();
 }
 
@@ -98,7 +101,10 @@ async fn nothing_listening_exits_1() {
     let probe = healthcheck(&addr.to_string()).await;
 
     assert_eq!(probe.code, ExitCode::from(1));
-    assert!(probe.err.starts_with("coffer: "), "{}", probe.err);
+    assert!(
+        probe.err.starts_with("coffer: "),
+        "the probe error must start with the program name"
+    );
 }
 
 #[tokio::test]
@@ -107,5 +113,8 @@ async fn an_invalid_listen_address_is_unhealthy_not_a_usage_error() {
     let probe = healthcheck("not-an-address").await;
 
     assert_eq!(probe.code, ExitCode::from(1));
-    assert!(probe.err.contains("COFFER_LISTEN"), "{}", probe.err);
+    assert!(
+        probe.err.contains("COFFER_LISTEN"),
+        "the probe error must name COFFER_LISTEN"
+    );
 }

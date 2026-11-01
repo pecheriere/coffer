@@ -1,16 +1,25 @@
 //! SQLite persistence for coffer. The only crate that depends on `sqlx`; its
 //! public API speaks domain types only.
 
+mod accounts;
 mod agent_tokens;
 mod audit;
 mod backup;
+mod balances;
+mod categories;
+mod connections;
 mod convert;
 mod error;
 mod household;
+mod idempotency;
 mod invites;
 mod members;
 mod passkeys;
+mod provider_accounts;
 mod sessions;
+mod sources;
+mod sync_runs;
+mod transactions;
 
 use std::path::Path;
 use std::time::Duration;
@@ -18,13 +27,40 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+pub use accounts::{AccountChanges, AccountRecord, NewAccount};
 pub use agent_tokens::{AgentTokenRecord, NewAgentToken};
 pub use audit::{AuditEvent, AuditFilter};
+pub use balances::BalanceSnapshot;
+pub use categories::{
+    CategoryChanges, CategoryGroupChanges, CategoryGroupRecord, CategoryRecord, NewCategory,
+    NewCategoryGroup,
+};
+pub use connections::{
+    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection,
+    UnknownConnectionStatus,
+};
 pub use error::StoreError;
+pub use idempotency::Reservation;
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
+pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
+pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
+pub use sync_runs::{NewSyncRun, RunCounts, SyncRunRecord};
+pub use transactions::{
+    AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
+    TransactionFilter, TransactionRecord, UserFieldChanges,
+};
+
+/// How long a writer waits for the write lock before it fails. A sync
+/// applies each provider account in one transaction (spec: an interrupted
+/// run leaves only whole accounts), and matching a large first sync holds
+/// the lock for seconds: 2,000 records took 1.0 s in a release build on a
+/// desktop machine, so several on a small single-board server. Other
+/// writers (a PATCH, a page form, session activity) wait that out instead
+/// of failing.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(15);
 
 const DEFAULT_PAGE_LIMIT: u32 = 50;
 const MAX_PAGE_LIMIT: u32 = 200;
@@ -56,7 +92,7 @@ impl Store {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(BUSY_TIMEOUT)
             // Temporary tables and indices stay in memory: the container image
             // has no writable temporary directory, and household-scale data
             // keeps them small.
@@ -132,6 +168,69 @@ impl Store {
         }
         result.map_err(StoreError::from_sqlx)?;
         restored.map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+}
+
+// The literal behind `INJECTED_FAILURE_RECORD_ID`, for SQL text.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! injected_failure_record_id {
+    () => {
+        "injected-store-failure"
+    };
+}
+
+/// The provider record id whose insertion fails once
+/// [`Store::inject_source_insert_failure_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_FAILURE_RECORD_ID: &str = injected_failure_record_id!();
+
+/// The connection label whose insertion fails once
+/// [`Store::inject_connection_insert_failure_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_FAILURE_LABEL: &str = injected_failure_record_id!();
+
+#[cfg(any(test, feature = "testkit"))]
+impl Store {
+    /// Make every later insertion of a source record with the provider id
+    /// [`INJECTED_FAILURE_RECORD_ID`] fail with a backend error, so tests
+    /// can prove that a failure mid-way through a write leaves nothing
+    /// behind.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_source_insert_failure \
+             BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
+            injected_failure_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later insertion of a connection labelled
+    /// [`INJECTED_FAILURE_LABEL`] fail with a backend error.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_connection_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_connection_insert_failure \
+             BEFORE INSERT ON connections WHEN NEW.label = '",
+            injected_failure_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         Ok(())
     }
 }

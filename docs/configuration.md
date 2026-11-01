@@ -12,11 +12,15 @@ commands read the same configuration; `healthcheck` reads only
 | `COFFER_PUBLIC_URL` | required | The externally visible origin, also the WebAuthn origin: `https://<domain>[:port]` with nothing after the host but an optional `/`. `http://localhost[:port]` is accepted for local development only. Rejected: IP addresses (IPv4 or IPv6, over https too) because passkeys need a domain; a path (coffer cannot be served under a sub-path); user information, a query or a fragment. Changing the domain later invalidates every registered passkey. |
 | `COFFER_DATA_DIR` | required | Directory holding `coffer.db` and the server key. Created with mode 0700 if missing; an existing directory that group or others can access (any of mode 0077 set) is refused at startup by every command, with the fix (`chmod 700 <dir>`) in the error. Must be persistent and backed up. |
 | `COFFER_LISTEN` | `127.0.0.1:8080` | `host:port` socket address to bind. |
-| `COFFER_SECRET_KEY_FILE` | `$COFFER_DATA_DIR/secret.key` | 32-byte server key, created with mode 0600 on first start. A file readable by group or others is refused. Losing it invalidates all sessions, agent tokens and outstanding links; passkeys are unaffected. |
+| `COFFER_SECRET_KEY_FILE` | `$COFFER_DATA_DIR/secret.key` | 32-byte server key, created with mode 0600 on first start. A file readable by group or others is refused. Losing it invalidates all sessions, agent tokens and outstanding links, and makes the stored provider credentials unreadable, so every provider connection must be reconnected; passkeys are unaffected. |
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An unparsable value falls back to `info`. |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
+| `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
+| `HTTPS_PROXY` | unset | Egress proxy for every outbound https request (`https_proxy` is read when `HTTPS_PROXY` is unset; an empty value counts as unset): `http://` or `https://` with a host, optional port and optional `user:password@`, nothing after the host but an optional `/`. coffer sends `CONNECT <host>:443` and never resolves target hosts itself, so the proxy enforces the public-address rule; the proxy's own address may be private. Its credentials never appear in logs or errors. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. |
+| `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). |
 | `COFFER_LOG_FORMAT` | text | `json` switches to JSON lines. Logs go to stderr. |
 
 ## File permissions
@@ -46,6 +50,34 @@ A Tailscale Service is one way to do this: run coffer on the host, expose it
 with a Tailscale Service whose name gives `https://coffer.<tailnet>.ts.net`,
 and set `COFFER_PUBLIC_URL` to that address. Any other proxy (Caddy, nginx,
 Traefik) that meets the list above works the same way.
+
+## Outbound network
+
+coffer is no longer an offline service: to sync provider connections it
+makes outbound https requests. It connects only to:
+
+- the hosts in `COFFER_SIMPLEFIN_HOSTS` (by default `bridge.simplefin.org`
+  and `beta-bridge.simplefin.org`), on port 443;
+- in later releases, Plaid's API hosts and the exchange-rate source's host,
+  documented here when they are added.
+
+Every other destination is refused before a connection is opened. Target
+hosts must resolve to public addresses: coffer refuses loopback, private,
+link-local and other special-purpose addresses, so a setup token cannot point
+it at the local network. Redirects are never followed. `NO_PROXY`,
+`HTTP_PROXY` and `ALL_PROXY` are ignored.
+
+To enforce the same allow-list outside coffer, use one of:
+
+- an egress proxy in `HTTPS_PROXY` (or `https_proxy` when `HTTPS_PROXY` is
+  unset) that allows `CONNECT` to the hosts above
+  (port 443) only. coffer then does not resolve the target itself, so the
+  proxy must enforce the public-address rule;
+- a firewall or SNI allow-list that lets the coffer host reach only those
+  hosts on port 443.
+
+Provider credentials are sealed under a key derived from the server key, so
+losing `secret.key` also means reconnecting every provider connection.
 
 ## Endpoints
 
@@ -82,4 +114,6 @@ directory or the server key.
 public keys, token hashes and all financial data, so store it as carefully as
 the live data directory. The server key (`secret.key`) is not part of the
 backup; without it, restored agent tokens and sessions no longer validate and
-must be recreated, while passkeys keep working.
+must be recreated, and provider credentials (sealed under a key derived from
+it) cannot be opened, so every provider connection must be reconnected, while
+passkeys keep working.

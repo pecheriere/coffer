@@ -11,6 +11,17 @@ use uuid::Uuid;
 #[error("invalid id")]
 pub struct ParseIdError;
 
+/// The schema of every id: a canonical (hyphenated, lowercase) `UUIDv7`.
+#[cfg(feature = "openapi")]
+fn uuid_v7_schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+    use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, SchemaFormat, Type};
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Uuid)))
+        .description(Some("UUIDv7"))
+        .into()
+}
+
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -53,6 +64,26 @@ macro_rules! id_type {
         impl Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 serializer.collect_str(self)
+            }
+        }
+
+        impl From<$name> for crate::audit::AuditValue {
+            fn from(id: $name) -> Self {
+                Self::Text(id.to_string())
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                crate::ids::uuid_v7_schema()
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl utoipa::ToSchema for $name {
+            fn name() -> std::borrow::Cow<'static, str> {
+                std::borrow::Cow::Borrowed(stringify!($name))
             }
         }
 
@@ -103,6 +134,42 @@ id_type!(
 id_type!(
     /// Identifies an audit log entry.
     AuditEventId
+);
+id_type!(
+    /// Identifies an account: a place money is held or owed.
+    AccountId
+);
+id_type!(
+    /// Identifies a group of categories.
+    CategoryGroupId
+);
+id_type!(
+    /// Identifies a spending or income category.
+    CategoryId
+);
+id_type!(
+    /// Identifies a canonical transaction.
+    TransactionId
+);
+id_type!(
+    /// Identifies one categorized split of a transaction.
+    SplitId
+);
+id_type!(
+    /// Identifies a connection to a data provider.
+    ConnectionId
+);
+id_type!(
+    /// Identifies an account as a provider reports it.
+    ProviderAccountId
+);
+id_type!(
+    /// Identifies a transaction record as a provider reported it.
+    SourceRecordId
+);
+id_type!(
+    /// Identifies one run of a provider sync.
+    SyncRunId
 );
 
 #[cfg(test)]

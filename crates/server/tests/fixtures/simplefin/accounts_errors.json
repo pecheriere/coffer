@@ -1,0 +1,39 @@
+{
+  "errors": [
+    "Example Bank: the connection needs attention"
+  ],
+  "accounts": [
+    {
+      "org": {
+        "domain": "example.com",
+        "name": "Example Bank",
+        "sfin-url": "https://bridge.example/simplefin"
+      },
+      "id": "ACT-0003",
+      "name": "Rewards",
+      "currency": "https://example.com/points",
+      "balance": "1200",
+      "balance-date": 1799992800,
+      "transactions": []
+    },
+    {
+      "org": {
+        "domain": "example.com",
+        "name": "Example Bank",
+        "sfin-url": "https://bridge.example/simplefin"
+      },
+      "id": "ACT-0004",
+      "name": "Savings",
+      "currency": "USD",
+      "balance": "980.00",
+      "balance-date": 1799992800,
+      "transactions": [
+        {
+          "id": "TRN-0201",
+          "posted": 1799745300,
+          "description": "TRANSFER IN"
+        }
+      ]
+    }
+  ]
+}

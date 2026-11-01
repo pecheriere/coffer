@@ -1,0 +1,3 @@
+# Lints docs/api/openapi.json in CI (openapi-lint). Findings are fixed in the
+# code that generates the document, never by disabling a rule here.
+extends: ["spectral:oas"]
