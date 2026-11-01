@@ -32,7 +32,7 @@ use coffer_server::ledger::categories::CategoryGroupInput;
 use coffer_server::ledger::transactions::NewManualTransactionInput;
 use coffer_server::secrets::SecretToken;
 use coffer_server::sync::provider::{ConnectInput, ProviderKind};
-use coffer_server::testkit::{FakeProvider, TestServer};
+use coffer_server::testkit::{FakeProvider, TEST_PUBLIC_URL, TestServer};
 use coffer_store::{
     AuditEvent, AuditFilter, ConnectionStatus, ConnectionStatusChange, ImportedFields,
     NewConnection, NewSource, NewTransaction, PageRequest, ProviderAccountUpsert,
@@ -1331,7 +1331,8 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
     world.fail_connection(connection, &last_error).await;
 
     // An imported transaction on each account, the last account's listed as
-    // a duplicate of it, which a merge across accounts can leave behind.
+    // a duplicate of it. Nothing in the server makes such a cross-account
+    // pair; this seed tests the filter that would keep one from showing.
     let last = accounts.len() - 1;
     let mut imported = Vec::new();
     for (n, account) in accounts.iter().enumerate() {
@@ -1538,20 +1539,25 @@ async fn grants_change_audited_and_session_only() {
         ),
         "an agent is refused"
     );
-    let (status, _) = world
-        .send(
-            Method::POST,
-            &format!("/account/tokens/{id}/grants"),
-            &secret,
-            None,
-            None,
+    let response = router(world.server.app_state())
+        .oneshot(
+            Request::post(format!("/account/tokens/{id}/grants"))
+                .header(header::ORIGIN, TEST_PUBLIC_URL)
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", secret.expose_secret()),
+                )
+                .body(Body::empty())
+                .unwrap(),
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
-        status,
-        StatusCode::FORBIDDEN,
-        "a bearer token opens no page"
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "from the right origin, a bearer token is still no session"
     );
+    assert_eq!(response.headers()[header::LOCATION], "/login");
     assert_eq!(
         world.server.store.token_grants(id).await.unwrap(),
         [grant(GrantTarget::All, AccountLevel::Balances)],
@@ -2212,23 +2218,31 @@ async fn reconnect_resolves_access_before_spending_the_setup_token() {
     );
 }
 
-/// A merge across accounts can leave a transaction listing a candidate in
-/// another account: a token that cannot see that account is not told its id.
+/// The server makes candidate pairs within one account only, and merges
+/// only within one account, so these cross-account pairs are seeded. Should
+/// one ever exist, a token that cannot read the other account's transactions
+/// is not told its id, by any answer that shows the candidates.
 #[tokio::test]
 async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
     let world = world().await;
-    let (a, b) = (
+    let (a, b, c) = (
         world.account("Checking").await,
         world.account("Hidden").await,
+        world.account("Balances only").await,
     );
     let flagged = world.transaction(a, 1, "Coffee").await;
     let same_account = world.transaction(a, 2, "Coffee again").await;
     let hidden = world.transaction(b, 1, "Coffee elsewhere").await;
-    world.flag_duplicate(flagged, same_account).await;
-    world.flag_duplicate(flagged, hidden).await;
+    let low = world.transaction(c, 1, "Coffee at balances").await;
+    for candidate in [same_account, hidden, low] {
+        world.flag_duplicate(flagged, candidate).await;
+    }
 
     let (_, restricted) = world
-        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .token(
+            Scope::Write,
+            vec![on(a, AccountLevel::Write), on(c, AccountLevel::Balances)],
+        )
         .await;
     let (_, list) = world.get("/api/v1/transactions", &restricted).await;
     let item = list["items"]
@@ -2266,7 +2280,7 @@ async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
         json!([s(same_account)])
     );
 
-    // One that sees both accounts is told both.
+    // One that reads every account is told all of them.
     let (_, wide) = world
         .token(
             Scope::Read,
@@ -2274,5 +2288,40 @@ async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
         )
         .await;
     let (_, got) = world.get(&uri, &wide).await;
-    assert_eq!(got["duplicate_candidates"].as_array().unwrap().len(), 2);
+    assert_eq!(got["duplicate_candidates"].as_array().unwrap().len(), 3);
+
+    // A merge answers with the target's candidates, filtered the same way.
+    // Three connections, because a merge forgets a candidate that has a
+    // posted record from the same connection as the merged transaction.
+    let target_feed = world.connection(&[("Target", Some(a))]).await;
+    let duplicate_feed = world.connection(&[("Duplicate", Some(a))]).await;
+    let candidates_feed = world
+        .connection(&[("Hidden", Some(b)), ("Low", Some(c))])
+        .await;
+    let (target, _) = world.imported(target_feed, a, "Groceries").await;
+    let (duplicate, _) = world.imported(duplicate_feed, a, "Groceries").await;
+    let (hidden, _) = world.imported(candidates_feed, b, "Groceries").await;
+    let (low, _) = world.imported(candidates_feed, c, "Groceries").await;
+    for candidate in [duplicate, hidden, low] {
+        world.flag_duplicate(target, candidate).await;
+    }
+    let merge = format!("/api/v1/transactions/{target}/merge");
+    let (status, merged) = world
+        .call(
+            Method::POST,
+            &merge,
+            &restricted,
+            Some(json!({"duplicate": duplicate})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(merged["duplicate_candidates"], json!([]));
+    let (_, got) = world
+        .get(&format!("/api/v1/transactions/{target}"), &wide)
+        .await;
+    assert_eq!(
+        got["duplicate_candidates"].as_array().unwrap().len(),
+        2,
+        "the candidates survived the merge: the filter hid them"
+    );
 }

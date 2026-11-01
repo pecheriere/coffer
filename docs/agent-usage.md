@@ -15,9 +15,11 @@ operation, parameter and schema.
    [Account grants](#account-grants)). Left as they are, "All accounts" at
    `write` and every account at `none`, the token has no grants: it sees
    every account at its scope's level, and `write` is capped by the scope.
-   Lower "All accounts" to `none` and pick levels per account for a token
-   that sees only those. An account set below "All accounts" is refused,
-   because the better level would win, and so is `none` everywhere.
+   To limit it to chosen accounts you must set "All accounts" to `none`,
+   then pick their levels. Picking an account while "All accounts" stays at
+   that level or above is refused, because the better level would win and
+   the token would still reach every account. `none` everywhere is refused
+   too.
 4. Copy the token now. It starts with `coffer_` and is shown exactly once;
    coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
    an admin can also see and revoke every member's tokens from

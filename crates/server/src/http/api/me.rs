@@ -65,7 +65,8 @@ pub struct AccountGrantView {
                    it may use.",
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "The token's member, the token and its access.", body = MeResponse),
+        (status = 200, description = "The token's member, the token and its access.",
+         body = MeResponse),
         CommonProblems,
     ),
 )]

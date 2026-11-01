@@ -965,9 +965,9 @@ impl SyncService {
     /// [`SyncError::Denied`] without [`Action::WriteHousehold`],
     /// [`Action::ManageConnections`] or write access to every account;
     /// [`SyncError::NotFound`] for an unknown provider account;
-    /// [`SyncError::Invalid`] without a kind or for an invalid name; [`SyncError::CurrencyMismatch`] when the
-    /// provider's currency is not a supported ISO 4217 code; the errors of
-    /// [`SyncService::bind`].
+    /// [`SyncError::Invalid`] without a kind or for an invalid name;
+    /// [`SyncError::CurrencyMismatch`] when the provider's currency is not a
+    /// supported ISO 4217 code; the errors of [`SyncService::bind`].
     pub async fn create_account_and_bind(
         &self,
         actor: &Actor,

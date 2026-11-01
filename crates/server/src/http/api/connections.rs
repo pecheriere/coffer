@@ -103,7 +103,6 @@ pub(crate) fn connect_problem(err: SyncError) -> Problem {
     }
 }
 
-/// The pre-reserve check of a connect: `ManageConnections`.
 /// Connects `SimpleFin`.
 #[utoipa::path(
     post,

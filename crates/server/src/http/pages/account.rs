@@ -36,6 +36,11 @@ const MAX_EXPIRY_DAYS: u32 = 3650;
 /// The form field and option of no grant.
 const NO_LEVEL: &str = "none";
 
+/// What a grants form says above its selects.
+const LIMIT_HELP: &str = "Which accounts it may use. All accounts covers every account, including \
+                          new ones, as far as the scope allows. To limit this token to chosen \
+                          accounts, set All accounts to none, then choose their levels.";
+
 /// The levels a form offers, lowest first.
 const LEVELS: [AccountLevel; 3] = [
     AccountLevel::Balances,
@@ -175,8 +180,7 @@ fn new_token_form(ceiling: Scope, accounts: &[AccountView], csrf: &str) -> Marku
                     max=(MAX_EXPIRY_DAYS);
             }
             p.item-meta {
-                "Which accounts it may use. Left as they are, it uses every account as far as \
-                 its scope allows. To limit it, set All accounts to none and choose accounts."
+                (LIMIT_HELP)
             }
             (level_field("All accounts", "all", Some(AccountLevel::Write), AccountLevel::Write))
             @for account in accounts.iter().filter(|account| !account.closed) {
@@ -265,6 +269,7 @@ fn grants_editor(
             summary { "Change account access" }
             form method="post" action={ "/account/tokens/" (token.id) "/grants" } {
                 (csrf_field(csrf))
+                p.item-meta { (LIMIT_HELP) }
                 (level_field("All accounts", "all", all, ceiling))
                 @for account in accounts {
                     @let level = level_of(GrantTarget::Account(account.id));
@@ -499,17 +504,17 @@ impl GrantChoices {
     }
 
     /// The grants chosen. The best grant on an account wins, so an account
-    /// set below All accounts would look restricted and not be: that is
-    /// refused.
+    /// set at or below All accounts would look restricted and not be: that
+    /// is refused, whether All accounts was chosen or left at its default.
     fn into_grants(self) -> Result<Vec<TokenGrant>, PageError> {
         if self
             .accounts
             .iter()
-            .any(|grant| Some(grant.level) < self.all)
+            .any(|grant| Some(grant.level) <= self.all)
         {
             return Err(PageError::invalid(
-                "an account set below All accounts would still have the All accounts level; \
-                 lower All accounts first",
+                "All accounts already gives this level to every account; to limit this token \
+                 to chosen accounts, set All accounts to none",
             ));
         }
         let all = self.all.map(|level| TokenGrant {

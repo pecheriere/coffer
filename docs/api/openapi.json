@@ -1633,7 +1633,7 @@
         "tags": [
           "connections"
         ],
-        "summary": "The pre-reserve check of a connect: `ManageConnections`.\nConnects `SimpleFin`.",
+        "summary": "Connects `SimpleFin`.",
         "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`; a token with account grants also needs `all` at `write`, since its first sync queues work on every account it reports. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
         "operationId": "createSimpleFinConnection",
         "parameters": [

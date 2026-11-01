@@ -84,16 +84,17 @@
   before and after. The list can never be emptied, for the same reason: a
   token is widened only by an explicit `all` grant, which the audit log
   shows. On `/account`, a form that selects no level at all is refused
-  rather than read as no restriction, and so is an account set below "All
-  accounts", which would look restricted and not be. The side channels are
+  rather than read as no restriction, and so is an account set at or below
+  "All accounts", which would look restricted and not be. The side channels are
   closed:
   - A hidden account, its transactions and the provider account bound to
     it answer exactly like missing ones (the same 404 body), in single
     reads, list filters, batch operations (the error names the operation's
     index, never an id), merges and creates. Lists and their cursors are
     filtered in the query, so hidden rows neither appear nor shorten a page.
-    A transaction's duplicate candidates leave out those in a hidden account,
-    which a merge across accounts can leave behind.
+    As defence in depth, a transaction's duplicate candidates leave out those
+    in an account the token cannot read: the server pairs candidates and
+    merges only within one account, so none should exist.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to

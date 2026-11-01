@@ -1281,6 +1281,91 @@ async fn account_level_below_all_is_refused() {
     assert_eq!(server.store.list_agent_tokens(None).await.unwrap().len(), 0);
 }
 
+/// Choosing one account and leaving All accounts alone is the usual way to
+/// fill the form. At the same level, All accounts already gives the account
+/// that level, so it would look restricted and reach every account.
+#[tokio::test]
+async fn account_level_equal_to_all_is_refused_when_creating() {
+    let (server, mut admin, _, checking, _) = with_accounts().await;
+    let field = format!("account_{checking}");
+    for (scope, all, level) in [
+        ("write", "write", "write"),
+        ("write", "balances", "balances"),
+        // All accounts is capped at what read allows: transactions.
+        ("read", "write", "transactions"),
+    ] {
+        let refused = post_token_form(
+            &mut admin,
+            "looks-limited",
+            scope,
+            &[("all", all), (field.as_str(), level)],
+        )
+        .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{scope} {all} {level}"
+        );
+        assert!(
+            refused.body.contains("set All accounts to none"),
+            "the error says what to do"
+        );
+    }
+    assert_eq!(server.store.list_agent_tokens(None).await.unwrap().len(), 0);
+
+    // The form says so before anyone tries.
+    let page = admin.get("/account").await;
+    let form = page.between("action=\"/account/tokens\"", "</form>");
+    assert!(
+        form.contains("set All accounts to none"),
+        "the help text says how to limit a token"
+    );
+}
+
+/// A uniform token's edit form opens at All accounts at the ceiling, so the
+/// same trap is refused there, and a restricted token keeps its grants.
+#[tokio::test]
+async fn account_level_equal_to_all_is_refused_when_editing() {
+    let (server, mut admin, alice, checking, savings) = with_accounts().await;
+    let field = format!("account_{checking}");
+    let restricted = vec![TokenGrant {
+        target: GrantTarget::Account(savings),
+        level: AccountLevel::Balances,
+    }];
+    let tokens = [
+        (Scope::Write, Vec::new(), "write", "write"),
+        (Scope::Read, Vec::new(), "transactions", "transactions"),
+        (Scope::Write, restricted, "balances", "balances"),
+    ];
+    for (scope, grants, all, level) in tokens {
+        let id = grants_token(&server, &alice, scope, grants.clone()).await;
+        let path = format!("/account/tokens/{id}/grants");
+        let page = admin.get("/account").await;
+        let form = page.between(&format!("action=\"{path}\""), "</form>");
+        assert!(
+            form.contains("set All accounts to none"),
+            "the help text says how to limit a token"
+        );
+        let refused = admin
+            .post_form(
+                &path,
+                &[
+                    ("csrf", &page.csrf()),
+                    ("all", all),
+                    (field.as_str(), level),
+                ],
+            )
+            .await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{all}");
+        assert!(refused.body.contains("set All accounts to none"));
+        assert_eq!(
+            server.store.token_grants(id).await.unwrap(),
+            grants,
+            "the grants stay"
+        );
+    }
+}
+
 #[tokio::test]
 async fn bad_grant_fields_are_refused_and_never_echoed() {
     let (server, mut admin, alice, checking, _) = with_accounts().await;
