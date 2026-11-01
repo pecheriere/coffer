@@ -102,7 +102,7 @@ async fn oversized_body_refused() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, EgressError::TooLarge), "{err:?}");
+    assert!(matches!(err, EgressError::TooLarge { .. }), "{err:?}");
 
     // No declared length: the cap applies while reading.
     let chunked = serve_chunked(17).await;
@@ -113,7 +113,7 @@ async fn oversized_body_refused() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, EgressError::TooLarge), "{err:?}");
+    assert!(matches!(err, EgressError::TooLarge { .. }), "{err:?}");
     let response = egress
         .send(
             get_request(&format!("http://127.0.0.1:{port}/limit")),
@@ -144,10 +144,10 @@ async fn caller_body_limit_applies_while_reading() {
     };
 
     let declared = send("/declared", port, allowed.clone()).await;
-    assert!(matches!(declared, Err(EgressError::TooLarge)));
+    assert!(matches!(declared, Err(EgressError::TooLarge { .. })));
     let chunked = serve_chunked(1).await;
     let streamed = send("/", chunked, HostAllowList::loopback(chunked)).await;
-    assert!(matches!(streamed, Err(EgressError::TooLarge)));
+    assert!(matches!(streamed, Err(EgressError::TooLarge { .. })));
     let at_limit = send("/limit", port, allowed).await.unwrap();
     assert_eq!(at_limit.body.len(), 2048);
 }

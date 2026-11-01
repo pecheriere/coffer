@@ -107,22 +107,7 @@ impl SimpleFin {
             .await
             .map_err(claim_egress_error)?;
         let body = Zeroizing::new(response.body);
-        match response.status {
-            StatusCode::OK => {}
-            StatusCode::FORBIDDEN => return Err(ProviderError::Invalid(TOKEN_REFUSED.into())),
-            status if status.is_server_error() => {
-                return Err(ProviderError::Unavailable(format!(
-                    "SimpleFin answered the claim with status {}",
-                    status.as_u16()
-                )));
-            }
-            status => {
-                return Err(ProviderError::Invalid(format!(
-                    "SimpleFin answered the claim with status {}",
-                    status.as_u16()
-                )));
-            }
-        }
+        claim_status(response.status)?;
         let text = std::str::from_utf8(&body)
             .map_err(|_| ProviderError::Invalid(CLAIM_ANSWER_INVALID.into()))?;
         let access = Url::parse(text.trim())
@@ -254,8 +239,28 @@ fn claim_egress_error(err: EgressError) -> ProviderError {
         EgressError::HostNotAllowed | EgressError::NotHttps => {
             ProviderError::Invalid(TOKEN_HOST_REFUSED.into())
         }
-        EgressError::TooLarge => ProviderError::Invalid(CLAIM_ANSWER_INVALID.into()),
+        // An oversized error page reads as its status; only an oversized
+        // successful answer is an invalid claim answer.
+        EgressError::TooLarge { status } => claim_status(status)
+            .err()
+            .unwrap_or_else(|| ProviderError::Invalid(CLAIM_ANSWER_INVALID.into())),
         other => ProviderError::Unavailable(format!("SimpleFin could not be reached: {other}")),
+    }
+}
+
+/// The error a claim answered with `status` stands for, if any.
+fn claim_status(status: StatusCode) -> Result<(), ProviderError> {
+    match status {
+        StatusCode::OK => Ok(()),
+        StatusCode::FORBIDDEN => Err(ProviderError::Invalid(TOKEN_REFUSED.into())),
+        status if status.is_server_error() => Err(ProviderError::Unavailable(format!(
+            "SimpleFin answered the claim with status {}",
+            status.as_u16()
+        ))),
+        status => Err(ProviderError::Invalid(format!(
+            "SimpleFin answered the claim with status {}",
+            status.as_u16()
+        ))),
     }
 }
 

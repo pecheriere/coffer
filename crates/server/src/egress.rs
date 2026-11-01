@@ -52,9 +52,13 @@ pub enum EgressError {
     #[error("request timed out")]
     Timeout,
     /// The response body is larger than [`MAX_BODY_BYTES`], or than the
-    /// caller's limit (see [`Egress::send_limited`]).
+    /// caller's limit (see [`Egress::send_limited`]). The status lets the
+    /// caller tell an oversized answer from an oversized error page.
     #[error("response body exceeds the size limit")]
-    TooLarge,
+    TooLarge {
+        /// The response's status.
+        status: StatusCode,
+    },
     /// The connection, the TLS handshake, the proxy or the exchange failed.
     #[error("connection failed")]
     Transport {
@@ -394,12 +398,12 @@ impl Egress {
             .content_length()
             .is_some_and(|len| usize::try_from(len).map_or(true, |len| len > max_body))
         {
-            return Err(EgressError::TooLarge);
+            return Err(EgressError::TooLarge { status });
         }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(classify)? {
             if chunk.len() > max_body - body.len() {
-                return Err(EgressError::TooLarge);
+                return Err(EgressError::TooLarge { status });
             }
             body.extend_from_slice(&chunk);
         }

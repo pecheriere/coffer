@@ -526,6 +526,13 @@ async fn claim_errors_map_to_their_problems() {
             StatusCode::BAD_GATEWAY,
             "provider_error",
         ),
+        // An error page over the claim answer's limit still reads as its
+        // status.
+        (
+            Reply::status(StatusCode::SERVICE_UNAVAILABLE, &"<p>down</p>".repeat(400)),
+            StatusCode::BAD_GATEWAY,
+            "provider_error",
+        ),
     ] {
         world.script.claim(reply);
         let (got, _, problem) = world.connect(&setup_token(&world.claim_url())).await;
