@@ -40,7 +40,8 @@
   does not open, and relabelling its version (to steer it to another key)
   fails authentication, as does any altered byte. The version byte allows a
   dedicated key later.
-  In clear they exist only in memory, in buffers wiped after use, and never
+  In clear they exist only in memory, in buffers wiped after use (except
+  the short-lived copies listed under accepted residual risks), and never
   appear in logs, errors, the audit log or responses. A stolen database or
   backup does not reveal them without the server key; losing the server key
   means reconnecting every provider.
@@ -56,7 +57,11 @@
   private. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored, so the
   environment cannot quietly route around the allow-list. Setup tokens, claim and access URLs and provider response
   bodies never reach an error, a log line, the audit log or a response:
-  provider error texts are fixed, with at most a status code.
+  coffer's own provider error texts are fixed, with at most a status code.
+  Errors the bridge itself reports beside its data are shown after
+  sanitizing (user information in URLs is redacted); any that holds the
+  connection's access user or password is withheld and replaced by a fixed
+  text.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
@@ -113,6 +118,16 @@
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can make coffer call a provider at most that budget
   (16 times in 24 hours for SimpleFin) per connection.
+- **Some copies of provider secrets are not wiped.** While a SimpleFin
+  setup token is claimed and while a sync fetches, the claim URL, the access
+  URL and its user name pass through `url::Url` and `String` buffers (the
+  parsed URL, the user name used for basic auth, the text the JSON parser
+  produces and the percent-decoded password before it becomes a
+  `SecretString`). These copies live only for the duration of the call and
+  are freed, not zeroed. Wiping them would mean parsing URLs by hand instead
+  of with `url::Url`, trading a well-tested parser for a home-made one on
+  input an attacker can shape; reading them needs access to the server's
+  memory, which already exposes the server key.
 - **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
   infeasible; password-style guessing does not exist. Network access control
   is the defense against abuse volume.

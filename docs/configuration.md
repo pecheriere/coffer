@@ -69,7 +69,8 @@ it at the local network. Redirects are never followed. `NO_PROXY`,
 
 To enforce the same allow-list outside coffer, use one of:
 
-- an egress proxy in `HTTPS_PROXY` that allows `CONNECT` to the hosts above
+- an egress proxy in `HTTPS_PROXY` (or `https_proxy` when `HTTPS_PROXY` is
+  unset) that allows `CONNECT` to the hosts above
   (port 443) only. coffer then does not resolve the target itself, so the
   proxy must enforce the public-address rule;
 - a firewall or SNI allow-list that lets the coffer host reach only those
