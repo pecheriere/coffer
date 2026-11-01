@@ -86,7 +86,7 @@ impl Reply {
 #[derive(Default)]
 struct Script {
     claims: Mutex<VecDeque<Reply>>,
-    account_replies: Mutex<VecDeque<Reply>>,
+    bridge_replies: Mutex<VecDeque<Reply>>,
 }
 
 impl Script {
@@ -94,8 +94,8 @@ impl Script {
         self.claims.lock().unwrap().push_back(reply);
     }
 
-    fn accounts(&self, reply: Reply) {
-        self.account_replies.lock().unwrap().push_back(reply);
+    fn bridge_reply(&self, reply: Reply) {
+        self.bridge_replies.lock().unwrap().push_back(reply);
     }
 }
 
@@ -139,7 +139,7 @@ fn bridge(script: Arc<Script>) -> Router {
                         .get(header::AUTHORIZATION)
                         .is_some_and(|value| value.as_bytes() == expected.as_bytes());
                     if authorized {
-                        answer(&script.account_replies, &headers)
+                        answer(&script.bridge_replies, &headers)
                     } else {
                         StatusCode::UNAUTHORIZED.into_response()
                     }
@@ -601,16 +601,16 @@ async fn upstream_errors_never_echo_credentials() {
         StatusCode::PAYMENT_REQUIRED,
         StatusCode::FORBIDDEN,
     ] {
-        world.script.accounts(Reply::status(status, &echo));
+        world.script.bridge_reply(Reply::status(status, &echo));
         let run = world.sync(connection).await;
         assert_eq!(run.status, SyncRunStatus::Failed);
         details.push(run.detail.unwrap_or_default());
     }
     // A 200 answer that cannot be read, and one whose errors echo the
     // password.
-    world.script.accounts(Reply::ok(&echo));
+    world.script.bridge_reply(Reply::ok(&echo));
     details.push(world.sync(connection).await.detail.unwrap_or_default());
-    world.script.accounts(Reply::ok(
+    world.script.bridge_reply(Reply::ok(
         &json!({ "errors": [echo], "accounts": [] }).to_string(),
     ));
     details.push(world.sync(connection).await.detail.unwrap_or_default());
@@ -636,7 +636,7 @@ async fn upstream_errors_never_echo_credentials() {
 async fn fetch_sends_window_and_basic_auth() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(ACCOUNTS_FIRST));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
 
     let run = world.sync(connection).await;
 
@@ -678,7 +678,7 @@ async fn start_date_is_household_midnight_across_dst() {
         .clock
         .set("2027-01-30T20:00:00Z".parse().unwrap());
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(ACCOUNTS_FIRST));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
 
     world.sync(connection).await;
 
@@ -760,7 +760,7 @@ async fn category(world: &World) -> CategoryId {
 async fn sync_from_fixtures_then_posted_keeps_state() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(ACCOUNTS_FIRST));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
     assert_eq!(
         world.sync(connection).await.status,
         SyncRunStatus::Succeeded
@@ -792,7 +792,7 @@ async fn sync_from_fixtures_then_posted_keeps_state() {
         .await
         .unwrap();
 
-    world.script.accounts(Reply::ok(ACCOUNTS_POSTED));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_POSTED));
     assert_eq!(
         world.sync(connection).await.status,
         SyncRunStatus::Succeeded
@@ -813,7 +813,7 @@ async fn posted_date_uses_household_timezone() {
     let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
     let connection = world.seeded().await;
     // 2026-10-31T06:30Z is still 2026-10-30 in Los Angeles.
-    world.script.accounts(Reply::ok(&account_set(&json!([{
+    world.script.bridge_reply(Reply::ok(&account_set(&json!([{
         "id": "TRN-0001", "posted": 1_793_428_200, "amount": "-5.00",
         "description": "PARKING METER",
     }]))));
@@ -830,7 +830,7 @@ async fn posted_date_uses_household_timezone() {
 async fn errors_fixture_reports_connection_and_account_errors() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(ACCOUNTS_ERRORS));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_ERRORS));
 
     let run = world.sync(connection).await;
 
@@ -862,7 +862,7 @@ async fn errors_fixture_reports_connection_and_account_errors() {
 async fn unreadable_account_is_its_error() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(
+    world.script.bridge_reply(Reply::ok(
         &json!({
             "errors": [],
             "accounts": [{
@@ -888,7 +888,7 @@ async fn unreadable_account_is_its_error() {
 async fn unusable_records_skipped_others_applied() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(&account_set(&json!([
+    world.script.bridge_reply(Reply::ok(&account_set(&json!([
         { "id": "TRN-0001", "posted": 1_799_745_300, "amount": "-5.00",
           "description": "PARKING METER" },
         { "id": "TRN-0002", "posted": 1_799_745_300, "description": "NO AMOUNT" },
@@ -928,7 +928,7 @@ async fn reauth_on_403() {
     let connection = world.seeded().await;
     world
         .script
-        .accounts(Reply::status(StatusCode::FORBIDDEN, "access revoked"));
+        .bridge_reply(Reply::status(StatusCode::FORBIDDEN, "access revoked"));
 
     let run = world.sync(connection).await;
 
@@ -943,7 +943,7 @@ async fn rate_limited_on_429() {
     let connection = world.seeded().await;
     world
         .script
-        .accounts(Reply::status(StatusCode::TOO_MANY_REQUESTS, "slow down"));
+        .bridge_reply(Reply::status(StatusCode::TOO_MANY_REQUESTS, "slow down"));
 
     let run = world.sync(connection).await;
 
@@ -962,7 +962,7 @@ async fn subscription_inactive_on_402() {
     let connection = world.seeded().await;
     world
         .script
-        .accounts(Reply::status(StatusCode::PAYMENT_REQUIRED, ""));
+        .bridge_reply(Reply::status(StatusCode::PAYMENT_REQUIRED, ""));
 
     let run = world.sync(connection).await;
 
@@ -981,7 +981,7 @@ async fn undated_pending_record_keeps_its_first_day() {
     let undated = account_set(&json!([{
         "id": "TRN-0001", "posted": 0, "amount": "-5.00", "description": "PARKING METER",
     }]));
-    world.script.accounts(Reply::ok(&undated));
+    world.script.bridge_reply(Reply::ok(&undated));
     world.sync(connection).await;
     let account = world.bind("ACT-0001", AccountKind::Checking).await;
     let first_day = world.transactions(account).await[0].posted_on;
@@ -990,7 +990,7 @@ async fn undated_pending_record_keeps_its_first_day() {
         .server
         .clock
         .advance(jiff::SignedDuration::from_hours(48));
-    world.script.accounts(Reply::ok(&undated));
+    world.script.bridge_reply(Reply::ok(&undated));
     assert_eq!(
         world.sync(connection).await.status,
         SyncRunStatus::Succeeded
@@ -1016,7 +1016,7 @@ async fn undated_pending_record_keeps_its_first_day() {
 async fn amounts_parsed_exactly() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(&account_set(&json!([{
+    world.script.bridge_reply(Reply::ok(&account_set(&json!([{
         "id": "TRN-0001", "posted": 1_799_745_300, "amount": "-1234567.89",
         "description": "LARGE TRANSFER", "extra": { "category": "transfer" },
     }]))));
@@ -1037,7 +1037,7 @@ async fn amounts_parsed_exactly() {
 async fn numeric_amount_is_skipped() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(&account_set(&json!([{
+    world.script.bridge_reply(Reply::ok(&account_set(&json!([{
         "id": "TRN-0001", "posted": 1_799_745_300, "amount": -12.5,
         "description": "FLOAT AMOUNT",
     }]))));
@@ -1068,12 +1068,12 @@ async fn numeric_amount_is_skipped() {
 async fn reconnect_with_new_setup_token() {
     let world = world().await;
     let connection = world.seeded().await;
-    world.script.accounts(Reply::ok(ACCOUNTS_FIRST));
+    world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
     world.sync(connection).await;
     let checking = world.bind("ACT-0001", AccountKind::Checking).await;
     world
         .script
-        .accounts(Reply::status(StatusCode::FORBIDDEN, ""));
+        .bridge_reply(Reply::status(StatusCode::FORBIDDEN, ""));
     world.sync(connection).await;
     assert_eq!(
         world

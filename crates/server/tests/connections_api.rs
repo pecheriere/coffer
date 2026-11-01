@@ -447,7 +447,7 @@ async fn delete_connection_keeps_transactions() {
     world.script_one_account();
     let run = world.queue_run().await;
     world.server.sync.run(run).await.unwrap();
-    let Ok(mut listed) = world
+    let Ok(listed) = world
         .server
         .store
         .list_provider_accounts(Some(world.connection))
@@ -455,7 +455,9 @@ async fn delete_connection_keeps_transactions() {
     else {
         panic!("the provider accounts can be listed");
     };
-    let provider_account = listed.remove(0);
+    let Some(provider_account) = listed.into_iter().next() else {
+        panic!("one provider account was synced");
+    };
     world
         .server
         .sync
