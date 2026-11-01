@@ -549,6 +549,26 @@ access at its scope; plan 2b adds per-token grants. Per-member visibility
 remains a non-goal. Hidden accounts answer exactly like missing ones (404); a
 visible account with too low a level answers 403 naming the level needed.
 
+An agent token may carry grants: up to 100, each naming `all` or one account
+and a level, no target twice, none above the token scope's ceiling (`read` →
+`transactions`; `write` and `admin` → `write`). The effective level on an
+account is min(best grant naming it or `all`, the ceiling of the token's
+effective scope, the member's own access), the member's own access being
+uniform `write`. An account no grant names is hidden: 404 `not_found`,
+exactly like a missing account; a visible account below the level needed
+answers 403 `forbidden` with "this action needs <level> access to this
+account". A token without grants, every token created before grants, and
+every passkey session have uniform access at their scope, as in plan 2a. An
+account created after a token is visible to it only through an `all` grant.
+
+Actions that touch more than one account, or accounts not yet granted, need
+an `all` grant at the level shown: reading the audit log and listing unbound
+provider accounts need `transactions`; creating an account, binding a
+provider account and triggering a sync need `write`. Lists of account-scoped
+data (accounts, transactions, bound provider accounts) are filtered to the
+accounts granted at the level they show, and no list, aggregate, audit entry
+or error reveals a hidden account.
+
 ### 8.3 Provider credentials
 
 Provider credentials are sealed with XChaCha20-Poly1305 under a key derived

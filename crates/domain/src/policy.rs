@@ -1,11 +1,32 @@
 //! The authorization policy. The requirements table in [`authorize`] holds
 //! the household rules; [`authorize_account`] decides everything tied to one
 //! account. No access rule lives anywhere else.
+//!
+//! An agent token may carry [`TokenGrant`]s limiting it to chosen accounts at
+//! chosen levels. Its effective level on an account is the best grant naming
+//! it (or `all`), capped by [`grant_ceiling`] of its effective scope; an
+//! account no grant names is hidden. A token without grants, and every
+//! session, has uniform access at its scope.
+//!
+//! Actions that touch more than one account, or accounts not yet granted,
+//! need an `all` grant ([`AccountAccess::sees_every_account`]):
+//!
+//! | Action                           | Needs `sees_every_account` at |
+//! |----------------------------------|-------------------------------|
+//! | Read the audit log               | `Transactions`                |
+//! | List unbound provider accounts   | `Transactions`                |
+//! | Create an account                | `Write`                       |
+//! | Bind a provider account          | `Write`                       |
+//! | Trigger a sync                   | `Write`                       |
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{Actor, Role, Scope, Via, role_ceiling};
-use crate::ids::{AccountId, MemberId};
+use crate::ids::{AccountId, MemberId, ParseIdError};
 
 /// How much of one account an actor may use. Ordered
 /// `Balances < Transactions < Write`; each level includes those below it.
@@ -39,14 +60,32 @@ impl AccountLevel {
 pub enum AccountAccess {
     /// The same level on every account.
     Uniform(AccountLevel),
+    /// An agent token's grants. Built only by [`account_access_with_grants`];
+    /// every level read from it is capped at `ceiling`.
+    #[non_exhaustive]
+    Granted {
+        /// The highest level the token's effective scope allows.
+        ceiling: AccountLevel,
+        /// The level on every account, from an `all` grant.
+        all: Option<AccountLevel>,
+        /// The levels granted on single accounts.
+        accounts: BTreeMap<AccountId, AccountLevel>,
+    },
 }
 
 impl AccountAccess {
     /// The level granted on `account`, or `None` when it is hidden.
     #[must_use]
-    pub fn level_for(&self, _account: AccountId) -> Option<AccountLevel> {
+    pub fn level_for(&self, account: AccountId) -> Option<AccountLevel> {
         match self {
             Self::Uniform(level) => Some(*level),
+            Self::Granted {
+                ceiling,
+                all,
+                accounts,
+            } => (*all)
+                .max(accounts.get(&account).copied())
+                .map(|level| level.min(*ceiling)),
         }
     }
 
@@ -56,8 +95,123 @@ impl AccountAccess {
         match self {
             Self::Uniform(level) if *level >= at_least => AccountScope::All,
             Self::Uniform(_) => AccountScope::Only(Vec::new()),
+            Self::Granted { .. } if self.sees_every_account(at_least) => AccountScope::All,
+            Self::Granted { accounts, .. } => AccountScope::Only(
+                accounts
+                    .keys()
+                    .copied()
+                    .filter(|account| self.level_for(*account) >= Some(at_least))
+                    .collect(),
+            ),
         }
     }
+
+    /// Whether every account, including ones created later, is granted at
+    /// least `at_least`. Needed by the actions in the module's rule table.
+    #[must_use]
+    pub fn sees_every_account(&self, at_least: AccountLevel) -> bool {
+        match self {
+            Self::Uniform(level) => *level >= at_least,
+            Self::Granted { ceiling, all, .. } => {
+                all.is_some_and(|all| all.min(*ceiling) >= at_least)
+            }
+        }
+    }
+}
+
+/// What a grant covers: every account, or one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(try_from = "String")]
+pub enum GrantTarget {
+    /// Every account, including ones created after the grant. Written `all`.
+    All,
+    /// One account. Written as its id.
+    Account(AccountId),
+}
+
+impl fmt::Display for GrantTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => f.write_str("all"),
+            Self::Account(account) => fmt::Display::fmt(account, f),
+        }
+    }
+}
+
+impl FromStr for GrantTarget {
+    type Err = ParseIdError;
+
+    /// Accepts `all` or an account id in canonical form.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "all" {
+            Ok(Self::All)
+        } else {
+            s.parse().map(Self::Account)
+        }
+    }
+}
+
+impl TryFrom<String> for GrantTarget {
+    type Error = ParseIdError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl Serialize for GrantTarget {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// One grant of an agent token: `level` on `target`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenGrant {
+    pub target: GrantTarget,
+    pub level: AccountLevel,
+}
+
+/// The most grants one token may carry.
+pub const MAX_GRANTS: usize = 100;
+
+/// Why a token's grants were rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum GrantError {
+    #[error("a token with grants needs at least one")]
+    Empty,
+    #[error("a token has at most 100 grants")]
+    TooMany,
+    #[error("each account, and all, is granted at most once")]
+    DuplicateTarget,
+    #[error("a grant is above what the token's scope allows")]
+    AboveScope,
+}
+
+/// Checks the grants of a token with `scope`: 1 to [`MAX_GRANTS`] of them,
+/// no target twice, none above [`grant_ceiling`].
+///
+/// # Errors
+/// Returns the first [`GrantError`] found.
+pub fn validate_grants(scope: Scope, grants: &[TokenGrant]) -> Result<(), GrantError> {
+    if grants.is_empty() {
+        return Err(GrantError::Empty);
+    }
+    if grants.len() > MAX_GRANTS {
+        return Err(GrantError::TooMany);
+    }
+    let ceiling = grant_ceiling(scope);
+    let mut targets = BTreeSet::new();
+    for grant in grants {
+        if !targets.insert(grant.target) {
+            return Err(GrantError::DuplicateTarget);
+        }
+        if grant.level > ceiling {
+            return Err(GrantError::AboveScope);
+        }
+    }
+    Ok(())
 }
 
 /// The accounts an account-scoped query may return.
@@ -70,18 +224,50 @@ pub enum AccountScope {
 
 /// The highest account level an effective scope allows: a read scope never
 /// writes.
-fn level_ceiling(scope: Scope) -> AccountLevel {
+#[must_use]
+pub fn grant_ceiling(scope: Scope) -> AccountLevel {
     match scope {
         Scope::Read => AccountLevel::Transactions,
         Scope::Write | Scope::Admin => AccountLevel::Write,
     }
 }
 
-/// The access every actor has until per-token grants exist: uniform, at the
-/// level its effective scope allows.
+/// Uniform access at the level the actor's effective scope allows: every
+/// session, and every agent token without grants.
 #[must_use]
 pub fn account_access_for_scope(actor: &Actor) -> AccountAccess {
-    AccountAccess::Uniform(level_ceiling(actor.effective_scope()))
+    AccountAccess::Uniform(grant_ceiling(actor.effective_scope()))
+}
+
+/// The access of `actor` holding `grants`: uniform at its scope for a
+/// session or when `grants` is empty, otherwise limited to the grants and
+/// capped at its effective scope. A target granted twice keeps its best
+/// level, still capped.
+#[must_use]
+pub fn account_access_with_grants(actor: &Actor, grants: &[TokenGrant]) -> AccountAccess {
+    if grants.is_empty() || matches!(actor.via, Via::Session) {
+        return account_access_for_scope(actor);
+    }
+    let ceiling = grant_ceiling(actor.effective_scope());
+    let mut all = None;
+    let mut accounts = BTreeMap::new();
+    for grant in grants {
+        let level = grant.level.min(ceiling);
+        match grant.target {
+            GrantTarget::All => all = all.max(Some(level)),
+            GrantTarget::Account(account) => {
+                accounts
+                    .entry(account)
+                    .and_modify(|held: &mut AccountLevel| *held = (*held).max(level))
+                    .or_insert(level);
+            }
+        }
+    }
+    AccountAccess::Granted {
+        ceiling,
+        all,
+        accounts,
+    }
 }
 
 /// Something an actor may attempt.
@@ -204,7 +390,7 @@ pub fn authorize_account(
 ) -> Result<(), Denied> {
     let reason = match access.level_for(account) {
         None => DenyReason::AccountHidden,
-        Some(level) if level.min(level_ceiling(actor.effective_scope())) >= needed => {
+        Some(level) if level.min(grant_ceiling(actor.effective_scope())) >= needed => {
             return Ok(());
         }
         Some(_) => DenyReason::AccountLevel { needed },
@@ -238,6 +424,7 @@ mod tests {
     use super::*;
     use crate::identity::{Actor, Role, Scope, Via};
     use crate::ids::{AccountId, AgentTokenId, MemberId};
+    use proptest::strategy::Strategy;
 
     fn session(role: Role) -> Actor {
         Actor {
@@ -643,5 +830,317 @@ mod tests {
         );
         assert_eq!(check_token_scope(Role::Member, Scope::Write), Ok(()));
         assert_eq!(check_token_scope(Role::Admin, Scope::Admin), Ok(()));
+    }
+
+    fn account(n: u128) -> AccountId {
+        AccountId::from_uuid(uuid::Uuid::from_u128(n))
+    }
+
+    fn grant(target: GrantTarget, level: AccountLevel) -> TokenGrant {
+        TokenGrant { target, level }
+    }
+
+    #[test]
+    fn uniform_without_grants() {
+        for actor in [
+            session(Role::Member),
+            agent(Role::Member, Scope::Read),
+            agent(Role::Admin, Scope::Write),
+            agent(Role::Admin, Scope::Admin),
+        ] {
+            assert_eq!(
+                account_access_with_grants(&actor, &[]),
+                account_access_for_scope(&actor),
+                "{actor:?}"
+            );
+        }
+        // A session is never restricted by grants.
+        let actor = session(Role::Member);
+        let grants = [grant(
+            GrantTarget::Account(account(1)),
+            AccountLevel::Balances,
+        )];
+        assert_eq!(
+            account_access_with_grants(&actor, &grants),
+            AccountAccess::Uniform(AccountLevel::Write)
+        );
+    }
+
+    #[test]
+    fn all_grant_plus_specific_takes_max() {
+        let actor = agent(Role::Member, Scope::Write);
+        let (x, y) = (account(1), account(2));
+        let access = account_access_with_grants(
+            &actor,
+            &[
+                grant(GrantTarget::All, AccountLevel::Balances),
+                grant(GrantTarget::Account(x), AccountLevel::Write),
+            ],
+        );
+        assert_eq!(access.level_for(x), Some(AccountLevel::Write));
+        assert_eq!(access.level_for(y), Some(AccountLevel::Balances));
+        assert_account(&actor, &access, x, AccountLevel::Write, None);
+        assert_account(&actor, &access, y, AccountLevel::Balances, None);
+        assert_account(
+            &actor,
+            &access,
+            y,
+            AccountLevel::Transactions,
+            Some(DenyReason::AccountLevel {
+                needed: AccountLevel::Transactions,
+            }),
+        );
+        assert!(access.sees_every_account(AccountLevel::Balances));
+        assert!(!access.sees_every_account(AccountLevel::Transactions));
+    }
+
+    /// A read token's grants never exceed `Transactions`, even when handed
+    /// grants that were never validated.
+    #[test]
+    fn ceiling_caps_grants() {
+        let actor = agent(Role::Admin, Scope::Read);
+        let x = account(1);
+        let access = account_access_with_grants(
+            &actor,
+            &[
+                grant(GrantTarget::All, AccountLevel::Write),
+                grant(GrantTarget::Account(x), AccountLevel::Write),
+            ],
+        );
+        for id in [x, account(2)] {
+            assert_eq!(access.level_for(id), Some(AccountLevel::Transactions));
+        }
+        assert_eq!(access.scope(AccountLevel::Transactions), AccountScope::All);
+        assert_eq!(
+            access.scope(AccountLevel::Write),
+            AccountScope::Only(Vec::new())
+        );
+        assert!(access.sees_every_account(AccountLevel::Transactions));
+        assert!(!access.sees_every_account(AccountLevel::Write));
+        assert_account(
+            &actor,
+            &access,
+            x,
+            AccountLevel::Write,
+            Some(DenyReason::AccountLevel {
+                needed: AccountLevel::Write,
+            }),
+        );
+        // A member's admin token is capped by the role first.
+        let member = agent(Role::Member, Scope::Admin);
+        let access =
+            account_access_with_grants(&member, &[grant(GrantTarget::All, AccountLevel::Write)]);
+        assert_eq!(access.level_for(x), Some(AccountLevel::Write));
+    }
+
+    #[test]
+    fn no_grant_hides_account() {
+        let actor = agent(Role::Admin, Scope::Admin);
+        let (granted, hidden) = (account(1), account(2));
+        let access = account_access_with_grants(
+            &actor,
+            &[grant(GrantTarget::Account(granted), AccountLevel::Write)],
+        );
+        assert_eq!(access.level_for(hidden), None);
+        for needed in [
+            AccountLevel::Balances,
+            AccountLevel::Transactions,
+            AccountLevel::Write,
+        ] {
+            assert_account(
+                &actor,
+                &access,
+                hidden,
+                needed,
+                Some(DenyReason::AccountHidden),
+            );
+            assert!(!access.sees_every_account(needed));
+        }
+        assert_account(&actor, &access, granted, AccountLevel::Write, None);
+    }
+
+    #[test]
+    fn scope_lists_only_sufficient_accounts() {
+        let actor = agent(Role::Admin, Scope::Write);
+        let (balances, transactions, write) = (account(1), account(2), account(3));
+        let access = account_access_with_grants(
+            &actor,
+            &[
+                grant(GrantTarget::Account(write), AccountLevel::Write),
+                grant(GrantTarget::Account(balances), AccountLevel::Balances),
+                grant(
+                    GrantTarget::Account(transactions),
+                    AccountLevel::Transactions,
+                ),
+            ],
+        );
+        assert_eq!(
+            access.scope(AccountLevel::Balances),
+            AccountScope::Only(vec![balances, transactions, write])
+        );
+        assert_eq!(
+            access.scope(AccountLevel::Transactions),
+            AccountScope::Only(vec![transactions, write])
+        );
+        assert_eq!(
+            access.scope(AccountLevel::Write),
+            AccountScope::Only(vec![write])
+        );
+        // An `all` grant covers every account at its level, the specific
+        // grants only above it.
+        let access = account_access_with_grants(
+            &actor,
+            &[
+                grant(GrantTarget::All, AccountLevel::Transactions),
+                grant(GrantTarget::Account(write), AccountLevel::Write),
+            ],
+        );
+        assert_eq!(access.scope(AccountLevel::Balances), AccountScope::All);
+        assert_eq!(access.scope(AccountLevel::Transactions), AccountScope::All);
+        assert_eq!(
+            access.scope(AccountLevel::Write),
+            AccountScope::Only(vec![write])
+        );
+    }
+
+    #[test]
+    fn validate_grants_rules() {
+        let x = account(1);
+        assert_eq!(validate_grants(Scope::Write, &[]), Err(GrantError::Empty));
+        let many: Vec<TokenGrant> = (0..=100)
+            .map(|n| grant(GrantTarget::Account(account(n)), AccountLevel::Balances))
+            .collect();
+        assert_eq!(validate_grants(Scope::Write, &many[..100]), Ok(()));
+        assert_eq!(
+            validate_grants(Scope::Write, &many),
+            Err(GrantError::TooMany)
+        );
+        for duplicate in [
+            [
+                grant(GrantTarget::Account(x), AccountLevel::Balances),
+                grant(GrantTarget::Account(x), AccountLevel::Write),
+            ],
+            [
+                grant(GrantTarget::All, AccountLevel::Balances),
+                grant(GrantTarget::All, AccountLevel::Balances),
+            ],
+        ] {
+            assert_eq!(
+                validate_grants(Scope::Write, &duplicate),
+                Err(GrantError::DuplicateTarget)
+            );
+        }
+        let write = [
+            grant(GrantTarget::All, AccountLevel::Balances),
+            grant(GrantTarget::Account(x), AccountLevel::Write),
+        ];
+        assert_eq!(
+            validate_grants(Scope::Read, &write),
+            Err(GrantError::AboveScope)
+        );
+        assert_eq!(validate_grants(Scope::Write, &write), Ok(()));
+        assert_eq!(validate_grants(Scope::Admin, &write), Ok(()));
+        assert_eq!(
+            validate_grants(
+                Scope::Read,
+                &[grant(GrantTarget::Account(x), AccountLevel::Transactions)]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn grant_ceiling_follows_scope() {
+        assert_eq!(grant_ceiling(Scope::Read), AccountLevel::Transactions);
+        assert_eq!(grant_ceiling(Scope::Write), AccountLevel::Write);
+        assert_eq!(grant_ceiling(Scope::Admin), AccountLevel::Write);
+    }
+
+    #[test]
+    fn grant_target_serializes_as_all_or_the_account_id() {
+        let x = account(1);
+        let grants = [
+            grant(GrantTarget::All, AccountLevel::Balances),
+            grant(GrantTarget::Account(x), AccountLevel::Write),
+        ];
+        let json = serde_json::to_string(&grants).unwrap();
+        assert_eq!(
+            json,
+            format!(
+                r#"[{{"target":"all","level":"balances"}},{{"target":"{x}","level":"write"}}]"#
+            )
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<TokenGrant>>(&json).unwrap(),
+            grants
+        );
+        for bad in ["\"All\"", "\"\"", "\"not-an-id\"", "null"] {
+            assert!(serde_json::from_str::<GrantTarget>(bad).is_err(), "{bad}");
+        }
+        // Only the canonical lowercase form, like every id.
+        let upper = format!("\"{}\"", account(0xabcd).to_string().to_uppercase());
+        assert!(serde_json::from_str::<GrantTarget>(&upper).is_err());
+    }
+
+    const LEVELS: [AccountLevel; 3] = [
+        AccountLevel::Balances,
+        AccountLevel::Transactions,
+        AccountLevel::Write,
+    ];
+
+    fn level() -> impl Strategy<Value = AccountLevel> {
+        proptest::sample::select(LEVELS.to_vec())
+    }
+
+    fn target() -> impl Strategy<Value = GrantTarget> {
+        proptest::option::of(0..6_u128)
+            .prop_map(|n| n.map_or(GrantTarget::All, |n| GrantTarget::Account(account(n))))
+    }
+
+    proptest::proptest! {
+        /// Grants are random and unvalidated (above the scope, repeated
+        /// targets): the level is still never above the scope ceiling or
+        /// the best grant naming the account, an account no grant names is
+        /// hidden, and `scope` and `sees_every_account` agree with
+        /// `authorize_account`.
+        #[test]
+        fn level_for_never_exceeds_ceiling_or_grant(
+            role in proptest::sample::select(vec![Role::Member, Role::Admin]),
+            scope in proptest::sample::select(vec![Scope::Read, Scope::Write, Scope::Admin]),
+            grants in proptest::collection::vec(
+                (target(), level()).prop_map(|(target, level)| TokenGrant { target, level }),
+                1..8,
+            ),
+        ) {
+            let actor = agent(role, scope);
+            let access = account_access_with_grants(&actor, &grants);
+            let ceiling = grant_ceiling(actor.effective_scope());
+            // Account 6 is never named by a grant.
+            for id in (0..=6).map(account) {
+                let best = grants
+                    .iter()
+                    .filter(|g| g.target == GrantTarget::All || g.target == GrantTarget::Account(id))
+                    .map(|g| g.level)
+                    .max();
+                let level = access.level_for(id);
+                proptest::prop_assert_eq!(level.is_some(), best.is_some());
+                if let (Some(level), Some(best)) = (level, best) {
+                    proptest::prop_assert!(level <= ceiling);
+                    proptest::prop_assert!(level <= best);
+                    proptest::prop_assert_eq!(level, best.min(ceiling));
+                }
+                for needed in LEVELS {
+                    let allowed = authorize_account(&actor, &access, id, needed).is_ok();
+                    let listed = match access.scope(needed) {
+                        AccountScope::All => true,
+                        AccountScope::Only(ids) => ids.contains(&id),
+                    };
+                    proptest::prop_assert_eq!(listed, allowed, "{:?} {:?}", id, needed);
+                    if access.sees_every_account(needed) {
+                        proptest::prop_assert!(allowed);
+                    }
+                }
+            }
+        }
     }
 }
