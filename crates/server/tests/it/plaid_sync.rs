@@ -877,7 +877,7 @@ async fn removal_refused_when_the_plaid_token_cannot_be_opened() {
         kept.credentials == before.credentials,
         "the sealed token is kept for when the key is restored"
     );
-    assert!(world.script.seen(REMOVE).is_empty());
+    assert_eq!(world.script.seen(REMOVE).len(), 0);
 }
 
 /// The same when Plaid is no longer configured on the server.
