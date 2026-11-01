@@ -884,7 +884,7 @@ fn convert(
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
 /// the day's value or source.
-async fn write_balance(
+pub(super) async fn write_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     account: AccountId,

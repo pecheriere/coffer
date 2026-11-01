@@ -287,7 +287,8 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
 
 A connection links coffer to a data provider (SimpleFin or Plaid). It reports
 provider accounts; once a provider account is bound to a coffer account,
-syncs bring that account's transactions and balances. coffer syncs every
+syncs bring that account's transactions and balances. Binding applies the
+records already held and the balance last reported. coffer syncs every
 connection on a schedule (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask
 for a sync.
 

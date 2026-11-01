@@ -9,18 +9,18 @@
 //! them up at the provider when the connection is removed. No audit entry,
 //! log line, error or view ever holds them.
 
-use coffer_domain::accounts::{AccountKind, ConnectionLabel, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BalanceSource, ConnectionLabel, LiquidityClass};
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
-use coffer_domain::money::Currency;
+use coffer_domain::money::{Currency, DecimalAmount};
 use coffer_domain::policy::{
     AccountAccess, AccountLevel, Action, authorize, authorize_account, authorize_every_account,
 };
 use coffer_domain::sync::SyncTrigger;
 use coffer_store::{
-    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection, NewSyncRun, Page,
-    PageRequest, ProviderAccountRecord, StoreTx,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection,
+    NewSyncRun, Page, PageRequest, ProviderAccountRecord, StoreTx,
 };
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp};
@@ -32,6 +32,7 @@ use super::SyncError;
 use super::apply::apply_held;
 use super::engine::{
     CONNECTION_REMOVED, PROVIDER_NOT_OFFERED, SyncRunView, SyncService, ensure_not_removed,
+    write_balance,
 };
 use super::provider::{Capabilities, ConnectInput, ProviderError, ProviderKind};
 use crate::http::idempotency::IdempotencySlot;
@@ -1074,7 +1075,7 @@ impl SyncService {
         authorize(actor, Action::ManageConnections)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let view = bind_in(&mut tx, now, actor, &access, provider_account, account).await?;
+        let (view, _) = bind_in(&mut tx, now, actor, &access, provider_account, account).await?;
         tx.commit().await?;
         tracing::info!(provider_account = %provider_account, account = %account, "provider account bound");
         Ok(view)
@@ -1142,20 +1143,20 @@ impl SyncService {
         })?;
         let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;
         authorize_account(actor, &access, record.id, AccountLevel::Write)?;
-        let bound = bind_in(&mut tx, now, actor, &access, provider_account, record.id).await?;
+        let (bound, balance) =
+            bind_in(&mut tx, now, actor, &access, provider_account, record.id).await?;
         tx.commit().await?;
         tracing::info!(provider_account = %provider_account, account = %record.id, "account created and bound");
         Ok(LinkedAccountView {
-            // Created without an opening balance; held records bring
-            // transactions, and its balance comes with the next sync.
-            account: AccountView::new(&record, None, true),
+            account: AccountView::new(&record, balance.as_ref(), true),
             provider_account: bound,
         })
     }
 }
 
-/// Binds `provider_account` to `account` inside `tx` and applies its held
-/// records; the caller has authorized the actor.
+/// Binds `provider_account` to `account` inside `tx`, applies its held
+/// records and gives the account the balance last reported, which it returns;
+/// the caller has authorized the actor.
 async fn bind_in(
     tx: &mut StoreTx,
     now: Timestamp,
@@ -1163,7 +1164,7 @@ async fn bind_in(
     access: &AccountAccess,
     provider_account: ProviderAccountId,
     account: AccountId,
-) -> Result<ProviderAccountView, SyncError> {
+) -> Result<(ProviderAccountView, Option<BalanceSnapshot>), SyncError> {
     let current = tx.get_provider_account(provider_account).await?;
     if !visible(access, &current) {
         return Err(SyncError::NotFound);
@@ -1192,6 +1193,24 @@ async fn bind_in(
         return Err(SyncError::CurrencyMismatch);
     }
     let bound = tx.bind_provider_account(provider_account, account).await?;
+    // The balance last reported, so net worth has the account before the
+    // next sync. One that does not convert was noted on the provider account.
+    let balance = match &bound.last_balance {
+        Some(reported) => DecimalAmount::parse(&reported.amount_raw)
+            .and_then(|amount| amount.to_minor_units_rounded(currency))
+            .ok()
+            .map(|balance_minor| BalanceSnapshot {
+                account,
+                on: reported.on,
+                balance_minor,
+                source: BalanceSource::Sync,
+                recorded_at: now,
+            }),
+        None => None,
+    };
+    if let Some(snapshot) = &balance {
+        write_balance(tx, now, account, snapshot.on, snapshot.balance_minor).await?;
+    }
     let report = apply_held(tx, now, bound.clone(), target).await?;
     audit(
         tx,
@@ -1210,5 +1229,5 @@ async fn bind_in(
         attached = report.attached,
         "held records applied"
     );
-    Ok(ProviderAccountView::from(bound))
+    Ok((ProviderAccountView::from(bound), balance))
 }

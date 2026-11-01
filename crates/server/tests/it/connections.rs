@@ -424,6 +424,79 @@ async fn bind_applies_held_records() {
     assert!(matches!(again, SyncError::Conflict(_)));
 }
 
+/// A provider account's balance reaches its account when it is bound, not
+/// only at the next sync: net worth would miss the account until then.
+#[tokio::test]
+async fn bind_brings_the_reported_balance() {
+    let world = world().await;
+    let on = date(2026, 10, 30);
+    let mut with_balance = reported("acct-1", "USD", None, Vec::new());
+    with_balance.balance = Some((on, DecimalAmount::parse("23631.9805").unwrap()));
+    let without_balance = reported("acct-2", "USD", Some(AccountKind::Savings), Vec::new());
+    let mut created = reported("acct-3", "USD", Some(AccountKind::Savings), Vec::new());
+    created.balance = Some((on, DecimalAmount::parse("-12.50").unwrap()));
+    world
+        .sync_once(vec![with_balance, without_balance, created])
+        .await;
+    let held = world.provider_account("acct-1").await;
+    let checking = world.account("Checking", "USD").await;
+
+    world
+        .server
+        .sync
+        .bind(&world.alice, held.id, checking)
+        .await
+        .unwrap();
+
+    let writer = world.token(Scope::Write).await;
+    let (status, account) = world
+        .call(
+            Method::GET,
+            &format!("/api/v1/accounts/{checking}"),
+            &writer,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        account["latest_balance"]["balance"]["minor_units"],
+        json!(2_363_198)
+    );
+    assert_eq!(account["latest_balance"]["on"], json!("2026-10-30"));
+    assert_eq!(account["latest_balance"]["source"], json!("sync"));
+
+    let other = world.provider_account("acct-2").await;
+    let (status, linked) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/provider-accounts/{}/create-account", other.id),
+            &writer,
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        linked["account"]["latest_balance"],
+        json!(null),
+        "no balance was reported, so none is invented"
+    );
+
+    let created = world.provider_account("acct-3").await;
+    let (status, linked) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/provider-accounts/{}/create-account", created.id),
+            &writer,
+            Some(json!({"name": "Linked savings"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        linked["account"]["latest_balance"]["balance"]["minor_units"],
+        json!(-1250)
+    );
+}
+
 #[tokio::test]
 async fn create_account_and_bind_via_api() {
     let world = world().await;
