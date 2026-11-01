@@ -1,10 +1,11 @@
 //! The sync engine (spec §6.2): performs a queued run of one connection.
 //!
 //! A run opens the connection's credentials only for the provider call,
-//! asks for a window computed from the last success and the household's
-//! `today`, then applies each provider account in its own store
-//! transaction, so a failing account leaves nothing of itself behind and
-//! never blocks the others. The outcome is recorded on the connection, its
+//! asks for a window computed from when each provider account was last
+//! applied and the household's `today`, then applies each provider account
+//! in its own store transaction, so a failing account leaves nothing of
+//! itself behind, never blocks the others, and is fetched again from where
+//! it stopped. The outcome is recorded on the connection, its
 //! provider accounts and the run. Every provider text is sanitized before
 //! it is stored, and nothing about the credentials is ever logged.
 
@@ -296,8 +297,12 @@ impl SyncService {
         started_at: Timestamp,
     ) -> Result<SyncRunRecord, SyncError> {
         let connection = self.store.get_connection(run.connection).await?;
+        let applied = self
+            .store
+            .reported_provider_accounts_applied(connection.id)
+            .await?;
         let today = self.today();
-        match self.fetch(&connection, today).await {
+        match self.fetch(&connection, &applied, today).await {
             Ok((result, mode)) => {
                 self.apply(run, &connection, result, mode, today, started_at)
                     .await
@@ -318,10 +323,12 @@ impl SyncService {
     }
 
     /// Calls the provider with the connection's credentials, opened only
-    /// for the call.
+    /// for the call. `applied` is when each provider account it still
+    /// reports was last applied (see [`window_start`]).
     async fn fetch(
         &self,
         connection: &ConnectionRecord,
+        applied: &[Option<Timestamp>],
         today: Date,
     ) -> Result<(FetchResult, FetchMode), Failure> {
         let sealed = match (&connection.credentials, connection.status) {
@@ -344,6 +351,7 @@ impl SyncService {
                 overlap_days,
             } => (
                 Some(window_start(
+                    applied,
                     connection.last_success_at,
                     today,
                     &self.config.timezone,
@@ -591,6 +599,8 @@ impl SyncService {
         if let (Some(account), Some((on, balance_minor))) = (bound, balance) {
             write_balance(&mut tx, now, account.id, on.min(today), balance_minor).await?;
         }
+        tx.set_provider_account_applied(provider_account, now)
+            .await?;
         tx.commit().await?;
         tracing::debug!(provider_account = %provider_account, "provider account applied");
         Ok(AccountOutcome::Applied(report))
@@ -673,11 +683,16 @@ fn failure(err: &SyncError) -> Failure {
     }
 }
 
-/// The first day to fetch: the provider's maximum window on the first run;
-/// afterwards `overlap_days` before the day of the last success, but never
-/// more than `max_days` before `today`, however long ago that was.
+/// The first day to fetch, so that every provider account the provider
+/// still reports gets the records it missed: `overlap_days` before the day
+/// its data was last applied, or the provider's maximum window for one
+/// never applied; the earliest of those over `applied`. Without any such
+/// account (the first run, or a connection reporting none), the same rule
+/// on the connection's last success. Never more than `max_days` before
+/// `today`, however long ago that was.
 #[must_use]
 fn window_start(
+    applied: &[Option<Timestamp>],
     last_success: Option<Timestamp>,
     today: Date,
     timezone: &TimeZone,
@@ -685,12 +700,21 @@ fn window_start(
     overlap_days: i64,
 ) -> Date {
     let earliest = days_before(today, max_days);
-    match last_success {
+    let start = |at: Option<Timestamp>| match at {
         None => earliest,
         Some(at) => {
-            let success_day = at.to_zoned(timezone.clone()).date();
-            days_before(success_day, overlap_days).max(earliest)
+            let day = at.to_zoned(timezone.clone()).date();
+            days_before(day, overlap_days).max(earliest)
         }
+    };
+    if applied.is_empty() {
+        start(last_success)
+    } else {
+        applied
+            .iter()
+            .map(|&at| start(at))
+            .min()
+            .unwrap_or(earliest)
     }
 }
 
@@ -907,23 +931,56 @@ mod tests {
     fn window_rules() {
         let utc = TimeZone::UTC;
         let today = date(2026, 10, 31);
-        assert_eq!(window_start(None, today, &utc, 90, 14), date(2026, 8, 2));
-        let yesterday = "2026-10-30T23:00:00Z".parse().unwrap();
         assert_eq!(
-            window_start(Some(yesterday), today, &utc, 90, 14),
+            window_start(&[], None, today, &utc, 90, 14),
+            date(2026, 8, 2)
+        );
+        let yesterday: jiff::Timestamp = "2026-10-30T23:00:00Z".parse().unwrap();
+        assert_eq!(
+            window_start(&[], Some(yesterday), today, &utc, 90, 14),
             date(2026, 10, 16)
         );
         // The day of the last success is the household's day.
         let auckland = TimeZone::get("Pacific/Auckland").unwrap();
         assert_eq!(
-            window_start(Some(yesterday), today, &auckland, 90, 14),
+            window_start(&[], Some(yesterday), today, &auckland, 90, 14),
             date(2026, 10, 17)
         );
-        let long_ago = "2025-01-01T00:00:00Z".parse().unwrap();
+        let long_ago: jiff::Timestamp = "2025-01-01T00:00:00Z".parse().unwrap();
         assert_eq!(
-            window_start(Some(long_ago), today, &utc, 90, 14),
+            window_start(&[], Some(long_ago), today, &utc, 90, 14),
             date(2026, 8, 2),
             "clamped after a long gap"
+        );
+        // With reported accounts, the one applied longest ago decides, and
+        // one never applied gets the maximum window.
+        let week_ago: jiff::Timestamp = "2026-10-24T12:00:00Z".parse().unwrap();
+        assert_eq!(
+            window_start(
+                &[Some(yesterday), Some(week_ago)],
+                Some(yesterday),
+                today,
+                &utc,
+                90,
+                14
+            ),
+            date(2026, 10, 10)
+        );
+        assert_eq!(
+            window_start(
+                &[Some(yesterday), None],
+                Some(yesterday),
+                today,
+                &utc,
+                90,
+                14
+            ),
+            date(2026, 8, 2)
+        );
+        assert_eq!(
+            window_start(&[Some(long_ago)], Some(yesterday), today, &utc, 90, 14),
+            date(2026, 8, 2),
+            "clamped for an account applied long ago"
         );
         assert_eq!(days_before(today, -3), today);
         assert_eq!(days_before(today, i64::MAX), jiff::civil::Date::MIN);

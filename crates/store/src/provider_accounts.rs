@@ -8,14 +8,15 @@ use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Sqlite, SqliteExecutor};
 
-use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time};
+use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time, time_opt};
 use crate::members::expect_one;
 use crate::{Store, StoreError, StoreTx};
 
 macro_rules! columns {
     () => {
         "id, connection_id, provider_account_id, name, institution, currency_raw, kind_hint, \
-         account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at"
+         account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at, \
+         last_applied_at"
     };
 }
 
@@ -47,6 +48,8 @@ pub struct ProviderAccountRecord {
     pub error: Option<String>,
     pub first_seen_at: Timestamp,
     pub last_seen_at: Timestamp,
+    /// When its data was last applied in full; `None` until then.
+    pub last_applied_at: Option<Timestamp>,
 }
 
 /// A provider account as a fetch reports it: created the first time it is
@@ -86,6 +89,7 @@ fn provider_account_from_row(row: &SqliteRow) -> Result<ProviderAccountRecord, S
         error: text_opt(row, "error")?,
         first_seen_at: time(row, "first_seen_at")?,
         last_seen_at: time(row, "last_seen_at")?,
+        last_applied_at: time_opt(row, "last_applied_at")?,
     })
 }
 
@@ -182,6 +186,48 @@ impl StoreTx {
         expect_one(result.rows_affected())
     }
 
+    /// Record that a provider account's data was applied in full at `at`.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn set_provider_account_applied(
+        &mut self,
+        id: ProviderAccountId,
+        at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query("UPDATE provider_accounts SET last_applied_at = ? WHERE id = ?")
+            .bind(at.as_millisecond())
+            .bind(id.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// The provider account of `connection` bound to `account`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or an id that no longer parses.
+    pub async fn connection_binding(
+        &mut self,
+        connection: ConnectionId,
+        account: AccountId,
+    ) -> Result<Option<ProviderAccountId>, StoreError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM provider_accounts WHERE connection_id = ? AND account_id = ? \
+             ORDER BY id LIMIT 1",
+        )
+        .bind(connection.to_string())
+        .bind(account.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        row.map(|(id,)| id.parse().map_err(StoreError::backend))
+            .transpose()
+    }
+
     /// Bind an unbound provider account to `account`.
     ///
     /// # Errors
@@ -211,6 +257,35 @@ impl StoreTx {
 }
 
 impl Store {
+    /// When each provider account of `connection` that the provider still
+    /// reports was last applied in full (`None` for one never applied).
+    /// "Still reports" means seen since the start of the connection's
+    /// latest run that applied data (`succeeded` or `partial`): an account
+    /// the provider stopped reporting before then is left out. Empty when
+    /// no run has applied data yet.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a value that no longer parses.
+    pub async fn reported_provider_accounts_applied(
+        &self,
+        connection: ConnectionId,
+    ) -> Result<Vec<Option<Timestamp>>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT last_applied_at FROM provider_accounts WHERE connection_id = ?1 \
+             AND last_seen_at >= (SELECT MAX(started_at) FROM sync_runs \
+             WHERE connection_id = ?1 AND status IN ('succeeded', 'partial')) \
+             ORDER BY id",
+        )
+        .bind(connection.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        rows.iter()
+            .map(|row| time_opt(row, "last_applied_at"))
+            .collect()
+    }
+
     /// The provider accounts of `connection`, or of every connection, oldest
     /// first.
     ///

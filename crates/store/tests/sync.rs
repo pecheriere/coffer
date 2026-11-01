@@ -505,3 +505,122 @@ async fn sync_run_start_since_counts_from_the_earliest() {
         None
     );
 }
+
+/// Runs `connection`'s run queued at `seconds`: started then, finished as
+/// `status` one second later.
+async fn run_once(store: &Store, connection: ConnectionId, seconds: i64, status: SyncRunStatus) {
+    let id = queue(store, connection, SyncTrigger::Manual, None, seconds).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(id, at(seconds)).await.unwrap();
+    tx.finish_sync_run(id, status, None, at(seconds + 1))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// Only accounts seen since the start of the latest run that applied data
+/// count, each with when it was last applied in full.
+#[tokio::test]
+async fn reported_provider_accounts_applied_follow_the_latest_applying_run() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let seen = |id: &str, seconds: i64| ProviderAccountUpsert {
+        provider_account_id: id.into(),
+        ..upsert(connection, id, None, seconds)
+    };
+    assert!(
+        store
+            .reported_provider_accounts_applied(connection)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing before a run applied data"
+    );
+
+    let mut tx = store.begin().await.unwrap();
+    let gone = tx.upsert_provider_account(seen("gone", 5)).await.unwrap();
+    tx.set_provider_account_applied(gone.id, at(5))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    run_once(&store, connection, 100, SyncRunStatus::Succeeded).await;
+    let mut tx = store.begin().await.unwrap();
+    let applied = tx
+        .upsert_provider_account(seen("applied", 100))
+        .await
+        .unwrap();
+    tx.set_provider_account_applied(applied.id, at(100))
+        .await
+        .unwrap();
+    let failing = tx
+        .upsert_provider_account(seen("failing", 100))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    // A later failed run does not move the reference.
+    run_once(&store, connection, 200, SyncRunStatus::Failed).await;
+
+    let mut anchors = store
+        .reported_provider_accounts_applied(connection)
+        .await
+        .unwrap();
+    anchors.sort();
+    assert_eq!(anchors, vec![None, Some(at(100))]);
+    assert_eq!(
+        store
+            .list_provider_accounts(Some(connection))
+            .await
+            .unwrap()
+            .iter()
+            .find(|account| account.id == failing.id)
+            .unwrap()
+            .last_applied_at,
+        None
+    );
+}
+
+/// The provider account of a connection bound to an account is found;
+/// another connection's binding is not.
+#[tokio::test]
+async fn connection_binding_is_per_connection() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let first = add_connection(&store, owner).await;
+    let second = add_connection(&store, owner).await;
+    let mut tx = store.begin().await.unwrap();
+    let account = tx
+        .insert_account(NewAccount {
+            id: AccountId::new(),
+            name: AccountName::parse("Savings").unwrap(),
+            kind: AccountKind::Savings,
+            currency: Currency::parse("USD").unwrap(),
+            liquidity: LiquidityClass::Cash,
+            liquidity_overridden: false,
+            include_in_net_worth: true,
+            include_in_forecast: true,
+            created_at: at(0),
+        })
+        .await
+        .unwrap();
+    let provider_account = tx
+        .upsert_provider_account(upsert(first, "Savings", None, 1))
+        .await
+        .unwrap();
+    assert_eq!(
+        tx.connection_binding(first, account.id).await.unwrap(),
+        None
+    );
+    tx.bind_provider_account(provider_account.id, account.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        tx.connection_binding(first, account.id).await.unwrap(),
+        Some(provider_account.id)
+    );
+    assert_eq!(
+        tx.connection_binding(second, account.id).await.unwrap(),
+        None
+    );
+    tx.commit().await.unwrap();
+}
