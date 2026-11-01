@@ -153,6 +153,10 @@ declares one module per area. Add a new test file as `tests/it/<area>.rs` plus
 a `mod <area>;` line, never directly under `tests/`, where cargo would build it
 as another binary.
 
+`.config/nextest.toml` gives every test a time limit. A test that needs longer
+gets its own override there, based on its measured time; don't raise the
+default.
+
 ## Security review
 
 Required before merge for changes to auth, sessions, tokens, policy, secrets,
