@@ -1039,7 +1039,7 @@
           "categories"
         ],
         "summary": "Creates a category.",
-        "description": "Creates a category in an existing group. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a category in an existing group. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createCategory",
         "parameters": [
           {
@@ -1170,7 +1170,7 @@
           "categories"
         ],
         "summary": "Changes a category.",
-        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Needs `write`.",
+        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updateCategory",
         "parameters": [
           {
@@ -1288,7 +1288,7 @@
           "categories"
         ],
         "summary": "Creates a category group.",
-        "description": "Creates a category group. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a category group. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createCategoryGroup",
         "parameters": [
           {
@@ -1419,7 +1419,7 @@
           "categories"
         ],
         "summary": "Changes a category group.",
-        "description": "Changes the fields given: name, position or archived. Every category of an archived group counts as archived. Needs `write`.",
+        "description": "Changes the fields given: name, position or archived. Every category of an archived group counts as archived. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updateCategoryGroup",
         "parameters": [
           {
@@ -1537,7 +1537,7 @@
           "connections"
         ],
         "summary": "Every connection.",
-        "description": "Every connection, removed ones included, oldest first: its status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`.",
+        "description": "Every connection, removed ones included, oldest first: its status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`. The last error could name any account the connection serves: a token with account grants gets it only with `all` at `transactions`, otherwise it is `null` and the status still shows the problem.",
         "operationId": "listConnections",
         "responses": {
           "200": {
@@ -1633,8 +1633,8 @@
         "tags": [
           "connections"
         ],
-        "summary": "Connects `SimpleFin`.",
-        "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
+        "summary": "The pre-reserve check of a connect: `ManageConnections`.\nConnects `SimpleFin`.",
+        "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`; a token with account grants also needs `all` at `write`, since its first sync queues work on every account it reports. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
         "operationId": "createSimpleFinConnection",
         "parameters": [
           {

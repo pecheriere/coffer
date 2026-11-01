@@ -92,11 +92,14 @@
     reads, list filters, batch operations (the error names the operation's
     index, never an id), merges and creates. Lists and their cursors are
     filtered in the query, so hidden rows neither appear nor shorten a page.
+    A transaction's duplicate candidates leave out those in a hidden account,
+    which a merge across accounts can leave behind.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to
     change (creating an account, binding a provider account, requesting a
-    sync, reconnecting or removing a connection), and is refused with a 403
+    sync, adding, reconnecting or removing a connection, creating or
+    changing a category or group), and is refused with a 403
     that names no account otherwise.
   - Connections list only the provider accounts the token may see.
   - Idempotency keys belong to the credential that sent them, so a token
@@ -163,10 +166,12 @@
   memory, which already exposes the server key.
 - **A restricted token still sees household-wide data.** Grants limit
   accounts, not the rest of the household: a token with grants still reads
-  members, categories and connections (label, status, last error, owner),
-  and with `write` changes categories and adds connections. A connection's
-  last error is the provider's sanitized text and could name an account
-  the token cannot see.
+  members, categories and connections (label, status, owner). Its changes
+  to what is shared stop there: changing categories, or adding a connection
+  (whose first sync queues work on accounts not yet granted), needs `all` at
+  `write`. A connection's last error, the provider's sanitized text, could
+  name an account the token cannot see, so it needs `all` at `transactions`;
+  without it the token sees only that the status says something is wrong.
 - **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
   infeasible; password-style guessing does not exist. Network access control
   is the defense against abuse volume.

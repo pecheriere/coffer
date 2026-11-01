@@ -568,10 +568,14 @@ an explicit `all` grant.
 Actions that touch more than one account, or accounts not yet granted, need
 an `all` grant at the level shown: reading the audit log, listing unbound
 provider accounts and reading a connection's sync runs (whose counts and
-errors cover all its accounts) need `transactions`; creating an account,
-binding a provider account, triggering a sync and reconnecting or removing
-a connection (which changes the feed of every account it serves) need
-`write`. Without it the action answers 403 `forbidden` with "this action
+errors cover all its accounts) and a connection's last error (which could
+name any of them; without it the field is empty and the status remains) need
+`transactions`; creating an account, binding a provider account, triggering
+a sync, adding a connection (whose first sync queues work on accounts not yet
+granted), reconnecting or removing one (which changes the feed of every
+account it serves) and creating or changing a category or category group
+(shared by every account) need `write`. Using an existing category on a split
+is governed by write access to that transaction's account. Without it the action answers 403 `forbidden` with "this action
 needs <level> access to every account". Idempotency keys belong to the
 credential that sent them (the session or one agent token), so no token
 replays a response another credential earned. Lists of account-scoped

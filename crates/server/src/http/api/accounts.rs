@@ -136,7 +136,8 @@ pub(super) async fn list(
     operation_id = "createAccount",
     tag = tags::ACCOUNTS,
     description = "Creates a manual account, with an opening balance if given. Needs \
-                   `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 \
+                   `write`; a token with account grants also needs `all` at `write`. With an \
+                   `Idempotency-Key`, a retry of the same request within 24 \
                    hours returns the first response instead of creating again.",
     security(("bearer" = [])),
     params(

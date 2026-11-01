@@ -366,7 +366,10 @@ impl SyncService {
     }
 
     /// Every connection, removed ones included, oldest first, each with the
-    /// provider accounts the actor may see.
+    /// provider accounts the actor may see. Its last error is the provider's
+    /// text and could name any account it serves, so only an actor who sees
+    /// every account at [`AccountLevel::Transactions`] gets it; the status
+    /// still says the connection needs attention.
     ///
     /// # Errors
     ///
@@ -378,6 +381,7 @@ impl SyncService {
         let mut accounts = self.store.list_provider_accounts(None).await?;
         accounts.retain(|account| visible(&access, account));
         let connections = self.store.list_connections().await?;
+        let sees_errors = access.sees_every_account(AccountLevel::Transactions);
         Ok(connections
             .into_iter()
             .map(|connection| {
@@ -387,7 +391,11 @@ impl SyncService {
                     .cloned()
                     .map(ProviderAccountView::from)
                     .collect();
-                self.connection_view(connection, own)
+                let mut view = self.connection_view(connection, own);
+                if !sees_errors {
+                    view.last_error = None;
+                }
+                view
             })
             .collect())
     }
@@ -425,7 +433,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// [`SyncError::Denied`] without [`Action::ManageConnections`];
+    /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
+    /// access to every account;
     /// [`SyncError::Invalid`] when this server does not offer `kind`;
     /// [`SyncError::Provider`] when the provider refuses the input;
     /// [`SyncError::Vault`] when the credentials cannot be sealed; storage
@@ -438,7 +447,7 @@ impl SyncService {
         input: ConnectInput,
         slot: Option<IdempotencySlot>,
     ) -> Result<ConnectionView, SyncError> {
-        authorize(actor, Action::ManageConnections)?;
+        self.authorize_connect(actor).await?;
         let provider = self
             .registry
             .get(kind)
@@ -465,6 +474,20 @@ impl SyncService {
         self.queued.notify_one();
         tracing::info!(connection = %view.id, provider = kind.as_str(), "connection created");
         Ok(view)
+    }
+
+    /// Checks that `actor` may add a connection, whose first sync queues
+    /// work on accounts not yet granted, so a create can be refused before
+    /// its idempotency key is reserved.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
+    /// access to every account; a failure to resolve access.
+    pub async fn authorize_connect(&self, actor: &Actor) -> Result<(), SyncError> {
+        authorize(actor, Action::ManageConnections)?;
+        self.authorize_every_account(actor, AccountLevel::Write)
+            .await
     }
 
     /// Stores a new connection of `kind` with `credentials`, sealed under
@@ -547,6 +570,9 @@ impl SyncService {
         if current.status == ConnectionStatus::Removed {
             return Err(SyncError::Conflict(CONNECTION_REMOVED));
         }
+        // Before the provider is asked: claiming a setup token spends it, so
+        // nothing after that may turn the reconnect into a failure.
+        let access = self.access.resolve(actor).await?;
         let provider = self
             .provider_of(&current)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
@@ -572,7 +598,6 @@ impl SyncService {
         drop(credentials);
         self.queued.notify_one();
         tracing::info!(connection = %id, "connection reconnected");
-        let access = self.access.resolve(actor).await?;
         let accounts = self
             .store
             .list_provider_accounts(Some(id))
@@ -809,8 +834,9 @@ impl SyncService {
     /// # Errors
     ///
     /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
-    /// access to every account; [`SyncError::Invalid`] for another trigger, or when this server does
-    /// not offer the connection's provider; [`SyncError::NotFound`] for an
+    /// access to every account; [`SyncError::Invalid`] for another trigger,
+    /// or when this server does not offer the connection's provider;
+    /// [`SyncError::NotFound`] for an
     /// unknown connection; [`SyncError::Conflict`] for a removed one;
     /// [`SyncError::InProgress`] while a run is queued or running;
     /// [`SyncError::RateLimited`] when the provider's limits do not allow a
@@ -937,9 +963,9 @@ impl SyncService {
     /// # Errors
     ///
     /// [`SyncError::Denied`] without [`Action::WriteHousehold`],
-    /// [`Action::ManageConnections`] or write access to every account; [`SyncError::NotFound`] for an
-    /// unknown provider account; [`SyncError::Invalid`] without a kind or
-    /// for an invalid name; [`SyncError::CurrencyMismatch`] when the
+    /// [`Action::ManageConnections`] or write access to every account;
+    /// [`SyncError::NotFound`] for an unknown provider account;
+    /// [`SyncError::Invalid`] without a kind or for an invalid name; [`SyncError::CurrencyMismatch`] when the
     /// provider's currency is not a supported ISO 4217 code; the errors of
     /// [`SyncService::bind`].
     pub async fn create_account_and_bind(

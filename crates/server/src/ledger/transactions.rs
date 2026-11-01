@@ -634,7 +634,7 @@ impl Ledger {
         let mut tx = self.store.begin().await?;
         let record = apply_patch(&mut tx, actor, &access, now, id, patch).await?;
         tx.commit().await?;
-        Ok(TransactionView::new(&record))
+        self.seen_by(&access, TransactionView::new(&record)).await
     }
 
     /// Deletes a manual transaction. Imported ones are never deleted by
@@ -695,7 +695,7 @@ impl Ledger {
         let access = self.access.resolve(actor).await?;
         let record = self.store.get_transaction(id).await?;
         authorize_account(actor, &access, record.account, AccountLevel::Transactions)?;
-        Ok(TransactionView::new(&record))
+        self.seen_by(&access, TransactionView::new(&record)).await
     }
 
     /// Whether `actor` may use transaction `id` at `level`, decided before
@@ -753,8 +753,10 @@ impl Ledger {
             text: query.text,
         };
         let page = self.store.list_transactions(&filter, &query.page).await?;
+        let mut items: Vec<TransactionView> = page.items.iter().map(TransactionView::new).collect();
+        self.hide_candidates(&access, &mut items).await?;
         Ok(TransactionPage {
-            items: page.items.iter().map(TransactionView::new).collect(),
+            items,
             next: page.next,
         })
     }
@@ -793,7 +795,47 @@ impl Ledger {
             views.push(TransactionView::new(&record));
         }
         tx.commit().await?;
+        self.hide_candidates(&access, &mut views).await?;
         Ok(views)
+    }
+
+    /// `view` as `access` may see it, see [`Self::hide_candidates`].
+    pub(super) async fn seen_by(
+        &self,
+        access: &AccountAccess,
+        view: TransactionView,
+    ) -> Result<TransactionView, LedgerError> {
+        let mut views = [view];
+        self.hide_candidates(access, &mut views).await?;
+        let [view] = views;
+        Ok(view)
+    }
+
+    /// Removes the duplicate candidates `access` may not see. A merge across
+    /// accounts can leave a transaction listing one in another account, and
+    /// naming it would reveal a hidden transaction. `possible_duplicate`
+    /// stays: it says only that a member should look.
+    async fn hide_candidates(
+        &self,
+        access: &AccountAccess,
+        views: &mut [TransactionView],
+    ) -> Result<(), LedgerError> {
+        if access.sees_every_account(AccountLevel::Transactions) {
+            return Ok(());
+        }
+        let candidates: Vec<TransactionId> = views
+            .iter()
+            .flat_map(|view| view.duplicate_candidates.iter().copied())
+            .collect();
+        let accounts = self.store.accounts_of_transactions(&candidates).await?;
+        for view in views {
+            view.duplicate_candidates.retain(|candidate| {
+                accounts.get(candidate).is_some_and(|account| {
+                    access.level_for(*account) >= Some(AccountLevel::Transactions)
+                })
+            });
+        }
+        Ok(())
     }
 }
 

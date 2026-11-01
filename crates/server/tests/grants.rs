@@ -10,6 +10,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -23,18 +24,24 @@ use coffer_domain::policy::{
     grant_ceiling,
 };
 use coffer_domain::time::Clock as _;
+use coffer_domain::transactions::{Description, TransactionFlag, TransactionOrigin};
 use coffer_server::auth::AuthError;
 use coffer_server::http::router;
 use coffer_server::ledger::accounts::NewAccountInput;
+use coffer_server::ledger::categories::CategoryGroupInput;
 use coffer_server::ledger::transactions::NewManualTransactionInput;
 use coffer_server::secrets::SecretToken;
-use coffer_server::sync::provider::ProviderKind;
-use coffer_server::testkit::TestServer;
-use coffer_store::{AuditEvent, AuditFilter, NewConnection, PageRequest, ProviderAccountUpsert};
+use coffer_server::sync::provider::{ConnectInput, ProviderKind};
+use coffer_server::testkit::{FakeProvider, TestServer};
+use coffer_store::{
+    AuditEvent, AuditFilter, ConnectionStatus, ConnectionStatusChange, ImportedFields,
+    NewConnection, NewSource, NewTransaction, PageRequest, ProviderAccountUpsert,
+};
 use http_body_util::BodyExt as _;
 use jiff::civil::date;
 use proptest::strategy::Strategy as _;
-use secrecy::ExposeSecret as _;
+use proptest::test_runner::TestCaseError;
+use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -46,16 +53,18 @@ const LEVELS: [AccountLevel; 3] = [
 
 struct World {
     server: TestServer,
+    fake: Arc<FakeProvider>,
     alice: Actor,
 }
 
 /// Admin "alice", signed in with a passkey.
 async fn world() -> World {
-    let server = TestServer::with_fake_provider().await.0;
+    let (server, fake) = TestServer::with_fake_provider().await;
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     World {
         server,
+        fake,
         alice: Actor {
             member,
             role: Role::Admin,
@@ -175,6 +184,102 @@ impl World {
         }
         tx.commit().await.unwrap();
         connection.id
+    }
+
+    /// Records `error` as the connection's last error.
+    async fn fail_connection(&self, connection: ConnectionId, error: &str) {
+        let now = self.server.clock.now();
+        let mut tx = self.server.store.begin().await.unwrap();
+        tx.update_connection_status(
+            connection,
+            ConnectionStatusChange {
+                status: ConnectionStatus::Error,
+                last_error: Some(error.to_owned()),
+                attempted_at: Some(now),
+                succeeded_at: None,
+                at: now,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// A transaction imported into `account` with one source record from the
+    /// provider account of `connection` bound to it (the first one if none
+    /// is). Returns its id and the source record's.
+    async fn imported(
+        &self,
+        connection: ConnectionId,
+        account: AccountId,
+        description: &str,
+    ) -> (TransactionId, String) {
+        let now = self.server.clock.now();
+        let accounts = self
+            .server
+            .store
+            .list_provider_accounts(Some(connection))
+            .await
+            .unwrap();
+        let provider_account = accounts
+            .iter()
+            .find(|provider_account| provider_account.account == Some(account))
+            .unwrap_or(&accounts[0])
+            .id;
+        let posted_on = date(2026, 10, 3);
+        let description = Description::from_provider(description);
+        let mut tx = self.server.store.begin().await.unwrap();
+        let record = tx
+            .insert_transaction(NewTransaction {
+                origin: TransactionOrigin::Imported,
+                account,
+                posted_on,
+                transacted_on: None,
+                pending: false,
+                amount_minor: -2500,
+                currency: Currency::parse("USD").unwrap(),
+                raw_description: description.clone(),
+                imported_payee: None,
+                memo: None,
+                notes: None,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        let source = tx
+            .insert_source(NewSource {
+                connection,
+                provider_account,
+                provider_txn_id: format!("txn-{}", record.id),
+                transaction: Some(record.id),
+                fields: ImportedFields {
+                    posted_on,
+                    transacted_on: None,
+                    pending: false,
+                    amount_minor: -2500,
+                    description,
+                    payee: None,
+                    memo: None,
+                },
+                amount_raw: "-25.00".to_owned(),
+                seen_at: now,
+            })
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        (record.id, s(source.id))
+    }
+
+    /// Flags `transaction` as a possible duplicate of `candidate`.
+    async fn flag_duplicate(&self, transaction: TransactionId, candidate: TransactionId) {
+        let mut tx = self.server.store.begin().await.unwrap();
+        tx.set_flag(transaction, TransactionFlag::PossibleDuplicate, true)
+            .await
+            .unwrap();
+        tx.add_duplicate_candidates(transaction, &[candidate])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
     }
 
     async fn audit_count(&self) -> usize {
@@ -558,6 +663,18 @@ async fn restricted_token_cannot_read_audit_or_trigger_sync() {
             Method::POST,
             "/api/v1/accounts".to_owned(),
             Some(json!({"name": "New", "kind": "checking", "currency": "USD"})),
+            "write",
+        ),
+        (
+            Method::POST,
+            "/api/v1/connections/simplefin".to_owned(),
+            Some(json!({"label": "New", "setup_token": "aHR0cHM6Ly9icmlkZ2U"})),
+            "write",
+        ),
+        (
+            Method::POST,
+            format!("/api/v1/connections/{connection}/simplefin/reconnect"),
+            Some(json!({"setup_token": "aHR0cHM6Ly9icmlkZ2U"})),
             "write",
         ),
         (
@@ -1081,116 +1198,192 @@ struct Household {
     accounts: Vec<Option<AccountLevel>>,
 }
 
-fn household() -> impl proptest::strategy::Strategy<Value = Household> {
+fn capped(scope: Scope, level: AccountLevel) -> AccountLevel {
+    level.min(grant_ceiling(scope))
+}
+
+/// No `all` grant, at least one visible account and at least one hidden.
+fn household_with_hidden_accounts() -> impl proptest::strategy::Strategy<Value = Household> {
     (
         proptest::sample::select(vec![Scope::Read, Scope::Write]),
-        proptest::option::of(level()),
-        proptest::collection::vec(proptest::option::of(level()), 1..=4),
+        proptest::collection::vec(level(), 1..=3),
+        1..=2_usize,
     )
-        .prop_map(|(scope, all, accounts)| {
-            let ceiling = grant_ceiling(scope);
-            let cap = |level: Option<AccountLevel>| level.map(|level| level.min(ceiling));
-            let mut all = cap(all);
-            let accounts: Vec<Option<AccountLevel>> = accounts.into_iter().map(cap).collect();
-            // A token with grants has at least one.
-            if all.is_none() && accounts.iter().all(Option::is_none) {
-                all = Some(AccountLevel::Balances);
-            }
-            Household {
-                scope,
-                all,
-                accounts,
-            }
+        .prop_map(|(scope, visible, hidden)| Household {
+            scope,
+            all: None,
+            accounts: visible
+                .into_iter()
+                .map(|level| Some(capped(scope, level)))
+                .chain(std::iter::repeat_n(None, hidden))
+                .collect(),
         })
+}
+
+/// An `all` grant, so no account is hidden; below `transactions` the
+/// connection-wide data still is.
+fn household_with_all_grant() -> impl proptest::strategy::Strategy<Value = Household> {
+    (
+        proptest::sample::select(vec![Scope::Read, Scope::Write]),
+        level(),
+        proptest::collection::vec(proptest::option::of(level()), 1..=3),
+    )
+        .prop_map(|(scope, all, accounts)| Household {
+            scope,
+            all: Some(capped(scope, all)),
+            accounts: accounts
+                .into_iter()
+                .map(|level| level.map(|level| capped(scope, level)))
+                .collect(),
+        })
+}
+
+/// Every read endpoint, for these accounts and transactions.
+fn read_uris(
+    connection: ConnectionId,
+    accounts: &[AccountId],
+    transactions: &[TransactionId],
+) -> Vec<String> {
+    let mut uris = vec![
+        "/api/v1/accounts".to_owned(),
+        "/api/v1/accounts?include_closed=true".to_owned(),
+        "/api/v1/transactions".to_owned(),
+        "/api/v1/transactions?limit=1".to_owned(),
+        "/api/v1/provider-accounts".to_owned(),
+        "/api/v1/provider-accounts?unbound=true".to_owned(),
+        "/api/v1/connections".to_owned(),
+        format!("/api/v1/connections/{connection}/sync-runs"),
+        "/api/v1/audit".to_owned(),
+        "/api/v1/me".to_owned(),
+    ];
+    for account in accounts {
+        uris.push(format!("/api/v1/accounts/{account}"));
+        uris.push(format!("/api/v1/accounts/{account}/balances"));
+        uris.push(format!("/api/v1/transactions?account={account}"));
+    }
+    for transaction in transactions {
+        uris.push(format!("/api/v1/transactions/{transaction}"));
+    }
+    uris
+}
+
+/// Every read endpoint, called with a token holding `household`'s grants:
+/// `/accounts` lists exactly the visible accounts, and no body holds a
+/// hidden account's id, name, provider account name, transaction id or
+/// description, or source id. Without an `all` grant at `transactions` no
+/// body holds an unbound provider account or a connection's last error.
+async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseError> {
+    let world = world().await;
+    let marker = uuid_marker();
+    let mut grants = Vec::new();
+    if let Some(level) = household.all {
+        grants.push(grant(GrantTarget::All, level));
+    }
+    let mut accounts = Vec::new();
+    let mut visible = Vec::new();
+    let mut transactions = Vec::new();
+    let mut hidden = Vec::new();
+    let mut bindings = Vec::new();
+    for (n, level) in household.accounts.iter().enumerate() {
+        let name = format!("acct{n}{marker}");
+        let account = world.account(&name).await;
+        world.balance(account).await;
+        let own = vec![
+            world
+                .transaction(account, 1, &format!("txa{n}{marker}"))
+                .await,
+            world
+                .transaction(account, 2, &format!("txb{n}{marker}"))
+                .await,
+        ];
+        if let Some(level) = level {
+            grants.push(on(account, *level));
+        }
+        if household.all.is_none() && level.is_none() {
+            hidden.push(s(account));
+            hidden.push(name);
+            hidden.push(format!("prov{n}{marker}"));
+            hidden.push(format!("txa{n}{marker}"));
+            hidden.push(format!("txb{n}{marker}"));
+            hidden.extend(own.iter().map(s));
+        } else {
+            visible.push(s(account));
+        }
+        bindings.push((format!("prov{n}{marker}"), account));
+        accounts.push(account);
+        transactions.extend(own);
+    }
+    let unbound = format!("unbound{marker}");
+    let last_error = format!("lasterror{marker}");
+    if household
+        .all
+        .is_none_or(|all| all < AccountLevel::Transactions)
+    {
+        hidden.push(unbound.clone());
+        hidden.push(last_error.clone());
+    }
+    let mut names: Vec<(&str, Option<AccountId>)> = bindings
+        .iter()
+        .map(|(name, account)| (name.as_str(), Some(*account)))
+        .collect();
+    names.push((unbound.as_str(), None));
+    let connection = world.connection(&names).await;
+    world.fail_connection(connection, &last_error).await;
+
+    // An imported transaction on each account, the last account's listed as
+    // a duplicate of it, which a merge across accounts can leave behind.
+    let last = accounts.len() - 1;
+    let mut imported = Vec::new();
+    for (n, account) in accounts.iter().enumerate() {
+        let description = format!("imported{n}{marker}");
+        let (transaction, source) = world.imported(connection, *account, &description).await;
+        if household.all.is_none() && household.accounts[n].is_none() {
+            hidden.push(description);
+            hidden.push(s(transaction));
+            hidden.push(source);
+        }
+        imported.push(transaction);
+        transactions.push(transaction);
+    }
+    for transaction in &imported[..last] {
+        world.flag_duplicate(*transaction, imported[last]).await;
+    }
+    world.flag_duplicate(imported[last], transactions[0]).await;
+
+    let (_, token) = world.token(household.scope, grants).await;
+
+    let (status, listed) = world.get("/api/v1/accounts", &token).await;
+    proptest::prop_assert_eq!(status, StatusCode::OK);
+    let mut listed = ids(&listed);
+    listed.sort();
+    visible.sort();
+    proptest::prop_assert_eq!(listed, visible, "every visible account is listed");
+
+    let uris = read_uris(connection, &accounts, &transactions);
+    for uri in &uris {
+        let (status, body) = world.send(Method::GET, uri, &token, None, None).await;
+        proptest::prop_assert!(status != StatusCode::INTERNAL_SERVER_ERROR);
+        for secret in &hidden {
+            proptest::prop_assert!(
+                !body.contains(secret.as_str()),
+                "a response reveals something hidden"
+            );
+        }
+    }
+    Ok(())
 }
 
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(16))]
 
-    /// Every read endpoint, called with a token whose grants hide some
-    /// accounts: no body holds a hidden account's id, name, provider
-    /// account name, or transaction id or description, and none holds an
-    /// unbound provider account without an `all` grant at `transactions`.
     #[test]
-    fn no_endpoint_leaks_hidden_accounts(household in household()) {
-        runtime().block_on(async {
-            let world = world().await;
-            let marker = uuid_marker();
-            let mut grants = Vec::new();
-            if let Some(level) = household.all {
-                grants.push(grant(GrantTarget::All, level));
-            }
-            let mut accounts = Vec::new();
-            let mut transactions = Vec::new();
-            let mut hidden = Vec::new();
-            let mut bindings = Vec::new();
-            for (n, level) in household.accounts.iter().enumerate() {
-                let name = format!("acct{n}{marker}");
-                let account = world.account(&name).await;
-                world.balance(account).await;
-                let own = vec![
-                    world.transaction(account, 1, &format!("txa{n}{marker}")).await,
-                    world.transaction(account, 2, &format!("txb{n}{marker}")).await,
-                ];
-                if let Some(level) = level {
-                    grants.push(on(account, *level));
-                }
-                if household.all.is_none() && level.is_none() {
-                    hidden.push(s(account));
-                    hidden.push(name);
-                    hidden.push(format!("prov{n}{marker}"));
-                    hidden.push(format!("txa{n}{marker}"));
-                    hidden.push(format!("txb{n}{marker}"));
-                    hidden.extend(own.iter().map(s));
-                }
-                bindings.push((format!("prov{n}{marker}"), account));
-                accounts.push(account);
-                transactions.extend(own);
-            }
-            let unbound = format!("unbound{marker}");
-            if household.all.is_none_or(|all| all < AccountLevel::Transactions) {
-                hidden.push(unbound.clone());
-            }
-            let mut names: Vec<(&str, Option<AccountId>)> = bindings
-                .iter()
-                .map(|(name, account)| (name.as_str(), Some(*account)))
-                .collect();
-            names.push((unbound.as_str(), None));
-            let connection = world.connection(&names).await;
-            let (_, token) = world.token(household.scope, grants).await;
+    fn no_endpoint_leaks_hidden_accounts(household in household_with_hidden_accounts()) {
+        runtime().block_on(check_no_endpoint_leaks(&household))?;
+    }
 
-            let mut uris = vec![
-                "/api/v1/accounts".to_owned(),
-                "/api/v1/accounts?include_closed=true".to_owned(),
-                "/api/v1/transactions".to_owned(),
-                "/api/v1/transactions?limit=1".to_owned(),
-                "/api/v1/provider-accounts".to_owned(),
-                "/api/v1/provider-accounts?unbound=true".to_owned(),
-                "/api/v1/connections".to_owned(),
-                format!("/api/v1/connections/{connection}/sync-runs"),
-                "/api/v1/audit".to_owned(),
-                "/api/v1/me".to_owned(),
-            ];
-            for account in &accounts {
-                uris.push(format!("/api/v1/accounts/{account}"));
-                uris.push(format!("/api/v1/accounts/{account}/balances"));
-                uris.push(format!("/api/v1/transactions?account={account}"));
-            }
-            for transaction in &transactions {
-                uris.push(format!("/api/v1/transactions/{transaction}"));
-            }
-            for uri in &uris {
-                let (status, body) = world.send(Method::GET, uri, &token, None, None).await;
-                proptest::prop_assert!(status != StatusCode::INTERNAL_SERVER_ERROR);
-                for secret in &hidden {
-                    proptest::prop_assert!(
-                        !body.contains(secret.as_str()),
-                        "a response reveals a hidden account"
-                    );
-                }
-            }
-            Ok(())
-        })?;
+    #[test]
+    fn no_endpoint_leaks_with_an_all_grant(household in household_with_all_grant()) {
+        runtime().block_on(check_no_endpoint_leaks(&household))?;
     }
 }
 
@@ -1738,4 +1931,348 @@ async fn me_reports_access() {
             (s(b), "write".to_owned()),
         ])
     );
+}
+
+#[tokio::test]
+async fn last_error_needs_every_account_at_transactions() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let connection = world.connection(&[("Everyday", Some(a))]).await;
+    world
+        .fail_connection(connection, "the bank refused account Secret")
+        .await;
+    let last_error = async |grants: Vec<TokenGrant>| {
+        let (_, token) = world.token(Scope::Write, grants).await;
+        let (status, body) = world.get("/api/v1/connections", &token).await;
+        assert_eq!(status, StatusCode::OK);
+        let listed = &body["items"][0];
+        assert_eq!(listed["status"], "error", "the status always shows");
+        listed["last_error"].as_str().map(str::to_owned)
+    };
+
+    let error = Some("the bank refused account Secret".to_owned());
+    assert_eq!(last_error(Vec::new()).await, error, "a uniform token");
+    assert_eq!(
+        last_error(vec![grant(GrantTarget::All, AccountLevel::Transactions)]).await,
+        error
+    );
+    assert_eq!(
+        last_error(vec![on(a, AccountLevel::Write)]).await,
+        None,
+        "write on one account is not every account"
+    );
+    assert_eq!(
+        last_error(vec![grant(GrantTarget::All, AccountLevel::Balances)]).await,
+        None
+    );
+}
+
+/// A create needing `all` at `write` is refused before its key is reserved:
+/// once the token may, the same key creates.
+#[tokio::test]
+async fn connection_and_category_creates_refuse_before_reserving_the_key() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let (id, token) = world
+        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .await;
+    let requests = [
+        ("/api/v1/category-groups", json!({"name": "Home"})),
+        (
+            "/api/v1/connections/simplefin",
+            json!({"label": "New", "setup_token": "a-setup-token"}),
+        ),
+    ];
+    for (uri, body) in &requests {
+        let (status, _) = world
+            .send(Method::POST, uri, &token, Some(body), Some(uri))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    world
+        .server
+        .agent_tokens
+        .replace_grants(
+            &world.alice,
+            id,
+            vec![grant(GrantTarget::All, AccountLevel::Write)],
+        )
+        .await
+        .unwrap();
+    for (uri, body) in &requests {
+        let (status, _) = world
+            .send(Method::POST, uri, &token, Some(body), Some(uri))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "the key was free");
+    }
+}
+
+#[tokio::test]
+async fn category_writes_need_every_account_at_write() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let transaction = world.transaction(a, 1, "Coffee").await;
+    let (_, uniform) = world.token(Scope::Write, Vec::new()).await;
+    let (_, everything) = world
+        .token(
+            Scope::Write,
+            vec![grant(GrantTarget::All, AccountLevel::Write)],
+        )
+        .await;
+    let (_, one_account) = world
+        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .await;
+    let (_, read_all) = world
+        .token(
+            Scope::Write,
+            vec![grant(GrantTarget::All, AccountLevel::Transactions)],
+        )
+        .await;
+
+    let (status, group) = world
+        .call(
+            Method::POST,
+            "/api/v1/category-groups",
+            &uniform,
+            Some(json!({"name": "Home"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "a uniform token creates");
+    let group = group["id"].as_str().unwrap().to_owned();
+    let (status, category) = world
+        .call(
+            Method::POST,
+            "/api/v1/categories",
+            &everything,
+            Some(json!({"group": group, "name": "Rent", "kind": "expense"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "an all grant creates");
+    let category = category["id"].as_str().unwrap().to_owned();
+
+    let before = world.audit_count().await;
+    let writes = [
+        (
+            Method::POST,
+            "/api/v1/category-groups".to_owned(),
+            json!({"name": "Other"}),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/v1/category-groups/{group}"),
+            json!({"archived": true}),
+        ),
+        (
+            Method::POST,
+            "/api/v1/categories".to_owned(),
+            json!({"group": group, "name": "Other", "kind": "expense"}),
+        ),
+        (
+            Method::PATCH,
+            format!("/api/v1/categories/{category}"),
+            json!({"archived": true}),
+        ),
+    ];
+    for token in [&one_account, &read_all] {
+        for (method, uri, body) in &writes {
+            let (status, problem) = world
+                .call(method.clone(), uri, token, Some(body.clone()))
+                .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(
+                problem["detail"],
+                "this action needs write access to every account"
+            );
+        }
+    }
+    assert_eq!(world.audit_count().await, before, "nothing was written");
+
+    // Using an existing category on a granted account is that account's
+    // business.
+    let (status, _) = world
+        .call(
+            Method::PATCH,
+            &format!("/api/v1/transactions/{transaction}"),
+            &one_account,
+            Some(json!({"splits": [{"category": category, "minor_units": -1000}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "a split on a granted account");
+
+    // A session has uniform access.
+    world
+        .server
+        .ledger
+        .create_category_group(
+            &world.alice,
+            CategoryGroupInput {
+                name: "From a session".to_owned(),
+                position: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+/// A token that lost an account gets a 404 for its own earlier request, not
+/// the response it stored while it could see the account.
+#[tokio::test]
+async fn own_replay_stops_once_the_account_is_hidden() {
+    let world = world().await;
+    let (a, b) = (
+        world.account("Checking").await,
+        world.account("Other").await,
+    );
+    let (id, token) = world
+        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .await;
+    let request = json!({"account": a, "posted_on": "2026-10-05", "minor_units": -500,
+                         "description": "Coffee"});
+    let post = async || {
+        world
+            .send(
+                Method::POST,
+                "/api/v1/transactions",
+                &token,
+                Some(&request),
+                Some("the-key"),
+            )
+            .await
+    };
+    let first = post().await;
+    assert_eq!(first.0, StatusCode::CREATED);
+    assert!(
+        post().await == first,
+        "a replay while the account is visible"
+    );
+
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.replace_token_grants(id, &[on(b, AccountLevel::Write)])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let retry = post().await;
+    assert_eq!(retry.0, StatusCode::NOT_FOUND, "not the stored response");
+    assert!(!retry.1.contains("Coffee"), "nothing of the stored body");
+}
+
+/// Claiming a setup token spends it, so once the provider has answered
+/// nothing may turn the reconnect into a failure: access is resolved first.
+#[tokio::test]
+async fn reconnect_resolves_access_before_spending_the_setup_token() {
+    let world = world().await;
+    let connection = world
+        .server
+        .seed_connection(
+            ProviderKind::SimpleFin,
+            "Family bank",
+            world.alice.member,
+            "seeded-access",
+        )
+        .await;
+    let (id, secret) = world
+        .token(
+            Scope::Write,
+            vec![grant(GrantTarget::All, AccountLevel::Write)],
+        )
+        .await;
+    let agent = world
+        .server
+        .agent_tokens
+        .resolve(secret.expose_secret())
+        .await
+        .unwrap();
+    let gate = world.fake.hold_next_connect();
+    let sync = Arc::clone(&world.server.sync);
+    let reconnecting = tokio::spawn(async move {
+        sync.reconnect(
+            &agent,
+            connection,
+            ConnectInput::SimpleFinSetupToken(SecretString::from("new-token")),
+        )
+        .await
+    });
+    gate.entered().await;
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "INSERT INTO agent_token_grants (token_id, target, level) \
+             VALUES (?, 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'write')",
+            &s(id),
+        )
+        .await
+        .unwrap();
+    gate.release();
+    assert!(
+        reconnecting.await.unwrap().is_ok(),
+        "the reconnect that spent the token succeeds"
+    );
+}
+
+/// A merge across accounts can leave a transaction listing a candidate in
+/// another account: a token that cannot see that account is not told its id.
+#[tokio::test]
+async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
+    let world = world().await;
+    let (a, b) = (
+        world.account("Checking").await,
+        world.account("Hidden").await,
+    );
+    let flagged = world.transaction(a, 1, "Coffee").await;
+    let same_account = world.transaction(a, 2, "Coffee again").await;
+    let hidden = world.transaction(b, 1, "Coffee elsewhere").await;
+    world.flag_duplicate(flagged, same_account).await;
+    world.flag_duplicate(flagged, hidden).await;
+
+    let (_, restricted) = world
+        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .await;
+    let (_, list) = world.get("/api/v1/transactions", &restricted).await;
+    let item = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == s(flagged))
+        .unwrap();
+    assert_eq!(item["duplicate_candidates"], json!([s(same_account)]));
+    let uri = format!("/api/v1/transactions/{flagged}");
+    let (_, got) = world.get(&uri, &restricted).await;
+    assert_eq!(got["duplicate_candidates"], json!([s(same_account)]));
+    assert_eq!(got["flags"], json!(["possible_duplicate"]));
+    let (status, patched) = world
+        .call(
+            Method::PATCH,
+            &uri,
+            &restricted,
+            Some(json!({"notes": "looked"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(patched["duplicate_candidates"], json!([s(same_account)]));
+    let (status, batch) = world
+        .call(
+            Method::POST,
+            "/api/v1/transactions/batch",
+            &restricted,
+            Some(json!({"operations": [{"id": flagged, "patch": {"notes": "again"}}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        batch["items"][0]["duplicate_candidates"],
+        json!([s(same_account)])
+    );
+
+    // One that sees both accounts is told both.
+    let (_, wide) = world
+        .token(
+            Scope::Read,
+            vec![grant(GrantTarget::All, AccountLevel::Transactions)],
+        )
+        .await;
+    let (_, got) = world.get(&uri, &wide).await;
+    assert_eq!(got["duplicate_candidates"].as_array().unwrap().len(), 2);
 }

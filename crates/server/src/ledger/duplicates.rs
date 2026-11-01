@@ -290,7 +290,7 @@ impl Ledger {
         drop_stale_candidates(&mut tx, now, &actor.into(), target.id, &HashSet::new()).await?;
         let record = tx.get_transaction(target.id).await?;
         tx.commit().await?;
-        Ok(TransactionView::new(&record))
+        self.seen_by(&access, TransactionView::new(&record)).await
     }
 
     /// Moves `source` out of `transaction` into a new imported transaction

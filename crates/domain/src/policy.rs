@@ -20,7 +20,12 @@
 //! | Create an account                        | `Write`                       |
 //! | Bind a provider account                  | `Write`                       |
 //! | Trigger a sync                           | `Write`                       |
-//! | Reconnect or remove a connection         | `Write`                       |
+//! | Add, reconnect or remove a connection    | `Write`                       |
+//! | Create or change a category or group     | `Write`                       |
+//!
+//! Using an existing category on a split is a write to the transaction's
+//! account, decided by [`authorize_account`]. A connection's last error is
+//! shown only to an actor who sees every account at `Transactions`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

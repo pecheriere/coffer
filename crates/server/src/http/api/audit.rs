@@ -115,7 +115,8 @@ impl From<&AuditEvent> for AuditEventView {
     operation_id = "listAudit",
     tag = tags::AUDIT,
     description = "Audit events, newest first, narrowed by the query. Needs `read`; a \
-                   token with account grants also needs `all` at `transactions`. Pages with the opaque `next` cursor.",
+                   token with account grants also needs `all` at `transactions`. Pages with the \
+                   opaque `next` cursor.",
     security(("bearer" = [])),
     params(AuditQuery),
     responses(

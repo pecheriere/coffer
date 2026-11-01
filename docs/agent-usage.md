@@ -68,19 +68,25 @@ token's access.
 
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
-  named in an error (a batch names the failing operation by index only).
+  named in an error (a batch names the failing operation by index only) or
+  in another transaction's `duplicate_candidates`.
 - A visible account below the level needed is a 403 `forbidden` whose
   detail names the level: "this action needs transactions access to this
   account". `GET /api/v1/transactions` silently leaves out the accounts the
   token sees only at `balances`; naming one in `account=` is the 403.
 - Actions that span every account need an `all` grant: reading the audit
   log and a connection's sync runs need `all` at `transactions`; creating
-  an account, binding a provider account, requesting a sync and
-  reconnecting or removing a connection need `all` at `write`. Without it
+  an account, binding a provider account, requesting a sync, adding,
+  reconnecting or removing a connection, and creating or changing a category
+  or category group need `all` at `write`. Without it
   they are a 403 whose detail says "this action needs write access to
   every account" (or `transactions`). Unbound provider accounts are listed
   (in `GET /api/v1/provider-accounts` and in connections) only with `all`
-  at `transactions`; bound ones follow their account.
+  at `transactions`; bound ones follow their account. A connection's
+  `last_error` could name any account it serves, so without `all` at
+  `transactions` it is `null`; its `status` still shows the problem. Using
+  an existing category on a split needs only `write` on the transaction's
+  account.
 
 ## First call
 

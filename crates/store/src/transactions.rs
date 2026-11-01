@@ -670,6 +670,37 @@ impl StoreTx {
 }
 
 impl Store {
+    /// The accounts of `ids`, for the ones that exist.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a stored id that no longer parses.
+    pub async fn accounts_of_transactions(
+        &self,
+        ids: &[TransactionId],
+    ) -> Result<HashMap<TransactionId, AccountId>, StoreError> {
+        let mut accounts = HashMap::new();
+        if ids.is_empty() {
+            return Ok(accounts);
+        }
+        let mut query =
+            QueryBuilder::<Sqlite>::new("SELECT id, account_id FROM transactions WHERE id IN (");
+        let mut separated = query.separated(", ");
+        for id in ids {
+            separated.push_bind(id.to_string());
+        }
+        separated.push_unseparated(")");
+        let rows = query
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        for row in &rows {
+            accounts.insert(parsed(row, "id")?, parsed(row, "account_id")?);
+        }
+        Ok(accounts)
+    }
+
     /// Fetch a transaction with its splits.
     ///
     /// # Errors

@@ -11,9 +11,7 @@ use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::Response;
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::identity::Actor;
 use coffer_domain::ids::ConnectionId;
-use coffer_domain::policy::{Action, authorize};
 use coffer_domain::sync::SyncTrigger;
 use coffer_store::PageRequest;
 use secrecy::SecretString;
@@ -106,10 +104,6 @@ pub(crate) fn connect_problem(err: SyncError) -> Problem {
 }
 
 /// The pre-reserve check of a connect: `ManageConnections`.
-fn manage_connections(actor: &Actor) -> Result<(), Problem> {
-    Ok(authorize(actor, Action::ManageConnections)?)
-}
-
 /// Connects `SimpleFin`.
 #[utoipa::path(
     post,
@@ -120,7 +114,9 @@ fn manage_connections(actor: &Actor) -> Result<(), Problem> {
                    a new connection owned by the token's member; its first sync is queued. The \
                    claim URL must name an allowed bridge host: a setup token that is \
                    malformed, names another host or is refused by the bridge answers \
-                   `422 setup_token_invalid`. Needs `write`. With an \
+                   `422 setup_token_invalid`. Needs `write`; a token with account grants also \
+                   needs `all` at `write`, since its first sync queues work on every account it \
+                   reports. With an \
                    `Idempotency-Key`, a retry of the same request within 24 hours returns the \
                    first response instead of claiming again.",
     security(("bearer" = [])),
@@ -156,7 +152,7 @@ pub(super) async fn create_simplefin(
         uri: &uri,
         body: &bytes,
     };
-    let authorize = async || manage_connections(&actor);
+    let authorize = async || Ok(state.sync.authorize_connect(&actor).await?);
     idempotency::create(&state, &actor, request, authorize, async |slot| {
         let label = ConnectionLabel::parse(&value.label)
             .map_err(|_| Problem::from(SyncError::Invalid(LABEL_INVALID)))?;
@@ -229,7 +225,9 @@ pub(super) async fn reconnect_simplefin(
     description = "Every connection, removed ones included, oldest first: its status, last \
                    error (sanitized), last attempt and success, when the schedule syncs it \
                    next, and the provider accounts the token may see. Never its credentials. \
-                   Needs `read`.",
+                   Needs `read`. The last error could name any account the connection serves: \
+                   a token with account grants gets it only with `all` at `transactions`, \
+                   otherwise it is `null` and the status still shows the problem.",
     security(("bearer" = [])),
     responses(
         (status = 200, description = "The connections.", body = ConnectionList),

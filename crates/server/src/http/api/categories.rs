@@ -65,7 +65,8 @@ pub(super) async fn list(
     path = "/api/v1/categories",
     operation_id = "createCategory",
     tag = tags::CATEGORIES,
-    description = "Creates a category in an existing group. Needs `write`. With an \
+    description = "Creates a category in an existing group. Needs `write`; a token with \
+                   account grants also needs `all` at `write`. With an \
                    `Idempotency-Key`, a retry of the same request within 24 hours returns the \
                    first response instead of creating again.",
     security(("bearer" = [])),
@@ -98,7 +99,7 @@ pub(super) async fn create(
         uri: &uri,
         body: &bytes,
     };
-    let authorize = async || idempotency::write_household(&actor);
+    let authorize = async || Ok(state.ledger.authorize_category_write(&actor).await?);
     idempotency::create(&state, &actor, request, authorize, async |slot| {
         state.ledger.create_category(&actor, value, slot).await
     })
@@ -113,7 +114,7 @@ pub(super) async fn create(
     tag = tags::CATEGORIES,
     description = "Changes the fields given: name, kind, position, group (moving it) or \
                    archived. An archived category takes no new splits; its existing splits \
-                   stay. Needs `write`.",
+                   stay. Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(CategoryPath),
     request_body = CategoryPatch,
@@ -142,7 +143,8 @@ pub(super) async fn update(
     path = "/api/v1/category-groups",
     operation_id = "createCategoryGroup",
     tag = tags::CATEGORIES,
-    description = "Creates a category group. Needs `write`. With an `Idempotency-Key`, a \
+    description = "Creates a category group. Needs `write`; a token with account grants also \
+                   needs `all` at `write`. With an `Idempotency-Key`, a \
                    retry of the same request within 24 hours returns the first response \
                    instead of creating again.",
     security(("bearer" = [])),
@@ -175,7 +177,7 @@ pub(super) async fn create_group(
         uri: &uri,
         body: &bytes,
     };
-    let authorize = async || idempotency::write_household(&actor);
+    let authorize = async || Ok(state.ledger.authorize_category_write(&actor).await?);
     idempotency::create(&state, &actor, request, authorize, async |slot| {
         state
             .ledger
@@ -192,7 +194,8 @@ pub(super) async fn create_group(
     operation_id = "updateCategoryGroup",
     tag = tags::CATEGORIES,
     description = "Changes the fields given: name, position or archived. Every category of \
-                   an archived group counts as archived. Needs `write`.",
+                   an archived group counts as archived. Needs `write`; a token with account \
+                   grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(CategoryGroupPath),
     request_body = CategoryGroupPatch,
