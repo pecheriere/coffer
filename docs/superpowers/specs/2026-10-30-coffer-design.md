@@ -608,6 +608,19 @@ silent second transaction. When an imported amount changes and the transaction
 has one split, that split follows the amount (a `system:sync` change); with
 several splits they stay and the transaction is flagged.
 
+A transaction fed by several connections takes its imported fields (date,
+pending state, amount, description, payee, memo) from one of them, its owner:
+the connection of the earliest live posted source, or without a posted one, of
+the earliest live source. Earliest is by first sighting; live means not
+vanished from the current fetch and not of a removed connection. Only the
+owner's records write to the transaction. The others are kept up to date as
+sources and write nothing, so two providers describing one purchase differently
+never rewrite it in turn. Ownership moves only when a source changes: a record
+posts, a record attaches, or the owner's last record vanishes, in which case
+the transaction takes the next owner's fields once. A removed connection's
+fields stay until the owner next reports a change. With one connection nothing
+differs: all its records write as they always did.
+
 ### 8.5 Outbound network
 
 §5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge

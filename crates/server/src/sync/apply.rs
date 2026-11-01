@@ -7,7 +7,13 @@
 //! the pending one it replaces); only then are the vanished records
 //! removed. Every change to a canonical transaction is audited as
 //! `system:sync`; a record that changes nothing writes no audit entry.
+//!
+//! A transaction fed by several connections shows the imported fields of the
+//! one that owns them (spec §8.4). A record of another connection is
+//! kept up to date as a source and changes nothing else, so two providers
+//! that describe one purchase differently never rewrite it in turn.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 
 use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
@@ -18,8 +24,8 @@ use coffer_domain::matching::{
 };
 use coffer_domain::transactions::{Description, Memo, Payee, TransactionFlag, TransactionOrigin};
 use coffer_store::{
-    AccountRecord, Attribution, CandidateRow, ImportedFields, NewSource, NewTransaction,
-    ProviderAccountRecord, SourceRecord, SourceUpdate, StoreTx, TransactionRecord,
+    AccountRecord, Attribution, CandidateRow, ConnectionStatus, ImportedFields, NewSource,
+    NewTransaction, ProviderAccountRecord, SourceRecord, SourceUpdate, StoreTx, TransactionRecord,
 };
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
@@ -336,6 +342,16 @@ pub async fn apply_held(
     Ok(apply.report)
 }
 
+/// The connection owning the imported fields of a transaction with these
+/// live sources (spec §8.4): that of the earliest posted record, or without
+/// one, of the earliest record. Earliest is by first sighting, the record id
+/// settling a tie, so the answer depends only on what is stored.
+fn owner_of(live: &[&SourceRecord]) -> Option<ConnectionId> {
+    live.iter()
+        .min_by_key(|source| (source.fields.pending, source.first_seen_at, source.id))
+        .map(|source| source.connection)
+}
+
 /// Who the sync's audit entries are attributed to.
 pub(crate) fn sync_actor() -> AuditActor {
     AuditActor::System {
@@ -354,6 +370,37 @@ fn sync_attribution(at: Timestamp) -> Attribution {
 }
 
 impl Apply<'_> {
+    /// Those of `sources` that can own imported fields: not about to vanish,
+    /// and of a connection that is not removed and so can still report.
+    async fn live_sources<'s>(
+        &mut self,
+        sources: &'s [SourceRecord],
+    ) -> Result<Vec<&'s SourceRecord>, SyncError> {
+        let mut checked = HashSet::from([self.connection]);
+        let mut removed = HashSet::new();
+        for source in sources {
+            if checked.insert(source.connection)
+                && self.tx.get_connection(source.connection).await?.status
+                    == ConnectionStatus::Removed
+            {
+                removed.insert(source.connection);
+            }
+        }
+        Ok(sources
+            .iter()
+            .filter(|source| {
+                !self.vanished.contains(&source.id) && !removed.contains(&source.connection)
+            })
+            .collect())
+    }
+
+    /// Whether this apply's connection owns the imported fields of a
+    /// transaction with `sources`.
+    async fn owns_imported_fields(&mut self, sources: &[SourceRecord]) -> Result<bool, SyncError> {
+        let live = self.live_sources(sources).await?;
+        Ok(owner_of(&live) == Some(self.connection))
+    }
+
     /// Forgets the stale candidate pairs of `transaction`, which just
     /// gained a posted record (see [`crate::canonical`]). Records
     /// about to vanish do not count.
@@ -438,9 +485,10 @@ impl Apply<'_> {
         mut record: Record,
     ) -> Result<(), SyncError> {
         // Same connection and provider id: the same transaction. Only a
-        // record whose reported fields changed changes it: a transaction
-        // holding several records (as after a merge) shows whichever one it
-        // last applied, and records re-reported unchanged never rewrite it.
+        // record whose reported fields changed changes it: among several
+        // records of one connection (as after a merge) it shows whichever
+        // one it last applied, and records re-reported unchanged never
+        // rewrite it. Another connection's record changes nothing at all.
         if let Some(existing) = self
             .tx
             .find_source(self.connection, &record.provider_id)
@@ -457,13 +505,9 @@ impl Apply<'_> {
                 Some(_) if existing.fields == record.fields => Ok(()),
                 Some(transaction) => {
                     let current = self.tx.get_transaction(transaction).await?;
-                    let changes = self
-                        .imported_changes(&current, &record.fields, AuditChanges::new())
-                        .await?;
-                    if !changes.is_empty() {
-                        self.audit("transaction.imported_update", transaction, changes)
+                    if self.owns_imported_fields(&current.sources).await? {
+                        self.update_imported_fields(&current, &record.fields)
                             .await?;
-                        self.report.updated += 1;
                     }
                     if existing.fields.pending && !record.fields.pending {
                         self.drop_stale_candidates(transaction).await?;
@@ -646,9 +690,12 @@ impl Apply<'_> {
         let mut changes = AuditChanges::new()
             .set("source", source)
             .set("provider_account", self.provider_account);
-        changes = self
-            .imported_changes(&current, &record.fields, changes)
-            .await?;
+        let sources = self.tx.sources_of(transaction).await?;
+        if self.owns_imported_fields(&sources).await? {
+            changes = self
+                .imported_changes(&current, &record.fields, changes)
+                .await?;
+        }
         if current.flags.contains(&TransactionFlag::SourceRemoved) {
             self.tx
                 .set_flag(transaction, TransactionFlag::SourceRemoved, false)
@@ -659,6 +706,60 @@ impl Apply<'_> {
             .await?;
         self.report.attached += 1;
         self.drop_stale_candidates(transaction).await
+    }
+
+    /// Applies `fields` to `current`'s imported fields as an audited update
+    /// of its own, if they change anything.
+    async fn update_imported_fields(
+        &mut self,
+        current: &TransactionRecord,
+        fields: &ImportedFields,
+    ) -> Result<(), SyncError> {
+        let changes = self
+            .imported_changes(current, fields, AuditChanges::new())
+            .await?;
+        if !changes.is_empty() {
+            self.audit("transaction.imported_update", current.id, changes)
+                .await?;
+            self.report.updated += 1;
+        }
+        Ok(())
+    }
+
+    /// Hands the imported fields of `transaction` to the next owner, if
+    /// losing `gone` changed who owns them. `remaining` are its sources now.
+    async fn follow_new_owner(
+        &mut self,
+        transaction: TransactionId,
+        gone: &SourceRecord,
+        remaining: &[SourceRecord],
+    ) -> Result<(), SyncError> {
+        let live = self.live_sources(remaining).await?;
+        let Some(owner) = owner_of(&live) else {
+            return Ok(());
+        };
+        let mut before = live.clone();
+        before.push(gone);
+        if owner_of(&before) == Some(owner) {
+            return Ok(());
+        }
+        // Its latest record, a posted one first: what it would have applied.
+        let latest = live
+            .iter()
+            .filter(|source| source.connection == owner)
+            .min_by_key(|source| {
+                (
+                    source.fields.pending,
+                    Reverse(source.first_seen_at),
+                    Reverse(source.id),
+                )
+            });
+        if let Some(latest) = latest {
+            let current = self.tx.get_transaction(transaction).await?;
+            self.update_imported_fields(&current, &latest.fields)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Applies `fields` to `current`'s imported fields, appending what
@@ -691,10 +792,13 @@ impl Apply<'_> {
         let Some(transaction) = source.transaction else {
             return Ok(());
         };
-        if !self.tx.sources_of(transaction).await?.is_empty() {
+        let remaining = self.tx.sources_of(transaction).await?;
+        if !remaining.is_empty() {
             let changes = AuditChanges::new().unset("source", source.id);
+            self.audit("transaction.detach_source", transaction, changes)
+                .await?;
             return self
-                .audit("transaction.detach_source", transaction, changes)
+                .follow_new_owner(transaction, &source, &remaining)
                 .await;
         }
         let current = self.tx.get_transaction(transaction).await?;
