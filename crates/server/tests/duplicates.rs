@@ -473,7 +473,7 @@ async fn merge_moves_sources_and_refuses_user_state() {
     let audit_count = transaction_audit(&world).await.len();
 
     let (status, body) = merge(&world, posted, json!({ "duplicate": pending })).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["code"], "merge_conflict");
     assert!(!body.to_string().contains(&pending.to_string()));
     assert_eq!(transactions(&world, checking.id).await.len(), 2);
@@ -485,7 +485,7 @@ async fn merge_moves_sources_and_refuses_user_state() {
         json!({ "duplicate": pending, "discard_duplicate_state": true }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], posted.to_string());
     let merged = get(&world, posted).await;
     assert_eq!(
@@ -551,8 +551,8 @@ async fn merge_takes_the_posted_fields_of_a_posted_duplicate() {
     .await;
 
     // The pending transaction holds the user state: it is the target.
-    let (status, body) = merge(&world, pending, json!({ "duplicate": posted })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = merge(&world, pending, json!({ "duplicate": posted })).await;
+    assert_eq!(status, StatusCode::OK);
     let merged = get(&world, pending).await;
     assert!(!merged.pending);
     assert_eq!(merged.posted_on, date(2026, 10, 11));
@@ -573,7 +573,7 @@ async fn merge_across_accounts_refused() {
     let audit_count = transaction_audit(&world).await.len();
 
     let (status, body) = merge(&world, ids[0], json!({ "duplicate": ids[1] })).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["code"], "invalid");
     assert_eq!(get(&world, ids[1]).await.sources.len(), 1);
     assert_eq!(transaction_audit(&world).await.len(), audit_count);
@@ -646,14 +646,14 @@ async fn merge_clears_flag_when_last_candidate_goes() {
     let (target, first, second) = (ids[0], ids[1], ids[2]);
     flag_with(&world, target, &[first, second]).await;
 
-    let (status, body) = merge(&world, target, json!({ "duplicate": first })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = merge(&world, target, json!({ "duplicate": first })).await;
+    assert_eq!(status, StatusCode::OK);
     let after = get(&world, target).await;
     assert_eq!(after.flags, [TransactionFlag::PossibleDuplicate]);
     assert_eq!(after.duplicate_candidates, [second]);
 
     let (status, body) = merge(&world, target, json!({ "duplicate": second })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["flags"], json!([]));
     let after = get(&world, target).await;
     assert_eq!(after.flags, Vec::new());
@@ -689,8 +689,8 @@ async fn merge_carries_the_duplicates_candidacies_to_the_target() {
     flag_with(&world, lister, &[duplicate]).await;
     flag_with(&world, both, &[duplicate, target]).await;
 
-    let (status, body) = merge(&world, target, json!({ "duplicate": duplicate })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = merge(&world, target, json!({ "duplicate": duplicate })).await;
+    assert_eq!(status, StatusCode::OK);
     let after = get(&world, target).await;
     assert_eq!(after.flags, [TransactionFlag::PossibleDuplicate]);
     assert_eq!(after.duplicate_candidates, [candidate]);
@@ -744,8 +744,8 @@ async fn merge_drops_candidates_the_same_provider_reported_apart() {
     let two = holding(&world, &second, "b-2").await.id;
     assert_eq!(flagged.duplicate_candidates.len(), 2);
 
-    let (status, body) = merge(&world, flagged.id, json!({ "duplicate": one })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = merge(&world, flagged.id, json!({ "duplicate": one })).await;
+    assert_eq!(status, StatusCode::OK);
     // The target now holds b-1, which the second provider reported apart
     // from b-2: it cannot also be b-2's purchase.
     let after = get(&world, flagged.id).await;
@@ -831,14 +831,17 @@ async fn unmerge_restores_separate_transaction() {
         .id;
 
     let (status, body) = unmerge(&world, shared.id, source, None).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::CREATED);
     let created: TransactionId = body["id"].as_str().unwrap().parse().unwrap();
     assert_ne!(created, shared.id);
     let split_off = get(&world, created).await;
     assert_eq!(split_off.sources.len(), 1);
     assert_eq!(split_off.sources[0].id, source);
     assert_eq!(split_off.amount_minor, -2_999);
-    assert!(split_off.user_state().is_empty(), "{split_off:#?}");
+    assert!(
+        split_off.user_state().is_empty(),
+        "the split-off transaction must carry no user state"
+    );
     assert_eq!(split_off.flags, Vec::new());
     let kept = get(&world, shared.id).await;
     assert_eq!(kept.sources.len(), 1);
@@ -900,7 +903,7 @@ async fn unmerge_recomputes_the_kept_transactions_fields() {
         .id;
 
     let (status, body) = unmerge(&world, joined.id, posted_source, None).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["amount"]["minor_units"], -4_600);
     assert_eq!(body["pending"], false);
     let kept = get(&world, joined.id).await;
@@ -923,7 +926,7 @@ async fn unmerge_with_idempotency_key_replays() {
     let source = shared.sources[1].id;
 
     let (status, body) = unmerge(&world, shared.id, source, Some("split-1")).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::CREATED);
     let (again, replayed) = unmerge(&world, shared.id, source, Some("split-1")).await;
     assert_eq!(again, StatusCode::CREATED);
     assert_eq!(replayed["id"], body["id"]);
@@ -942,11 +945,11 @@ async fn unmerge_last_source_refused() {
     let audit_count = transaction_audit(&world).await.len();
 
     let (status, body) = unmerge(&world, only.id, only.sources[0].id, None).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["code"], "conflict");
     // A record of another transaction is not one of its own.
     let (status, body) = unmerge(&world, only.id, other.sources[0].id, None).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(!body.to_string().contains(&other.sources[0].id.to_string()));
     assert_eq!(transactions(&world, checking.id).await.len(), 2);
     assert_eq!(transaction_audit(&world).await.len(), audit_count);
@@ -960,7 +963,7 @@ async fn dismiss_clears_flag_and_candidates() {
     let (pending, posted) = flagged_pair(&world, &link).await;
 
     let (status, body) = dismiss(&world, posted).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["flags"], json!([]));
     assert_eq!(body["duplicate_candidates"], json!([]));
     let after = get(&world, posted).await;
@@ -1031,7 +1034,7 @@ async fn read_token_cannot_merge() {
         ),
     ] {
         let (status, problem) = send(&world, &read, &uri, body, None).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {problem}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
         assert_eq!(problem["code"], "forbidden");
     }
     assert_eq!(transactions(&world, checking.id).await.len(), 2);
@@ -1064,8 +1067,8 @@ async fn merged_records_of_two_connections_stay_put_through_resyncs() {
         },
     )
     .await;
-    let (status, body) = merge(&world, target, json!({ "duplicate": duplicate })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = merge(&world, target, json!({ "duplicate": duplicate })).await;
+    assert_eq!(status, StatusCode::OK);
     let merged = get(&world, target).await;
     let audit_count = transaction_audit(&world).await.len();
 
@@ -1105,7 +1108,7 @@ async fn merge_refuses_purchases_one_connection_reported_apart() {
     let audit_count = transaction_audit(&world).await.len();
 
     let (status, body) = merge(&world, one, json!({ "duplicate": two })).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["code"], "invalid");
     assert!(!body.to_string().contains(&two.to_string()));
     assert_eq!(transactions(&world, checking.id).await.len(), 2);
@@ -1124,8 +1127,8 @@ async fn dismiss_drops_the_reverse_link_of_a_mutual_pair() {
     flag_with(&world, dismissed, &[mutual]).await;
     flag_with(&world, mutual, &[dismissed, other]).await;
 
-    let (status, body) = dismiss(&world, dismissed).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = dismiss(&world, dismissed).await;
+    assert_eq!(status, StatusCode::OK);
     let after = get(&world, mutual).await;
     assert_eq!(after.duplicate_candidates, [other], "its other pair stays");
     assert_eq!(after.flags, [TransactionFlag::PossibleDuplicate]);

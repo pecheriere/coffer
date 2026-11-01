@@ -897,7 +897,7 @@ async fn delete_imported_refused() {
         .collect();
     assert!(
         actions.contains(&"transaction.delete".to_owned()),
-        "{actions:?}"
+        "the audit log lacks the delete action"
     );
     let err = world
         .ledger

@@ -100,7 +100,7 @@ async fn call(
 
 async fn create(server: &TestServer, token: &SecretToken, body: Value) -> Value {
     let (status, created) = call(server, Method::POST, "/api/v1/accounts", token, Some(body)).await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(status, StatusCode::CREATED);
     created
 }
 
@@ -191,7 +191,7 @@ async fn chosen_liquidity_is_kept_as_an_override() {
         Some(json!({"kind": "retirement"})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(patched["kind"], "retirement");
     assert_eq!(
         patched["liquidity"], "cash",
@@ -219,7 +219,7 @@ async fn kind_change_redefaults_liquidity() {
         Some(json!({"kind": "savings"})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(patched["liquidity"], "cash");
     assert_eq!(patched["liquidity_overridden"], false);
 }
@@ -282,7 +282,7 @@ async fn manual_balance_last_write_wins_and_lists_newest_first() {
             Some(json!({"minor_units": minor})),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(body["balance"]["minor_units"], minor);
         assert_eq!(body["source"], "manual");
     }
@@ -320,7 +320,10 @@ async fn manual_balance_last_write_wins_and_lists_newest_first() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "invalid_cursor");
-    assert!(!body.to_string().contains("SECRET"), "{body}");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
 
     let (status, body) = call(
         &world.server,
@@ -438,9 +441,12 @@ async fn invalid_values_are_refused_without_echo() {
             Some(body),
         )
         .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(problem["code"], "invalid");
-        assert!(!problem.to_string().contains("SECRET"), "{problem}");
+        assert!(
+            !problem.to_string().contains("SECRET"),
+            "the response must not contain the secret"
+        );
     }
     for body in [
         json!({"name": "A", "kind": "SECRETKIND", "currency": "USD"}),
@@ -455,8 +461,11 @@ async fn invalid_values_are_refused_without_echo() {
             Some(body),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
-        assert!(!problem.to_string().contains("SECRET"), "{problem}");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            !problem.to_string().contains("SECRET"),
+            "the response must not contain the secret"
+        );
     }
     assert_eq!(account_count(&world.server).await, 0);
 }
@@ -473,7 +482,10 @@ async fn path_rejection_does_not_echo() {
         let (status, body) = call(&world.server, Method::GET, uri, &write, None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
         assert_eq!(body["code"], "invalid");
-        assert!(!body.to_string().contains("SECRET"), "{body}");
+        assert!(
+            !body.to_string().contains("SECRET"),
+            "the response must not contain the secret"
+        );
     }
     let created = create(
         &world.server,
@@ -492,7 +504,10 @@ async fn path_rejection_does_not_echo() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["detail"], "the `on` parameter is not valid");
-    assert!(!body.to_string().contains("SECRET"), "{body}");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
 }
 
 #[tokio::test]
@@ -542,7 +557,7 @@ async fn read_token_cannot_create_account() {
     assert_eq!(body["code"], "forbidden");
     assert_eq!(account_count(&world.server).await, 0);
 
-    let (status, body) = send(
+    let (status, _) = send(
         &world.server,
         request(
             Method::POST,
@@ -553,7 +568,7 @@ async fn read_token_cannot_create_account() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(account_count(&world.server).await, 0);
 }
 
@@ -605,14 +620,17 @@ async fn account_changes_audited_with_agent() {
         "liquidity",
         "opening_balance_on",
     ] {
-        assert!(fields.contains(&field), "{field} in {fields:?}");
+        assert!(
+            fields.contains(&field),
+            "a created account must record every set field"
+        );
     }
 
     let updates = audit_actions(&world.server, "account.update").await;
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].actor, by_agent);
     let changes: Vec<_> = updates[0].changes.iter().collect();
-    assert_eq!(changes.len(), 2, "only the changed fields: {changes:?}");
+    assert_eq!(changes.len(), 2);
     let name = changes
         .iter()
         .find(|(field, _)| *field == "name")
@@ -668,8 +686,8 @@ async fn idempotent_retry_replays_response() {
     let (first_status, first) = send(&world.server, post()).await;
     let (second_status, second) = send(&world.server, post()).await;
 
-    assert_eq!(first_status, StatusCode::CREATED, "{first}");
-    assert_eq!(second_status, StatusCode::CREATED, "{second}");
+    assert_eq!(first_status, StatusCode::CREATED);
+    assert_eq!(second_status, StatusCode::CREATED);
     assert_eq!(first["id"], second["id"]);
     assert_eq!(first, second);
     assert_eq!(account_count(&world.server).await, 1);
@@ -745,10 +763,10 @@ async fn failed_create_frees_its_idempotency_key() {
             ),
         )
         .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["code"], "invalid");
     }
-    let (status, body) = send(
+    let (status, _) = send(
         &world.server,
         request(
             Method::POST,
@@ -759,7 +777,7 @@ async fn failed_create_frees_its_idempotency_key() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::CREATED);
 }
 
 #[tokio::test]
@@ -828,12 +846,12 @@ async fn concurrent_same_key_creates_once() {
     }
     results.sort_by_key(|(status, _)| *status);
     let (first_status, first) = &results[0];
-    assert_eq!(*first_status, StatusCode::CREATED, "{first}");
+    assert_eq!(*first_status, StatusCode::CREATED);
     let (second_status, second) = &results[1];
     match *second_status {
         StatusCode::CREATED => assert_eq!(second["id"], first["id"]),
         StatusCode::CONFLICT => assert_eq!(second["code"], "idempotency_in_progress"),
-        other => panic!("unexpected {other}: {second}"),
+        other => panic!("unexpected status {other}"),
     }
     assert_eq!(account_count(&world.server).await, 1);
 }

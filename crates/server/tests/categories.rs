@@ -109,7 +109,7 @@ async fn expect(
     expected: StatusCode,
 ) -> Value {
     let (status, answer) = call(server, method, uri, token, body, key).await;
-    assert_eq!(status, expected, "{answer}");
+    assert_eq!(status, expected);
     answer
 }
 
@@ -288,7 +288,7 @@ async fn category_requests_are_validated_without_echo() {
     let (_, read) = token(&world, Scope::Read).await;
     let server = &world.server;
 
-    let (status, body) = call(
+    let (status, _) = call(
         server,
         Method::POST,
         "/api/v1/category-groups",
@@ -297,7 +297,7 @@ async fn category_requests_are_validated_without_echo() {
         Some("read-key"),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _) = call(server, Method::GET, "/api/v1/categories", &read, None, None).await;
     assert_eq!(status, StatusCode::OK, "a read token lists categories");
 
@@ -334,9 +334,12 @@ async fn category_requests_are_validated_without_echo() {
         let (status, problem) = call(server, Method::POST, uri, &write, Some(body), None).await;
         assert!(
             status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
-            "{status} {problem}"
+            "{status}"
         );
-        assert!(!problem.to_string().contains("SECRET"), "{problem}");
+        assert!(
+            !problem.to_string().contains("SECRET"),
+            "the response must not contain the secret"
+        );
     }
     let (status, _) = call(
         server,

@@ -479,7 +479,10 @@ async fn rejection_body(problem: Problem) -> Value {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "invalid");
-    assert!(!body.to_string().contains("SECRET"), "{body}");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
     body
 }
 
@@ -522,7 +525,10 @@ async fn path_rejection_does_not_echo() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "invalid");
     assert_eq!(body["detail"], "the `id` parameter is not valid");
-    assert!(!body.to_string().contains("SECRET"), "{body}");
+    assert!(
+        !body.to_string().contains("SECRET"),
+        "the response must not contain the secret"
+    );
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
@@ -626,19 +632,30 @@ async fn rejected_body_logs_no_input() {
     .await;
 
     let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
-    assert!(text.contains("capture-check-KNOWN-MARKER"), "{text}");
+    assert!(
+        text.contains("capture-check-KNOWN-MARKER"),
+        "the log lacks the capture marker"
+    );
     assert_eq!(
         text.matches("request body rejected").count(),
-        SECRET_BODIES.len(),
-        "{text}"
+        SECRET_BODIES.len()
     );
     assert!(
         text.contains("path=count"),
-        "a documented field is named: {text}"
+        "the log must name a documented field"
     );
-    assert!(text.contains("category=data"), "{text}");
-    assert!(text.contains("category=eof"), "{text}");
-    assert!(!text.contains("SECRET"), "{text}");
+    assert!(
+        text.contains("category=data"),
+        "the log lacks the data category"
+    );
+    assert!(
+        text.contains("category=eof"),
+        "the log lacks the eof category"
+    );
+    assert!(
+        !text.contains("SECRET"),
+        "the log must not contain the secret"
+    );
 }
 
 #[tokio::test]
