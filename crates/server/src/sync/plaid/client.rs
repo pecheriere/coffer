@@ -71,6 +71,8 @@ pub enum PlaidError {
     /// `HTTP_<status>` as its code.
     #[error("Plaid refused the request: {error_type} {error_code}")]
     Api {
+        /// The answer's HTTP status.
+        status: u16,
         /// Plaid's `error_type`.
         error_type: String,
         /// Plaid's `error_code`.
@@ -115,6 +117,25 @@ pub struct PlaidAccount {
     pub unofficial_currency_code: Option<String>,
 }
 
+/// An Item's accounts. An account that cannot be read does not spoil the
+/// answer: it is left out and listed in `unreadable`.
+#[derive(Debug, Clone)]
+pub struct PlaidAccounts {
+    /// The accounts that could be read.
+    pub accounts: Vec<PlaidAccount>,
+    /// One entry per account that could not.
+    pub unreadable: Vec<UnreadableAccount>,
+}
+
+/// What can still be read of a malformed account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableAccount {
+    /// Its id, when readable.
+    pub account_id: Option<String>,
+    /// Its name, when readable.
+    pub name: Option<String>,
+}
+
 /// A transaction as Plaid reports it.
 #[derive(Debug, Clone)]
 pub struct PlaidTransaction {
@@ -142,6 +163,24 @@ pub struct PlaidTransaction {
     pub pending_transaction_id: Option<String>,
 }
 
+/// A transaction Plaid says no longer exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedTransaction {
+    /// Plaid's id of the transaction.
+    pub transaction_id: String,
+    /// Plaid's id of its account.
+    pub account_id: String,
+}
+
+/// What can still be read of a malformed record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnusableRecord {
+    /// Its transaction id, when readable.
+    pub transaction_id: Option<String>,
+    /// Its account id, when readable.
+    pub account_id: Option<String>,
+}
+
 /// One page of `/transactions/sync`. A record that cannot be read does not
 /// fail the page: it is left out and listed in `unusable`.
 #[derive(Debug, Clone)]
@@ -150,11 +189,11 @@ pub struct SyncPage {
     pub added: Vec<PlaidTransaction>,
     /// Transactions that changed.
     pub modified: Vec<PlaidTransaction>,
-    /// The ids of transactions that no longer exist.
-    pub removed: Vec<String>,
+    /// Transactions that no longer exist.
+    pub removed: Vec<RemovedTransaction>,
     /// One entry per record of `added`, `modified` or `removed` that could
-    /// not be read: its id, or `None` when not even that could be.
-    pub unusable: Vec<Option<String>>,
+    /// not be read.
+    pub unusable: Vec<UnusableRecord>,
     /// Where the next page, or the next sync, starts.
     pub next_cursor: String,
     /// Whether another page follows.
@@ -241,8 +280,9 @@ struct ExchangeAnswer {
 
 #[derive(Deserialize)]
 struct AccountsAnswer<'a> {
+    /// Kept raw so that one malformed account does not spoil the others.
     #[serde(borrow)]
-    accounts: Vec<RawAccount<'a>>,
+    accounts: Vec<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -304,11 +344,30 @@ struct RawTransaction<'a> {
     pending_transaction_id: Option<String>,
 }
 
-/// All that a removed record needs, and all that can still be read of a
-/// malformed one.
+/// All that a removed record needs.
 #[derive(Deserialize)]
-struct RecordId {
+struct RawRemoved {
     transaction_id: String,
+    account_id: String,
+}
+
+/// The identifying fields of a malformed record, each kept raw so that a
+/// wrong type in one does not spoil the other.
+#[derive(Deserialize)]
+struct RawRecordIds<'a> {
+    #[serde(default, borrow)]
+    transaction_id: Option<&'a RawValue>,
+    #[serde(default, borrow)]
+    account_id: Option<&'a RawValue>,
+}
+
+/// The identifying fields of a malformed account, as [`RawRecordIds`].
+#[derive(Deserialize)]
+struct RawAccountIds<'a> {
+    #[serde(default, borrow)]
+    account_id: Option<&'a RawValue>,
+    #[serde(default, borrow)]
+    name: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -411,22 +470,16 @@ impl PlaidClient {
     ///
     /// # Errors
     ///
-    /// As [`PlaidClient::link_token`]; an account that cannot be read, a
-    /// balance in exponent form for one, fails the whole answer.
-    pub async fn accounts(
-        &self,
-        access_token: &SecretString,
-    ) -> Result<Vec<PlaidAccount>, PlaidError> {
+    /// As [`PlaidClient::link_token`]. An account that cannot be read, a
+    /// balance in exponent form for one, is no error: see
+    /// [`PlaidAccounts::unreadable`].
+    pub async fn accounts(&self, access_token: &SecretString) -> Result<PlaidAccounts, PlaidError> {
         let fields = AccessTokenFields {
             access_token: access_token.expose_secret(),
         };
         let body = self.post("accounts/get", fields).await?;
         let answer: AccountsAnswer<'_> = read(&body)?;
-        answer
-            .accounts
-            .into_iter()
-            .map(PlaidAccount::from_raw)
-            .collect()
+        Ok(PlaidAccounts::from_raw(&answer.accounts))
     }
 
     /// One page of transaction updates after `cursor`, or from the start of
@@ -505,8 +558,58 @@ impl PlaidClient {
     }
 }
 
+impl PlaidAccounts {
+    fn from_raw(records: &[&RawValue]) -> Self {
+        let mut accounts = Vec::new();
+        let mut unreadable = Vec::new();
+        for record in records {
+            match PlaidAccount::parse(record.get()) {
+                Ok(account) => accounts.push(account),
+                Err(_) => unreadable.push(UnreadableAccount::of(record)),
+            }
+        }
+        Self {
+            accounts,
+            unreadable,
+        }
+    }
+}
+
+impl UnreadableAccount {
+    fn of(record: &RawValue) -> Self {
+        serde_json::from_str::<RawAccountIds<'_>>(record.get()).map_or(
+            Self {
+                account_id: None,
+                name: None,
+            },
+            |ids| Self {
+                account_id: text(ids.account_id),
+                name: text(ids.name),
+            },
+        )
+    }
+}
+
+impl UnusableRecord {
+    fn of(record: &RawValue) -> Self {
+        serde_json::from_str::<RawRecordIds<'_>>(record.get()).map_or(
+            Self {
+                transaction_id: None,
+                account_id: None,
+            },
+            |ids| Self {
+                transaction_id: text(ids.transaction_id),
+                account_id: text(ids.account_id),
+            },
+        )
+    }
+}
+
 impl PlaidAccount {
-    fn from_raw(raw: RawAccount<'_>) -> Result<Self, PlaidError> {
+    /// Reads one account.
+    fn parse(record: &str) -> Result<Self, PlaidError> {
+        let raw: RawAccount<'_> =
+            serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
         let current = raw.balances.current.map(amount).transpose()?;
         Ok(Self {
             account_id: raw.account_id,
@@ -549,9 +652,12 @@ impl SyncPage {
         let modified = transactions(&raw.modified, &mut unusable);
         let mut removed = Vec::new();
         for record in &raw.removed {
-            match record_id(record) {
-                Some(id) => removed.push(id),
-                None => unusable.push(None),
+            match serde_json::from_str::<RawRemoved>(record.get()) {
+                Ok(parsed) => removed.push(RemovedTransaction {
+                    transaction_id: parsed.transaction_id,
+                    account_id: parsed.account_id,
+                }),
+                Err(_) => unusable.push(UnusableRecord::of(record)),
             }
         }
         Self {
@@ -568,22 +674,21 @@ impl SyncPage {
 /// The records that can be read; each of the others adds to `unusable`.
 fn transactions(
     records: &[&RawValue],
-    unusable: &mut Vec<Option<String>>,
+    unusable: &mut Vec<UnusableRecord>,
 ) -> Vec<PlaidTransaction> {
     let mut read = Vec::new();
     for record in records {
         match PlaidTransaction::parse(record.get()) {
             Ok(transaction) => read.push(transaction),
-            Err(_) => unusable.push(record_id(record)),
+            Err(_) => unusable.push(UnusableRecord::of(record)),
         }
     }
     read
 }
 
-fn record_id(record: &RawValue) -> Option<String> {
-    serde_json::from_str::<RecordId>(record.get())
-        .ok()
-        .map(|record| record.transaction_id)
+/// The JSON string `raw` holds, if it holds one.
+fn text(raw: Option<&RawValue>) -> Option<String> {
+    serde_json::from_str(raw?.get()).ok()
 }
 
 /// A JSON number as an exact decimal: a string, an exponent or any other
@@ -606,6 +711,7 @@ fn error_from(status: StatusCode, body: &[u8]) -> PlaidError {
             PlaidError::RateLimited
         } else {
             PlaidError::Api {
+                status: status.as_u16(),
                 error_type: UNREADABLE_TYPE.to_owned(),
                 error_code: format!("HTTP_{}", status.as_u16()),
             }
@@ -621,6 +727,7 @@ fn error_from(status: StatusCode, body: &[u8]) -> PlaidError {
             PlaidError::RateLimited
         }
         code => PlaidError::Api {
+            status: status.as_u16(),
             error_type: code_or_unknown(&error.error_type),
             error_code: code_or_unknown(code),
         },

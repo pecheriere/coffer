@@ -16,7 +16,9 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use coffer_domain::ids::MemberId;
 use coffer_server::config::{PlaidConfig, PlaidEnvironment};
-use coffer_server::sync::plaid::client::{PlaidClient, PlaidError};
+use coffer_server::sync::plaid::client::{
+    PlaidClient, PlaidError, RemovedTransaction, UnreadableAccount, UnusableRecord,
+};
 use coffer_server::testkit::{MockUpstream, capture_logs, captured_log_text, log_marker};
 use jiff::civil::date;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -274,6 +276,8 @@ async fn accounts_read_from_the_fixture() {
 
     let accounts = client.accounts(&access_token()).await.unwrap();
 
+    assert_eq!(accounts.unreadable, []);
+    let accounts = accounts.accounts;
     assert_eq!(accounts.len(), 3);
     let checking = &accounts[0];
     assert_eq!(checking.account_id, "acct-checking");
@@ -326,8 +330,14 @@ async fn sync_pages_read_from_the_fixtures() {
     assert!(!second.has_more);
     assert_eq!(second.added[0].amount.as_str(), "-1500.25");
     assert_eq!(second.modified[0].transaction_id, "txn-integer");
-    assert_eq!(second.removed, ["txn-gone"]);
-    assert_eq!(second.unusable, Vec::<Option<String>>::new());
+    assert_eq!(
+        second.removed,
+        [RemovedTransaction {
+            transaction_id: "txn-gone".to_owned(),
+            account_id: "acct-checking".to_owned(),
+        }]
+    );
+    assert_eq!(second.unusable, []);
 
     script.reply(StatusCode::OK, POSTED);
     let posted = client
@@ -359,14 +369,14 @@ async fn amounts_read_exactly_from_fixtures() {
     assert_eq!(page.added[0].amount.as_str(), "12");
     assert_eq!(page.added[1].amount.as_str(), "4.5");
 
-    let accounts = client.accounts(&access_token()).await.unwrap();
+    let accounts = client.accounts(&access_token()).await.unwrap().accounts;
     assert_eq!(accounts[0].current.as_ref().unwrap().as_str(), "110.5");
     assert_eq!(accounts[1].current.as_ref().unwrap().as_str(), "410");
 }
 
 /// A record with a number coffer will not read as exact, or without a field
-/// it needs, is left out and listed by id, or without one when none can be
-/// read; the page keeps its usable records and its cursor.
+/// it needs, is left out and listed with whichever of its ids can be read;
+/// the page keeps its usable records and its cursor.
 #[tokio::test]
 async fn one_bad_record_does_not_fail_the_page() {
     let (client, _mock, script) = client().await;
@@ -379,7 +389,9 @@ async fn one_bad_record_does_not_fail_the_page() {
     let body = format!(
         r#"{{"added":[{},{},{},{{"amount":1}},7],
              "modified":[{},{{"transaction_id":"no-fields"}}],
-             "removed":[{{"transaction_id":"gone"}},{{"account_id":"a"}}],
+             "removed":[{{"transaction_id":"gone","account_id":"a"}},
+                        {{"transaction_id":"no-account"}},{{"account_id":"a"}},
+                        {{"transaction_id":7,"account_id":"a"}}],
              "next_cursor":"c","has_more":false}}"#,
         record("ok", "1.25"),
         record("exponent", "1e2"),
@@ -394,17 +406,29 @@ async fn one_bad_record_does_not_fail_the_page() {
     assert_eq!(page.added[0].transaction_id, "ok");
     assert_eq!(page.modified.len(), 1);
     assert_eq!(page.modified[0].transaction_id, "modified-ok");
-    assert_eq!(page.removed, ["gone"]);
+    assert_eq!(
+        page.removed,
+        [RemovedTransaction {
+            transaction_id: "gone".to_owned(),
+            account_id: "a".to_owned(),
+        }]
+    );
     assert_eq!(page.next_cursor, "c");
+    let ids = |transaction: Option<&str>, account: Option<&str>| UnusableRecord {
+        transaction_id: transaction.map(str::to_owned),
+        account_id: account.map(str::to_owned),
+    };
     assert_eq!(
         page.unusable,
-        vec![
-            Some("exponent".to_owned()),
-            Some("quoted".to_owned()),
-            None,
-            None,
-            Some("no-fields".to_owned()),
-            None,
+        [
+            ids(Some("exponent"), Some("a")),
+            ids(Some("quoted"), Some("a")),
+            ids(None, None),
+            ids(None, None),
+            ids(Some("no-fields"), None),
+            ids(Some("no-account"), None),
+            ids(None, Some("a")),
+            ids(None, Some("a")),
         ]
     );
 }
@@ -426,14 +450,10 @@ async fn unreadable_answers_are_invalid() {
             "an unreadable page must be invalid"
         );
     }
-    script.reply(
-        StatusCode::OK,
-        r#"{"accounts":[{"account_id":"a","name":"n","type":"other",
-            "balances":{"current":1e2}}]}"#,
-    );
+    script.reply(StatusCode::OK, r#"{"accounts":{}}"#);
     assert!(
         matches!(client.accounts(&token).await, Err(PlaidError::Invalid(_))),
-        "a balance in exponent form must be invalid"
+        "an unreadable list of accounts must be invalid"
     );
     script.reply(StatusCode::OK, "{}");
     assert!(matches!(
@@ -445,6 +465,42 @@ async fn unreadable_answers_are_invalid() {
         client.exchange(&SecretString::from(PUBLIC_TOKEN)).await,
         Err(PlaidError::Invalid(_))
     ));
+}
+
+/// A malformed account is left out and listed with whichever of its fields
+/// can be read; the others are kept.
+#[tokio::test]
+async fn one_bad_account_does_not_fail_the_answer() {
+    let (client, _mock, script) = client().await;
+    script.reply(
+        StatusCode::OK,
+        r#"{"accounts":[
+            {"account_id":"ok","name":"Fine","type":"other","balances":{"current":1}},
+            {"account_id":"exponent","name":"Bad","type":"other","balances":{"current":1e2}},
+            {"account_id":"no-name","type":"other","balances":{}},
+            {"name":"no id"},
+            {"account_id":7,"name":"typed"},
+            7]}"#,
+    );
+
+    let answer = client.accounts(&access_token()).await.unwrap();
+
+    assert_eq!(answer.accounts.len(), 1);
+    assert_eq!(answer.accounts[0].account_id, "ok");
+    let ids = |account: Option<&str>, name: Option<&str>| UnreadableAccount {
+        account_id: account.map(str::to_owned),
+        name: name.map(str::to_owned),
+    };
+    assert_eq!(
+        answer.unreadable,
+        [
+            ids(Some("exponent"), Some("Bad")),
+            ids(Some("no-name"), None),
+            ids(None, Some("no id")),
+            ids(None, Some("typed")),
+            ids(None, None),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -506,6 +562,7 @@ async fn error_body_mapped() {
     let PlaidError::Api {
         error_type,
         error_code,
+        ..
     } = &err
     else {
         panic!("an unrecognised error body maps to Api");
@@ -525,6 +582,7 @@ async fn error_body_mapped() {
     let PlaidError::Api {
         error_type,
         error_code,
+        ..
     } = &err
     else {
         panic!("an unreadable error maps to Api");
