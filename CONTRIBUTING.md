@@ -21,6 +21,24 @@ cargo deny check
 All five must pass (run `cargo fmt` to fix formatting); CI runs them on
 every pull request.
 
+## Fast local loop
+
+While iterating, run only the crate you are changing with
+[cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`, or
+your package manager), which runs tests in parallel processes:
+
+```sh
+cargo nextest run -p coffer-server --all-features            # one crate
+cargo nextest run -p coffer-store --all-features -E 'test(idempotency)'  # a filter
+```
+
+Before committing, run the five checks above unchanged. nextest does not run
+doctests, so the full `cargo test` stays the gate, locally and in CI.
+
+A compiler cache such as [sccache](https://github.com/mozilla/sccache)
+(`RUSTC_WRAPPER=sccache`) speeds up rebuilds after branch switches. It is
+optional and local only; CI does not use it.
+
 ## Static assets
 
 Files under `crates/server/assets` are served at content-hashed URLs, so

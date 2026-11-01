@@ -50,6 +50,11 @@ cargo test --workspace --all-features
 cargo deny check
 ```
 
+While iterating, test only the crate you change with
+`cargo nextest run -p <crate> --all-features` (add `-E 'test(<name>)'` to
+filter); run the full gate above once before committing (nextest skips
+doctests, so `cargo test` stays the gate).
+
 ## CI and supply chain
 
 - Actions are pinned to the full commit SHA of a release at least 7 days old
