@@ -19,8 +19,10 @@ WORKDIR /src
 
 # Dependencies build in their own layer, from the manifests and Cargo.lock
 # only, so the build cache reuses it until a manifest or Cargo.lock changes.
-# Each crate gets an empty stub source for this step (no build.rs, so only the
-# build-dependencies compile), and the target triple is computed once here.
+# Each crate gets an empty stub source for this step (the coffer crates' own
+# build scripts are not copied yet, so cargo skips them and only the external
+# dependencies and their build scripts compile), and the target triple is
+# computed once here.
 COPY Cargo.toml Cargo.lock ./
 COPY crates/domain/Cargo.toml crates/domain/
 COPY crates/store/Cargo.toml crates/store/
