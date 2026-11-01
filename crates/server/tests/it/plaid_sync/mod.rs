@@ -9,6 +9,7 @@
 
 mod credentials;
 mod failures;
+mod limits;
 mod providers;
 mod removal;
 mod transactions;
@@ -39,7 +40,7 @@ use coffer_store::{
 use http_body_util::BodyExt as _;
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt as _;
 
@@ -69,6 +70,8 @@ struct Script {
     /// The answer by path once there is none of the above.
     fallback: Arc<Mutex<HashMap<String, Reply>>>,
     seen: Arc<Mutex<Vec<(String, Value)>>>,
+    /// Paths whose next request is never answered.
+    silent: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Script {
@@ -90,6 +93,11 @@ impl Script {
             .lock()
             .unwrap()
             .insert(path.to_owned(), (status, body.into()));
+    }
+
+    /// Leaves the next request to `path` without an answer.
+    fn go_silent(&self, path: &str) {
+        self.silent.lock().unwrap().insert(path.to_owned());
     }
 
     fn seen(&self, path: &str) -> Vec<Value> {
@@ -118,6 +126,10 @@ async fn answer(State(script): State<Script>, uri: Uri, body: String) -> Respons
         .lock()
         .unwrap()
         .push((path.clone(), serde_json::from_str(&body).unwrap()));
+    let silent = script.silent.lock().unwrap().remove(&path);
+    if silent {
+        std::future::pending::<()>().await;
+    }
     let scripted = script
         .replies
         .lock()
@@ -136,7 +148,7 @@ async fn answer(State(script): State<Script>, uri: Uri, body: String) -> Respons
 struct World {
     server: TestServer,
     script: Script,
-    _mock: MockUpstream,
+    mock: MockUpstream,
     fake: Arc<FakeProvider>,
     alice: Actor,
     connection: ConnectionId,
@@ -158,7 +170,7 @@ async fn world() -> World {
     World {
         server,
         script,
-        _mock: mock,
+        mock,
         fake,
         alice: Actor {
             member,

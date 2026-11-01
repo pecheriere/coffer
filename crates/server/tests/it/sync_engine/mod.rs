@@ -9,6 +9,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod deadline;
 mod provider_accounts;
 mod records;
 mod reporting;

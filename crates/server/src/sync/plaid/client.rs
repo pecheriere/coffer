@@ -26,6 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::config::PlaidConfig;
 use crate::egress::{Egress, EgressError, HostAllowList, OutboundRequest};
+use crate::sync::apply::MAX_PROVIDER_ID_CHARS;
 
 const PLAID_VERSION: HeaderName = HeaderName::from_static("plaid-version");
 const PLAID_VERSION_VALUE: HeaderValue = HeaderValue::from_static("2020-09-14");
@@ -198,6 +199,8 @@ pub struct SyncPage {
     pub next_cursor: String,
     /// Whether another page follows.
     pub has_more: bool,
+    /// The size of the answer this page was read from.
+    pub body_bytes: usize,
 }
 
 /// The Plaid API, for one environment.
@@ -501,7 +504,7 @@ impl PlaidClient {
         };
         let body = self.post("transactions/sync", fields).await?;
         let raw: RawSyncPage<'_> = read(&body)?;
-        Ok(SyncPage::from_raw(raw))
+        Ok(SyncPage::from_raw(raw, body.len()))
     }
 
     /// Removes the Item at Plaid, which ends its access token and its
@@ -584,7 +587,7 @@ impl UnreadableAccount {
                 name: None,
             },
             |ids| Self {
-                account_id: text(ids.account_id),
+                account_id: storable_id(ids.account_id),
                 name: text(ids.name),
             },
         )
@@ -599,8 +602,8 @@ impl UnusableRecord {
                 account_id: None,
             },
             |ids| Self {
-                transaction_id: text(ids.transaction_id),
-                account_id: text(ids.account_id),
+                transaction_id: storable_id(ids.transaction_id),
+                account_id: storable_id(ids.account_id),
             },
         )
     }
@@ -611,6 +614,9 @@ impl PlaidAccount {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawAccount<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
+        if over_long(&raw.account_id) {
+            return Err(PlaidError::Invalid(RECORD_UNREADABLE));
+        }
         let current = raw.balances.current.map(amount).transpose()?;
         Ok(Self {
             account_id: raw.account_id,
@@ -630,6 +636,10 @@ impl PlaidTransaction {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawTransaction<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
+        let replaced = raw.pending_transaction_id.as_deref().unwrap_or_default();
+        if over_long(&raw.transaction_id) || over_long(&raw.account_id) || over_long(replaced) {
+            return Err(PlaidError::Invalid(RECORD_UNREADABLE));
+        }
         Ok(Self {
             amount: amount(raw.amount)?,
             transaction_id: raw.transaction_id,
@@ -647,18 +657,22 @@ impl PlaidTransaction {
 }
 
 impl SyncPage {
-    fn from_raw(raw: RawSyncPage<'_>) -> Self {
+    fn from_raw(raw: RawSyncPage<'_>, body_bytes: usize) -> Self {
         let mut unusable = Vec::new();
         let added = transactions(&raw.added, &mut unusable);
         let modified = transactions(&raw.modified, &mut unusable);
         let mut removed = Vec::new();
         for record in &raw.removed {
             match serde_json::from_str::<RawRemoved>(record.get()) {
-                Ok(parsed) => removed.push(RemovedTransaction {
-                    transaction_id: parsed.transaction_id,
-                    account_id: parsed.account_id,
-                }),
-                Err(_) => unusable.push(UnusableRecord::of(record)),
+                Ok(parsed)
+                    if !over_long(&parsed.transaction_id) && !over_long(&parsed.account_id) =>
+                {
+                    removed.push(RemovedTransaction {
+                        transaction_id: parsed.transaction_id,
+                        account_id: parsed.account_id,
+                    });
+                }
+                _ => unusable.push(UnusableRecord::of(record)),
             }
         }
         Self {
@@ -668,6 +682,7 @@ impl SyncPage {
             unusable,
             next_cursor: raw.next_cursor,
             has_more: raw.has_more,
+            body_bytes,
         }
     }
 }
@@ -690,6 +705,17 @@ fn transactions(
 /// The JSON string `raw` holds, if it holds one.
 fn text(raw: Option<&RawValue>) -> Option<String> {
     serde_json::from_str(raw?.get()).ok()
+}
+
+/// Whether `id` is longer than coffer can store. Descriptions and merchants
+/// are cut to their limits later; an id cut short would name something else.
+fn over_long(id: &str) -> bool {
+    id.chars().count() > MAX_PROVIDER_ID_CHARS
+}
+
+/// The id `raw` holds, if it holds one coffer can store.
+fn storable_id(raw: Option<&RawValue>) -> Option<String> {
+    text(raw).filter(|id| !over_long(id))
 }
 
 /// A JSON number as an exact decimal: a string, an exponent or any other
@@ -765,6 +791,7 @@ mod tests {
     };
     use crate::config::{PlaidConfig, PlaidEnvironment};
     use crate::egress::{Egress, EgressError, HostAllowList};
+    use crate::sync::apply::MAX_PROVIDER_ID_CHARS;
 
     fn config(environment: PlaidEnvironment) -> PlaidConfig {
         PlaidConfig {
@@ -826,6 +853,35 @@ mod tests {
             assert!(
                 matches!(PlaidTransaction::parse(bad), Err(PlaidError::Invalid(_))),
                 "a malformed record is invalid"
+            );
+        }
+    }
+
+    /// The limit is in characters, as the store's is, and holds for every id
+    /// a record carries.
+    #[test]
+    fn ids_are_limited_in_characters() {
+        let parsed = |id: &str, account: &str, replaced: &str| {
+            PlaidTransaction::parse(&format!(
+                r#"{{"transaction_id":"{id}","account_id":"{account}","amount":1,
+                    "date":"2027-01-10","name":"n","pending":false,
+                    "pending_transaction_id":"{replaced}"}}"#
+            ))
+        };
+        let longest = "é".repeat(MAX_PROVIDER_ID_CHARS);
+        let long = "é".repeat(MAX_PROVIDER_ID_CHARS + 1);
+        assert!(
+            parsed(&longest, &longest, &longest).is_ok(),
+            "an id at the limit is read"
+        );
+        for over in [
+            parsed(&long, "a", "p"),
+            parsed("t", &long, "p"),
+            parsed("t", "a", &long),
+        ] {
+            assert!(
+                matches!(over, Err(PlaidError::Invalid(_))),
+                "an id over the limit is invalid"
             );
         }
     }

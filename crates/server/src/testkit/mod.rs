@@ -16,6 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Duration;
 
 use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::identity::{DisplayName, TokenName, Username};
@@ -48,7 +49,7 @@ use crate::egress::{Egress, HostAllowList};
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
 use crate::secrets::{SecretToken, ServerKey};
-use crate::sync::engine::SyncService;
+use crate::sync::engine::{FETCH_DEADLINE, SyncService};
 use crate::sync::plaid::client::PlaidClient;
 use crate::sync::plaid::provider::Plaid;
 use crate::sync::provider::{
@@ -92,6 +93,7 @@ pub struct TestServer {
     /// The sync engine, over the providers registered so far.
     pub sync: Arc<SyncService>,
     registry: ProviderRegistry,
+    fetch_deadline: Duration,
     _dir: Option<TempDir>,
 }
 
@@ -152,16 +154,26 @@ impl TestServer {
         self.use_registry(ProviderRegistry::default());
     }
 
+    /// Limits the sync engine's provider fetches to `deadline`, for tests
+    /// that wait for them to run out of time.
+    pub fn limit_fetch_time(&mut self, deadline: Duration) {
+        self.fetch_deadline = deadline;
+        self.use_registry(self.registry.clone());
+    }
+
     fn use_registry(&mut self, registry: ProviderRegistry) {
         self.registry = registry.clone();
-        self.sync = Arc::new(SyncService::new(
-            self.store.clone(),
-            self.clock.clone(),
-            Arc::clone(&self.vault),
-            Arc::new(registry),
-            Arc::clone(&self.access),
-            self.config.clone(),
-        ));
+        self.sync = Arc::new(
+            SyncService::new(
+                self.store.clone(),
+                self.clock.clone(),
+                Arc::clone(&self.vault),
+                Arc::new(registry),
+                Arc::clone(&self.access),
+                self.config.clone(),
+            )
+            .with_fetch_deadline(self.fetch_deadline),
+        );
     }
 
     /// This server with its `SimpleFin` provider talking to `mock` only: a
@@ -341,6 +353,7 @@ impl TestServer {
             vault,
             sync,
             registry,
+            fetch_deadline: FETCH_DEADLINE,
             _dir: dir,
         }
     }

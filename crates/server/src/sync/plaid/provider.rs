@@ -39,6 +39,9 @@ const MAX_PASSES: u32 = 3;
 const MAX_PAGES: usize = 200;
 /// The most records one pass gathers, whatever the size of its pages.
 const MAX_RECORDS: usize = 100_000;
+/// The most response bytes one pass holds: some 30,000 real records of about
+/// 2 KiB each, where 200 pages of 16 MiB would be 3.2 GiB.
+const MAX_PASS_BYTES: usize = 64 * 1024 * 1024;
 
 /// Plaid's error type for a failure on its side.
 const API_ERROR: &str = "API_ERROR";
@@ -64,6 +67,7 @@ const CREDENTIALS_UNUSABLE: &str =
     "the connection's Plaid credentials are not usable; reconnect it";
 const CREDENTIALS_NOT_STORABLE: &str = "Plaid's access token could not be stored";
 const TOO_MUCH_DATA: &str = "Plaid sent more records than one sync accepts";
+const TOO_MANY_BYTES: &str = "Plaid sent more data than one sync accepts";
 const CURSOR_UNUSABLE: &str = "Plaid sent a sync cursor coffer could not store";
 const ACCOUNT_UNREADABLE: &str = "Plaid sent this account in a form coffer could not read";
 const ACCOUNT_NOT_LISTED: &str = "Plaid sent records for an account it did not list";
@@ -75,6 +79,7 @@ const RECORDS_WITHOUT_ACCOUNT: &str =
 #[derive(Debug)]
 pub struct Plaid {
     client: PlaidClient,
+    max_pass_bytes: usize,
 }
 
 /// What is sealed as a Plaid connection's credentials.
@@ -218,7 +223,21 @@ impl Plaid {
     /// The provider, over `client`.
     #[must_use]
     pub fn new(client: PlaidClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            max_pass_bytes: MAX_PASS_BYTES,
+        }
+    }
+
+    /// This provider with a pass limited to `bytes`, so a test can reach the
+    /// limit with small pages.
+    #[cfg(feature = "testkit")]
+    #[must_use]
+    pub fn with_max_pass_bytes(self, bytes: usize) -> Self {
+        Self {
+            max_pass_bytes: bytes,
+            ..self
+        }
     }
 
     async fn exchange(&self, public_token: &SecretString) -> Result<SecretString, ProviderError> {
@@ -257,11 +276,16 @@ impl Plaid {
     ) -> Result<(Gathered, String), PlaidError> {
         let mut gathered = Gathered::default();
         let mut next = cursor.map(str::to_owned);
+        let mut bytes = 0_usize;
         for _ in 0..MAX_PAGES {
             let mut page = self
                 .client
                 .sync_page(access_token, next.as_deref().filter(|c| !c.is_empty()))
                 .await?;
+            bytes = bytes.saturating_add(page.body_bytes);
+            if bytes > self.max_pass_bytes {
+                return Err(PlaidError::Invalid(TOO_MANY_BYTES));
+            }
             let last = !page.has_more;
             let cursor = std::mem::take(&mut page.next_cursor);
             gathered.add(page)?;
@@ -656,6 +680,7 @@ mod tests {
             unusable,
             next_cursor: "c".to_owned(),
             has_more: false,
+            body_bytes: 0,
         }
     }
 
