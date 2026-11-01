@@ -639,6 +639,14 @@ are `sandbox` and `production` (Plaid retired `development` in 2024).
 Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
 disconnect calls `/item/remove`, and 730 days of history are requested.
 
+A delta is reported once, so the cursor moves on only when every record it
+covers was stored or can never be. An account that fails while its records are
+in the fetch holds the saved cursor, and the next sync fetches them again; the
+apply step is idempotent, so the other accounts lose and repeat nothing. A
+currency coffer does not support cannot become storable by fetching again, and
+does not hold it. A record that cannot be read is skipped and counted without
+failing its account.
+
 ### 8.7 Household timezone
 
 Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,

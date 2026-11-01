@@ -23,6 +23,8 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::apply::Coverage;
+use super::plaid::client::PlaidClient;
+use super::plaid::provider::Plaid;
 use super::simplefin::SimpleFin;
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
@@ -37,6 +39,8 @@ pub const MAX_PROVIDER_MESSAGE_CHARS: usize = 500;
 pub enum ProviderKind {
     /// `SimpleFin` Bridge.
     SimpleFin,
+    /// Plaid.
+    Plaid,
 }
 
 impl ProviderKind {
@@ -45,6 +49,7 @@ impl ProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SimpleFin => "simplefin",
+            Self::Plaid => "plaid",
         }
     }
 }
@@ -66,6 +71,7 @@ impl FromStr for ProviderKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "simplefin" => Ok(Self::SimpleFin),
+            "plaid" => Ok(Self::Plaid),
             _ => Err(UnknownProvider),
         }
     }
@@ -102,6 +108,8 @@ pub struct Capabilities {
 pub enum ConnectInput {
     /// A `SimpleFin` setup token.
     SimpleFinSetupToken(SecretString),
+    /// The public token Plaid Link produced.
+    PlaidPublicToken(SecretString),
 }
 
 /// One fetch, as the engine asks for it.
@@ -299,6 +307,15 @@ impl ProviderRegistry {
             egress.clone(),
             config.simplefin_hosts.clone(),
         )));
+        if let Some(plaid) = &config.plaid {
+            let client = PlaidClient::new(egress.clone(), plaid.clone()).map_err(|_| {
+                ConfigError::Invalid {
+                    var: "COFFER_PLAID_ENV",
+                    reason: "its host could not be used",
+                }
+            })?;
+            registry.insert(Arc::new(Plaid::new(client)));
+        }
         Ok(registry)
     }
 
@@ -574,6 +591,12 @@ mod tests {
             Ok(ProviderKind::SimpleFin)
         );
         assert_eq!(ProviderKind::SimpleFin.as_str(), "simplefin");
+        assert_eq!("plaid".parse::<ProviderKind>(), Ok(ProviderKind::Plaid));
+        assert_eq!(ProviderKind::Plaid.as_str(), "plaid");
+        assert_eq!(
+            serde_json::to_value(ProviderKind::Plaid).unwrap(),
+            serde_json::Value::from("plaid")
+        );
         assert_eq!(
             serde_json::to_value(ProviderKind::SimpleFin).unwrap(),
             serde_json::Value::from("simplefin")

@@ -25,7 +25,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
-  `SimpleFin` provider; connections, sync requests and their rate limits,
+  `SimpleFin` and Plaid providers; connections, sync requests and their rate limits,
   and provider account binding; the engine that performs sync runs; the
   provider-agnostic apply step matching provider records onto transactions;
   the scheduler, whose worker performs queued runs and whose ticker queues

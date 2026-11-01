@@ -916,7 +916,10 @@ mod tests {
         // A credential shaped like a code is withheld, alone or inside one.
         let credentials = ["UPPERCLIENT1", "UPPERSECRET2", ""];
         for echoed in ["UPPERCLIENT1", "UPPERSECRET2", "X_UPPERSECRET2_Y"] {
-            assert_eq!(code_or_unknown(echoed, &credentials), "UNKNOWN");
+            assert!(
+                code_or_unknown(echoed, &credentials) == "UNKNOWN",
+                "a code holding a credential is replaced"
+            );
         }
         assert_eq!(code_or_unknown("OTHER", &credentials), "OTHER");
     }

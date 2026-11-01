@@ -639,6 +639,8 @@ impl SyncService {
         }
         tx.set_connection_credentials(id, Some(sealed.into()))
             .await?;
+        // A cursor belongs to the credentials it was given for.
+        tx.set_provider_state(id, None).await?;
         tx.update_connection_status(
             id,
             ConnectionStatusChange {
