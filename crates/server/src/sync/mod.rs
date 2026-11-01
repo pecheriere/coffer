@@ -6,6 +6,7 @@ pub mod apply;
 pub mod connections;
 pub mod engine;
 pub mod provider;
+pub mod scheduler;
 pub mod simplefin;
 
 use axum::http::StatusCode;
@@ -154,6 +155,11 @@ impl From<SyncError> for Problem {
                 "Currency mismatch",
             )
             .with_detail(message),
+            SyncError::Store(StoreError::InvalidCursor) => Self::new(
+                StatusCode::BAD_REQUEST,
+                ProblemCode::InvalidCursor,
+                "Invalid pagination cursor",
+            ),
             SyncError::Store(_) | SyncError::Vault(_) => {
                 tracing::error!(error = ?err, "sync failed");
                 Self::new(

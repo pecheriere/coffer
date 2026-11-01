@@ -103,6 +103,17 @@ container coffer binds every interface on port 8080, so publish that port
 only where the proxy alone can reach it: on `127.0.0.1` as above, or on a
 private Docker network shared with the proxy and not published at all.
 
+### Outbound network
+
+To sync provider connections the container needs outbound https (port 443)
+to the hosts in `COFFER_SIMPLEFIN_HOSTS`, and nowhere else. The image
+carries a CA bundle to verify their certificates, so no host mount is
+needed. Enforce the allow-list outside the container too: route egress
+through a proxy that allows `CONNECT` to those hosts only and pass it as
+`HTTPS_PROXY`, or restrict the container's network with an SNI or firewall
+allow-list. Without any connection, coffer still serves everything except
+syncing; see [configuration.md](configuration.md#outbound-network).
+
 ## Operator commands
 
 Run the other commands in the running container:

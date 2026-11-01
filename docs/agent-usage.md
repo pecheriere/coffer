@@ -24,8 +24,8 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories and transactions. |
-| `write` | Everything in `read`, plus changes to household data: creating and changing accounts, recording balances, creating and changing categories, and creating, reviewing, categorizing and deleting transactions. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs. |
+| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts) and sync (requesting one). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -199,6 +199,82 @@ clears it).
   to review a page of transactions with the owner in one call: categorize,
   assign and mark them reviewed together.
 
+- `POST /api/v1/transactions/{transaction_id}/merge` (`write`) merges
+  `{"duplicate": "<transaction id>"}` into this transaction: the
+  duplicate's source records move here and it is deleted. Use the
+  transaction holding the notes, splits and review as the target; a
+  duplicate with user state of its own is a 409 `merge_conflict` unless
+  `discard_duplicate_state` is `true`.
+- `POST /api/v1/transactions/{transaction_id}/dismiss-duplicate`
+  (`write`) clears `possible_duplicate` when the candidates are distinct
+  purchases.
+- `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
+  source record back into a transaction of its own.
+
+### Connections and sync
+
+A connection links coffer to a data provider (today SimpleFin). It reports
+provider accounts; once a provider account is bound to a coffer account,
+syncs bring that account's transactions and balances. coffer syncs every
+connection on a schedule (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask
+for a sync.
+
+- `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
+  `status` (`active`, `error`, `reauth_required` or `removed`),
+  `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
+  `next_sync_at` and the provider accounts the token may see. Credentials
+  are never returned.
+- `POST /api/v1/connections/simplefin` (`write`) connects SimpleFin from
+  `{"label": "...", "setup_token": "..."}`; accepts an `Idempotency-Key`.
+  The setup token is claimed once and never stored or echoed.
+- `POST /api/v1/connections/{connection_id}/sync` (`write`) queues a manual
+  sync and answers 202 with the run (`status: "queued"`), attributed to
+  your token. Follow it with
+  `GET /api/v1/connections/{connection_id}/sync-runs`, which pages the
+  connection's runs newest first (`after`, `limit`) with their `status`
+  (`queued`, `running`, `succeeded`, `partial` or `failed`) and `detail`.
+- `DELETE /api/v1/connections/{connection_id}` (`write`) gives up the
+  connection's access at the provider and marks it `removed` (204). Its
+  accounts and transactions stay. If the provider cannot be reached it is a
+  502 `provider_error` and nothing changes.
+- `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
+  `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
+  `{"account": "<id>"}` (an open account in the same currency), and
+  `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
+  (creates a linked account and binds it) attach what a provider reports to
+  the household's accounts.
+
+Sync limits are the provider's: for SimpleFin, at most one requested sync
+per hour per connection, scheduled syncs at least two hours apart, and 16
+syncs in 24 hours. A sync request while a run is queued or running is a 409
+`sync_in_progress`: wait for that run. A request the limits refuse is a 429
+`sync_rate_limited` with a `Retry-After` header in seconds; do not retry
+before it has passed.
+
+When a connection's status is `reauth_required`, the provider no longer
+accepts its access. Ask the owner for a new SimpleFin setup token and send
+it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
+`{"setup_token": "..."}`: the connection becomes `active` again and keeps
+its provider accounts, bindings and history.
+
+## Review workflow
+
+A typical pass over newly synced transactions with the owner:
+
+1. List what needs a look: `GET /api/v1/transactions?review=unreviewed`,
+   and `flag=possible_duplicate` for possible duplicates.
+2. Categorize, assign and mark reviewed in batches of up to 200 with
+   `POST /api/v1/transactions/batch`; each patch sets `splits`, `assignee`
+   and `review: "reviewed"` as needed, and the batch applies atomically.
+3. For each flagged duplicate, compare it with its `duplicate_candidates`:
+   merge the same purchase with `.../merge`, or dismiss distinct purchases
+   with `.../dismiss-duplicate`.
+
+Amounts are always integers in minor units with their currency, and
+negative is money out of the account; splits sum exactly to the
+transaction's amount. Use an `Idempotency-Key`
+on every create so a retry never creates twice.
+
 ### Retrying creates
 
 Send an `Idempotency-Key` header (1 to 128 visible ASCII characters) with a
@@ -230,7 +306,11 @@ query or path parameter, or a body that is not valid JSON for the
 operation), `invalid` (422: a value the operation does not accept, such as
 an empty account name), `conflict` (409: the change does not fit the
 current state), `invalid_cursor` (400), `idempotency_key_reuse`
-(422), `idempotency_in_progress` (409), `internal` (500). `detail`, when
+(422), `idempotency_in_progress` (409), `merge_conflict` (409),
+`currency_mismatch` (409), `setup_token_invalid` (422), `reauth_required`
+(409), `sync_in_progress` (409), `sync_rate_limited` (429, with
+`Retry-After`), `provider_error` (502: the provider failed or could not be
+reached), `internal` (500). `detail`, when
 present, names at most the documented parameter at fault and never echoes
 what you sent. A problem may carry a `Retry-After` header (seconds): wait
 that long before retrying. Request bodies are limited to 256 KiB.

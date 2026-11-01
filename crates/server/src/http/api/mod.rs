@@ -56,8 +56,12 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(connections::list))
+        .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))
         .op(routes!(connections::reconnect_simplefin))
+        .op(routes!(connections::sync))
+        .op(routes!(connections::list_runs))
         .op(routes!(provider_accounts::list))
         .op(routes!(provider_accounts::bind))
         .op(routes!(provider_accounts::create_account))

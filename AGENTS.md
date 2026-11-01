@@ -25,8 +25,11 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
-  `SimpleFin` provider; the engine that performs sync runs; the provider-agnostic apply step
-  matching provider records onto transactions); `canonical` (changes to
+  `SimpleFin` provider; connections, sync requests and their rate limits,
+  and provider account binding; the engine that performs sync runs; the
+  provider-agnostic apply step matching provider records onto transactions;
+  the scheduler, whose worker performs queued runs and whose ticker queues
+  scheduled ones, started by `serve`); `canonical` (changes to
   canonical transactions shared by `sync` and `ledger`: imported fields and
   duplicate candidates); `cli` and
   the `coffer` binary (`src/main.rs`). It never imports `sqlx`.
@@ -74,8 +77,19 @@ cargo deny check
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
 - Every mutation goes through a `StoreTx` together with its audit entry.
-- Every handler authorizes through `coffer_domain::policy::authorize`; a
-  `Denied` becomes a problem only through `impl From<Denied> for Problem`.
+- Every handler authorizes through `coffer_domain::policy`: `authorize` for
+  household actions, `authorize_account` for anything tied to an account,
+  with the `AccountAccess` that `AccessResolver` resolves (never built by
+  hand). A `Denied` becomes a problem only through
+  `impl From<Denied> for Problem`.
+- Money is an integer in minor units with its ISO 4217 currency
+  (`coffer_domain::money`); negative is money out of the account. No
+  floating point anywhere on a money path, provider JSON included.
+- Outbound HTTP goes only through `egress::Egress`, with a host allow-list.
+  Providers are registered only in `ProviderRegistry::from_config`. Every
+  provider text passes through `sanitize_provider_message` before it is
+  stored or shown. Provider credentials exist in clear only in memory, and
+  never in the database, a log, an error, the audit log or a response.
 - API routes are added only through `ApiRouter::op` (`http/api/router.rs`)
   with a `#[utoipa::path]`; the application router merges nothing else under
   `/api`. Request, query, path and response types derive `ToSchema` or
@@ -116,8 +130,9 @@ coverage. Integration tests drive the real router with soft passkeys.
 
 ## Security review
 
-Required before merge for changes to auth, sessions, tokens, policy, secrets
-or outbound HTTP. Run the `security-review` skill or an equivalent review and
+Required before merge for changes to auth, sessions, tokens, policy, secrets,
+the vault, outbound HTTP (`egress`), provider code (`sync`), or the content
+security policy and other security headers. Run the `security-review` skill or an equivalent review and
 record the findings in the PR.
 
 ## Definition of done

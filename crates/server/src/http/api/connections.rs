@@ -1,7 +1,10 @@
-//! `/api/v1/connections`: connecting and reconnecting `SimpleFin`.
+//! `/api/v1/connections`: listing connections, connecting and reconnecting
+//! `SimpleFin`, requesting a sync, listing a connection's sync runs and
+//! removing a connection.
 //!
 //! A setup token is a credential: it is read into a `SecretString`, never
-//! logged, and no error repeats it.
+//! logged, and no error repeats it. No response ever holds a connection's
+//! credentials.
 
 use axum::Json;
 use axum::extract::State;
@@ -11,18 +14,21 @@ use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::ConnectionId;
 use coffer_domain::policy::{Action, authorize};
+use coffer_domain::sync::SyncTrigger;
+use coffer_store::PageRequest;
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use super::extract::{TypedJson, TypedJsonBytes, TypedPath};
+use super::extract::{TypedJson, TypedJsonBytes, TypedPath, TypedQuery};
 use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
 use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
-use crate::http::problem::{CommonProblems, Problem, ProblemBody, ProblemCode};
+use crate::http::problem::{CommonProblems, Problem, ProblemBody, ProblemCode, RateLimitedProblem};
 use crate::sync::SyncError;
 use crate::sync::connections::ConnectionView;
+use crate::sync::engine::SyncRunView;
 use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 
 const LABEL_INVALID: &str = "label must be 1 to 100 characters without control characters";
@@ -56,6 +62,33 @@ pub struct SimpleFinReconnect {
 pub struct ConnectionPath {
     /// The connection's id.
     pub connection_id: ConnectionId,
+}
+
+/// Every connection.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectionList {
+    pub items: Vec<ConnectionView>,
+}
+
+/// Which page of sync runs to list.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct SyncRunQuery {
+    /// The `next` cursor of the previous page.
+    pub after: Option<String>,
+    /// The most runs to return, clamped to 1 to 200.
+    #[param(minimum = 0)]
+    pub limit: Option<u32>,
+}
+
+/// One page of a connection's sync runs, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SyncRunPage {
+    pub items: Vec<SyncRunView>,
+    /// Pass as `after` for the next page; `null` on the last page.
+    #[schema(required)]
+    pub next: Option<String>,
 }
 
 /// The problem of a connect or reconnect: a setup token the provider
@@ -184,4 +217,135 @@ pub(super) async fn reconnect_simplefin(
         .await
         .map_err(connect_problem)?;
     Ok(Json(view))
+}
+
+/// Every connection.
+#[utoipa::path(
+    get,
+    path = "/api/v1/connections",
+    operation_id = "listConnections",
+    tag = tags::CONNECTIONS,
+    description = "Every connection, removed ones included, oldest first: its status, last \
+                   error (sanitized), last attempt and success, when the schedule syncs it \
+                   next, and the provider accounts the token may see. Never its credentials. \
+                   Needs `read`.",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The connections.", body = ConnectionList),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn list(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+) -> Result<Json<ConnectionList>, Problem> {
+    let items = state.sync.list_connections(&actor).await?;
+    Ok(Json(ConnectionList { items }))
+}
+
+/// Requests a sync of a connection.
+#[utoipa::path(
+    post,
+    path = "/api/v1/connections/{connection_id}/sync",
+    operation_id = "syncConnection",
+    tag = tags::CONNECTIONS,
+    description = "Queues a manual sync of the connection, attributed to the token; the server \
+                   performs it shortly after. Follow it with \
+                   `GET /api/v1/connections/{connection_id}/sync-runs`. The provider's limits \
+                   apply: a minimum interval between syncs and a daily budget. Needs `write`.",
+    security(("bearer" = [])),
+    params(ConnectionPath),
+    responses(
+        (status = 202, description = "The run, queued.", body = SyncRunView),
+        (status = 409, description = "`sync_in_progress` while a run of the connection is \
+                                      queued or running; `conflict` when the connection is \
+                                      removed.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        RateLimitedProblem,
+        CommonProblems,
+    ),
+)]
+pub(super) async fn sync(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<ConnectionPath>,
+) -> Result<(StatusCode, Json<SyncRunView>), Problem> {
+    let run = state
+        .sync
+        .request_sync(Some(&actor), path.connection_id, SyncTrigger::Manual)
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(run)))
+}
+
+/// A connection's sync runs.
+#[utoipa::path(
+    get,
+    path = "/api/v1/connections/{connection_id}/sync-runs",
+    operation_id = "listSyncRuns",
+    tag = tags::CONNECTIONS,
+    description = "The connection's sync runs, newest first: who requested each, its status \
+                   and what it did. Needs `read`. Pages with the opaque `next` cursor.",
+    security(("bearer" = [])),
+    params(ConnectionPath, SyncRunQuery),
+    responses(
+        (status = 200, description = "One page of runs.", body = SyncRunPage),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn list_runs(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<ConnectionPath>,
+    TypedQuery(query): TypedQuery<SyncRunQuery>,
+) -> Result<Json<SyncRunPage>, Problem> {
+    let mut page = PageRequest {
+        after: query.after,
+        ..PageRequest::default()
+    };
+    if let Some(limit) = query.limit {
+        page.limit = limit;
+    }
+    let page = state
+        .sync
+        .list_runs(&actor, path.connection_id, &page)
+        .await?;
+    Ok(Json(SyncRunPage {
+        items: page.items,
+        next: page.next,
+    }))
+}
+
+/// Removes a connection.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/connections/{connection_id}",
+    operation_id = "removeConnection",
+    tag = tags::CONNECTIONS,
+    description = "Gives up the connection's access at the provider, erases its credentials \
+                   and marks it `removed`. Its accounts, transactions and provider accounts \
+                   stay; it is never synced again. Needs `write`; removing another member's \
+                   connection needs `admin`.",
+    security(("bearer" = [])),
+    params(ConnectionPath),
+    responses(
+        (status = 204, description = "Removed."),
+        (status = 409, description = "`conflict` when the connection is already removed, or \
+                                      was reconnected meanwhile.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        (status = 502, description = "`provider_error`: the provider could not give up the \
+                                      access; nothing changed.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn remove(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<ConnectionPath>,
+) -> Result<StatusCode, Problem> {
+    state
+        .sync
+        .remove_connection(&actor, path.connection_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

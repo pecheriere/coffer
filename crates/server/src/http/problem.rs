@@ -1,7 +1,7 @@
 //! `application/problem+json` error bodies (RFC 9457).
 
 use axum::Json;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use coffer_domain::policy::{Denied, DenyReason};
 use serde::Serialize;
@@ -124,6 +124,25 @@ pub enum CommonProblems {
     /// The server failed.
     #[response(status = 500, content_type = "application/problem+json")]
     Internal(ProblemBody),
+}
+
+/// The answer of an operation the sync rate limits refuse, for its
+/// OpenAPI `responses`. Never constructed: handlers return [`Problem`].
+#[derive(IntoResponses)]
+pub enum RateLimitedProblem {
+    /// `sync_rate_limited`: the connection's limits allow no sync yet.
+    #[response(
+        status = 429,
+        content_type = "application/problem+json",
+        headers(("Retry-After" = u32, description = "Whole seconds until a sync is allowed."))
+    )]
+    RateLimited(ProblemBody),
+}
+
+/// Sets `Retry-After` to `seconds` on `headers`: the one way every
+/// response, JSON or page, says when to retry.
+pub(crate) fn set_retry_after(headers: &mut HeaderMap, seconds: u32) {
+    headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
 }
 
 /// An HTTP error. Neither field ever carries a presented credential.
@@ -305,7 +324,7 @@ impl IntoResponse for Problem {
             headers.insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         }
         if let Some(seconds) = self.retry_after {
-            headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+            set_retry_after(headers, seconds);
         }
         response
     }

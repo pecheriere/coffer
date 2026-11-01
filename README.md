@@ -8,11 +8,11 @@ actually need (recurring bills, known big expenses, money set aside for later,
 plus a safety floor), so that everything above that can be invested.
 
 > [!WARNING]
-> **Work in progress.** coffer is pre-alpha and not ready for real use. 0.1.0
-> contains only the foundation: members with passkey sign-in, invites, sessions,
-> agent tokens, an audit log, a minimal web UI and the container image. Accounts,
-> transactions, data sources (SimpleFin), the spending plan and the forecast are
-> not built yet. The API, the database schema and the configuration will change
+> **Work in progress.** coffer is pre-alpha and not ready for real use. It has
+> members with passkey sign-in, invites, sessions, agent tokens, an audit log,
+> a web UI and the container image, plus accounts, balances, categories and
+> transactions with SimpleFin sync. The spending plan and the forecast are not
+> built yet. The API, the database schema and the configuration will change
 > without migration paths between 0.x releases. Do not put financial data you
 > care about in it yet.
 
@@ -21,13 +21,20 @@ What exists and what comes next:
 - **0.1.0 (this release):** identity and access. Passkey-only members (admin and
   member roles), expiring invite links, sessions, revocable agent tokens with
   read/write/admin scopes, an append-only audit log, backups, a container image.
-- **Next:** accounts, balances and transactions with SimpleFin sync and
-  duplicate matching; then planned items, sinking funds and the cash forecast;
-  then reports, a typed OpenAPI document and an MCP server for agents. See the
+- **Unreleased:** accounts (manual and linked), daily balances, categories
+  and transactions with splits, review and assignment; SimpleFin connections
+  synced on a schedule and on demand, with duplicate matching and merging; a
+  typed OpenAPI document of the JSON API.
+- **Next:** planned items, sinking funds and the cash forecast; then reports
+  and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
 Configuration is in [docs/configuration.md](docs/configuration.md); to run
-coffer in a container, see [docs/container.md](docs/container.md).
+coffer in a container, see [docs/container.md](docs/container.md). coffer now
+makes outbound requests to the SimpleFin Bridge to sync; which hosts it
+reaches and how to restrict them is in
+[docs/configuration.md](docs/configuration.md#outbound-network). Agents use
+the API as described in [docs/agent-usage.md](docs/agent-usage.md).
 
 ## Dependency age
 

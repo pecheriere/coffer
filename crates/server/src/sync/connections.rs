@@ -17,8 +17,8 @@ use coffer_domain::money::Currency;
 use coffer_domain::policy::{AccountAccess, AccountLevel, Action, authorize, authorize_account};
 use coffer_domain::sync::SyncTrigger;
 use coffer_store::{
-    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection, NewSyncRun,
-    ProviderAccountRecord, StoreTx,
+    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, NewConnection, NewSyncRun, Page,
+    PageRequest, ProviderAccountRecord, StoreTx,
 };
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp};
@@ -293,7 +293,7 @@ fn default_account_name(provider_account: &ProviderAccountRecord) -> String {
 
 impl SyncService {
     /// The provider a connection uses, if this server offers it.
-    fn provider_of(
+    pub(super) fn provider_of(
         &self,
         connection: &ConnectionRecord,
     ) -> Option<std::sync::Arc<dyn super::provider::Provider>> {
@@ -304,6 +304,19 @@ impl SyncService {
             .and_then(|kind| self.registry.get(kind))
     }
 
+    /// How long the schedule waits after an attempt to sync `connection`
+    /// again: the longer of the server's sync interval and its provider's
+    /// minimum between scheduled syncs.
+    pub(super) fn effective_interval(&self, connection: &ConnectionRecord) -> SignedDuration {
+        self.provider_of(connection)
+            .map_or(self.config.sync_interval, |provider| {
+                provider
+                    .capabilities()
+                    .min_scheduled_interval
+                    .max(self.config.sync_interval)
+            })
+    }
+
     fn connection_view(
         &self,
         connection: ConnectionRecord,
@@ -311,14 +324,7 @@ impl SyncService {
     ) -> ConnectionView {
         let next_sync_at = match connection.status {
             ConnectionStatus::Active | ConnectionStatus::Error => {
-                let interval =
-                    self.provider_of(&connection)
-                        .map_or(self.config.sync_interval, |provider| {
-                            provider
-                                .capabilities()
-                                .min_scheduled_interval
-                                .max(self.config.sync_interval)
-                        });
+                let interval = self.effective_interval(&connection);
                 connection
                     .last_attempt_at
                     .map(|at| at.checked_add(interval).unwrap_or(Timestamp::MAX))
@@ -460,6 +466,7 @@ impl SyncService {
         let view = self.connection_view(record, Vec::new());
         complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
+        self.queued.notify_one();
         tracing::info!(connection = %view.id, provider = kind.as_str(), "connection created");
         Ok(view)
     }
@@ -519,6 +526,7 @@ impl SyncService {
             }
         };
         drop(credentials);
+        self.queued.notify_one();
         tracing::info!(connection = %id, "connection reconnected");
         let access = self.access.resolve(actor).await?;
         let accounts = self
@@ -765,8 +773,32 @@ impl SyncService {
             .await?;
         }
         tx.commit().await?;
+        self.queued.notify_one();
         tracing::info!(connection = %id, run = %run.id, trigger = trigger.as_str(), "sync requested");
         Ok(SyncRunView::from(run))
+    }
+
+    /// One page of the connection's runs, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] without [`Action::ReadHousehold`];
+    /// [`SyncError::NotFound`] for an unknown connection;
+    /// [`SyncError::Store`] with [`coffer_store::StoreError::InvalidCursor`]
+    /// for a cursor this method did not issue; storage failures.
+    pub async fn list_runs(
+        &self,
+        actor: &Actor,
+        id: ConnectionId,
+        page: &PageRequest,
+    ) -> Result<Page<SyncRunView>, SyncError> {
+        authorize(actor, Action::ReadHousehold)?;
+        self.store.get_connection(id).await?;
+        let page = self.store.list_sync_runs(id, page).await?;
+        Ok(Page {
+            items: page.items.into_iter().map(SyncRunView::from).collect(),
+            next: page.next,
+        })
     }
 
     /// Binds the provider account to `account` and turns the records held

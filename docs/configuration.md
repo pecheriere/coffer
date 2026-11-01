@@ -51,6 +51,33 @@ with a Tailscale Service whose name gives `https://coffer.<tailnet>.ts.net`,
 and set `COFFER_PUBLIC_URL` to that address. Any other proxy (Caddy, nginx,
 Traefik) that meets the list above works the same way.
 
+## Outbound network
+
+coffer is no longer an offline service: to sync provider connections it
+makes outbound https requests. It connects only to:
+
+- the hosts in `COFFER_SIMPLEFIN_HOSTS` (by default `bridge.simplefin.org`
+  and `beta-bridge.simplefin.org`), on port 443;
+- in later releases, Plaid's API hosts and the exchange-rate source's host,
+  documented here when they are added.
+
+Every other destination is refused before a connection is opened. Target
+hosts must resolve to public addresses: coffer refuses loopback, private,
+link-local and other special-purpose addresses, so a setup token cannot point
+it at the local network. Redirects are never followed. `NO_PROXY`,
+`HTTP_PROXY` and `ALL_PROXY` are ignored.
+
+To enforce the same allow-list outside coffer, use one of:
+
+- an egress proxy in `HTTPS_PROXY` that allows `CONNECT` to the hosts above
+  (port 443) only. coffer then does not resolve the target itself, so the
+  proxy must enforce the public-address rule;
+- a firewall or SNI allow-list that lets the coffer host reach only those
+  hosts on port 443.
+
+Provider credentials are sealed under a key derived from the server key, so
+losing `secret.key` also means reconnecting every provider connection.
+
 ## Endpoints
 
 - `GET /healthz` returns `200 ok` when the database answers, otherwise `503`.

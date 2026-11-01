@@ -15,6 +15,7 @@ use coffer_domain::identity::Username;
 use coffer_domain::time::SystemClock;
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 use crate::appearance::Appearance;
@@ -27,6 +28,7 @@ use crate::ledger::Ledger;
 use crate::secrets::{SecretError, ServerKey};
 use crate::sync::engine::SyncService;
 use crate::sync::provider::ProviderRegistry;
+use crate::sync::scheduler;
 use crate::vault::CredentialVault;
 
 mod healthcheck;
@@ -419,8 +421,9 @@ async fn serve(config: Config) -> Result<(), CliError> {
     serve_with(state, listener, shutdown_signal()).await
 }
 
-/// Serves `state` on `listener` until `shutdown` resolves, then drains
-/// in-flight requests and returns.
+/// Serves `state` on `listener`, with the sync scheduler running, until
+/// `shutdown` resolves; then drains in-flight requests, stops the
+/// scheduler and returns.
 ///
 /// Logs the setup link when no admin exists. That is the only place a setup
 /// link is logged: with no channel to the operator, and the link
@@ -439,9 +442,22 @@ pub async fn serve_with(
     }
     let listen = listener.local_addr()?;
     tracing::info!(%listen, public_url = %state.config.public_url, "coffer is serving");
-    axum::serve(listener, http::router(state))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    let (stop, mut stopped) = watch::channel(false);
+    let scheduler = scheduler::spawn(state.clone(), async move {
+        // An error means the server is gone, which stops the scheduler too.
+        let _ = stopped.wait_for(|stop| *stop).await;
+    });
+    let served = axum::serve(listener, http::router(state))
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            // The scheduler stops once `stop` is dropped in any case.
+            let _ = stop.send(true);
+        })
+        .await;
+    if let Err(err) = scheduler.await {
+        tracing::error!(error = %err, "the sync scheduler ended abnormally");
+    }
+    served?;
     tracing::info!("coffer stopped");
     Ok(())
 }

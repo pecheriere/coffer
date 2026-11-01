@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use coffer_domain::accounts::ConnectionLabel;
@@ -27,7 +27,7 @@ use super::layout::{Frame, Nav, csrf_field, empty_state, page};
 use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
-use crate::http::problem::Problem;
+use crate::http::problem::{Problem, set_retry_after};
 use crate::sync::connections::{ConnectionState, ConnectionView, ProviderAccountView};
 use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 use crate::sync::{SyncError, retry_seconds};
@@ -146,9 +146,7 @@ async fn render(
     };
     let mut response = (notice.status, markup).into_response();
     if let Some(seconds) = notice.retry_after {
-        response
-            .headers_mut()
-            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        set_retry_after(response.headers_mut(), seconds);
     }
     Ok(response)
 }

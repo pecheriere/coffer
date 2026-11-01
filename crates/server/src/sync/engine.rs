@@ -106,6 +106,8 @@ pub struct SyncService {
     /// The only source of account access.
     pub(super) access: Arc<AccessResolver>,
     pub(super) config: Config,
+    /// Wakes the scheduler's worker when a run is queued.
+    pub(super) queued: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for SyncService {
@@ -213,6 +215,7 @@ impl SyncService {
             registry,
             access,
             config,
+            queued: tokio::sync::Notify::new(),
         }
     }
 
@@ -268,7 +271,7 @@ impl SyncService {
     }
 
     /// Marks `run` failed after a storage error, if the store allows.
-    async fn abandon(&self, run: SyncRunId) {
+    pub(super) async fn abandon(&self, run: SyncRunId) {
         let finished = async {
             let mut tx = self.store.begin().await?;
             tx.finish_sync_run(

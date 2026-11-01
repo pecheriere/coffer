@@ -184,3 +184,115 @@ async fn production_wiring_refuses_unlisted_setup_token() {
         .unwrap()
         .unwrap();
 }
+
+/// Sends one HTTP/1.0 request (so the reply is never chunked) and returns
+/// the status code and body.
+async fn http(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<&str>,
+) -> (u16, String) {
+    let headers = body.map_or_else(String::new, |body| {
+        format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+    });
+    let request = format!(
+        "{method} {path} HTTP/1.0\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
+         {headers}\r\n{}",
+        body.unwrap_or_default()
+    );
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).await.unwrap();
+    let reply = String::from_utf8(reply).unwrap();
+    let (head, body) = reply.split_once("\r\n\r\n").unwrap();
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap();
+    (status, body.to_owned())
+}
+
+/// The whole server, as `serve` runs it (scheduler included), on a real
+/// listener: a write token creates a manual account and a transaction in
+/// it, lists it back, and fetches the OpenAPI document; then it stops.
+#[tokio::test]
+async fn serve_creates_account_and_transaction_end_to_end() {
+    let server = TestServer::new().await;
+    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let member = server.authenticator().enroll(&link, "alice", "Alice").await;
+    let alice = Actor {
+        member,
+        role: Role::Admin,
+        via: Via::Session,
+    };
+    let (_, token) = server
+        .agent_tokens
+        .create(
+            &alice,
+            TokenName::parse("planner").unwrap(),
+            Scope::Write,
+            None,
+        )
+        .await
+        .unwrap();
+    let token = token.expose_secret().to_owned();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(serve_with(server.app_state(), listener, async {
+        let _ = stopped.await;
+    }));
+
+    let (status, account) = http(
+        addr,
+        "POST",
+        "/api/v1/accounts",
+        &token,
+        Some(r#"{"name":"Cash","kind":"checking","currency":"EUR"}"#),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let account: serde_json::Value = serde_json::from_str(&account).unwrap();
+    let account_id = account["id"].as_str().unwrap().to_owned();
+
+    let create = format!(
+        r#"{{"account":"{account_id}","posted_on":"2027-01-10","minor_units":-1250,"description":"Groceries"}}"#
+    );
+    let (status, created) = http(addr, "POST", "/api/v1/transactions", &token, Some(&create)).await;
+    assert_eq!(status, 201);
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+
+    let (status, listed) = http(
+        addr,
+        "GET",
+        &format!("/api/v1/transactions?account={account_id}"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    let items = listed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], created["id"]);
+    assert_eq!(items[0]["amount"]["minor_units"], serde_json::json!(-1250));
+
+    let (status, document) = http(addr, "GET", "/api/v1/openapi.json", &token, None).await;
+    assert_eq!(status, 200);
+    let document: serde_json::Value = serde_json::from_str(&document).unwrap();
+    assert!(document["paths"]["/api/v1/connections/{connection_id}/sync"].is_object());
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("server stops")
+        .unwrap()
+        .unwrap();
+}
