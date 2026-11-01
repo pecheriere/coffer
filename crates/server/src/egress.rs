@@ -8,7 +8,10 @@
 //! resolver the connection itself uses, so a name cannot be re-pointed
 //! between the check and the connect. With `HTTPS_PROXY` set, coffer resolves
 //! only the proxy (unfiltered: an egress proxy usually sits on a private
-//! address) and the proxy resolves targets and enforces its own policy.
+//! address) and the proxy resolves targets and enforces its own policy. With
+//! `COFFER_EGRESS_RELAY` set, nothing is resolved: every connection goes to
+//! that one address, which only the operator's configuration can name, and the
+//! URL, so the SNI and the certificate check, stay the real host's.
 
 use std::error::Error as StdError;
 use std::fmt;
@@ -24,6 +27,8 @@ use rustls_platform_verifier::BuilderVerifierExt as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use thiserror::Error;
 use url::{Host, Url};
+
+use crate::config::Config;
 
 /// Largest response body accepted, in bytes (16 MiB).
 pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
@@ -249,13 +254,7 @@ impl Egress {
     /// proxy URL is not `http` or `https` with a host, or the client cannot
     /// be built.
     pub fn new(proxy: Option<&Url>) -> Result<Egress, EgressError> {
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let tls = rustls::ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
-            .map_err(|_| EgressError::Config("TLS 1.2 and 1.3 are unavailable"))?
-            .with_platform_verifier()
-            .map_err(|_| EgressError::Config("no CA certificate could be loaded"))?
-            .with_no_client_auth();
+        let tls = platform_tls()?;
 
         let resolver = match proxy {
             None => PublicResolver::Public,
@@ -273,15 +272,7 @@ impl Egress {
             }
         };
 
-        let mut builder = reqwest::Client::builder()
-            .tls_backend_preconfigured(tls)
-            .no_proxy()
-            .redirect(redirect::Policy::none())
-            .referer(false)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(USER_AGENT)
-            .dns_resolver(Arc::new(resolver));
+        let mut builder = client_builder(tls, resolver);
         if let Some(proxy) = proxy {
             // Credentials in the proxy URL become its Proxy-Authorization
             // header; no NO_PROXY list is attached.
@@ -289,6 +280,27 @@ impl Egress {
                 .map_err(|_| EgressError::Config("the proxy URL is invalid"))?;
             builder = builder.proxy(proxy);
         }
+        Egress::build(builder)
+    }
+
+    /// The production client for `config`: through its relay when it has one
+    /// (see [`Egress::new`] for all that does not change), else as
+    /// [`Egress::new`] with its proxy.
+    ///
+    /// # Errors
+    ///
+    /// As [`Egress::new`].
+    pub fn from_config(config: &Config) -> Result<Egress, EgressError> {
+        match config.egress_relay {
+            Some(relay) => {
+                let resolver = PublicResolver::relay(relay);
+                Egress::build(client_builder(platform_tls()?, resolver))
+            }
+            None => Egress::new(config.https_proxy.as_ref()),
+        }
+    }
+
+    fn build(builder: reqwest::ClientBuilder) -> Result<Egress, EgressError> {
         let client = builder
             .build()
             .map_err(|_| EgressError::Config("the HTTP client could not be built"))?;
@@ -317,6 +329,39 @@ impl Egress {
             loopback_http: true,
             ..Egress::new(None).expect("the test client builds")
         }
+    }
+
+    /// A production client whose connections go to `relay`, port included
+    /// (a test server cannot listen on 443), and which trusts `extra_root` on
+    /// top of the platform's roots. Its destination checks are the production
+    /// ones: it has no [`Egress::for_tests`] exception.
+    ///
+    /// # Panics
+    ///
+    /// When the client cannot be built.
+    #[cfg(feature = "testkit")]
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a client that cannot be built must abort the test using it"
+    )]
+    pub fn relay_for_tests(
+        relay: SocketAddr,
+        extra_root: rustls::pki_types::CertificateDer<'static>,
+    ) -> Egress {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+            [extra_root],
+            Arc::clone(&provider),
+        )
+        .expect("the test root is valid");
+        let tls = tls_versions(provider)
+            .expect("the test client builds")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+        Egress::build(client_builder(tls, PublicResolver::Relay(relay)))
+            .expect("the test client builds")
     }
 
     /// Checks a destination: scheme `https`; host a DNS name in `allowed`
@@ -411,6 +456,37 @@ impl Egress {
     }
 }
 
+/// The TLS settings every client shares, up to the choice of verifier.
+fn tls_versions(
+    provider: Arc<rustls::crypto::CryptoProvider>,
+) -> Result<rustls::ConfigBuilder<rustls::ClientConfig, rustls::WantsVerifier>, EgressError> {
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .map_err(|_| EgressError::Config("TLS 1.2 and 1.3 are unavailable"))
+}
+
+fn platform_tls() -> Result<rustls::ClientConfig, EgressError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    Ok(tls_versions(provider)?
+        .with_platform_verifier()
+        .map_err(|_| EgressError::Config("no CA certificate could be loaded"))?
+        .with_no_client_auth())
+}
+
+/// The settings every client shares: no proxy from the environment, no
+/// redirects, no referer, and the time limits.
+fn client_builder(tls: rustls::ClientConfig, resolver: PublicResolver) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(tls)
+        .no_proxy()
+        .redirect(redirect::Policy::none())
+        .referer(false)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent(USER_AGENT)
+        .dns_resolver(Arc::new(resolver))
+}
+
 /// Lowercases a DNS name and drops one trailing dot.
 fn normalize_name(name: &str) -> String {
     let lowered = name.to_ascii_lowercase();
@@ -444,11 +520,17 @@ fn classify(error: reqwest::Error) -> EgressError {
         }
         if let Some(io_error) = cause.downcast_ref::<io::Error>() {
             io_kind.get_or_insert(io_error.kind());
-            if io_error
-                .get_ref()
-                .is_some_and(<dyn StdError + Send + Sync>::is::<rustls::Error>)
-            {
-                stage = TransportStage::Tls;
+            // A failed handshake arrives as an `io::Error` holding an
+            // `io::Error` holding the rustls error, and `source()` skips an
+            // `io::Error`'s payload, so look through the payloads here.
+            let mut payload = io_error.get_ref();
+            while let Some(inner) = payload {
+                if inner.is::<rustls::Error>() {
+                    stage = TransportStage::Tls;
+                }
+                payload = inner
+                    .downcast_ref::<io::Error>()
+                    .and_then(io::Error::get_ref);
             }
         }
         source = cause.source();
@@ -466,6 +548,15 @@ enum PublicResolver {
     /// unfiltered; any other name is refused, since targets are the proxy's
     /// to resolve.
     ProxyOnly(Option<Arc<str>>),
+    /// A relay is configured: every name answers with this address, with no
+    /// lookup and no filter. Port 0 stands for the port of the URL.
+    Relay(SocketAddr),
+}
+
+impl PublicResolver {
+    fn relay(relay: IpAddr) -> PublicResolver {
+        PublicResolver::Relay(SocketAddr::new(relay, 0))
+    }
 }
 
 /// A name that did not resolve or resolved to no acceptable address.
@@ -477,6 +568,10 @@ impl Resolve for PublicResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = normalize_name(name.as_str());
         let filtered = match self {
+            PublicResolver::Relay(relay) => {
+                let addrs: Addrs = Box::new(std::iter::once(*relay));
+                return Box::pin(std::future::ready(Ok(addrs)));
+            }
             PublicResolver::Public => Some(true),
             PublicResolver::ProxyOnly(Some(proxy)) if **proxy == *host => Some(false),
             PublicResolver::ProxyOnly(_) => None,
@@ -762,6 +857,22 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EgressError::Resolution), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn relay_resolver_answers_only_the_configured_address() {
+        let relay = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
+        for name in ["bridge.example", "localhost", "metadata.internal"] {
+            let name: Name = name.parse().unwrap();
+            let addrs: Vec<SocketAddr> = PublicResolver::relay(relay)
+                .resolve(name)
+                .await
+                .unwrap()
+                .collect();
+            // Port 0 makes the client use the URL's port, which `check_url`
+            // holds to 443.
+            assert_eq!(addrs, [SocketAddr::new(relay, 0)]);
+        }
     }
 
     /// Accepts connections, records the first request line of each and

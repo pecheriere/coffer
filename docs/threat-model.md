@@ -54,7 +54,16 @@
   other special-purpose address). With an egress proxy (`HTTPS_PROXY`),
   coffer sends `CONNECT` to the allowed host and does not resolve it, so the
   proxy must enforce the public-address rule; the proxy's own address may be
-  private. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored, so the
+  private. With an egress relay (`COFFER_EGRESS_RELAY`), coffer resolves
+  nothing and connects to that one operator-configured address, which may be
+  private; only the environment can set it, never a setup token, a provider
+  or a request. The operator trusts the relay to forward to the allowed hosts
+  only and to apply the public-address rule, which coffer cannot check any
+  more, and the relay learns which hosts coffer contacts, and when. coffer
+  does not trust it with anything else: the allow-list, https and the ban on
+  redirects are unchanged, and TLS is verified against the real host name, so
+  a relay cannot read or alter the traffic unless it holds a certificate for
+  that name from a CA the host trusts. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored, so the
   environment cannot quietly route around the allow-list. Setup tokens, claim and access URLs and provider response
   bodies never reach an error, a log line, the audit log or a response:
   coffer's own provider error texts are fixed, with at most a status code.

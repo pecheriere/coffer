@@ -64,6 +64,10 @@ pub struct Config {
     /// Proxy for every outbound https request, from `HTTPS_PROXY` (else
     /// `https_proxy`). It may carry credentials, which `Debug` redacts.
     pub https_proxy: Option<Url>,
+    /// The address every outbound connection goes to instead of the target's
+    /// own, from `COFFER_EGRESS_RELAY`. Only this configuration sets it, and
+    /// it excludes [`Config::https_proxy`].
+    pub egress_relay: Option<IpAddr>,
     /// The household's time zone, from `COFFER_TIMEZONE` (an IANA name,
     /// default `UTC`): provider timestamps become calendar days in it, and
     /// it decides which day is today.
@@ -137,6 +141,7 @@ impl fmt::Debug for Config {
             .field("session_idle", &self.session_idle)
             .field("session_absolute", &self.session_absolute)
             .field("https_proxy", &https_proxy)
+            .field("egress_relay", &self.egress_relay)
             .field("timezone", &self.timezone.iana_name())
             .field("sync_interval", &self.sync_interval)
             .field("simplefin_hosts", &self.simplefin_hosts)
@@ -227,6 +232,9 @@ impl Config {
             1..=24,
         )?;
 
+        let https_proxy = parse_https_proxy(&vars)?;
+        let egress_relay = parse_egress_relay(&vars, https_proxy.is_some())?;
+
         Ok(Self {
             listen,
             public_url,
@@ -235,7 +243,8 @@ impl Config {
             invite_ttl: SignedDuration::from_mins(invite_minutes),
             session_idle: SignedDuration::from_hours(idle_hours),
             session_absolute: SignedDuration::from_hours(absolute_days * 24),
-            https_proxy: parse_https_proxy(&vars)?,
+            https_proxy,
+            egress_relay,
             timezone: parse_timezone(&vars)?,
             sync_interval: SignedDuration::from_hours(sync_hours),
             simplefin_hosts: parse_simplefin_hosts(&vars)?,
@@ -324,6 +333,34 @@ fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Ur
         return Err(invalid("must not have a query or fragment"));
     }
     Ok(Some(url))
+}
+
+/// Reads `COFFER_EGRESS_RELAY`: one IP address that can be connected to, with
+/// no port and no name. `proxied` says that a proxy is configured too, which
+/// is refused: both would decide where connections go.
+fn parse_egress_relay(
+    vars: &impl Fn(&str) -> Option<String>,
+    proxied: bool,
+) -> Result<Option<IpAddr>, ConfigError> {
+    const VAR: &str = "COFFER_EGRESS_RELAY";
+    let invalid = |reason| ConfigError::Invalid { var: VAR, reason };
+    let Some(raw) = vars(VAR) else {
+        return Ok(None);
+    };
+    let relay = raw
+        .parse::<IpAddr>()
+        .map_err(|_| invalid("expected one IP address, with no port and no host name"))?
+        .to_canonical();
+    let broadcast = matches!(relay, IpAddr::V4(ip) if ip.is_broadcast());
+    if relay.is_unspecified() || relay.is_multicast() || broadcast {
+        return Err(invalid("must be a unicast address"));
+    }
+    if proxied {
+        return Err(invalid(
+            "conflicts with HTTPS_PROXY or https_proxy, which is also set: use only one",
+        ));
+    }
+    Ok(Some(relay))
 }
 
 /// Reads `COFFER_SIMPLEFIN_HOSTS`; unset means the public `SimpleFin`
