@@ -143,7 +143,9 @@ carries a CA bundle to verify their certificates, so no host mount is
 needed. Enforce the allow-list outside the container too: route egress
 through a proxy that allows `CONNECT` to those hosts only and pass it as
 `HTTPS_PROXY`, or restrict the container's network with an SNI or firewall
-allow-list. Plaid Link runs in the member's browser, which must reach `cdn.plaid.com`
+allow-list. On a network with no DNS and no direct internet, where an SNI relay
+you control forwards outbound TLS, pass its IP address as
+`COFFER_EGRESS_RELAY` instead. Plaid Link runs in the member's browser, which must reach `cdn.plaid.com`
 and Plaid's hosts; the container does not. Without any connection, coffer still serves everything except
 syncing; see [configuration.md](configuration.md#outbound-network).
 

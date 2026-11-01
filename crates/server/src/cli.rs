@@ -314,7 +314,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         clock.clone(),
         Arc::clone(&access),
     ));
-    let egress = Egress::new(config.https_proxy.as_ref())?;
+    let egress = Egress::from_config(&config)?;
     let registry = Arc::new(ProviderRegistry::from_config(&config, &egress)?);
     let sync = Arc::new(SyncService::new(
         store.clone(),
