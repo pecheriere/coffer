@@ -3,8 +3,9 @@
 //! They exist only on a server configured for Plaid.
 //!
 //! These are the only pages that load a third-party script, so only they have
-//! a policy of their own, set on the successful response alone: a failure
-//! shows a plain error page under the default policy. The link token goes
+//! a policy of their own, with a nonce minted for each response and set on the
+//! successful response alone: a failure shows a plain error page under the
+//! default policy. The link token goes
 //! into the page and into no log; HTML is never stored by the browser's
 //! caches ([`super::security_headers`]). A public token is passed on to Plaid
 //! by the sync service and never comes back: its type hides it, and errors
@@ -24,12 +25,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::account::{json_session, viewer};
-use super::layout::{Frame, Nav, page_with_scripts};
+use super::layout::{Frame, Nav, Script, page_with_scripts};
 use super::{ApiJson, PageError, PageSession};
 use crate::assets;
 use crate::config::PlaidEnvironment;
 use crate::http::AppState;
 use crate::http::problem::{Problem, ProblemCode};
+use crate::secrets::mint_nonce;
 use crate::sync::SyncError;
 use crate::sync::provider::{ConnectInput, ProviderKind};
 
@@ -43,29 +45,18 @@ const AFTER_LINK: &str = "/connections";
 const LABEL_INVALID: &str = "The label must be 1 to 100 characters without control characters.";
 const TOKEN_MISSING: &str = "Plaid Link sent no public token.";
 
-/// The policy of the Link pages for the environment host `$host`: the default
-/// policy plus exactly what Link needs from Plaid.
-macro_rules! plaid_link_csp {
-    ($host:literal) => {
-        concat!(
-            "default-src 'self'; ",
-            "script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; ",
-            "frame-src https://cdn.plaid.com; ",
-            "connect-src 'self' https://",
-            $host,
-            "; style-src 'self'; img-src 'self'; frame-ancestors 'none'; ",
-            "form-action 'self'; base-uri 'none'"
-        )
-    };
-}
-
 /// The Link pages' policy for `environment`: the only policy a handler may
-/// set.
-const fn plaid_link_csp(environment: PlaidEnvironment) -> &'static str {
-    match environment {
-        PlaidEnvironment::Sandbox => plaid_link_csp!("sandbox.plaid.com"),
-        PlaidEnvironment::Production => plaid_link_csp!("production.plaid.com"),
-    }
+/// set. It is the default policy plus exactly what Link needs from Plaid. The
+/// nonce admits the stylesheet Plaid's script adds, which it marks with the
+/// nonce of its own tag; without it Link has no layout on a phone.
+fn plaid_link_csp(environment: PlaidEnvironment, nonce: &str) -> String {
+    let host = environment.host();
+    format!(
+        "default-src 'self'; script-src 'self' {LINK_SCRIPT}; \
+         frame-src https://cdn.plaid.com; connect-src 'self' https://{host}; \
+         style-src 'self' 'nonce-{nonce}'; img-src 'self'; frame-ancestors 'none'; \
+         form-action 'self'; base-uri 'none'"
+    )
 }
 
 pub fn routes() -> Router<AppState> {
@@ -134,21 +125,25 @@ async fn render(
         current: Some(Nav::Connections),
         narrow: false,
     };
+    let nonce = mint_nonce();
     let markup = page_with_scripts(
         &frame,
         title,
         &content,
-        &[LINK_SCRIPT, assets::JS_PLAID_LINK_JS.url],
+        &[
+            Script {
+                src: LINK_SCRIPT,
+                nonce: Some(&nonce),
+            },
+            Script {
+                src: assets::JS_PLAID_LINK_JS.url,
+                nonce: None,
+            },
+        ],
     );
-    let policy = plaid_link_csp(plaid.environment);
-    Ok((
-        [(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(policy),
-        )],
-        markup,
-    )
-        .into_response())
+    let policy = HeaderValue::from_str(&plaid_link_csp(plaid.environment, &nonce))
+        .map_err(|_| PageError(internal()))?;
+    Ok(([(header::CONTENT_SECURITY_POLICY, policy)], markup).into_response())
 }
 
 fn link_content(
@@ -246,6 +241,14 @@ fn invalid(detail: &str) -> Problem {
     .with_detail(detail.to_owned())
 }
 
+fn internal() -> Problem {
+    Problem::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        ProblemCode::Internal,
+        "Internal error",
+    )
+}
+
 fn page_error(err: SyncError) -> PageError {
     PageError(Problem::from(err))
 }
@@ -256,21 +259,30 @@ mod tests {
 
     #[test]
     fn link_csp_allows_only_the_environment_host() {
-        let sandbox = plaid_link_csp(PlaidEnvironment::Sandbox);
-        let production = plaid_link_csp(PlaidEnvironment::Production);
+        let sandbox = plaid_link_csp(PlaidEnvironment::Sandbox, "NONCE");
+        let production = plaid_link_csp(PlaidEnvironment::Production, "NONCE");
         assert_eq!(
             production,
             "default-src 'self'; \
              script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; \
              frame-src https://cdn.plaid.com; \
              connect-src 'self' https://production.plaid.com; \
-             style-src 'self'; img-src 'self'; frame-ancestors 'none'; \
+             style-src 'self' 'nonce-NONCE'; img-src 'self'; frame-ancestors 'none'; \
              form-action 'self'; base-uri 'none'"
         );
         assert!(!production.contains("sandbox.plaid.com"));
         assert!(!sandbox.contains("production.plaid.com"));
-        for policy in [sandbox, production] {
+        for policy in [&sandbox, &production] {
             assert!(!policy.contains("unsafe"), "never an unsafe source");
+            assert!(
+                !policy.contains("style-src-elem") && !policy.contains("style-src-attr"),
+                "no narrower style directive"
+            );
+            assert_eq!(
+                policy.matches("nonce-").count(),
+                1,
+                "the nonce is for styles"
+            );
         }
     }
 }

@@ -15,6 +15,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Method, Request, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::ConnectionId;
 use coffer_domain::policy::{AccountLevel, GrantTarget, TokenGrant};
@@ -37,8 +39,8 @@ const LINK_CSP: &str = "default-src 'self'; \
                         script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; \
                         frame-src https://cdn.plaid.com; \
                         connect-src 'self' https://sandbox.plaid.com; \
-                        style-src 'self'; img-src 'self'; frame-ancestors 'none'; \
-                        form-action 'self'; base-uri 'none'";
+                        style-src 'self' 'nonce-{nonce}'; img-src 'self'; \
+                        frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
 const LINK_SCRIPT: &str = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
 const NEW_PAGE: &str = "/connections/plaid/new";
@@ -292,6 +294,12 @@ fn csp(reply: &Reply) -> &str {
     reply.header(header::CONTENT_SECURITY_POLICY)
 }
 
+/// The nonce in a Link page's policy.
+fn policy_nonce(reply: &Reply) -> String {
+    let (_, rest) = csp(reply).split_once("'nonce-").unwrap();
+    rest.split('\'').next().unwrap().to_owned()
+}
+
 #[tokio::test]
 async fn plaid_pages_absent_without_config() {
     let (server, mut admin, _) = with_admin().await;
@@ -334,7 +342,9 @@ async fn link_page_has_plaid_csp_only_there() {
     for path in [NEW_PAGE.to_owned(), reconnect_path(id)] {
         let page = world.admin.get(&path).await;
         assert_eq!(page.status, StatusCode::OK);
-        assert_eq!(csp(&page), LINK_CSP);
+        let expected = LINK_CSP.replace("{nonce}", &policy_nonce(&page));
+        assert_eq!(csp(&page), expected);
+        assert!(!csp(&page).contains("unsafe-"), "never an unsafe source");
     }
 
     for path in [
@@ -353,6 +363,10 @@ async fn link_page_has_plaid_csp_only_there() {
 
     // The endpoints the page calls keep the default too, in success and
     // refusal, and the same pages on a server without Plaid.
+    for path in ["/connections", "/account", "/login"] {
+        let reply = world.admin.get(path).await;
+        assert!(!reply.body.contains("nonce"), "no other page has a nonce");
+    }
     let refused = world.exchange(&json!({})).await;
     assert_eq!(csp(&refused), DEFAULT_CSP);
     let confirmed = world.confirm(id).await;
@@ -382,6 +396,62 @@ async fn link_page_failure_keeps_default_csp() {
     assert_eq!(csp(&page), DEFAULT_CSP);
     assert!(!page.body.contains(LINK_SCRIPT), "no third-party script");
     assert!(!page.body.contains("data-link-token"));
+    assert!(!page.body.contains("nonce"), "no nonce on a failed page");
+}
+
+/// Plaid's script reads its own tag's nonce for the stylesheet it adds, so the
+/// tag and the policy must agree, and no other element may hold the nonce.
+#[tokio::test]
+async fn nonce_is_on_plaids_script_tag_only() {
+    let mut world = world().await;
+    let id = world.needing_login().await;
+    world.script.link_token();
+    world.script.link_token();
+
+    for path in [NEW_PAGE.to_owned(), reconnect_path(id)] {
+        let page = world.admin.get(&path).await;
+        let nonce = policy_nonce(&page);
+        let scripts = tags(&page.body, "script");
+        let plaid: Vec<&&str> = scripts
+            .iter()
+            .filter(|script| script.contains(LINK_SCRIPT))
+            .collect();
+        assert_eq!(plaid.len(), 1, "one Plaid script");
+        assert!(
+            plaid[0].contains(&format!(" nonce=\"{nonce}\"")),
+            "the tag's nonce is the policy's"
+        );
+        assert_eq!(
+            page.body.matches("nonce=").count(),
+            1,
+            "one nonce attribute"
+        );
+        assert_eq!(
+            page.body.matches(&nonce).count(),
+            1,
+            "the value appears once"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_render_has_a_fresh_nonce_and_logs_none() {
+    let mut world = world().await;
+    world.script.link_token();
+    world.script.link_token();
+    let marker = log_marker();
+
+    let first = policy_nonce(&world.admin.get(NEW_PAGE).await);
+    let second = policy_nonce(&world.admin.get(NEW_PAGE).await);
+
+    assert!(first != second, "two renders never share a nonce");
+    let bytes = URL_SAFE_NO_PAD.decode(&first).unwrap();
+    assert!(bytes.len() >= 16, "at least 128 bits");
+    let log = captured_log_text();
+    assert!(log.contains(&marker), "the capture still holds the marker");
+    for nonce in [&first, &second] {
+        assert!(!log.contains(nonce.as_str()), "a nonce is never logged");
+    }
 }
 
 #[tokio::test]

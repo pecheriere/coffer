@@ -49,13 +49,20 @@ pub fn page(frame: &Frame<'_>, title: &str, content: &Markup) -> Markup {
     page_with_scripts(frame, title, content, &[])
 }
 
+/// A script a page loads beside the shared one.
+pub struct Script<'a> {
+    pub src: &'a str,
+    /// The response's nonce, for a script the page's policy expects to use it.
+    pub nonce: Option<&'a str>,
+}
+
 /// A full page that also loads `scripts`, in order, after the shared script.
 /// A script from another origin must be allowed by the page's own policy.
 pub fn page_with_scripts(
     frame: &Frame<'_>,
     title: &str,
     content: &Markup,
-    scripts: &[&str],
+    scripts: &[Script<'_>],
 ) -> Markup {
     let look = frame.look;
     let (color_scheme, data_scheme) = match look.scheme {
@@ -84,7 +91,7 @@ pub fn page_with_scripts(
                 link rel="stylesheet" href=(assets::CSS_BASE_CSS.url);
                 script src=(assets::JS_COFFER_JS.url) defer {}
                 @for script in scripts {
-                    script src=(script) defer {}
+                    script src=(script.src) nonce=[script.nonce] defer {}
                 }
             }
             body {

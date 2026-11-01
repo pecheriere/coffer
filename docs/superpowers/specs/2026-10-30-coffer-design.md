@@ -645,7 +645,12 @@ proxy's job. The exact host list lives in `docs/configuration.md`.
 
 Plan 2b adds Plaid as a second provider behind the same interface. Link runs on
 two pages, a new connection and a new login for an existing one, whose CSP alone
-also allows `https://cdn.plaid.com`. The environments
+also allows Plaid's script at its exact URL, frames from `https://cdn.plaid.com`
+and requests to the environment's API host. Plaid's script adds a stylesheet of
+its own, which Link needs for its layout on a phone: each response mints a nonce
+of at least 128 bits, put in `style-src` and on Plaid's script tag only, and never
+`'unsafe-inline'` or `'unsafe-eval'`. Every other page keeps the default policy,
+which has no nonce. The environments
 are `sandbox` and `production` (Plaid retired `development` in 2024).
 Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
 disconnect calls `/item/remove`, and 730 days of history are requested. Only
