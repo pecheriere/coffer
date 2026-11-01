@@ -12,6 +12,7 @@
 mod account;
 mod admin;
 mod connections;
+mod grants;
 mod household;
 mod layout;
 mod login;
@@ -60,6 +61,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(setup::routes())
         .merge(login::routes())
         .merge(account::routes())
+        .merge(grants::routes())
         .merge(admin::routes())
         .merge(connections::routes())
         .merge(household::routes())
