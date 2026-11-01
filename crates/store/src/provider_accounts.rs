@@ -35,12 +35,14 @@ macro_rules! insert_provider_account {
     };
 }
 
-/// A balance as a provider gave it.
+/// A balance as a provider reported it, unconverted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawBalance {
     /// The day it describes.
     pub on: Date,
-    /// The amount as a decimal text, unconverted.
+    /// The amount as a decimal text with all its decimals, in coffer's sign:
+    /// a liability's amount owed is negative here even when the provider
+    /// reports it as positive.
     pub amount_raw: String,
 }
 

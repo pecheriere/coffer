@@ -644,7 +644,8 @@ proxy's job. The exact host list lives in `docs/configuration.md`.
 ### 8.6 Plaid
 
 Plan 2b adds Plaid as a second provider behind the same interface. Link runs on
-one page whose CSP alone also allows `https://cdn.plaid.com`. The environments
+two pages, a new connection and a new login for an existing one, whose CSP alone
+also allows `https://cdn.plaid.com`. The environments
 are `sandbox` and `production` (Plaid retired `development` in 2024).
 Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
 disconnect calls `/item/remove`, and 730 days of history are requested. Only

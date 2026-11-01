@@ -573,7 +573,9 @@ impl SyncService {
         if tx.get_connection(connection).await?.status == ConnectionStatus::Removed {
             return Ok(AccountOutcome::ConnectionRemoved);
         }
-        let record = if data.error.is_some() {
+        // A report with an error or no currency says nothing about what the
+        // account is, and the account is refused below.
+        let record = if data.error.is_some() || data.currency.is_empty() {
             tx.upsert_failed_provider_account(upsert).await?
         } else {
             tx.upsert_provider_account(upsert).await?

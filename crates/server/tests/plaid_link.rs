@@ -741,6 +741,10 @@ async fn confirming_reauthorization_keeps_credentials_and_cursor() {
     assert_eq!(runs[0].trigger, SyncTrigger::Manual);
     let audit = world.audit_text().await;
     assert!(audit.contains("connection.reconnect"), "it is audited");
+    assert!(
+        audit.contains(r#""credentials_replaced":{"before":null,"after":false}"#),
+        "and says the credentials were not replaced"
+    );
     assert!(!audit.contains(ACCESS_MARKER));
     assert_eq!(
         world.script.seen(LINK_TOKEN_CREATE).len(),

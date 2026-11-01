@@ -1495,6 +1495,35 @@ async fn missing_currency_holds_the_cursor() {
     assert_eq!(world.connection().await.provider_state, None);
 }
 
+/// An answer without a currency says nothing about the account's: the one a
+/// good sync learned stays, and the refusal is recorded.
+#[tokio::test]
+async fn blank_currency_keeps_the_known_one() {
+    let world = world().await;
+    world.script.page(page(&[], &[], &[], "cursor-1", false));
+    world.sync().await;
+    assert_eq!(
+        world.provider_account("acct-checking").await.currency_raw,
+        "USD"
+    );
+
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        r#"{"accounts":[{"account_id":"acct-checking","name":"Checking","type":"depository",
+            "balances":{"current":5,"iso_currency_code":null,"unofficial_currency_code":null}}]}"#,
+    );
+    world.script.page(page(&[], &[], &[], "cursor-2", false));
+    world.sync().await;
+
+    let refused = world.provider_account("acct-checking").await;
+    assert_eq!(refused.currency_raw, "USD", "the known currency stays");
+    assert!(
+        refused.error.unwrap().contains("currency"),
+        "the refusal is recorded"
+    );
+}
+
 /// A failed account's report says nothing about what it is: what a good sync
 /// learned about it stays.
 #[tokio::test]
