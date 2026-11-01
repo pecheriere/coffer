@@ -393,9 +393,15 @@ impl TestServer {
 }
 
 /// The providers the configuration registers, as in production, over a
-/// test egress client.
+/// test egress client, each with an allow-list that allows nothing: no
+/// test reaches a real provider host. A test points a provider at a
+/// loopback mock instead ([`TestServer::with_simplefin`]).
 fn registry(config: &Config) -> ProviderRegistry {
-    ProviderRegistry::from_config(config, &Egress::for_tests()).expect("provider registry")
+    let config = Config {
+        simplefin_hosts: HostAllowList::none(),
+        ..config.clone()
+    };
+    ProviderRegistry::from_config(&config, &Egress::for_tests()).expect("provider registry")
 }
 
 /// One fetch a [`FakeProvider`] received.
@@ -899,6 +905,22 @@ pub fn captured_log_text() -> String {
     captured().text().to_owned()
 }
 
+/// Logs a line holding a fresh marker and returns the marker. A test that
+/// checks the capture for something that must be absent logs a marker
+/// first and checks afterwards that it is still captured: the capture drops
+/// its oldest lines first, so while the marker is kept, every line logged
+/// after it is kept too, and the absence means something.
+#[must_use]
+pub fn log_marker() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let marker = format!(
+        "[log-marker-{}]",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    tracing::info!(marker = %marker, "test log marker");
+    marker
+}
+
 /// The most text the capture keeps, in bytes.
 const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -936,11 +958,14 @@ impl CapturedLog {
         self.text.push_str(&line[..end]);
         self.text.push('\n');
         if let Some(excess) = self.text.len().checked_sub(self.limit).filter(|&e| e > 0) {
-            // Newlines are always character boundaries.
-            let cut = self.text.as_bytes()[excess..]
+            // Cut after the first newline at or after byte `excess - 1`, so
+            // that a newline ending exactly at the excess keeps everything
+            // after it. Newlines are always character boundaries.
+            let from = excess - 1;
+            let cut = self.text.as_bytes()[from..]
                 .iter()
                 .position(|&byte| byte == b'\n')
-                .map_or(self.text.len(), |at| excess + at + 1);
+                .map_or(self.text.len(), |at| from + at + 1);
             self.text.drain(..cut);
         }
     }
@@ -1044,6 +1069,10 @@ mod tests {
         assert!(!log.text().contains("line 000"), "the oldest lines go");
         // A line longer than the bound is kept alone, cut to it.
         log.push_line(&"x".repeat(300));
-        assert!(log.text().len() <= 100);
+        assert_eq!(log.text(), format!("{}\n", "x".repeat(99)));
+        // A line that just fits evicts the older lines and is kept whole.
+        log.push_line("short");
+        log.push_line(&"y".repeat(99));
+        assert_eq!(log.text(), format!("{}\n", "y".repeat(99)));
     }
 }

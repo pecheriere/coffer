@@ -30,9 +30,10 @@ use coffer_server::http::router;
 use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
 use coffer_server::ledger::transactions::TransactionPatch;
 use coffer_server::secrets::SecretToken;
+use coffer_server::sync::SyncError;
 use coffer_server::sync::connections::NewLinkedAccountInput;
-use coffer_server::sync::provider::{ConnectInput, ProviderKind};
-use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text};
+use coffer_server::sync::provider::{ConnectInput, ProviderError, ProviderKind};
+use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text, log_marker};
 use coffer_server::vault::SealedCredentials;
 use coffer_store::{
     AuditFilter, ConnectionStatus, NewSyncRun, PageRequest, ProviderAccountRecord, SyncRunRecord,
@@ -532,6 +533,7 @@ async fn claim_errors_map_to_their_problems() {
 #[tokio::test]
 async fn setup_token_never_echoed() {
     let world = world().await;
+    let marker = log_marker();
     let oversized = format!("{BOGUS_TOKEN}{}", "A".repeat(2100));
     let not_a_url = STANDARD.encode(format!("{BOGUS_TOKEN} is no url"));
     for token in [BOGUS_TOKEN, oversized.as_str(), not_a_url.as_str(), ""] {
@@ -541,7 +543,12 @@ async fn setup_token_never_echoed() {
         assert!(!contains(&raw, "SECRETTOKEN"));
     }
     assert!(!world.audit_text().await.contains("SECRETTOKEN"));
-    assert!(!captured_log_text().contains("SECRETTOKEN"));
+    let log = captured_log_text();
+    assert!(
+        log.contains(&marker),
+        "the capture still holds this test's lines"
+    );
+    assert!(!log.contains("SECRETTOKEN"));
     assert_eq!(world.mock.requests().len(), 0);
 }
 
@@ -551,6 +558,7 @@ async fn setup_token_never_echoed() {
 #[tokio::test]
 async fn upstream_errors_never_echo_credentials() {
     let world = world().await;
+    let marker = log_marker();
     let claim_marker = "/claim/x";
     let token = setup_token(&world.claim_url());
     let echo = format!(
@@ -599,6 +607,10 @@ async fn upstream_errors_never_echo_credentials() {
     stored.push_str(&record.last_error.unwrap_or_default());
     let audit = world.audit_text().await;
     let log = captured_log_text();
+    assert!(
+        log.contains(&marker),
+        "the capture still holds this test's lines"
+    );
     for text in [&stored, &audit, &log] {
         assert!(!text.contains(&token));
         assert!(!text.contains(PASSWORD_MARKER));

@@ -22,7 +22,7 @@ use coffer_domain::sync::SyncTrigger;
 use coffer_domain::time::Clock as _;
 use coffer_server::sync::provider::ProviderKind;
 use coffer_server::testkit::browser::{Browser, Reply, with_admin};
-use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text};
+use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text, log_marker};
 use coffer_store::{ConnectionStatus, NewSyncRun, PageRequest};
 
 const ACCOUNTS_FIRST: &str = include_str!("fixtures/simplefin/accounts_first.json");
@@ -280,6 +280,7 @@ async fn add_form_creates_connection() {
 #[tokio::test]
 async fn add_form_never_echoes_invalid_token() {
     let mut world = world().await;
+    let marker = log_marker();
     let csrf = world.admin.get("/connections").await.csrf();
 
     let refused = world
@@ -299,7 +300,12 @@ async fn add_form_never_echoes_invalid_token() {
     assert!(refused.body.contains("role=\"alert\""));
     assert!(refused.body.contains("setup token"));
     assert!(!refused.body.contains("SECRETTOKEN"));
-    assert!(!captured_log_text().contains("SECRETTOKEN"));
+    let log = captured_log_text();
+    assert!(
+        log.contains(&marker),
+        "the capture still holds this test's lines"
+    );
+    assert!(!log.contains("SECRETTOKEN"));
     assert_eq!(
         world.server.store.list_connections().await.unwrap().len(),
         0
