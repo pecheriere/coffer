@@ -1,0 +1,10 @@
+# A hung test fails the run instead of stalling it. Limits are about three
+# times the measured time, with a floor of 30 s: the slowest ordinary test takes
+# 6 s.
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+# These wait out the store's 15 s busy timeout on purpose, so they get 48 s.
+[[profile.default.overrides]]
+filter = "test(activity_that_cannot_be_recorded_does_not_fail_the_request) | test(failed_last_used_update_does_not_fail_the_request)"
+slow-timeout = { period = "16s", terminate-after = 3 }

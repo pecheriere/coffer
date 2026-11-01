@@ -55,6 +55,21 @@ While iterating, test only the crate you change with
 filter); run the full gate above once before committing (nextest skips
 doctests, so `cargo test` stays the gate).
 
+## Parallel work
+
+Each task running at the same time gets its own git worktree and branch:
+
+```sh
+git worktree add -b <branch> ../coffer-<task> origin/main
+```
+
+Leave `CARGO_TARGET_DIR` unset, so each worktree keeps its own build output.
+Never run two agents that write in one worktree: one's half-finished edit
+fails the other's build and checks. A shared build directory makes builds wait
+for each other and can hand one worktree a binary built from another's source.
+A read-only reviewer may share a worktree if it does not build. Remove a
+worktree when its branch has merged.
+
 ## CI and supply chain
 
 - Actions are pinned to the full commit SHA of a release at least 7 days old
@@ -133,6 +148,15 @@ doctests, so `cargo test` stays the gate).
 
 Tests specify behavior; no tests that restate implementation or exist for
 coverage. Integration tests drive the real router with soft passkeys.
+
+Each crate's integration tests build as one test binary: `tests/it/main.rs`
+declares one module per area. Add a new test file as `tests/it/<area>.rs` plus
+a `mod <area>;` line, never directly under `tests/`, where cargo would build it
+as another binary.
+
+`.config/nextest.toml` gives every test a time limit. A test that needs longer
+gets its own override there, based on its measured time; don't raise the
+default.
 
 ## Security review
 
