@@ -5,6 +5,7 @@
 pub mod apply;
 pub mod connections;
 pub mod engine;
+pub mod plaid;
 pub mod provider;
 pub mod scheduler;
 pub mod simplefin;

@@ -1,0 +1,37 @@
+{
+  "added": [
+    {
+      "account_id": "acct-checking",
+      "amount": 12,
+      "authorized_date": "2027-01-09",
+      "date": "2027-01-10",
+      "iso_currency_code": "USD",
+      "merchant_name": "Corner Coffee",
+      "name": "CORNER COFFEE 0001",
+      "pending": false,
+      "pending_transaction_id": null,
+      "transaction_id": "txn-integer",
+      "unofficial_currency_code": null
+    },
+    {
+      "account_id": "acct-card",
+      "amount": 4.5,
+      "authorized_date": null,
+      "date": "2027-01-11",
+      "iso_currency_code": "USD",
+      "merchant_name": null,
+      "name": "SANDBOX GROCER",
+      "pending": true,
+      "pending_transaction_id": null,
+      "transaction_id": "txn-pending",
+      "unofficial_currency_code": null
+    }
+  ],
+  "modified": [],
+  "removed": [],
+  "next_cursor": "cursor-page-1",
+  "has_more": true,
+  "transactions_update_status": "HISTORICAL_UPDATE_COMPLETE",
+  "accounts": [],
+  "request_id": "fixtureRequest04"
+}

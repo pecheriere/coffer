@@ -1,13 +1,16 @@
 //! Server configuration read from `COFFER_*` environment variables.
 
 use std::fmt;
+use std::io::Read as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use jiff::SignedDuration;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
+use secrecy::SecretString;
 use thiserror::Error;
 use url::{Host, Url};
+use zeroize::Zeroizing;
 
 use crate::egress::HostAllowList;
 
@@ -17,6 +20,9 @@ const DEFAULT_SESSION_IDLE_HOURS: i64 = 168;
 const DEFAULT_SESSION_ABSOLUTE_DAYS: i64 = 30;
 const DEFAULT_SYNC_INTERVAL_HOURS: i64 = 6;
 const DEFAULT_SIMPLEFIN_HOSTS: &str = "bridge.simplefin.org,beta-bridge.simplefin.org";
+const DEFAULT_PLAID_COUNTRY_CODES: &str = "US";
+/// The longest Plaid secret file accepted, in bytes.
+const MAX_PLAID_SECRET_BYTES: usize = 4096;
 
 /// A configuration problem. Messages name the offending variable and never
 /// echo its value, which may be sensitive.
@@ -70,6 +76,53 @@ pub struct Config {
     /// yields may name, from `COFFER_SIMPLEFIN_HOSTS` (comma-separated DNS
     /// names, default `bridge.simplefin.org,beta-bridge.simplefin.org`).
     pub simplefin_hosts: HostAllowList,
+    /// Plaid's credentials and environment, when Plaid is configured.
+    pub plaid: Option<PlaidConfig>,
+}
+
+/// Plaid's API environment, from `COFFER_PLAID_ENV`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaidEnvironment {
+    /// Test data, `sandbox.plaid.com`.
+    Sandbox,
+    /// Real institutions, `production.plaid.com`.
+    Production,
+}
+
+impl PlaidEnvironment {
+    /// The one host this environment's API lives on.
+    #[must_use]
+    pub fn host(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox.plaid.com",
+            Self::Production => "production.plaid.com",
+        }
+    }
+}
+
+/// How coffer reaches Plaid. The client id and the secret are credentials:
+/// `Debug` shows neither.
+#[derive(Clone)]
+pub struct PlaidConfig {
+    /// The client id, from `COFFER_PLAID_CLIENT_ID`.
+    pub client_id: String,
+    /// The secret, from the file `COFFER_PLAID_SECRET_FILE` names.
+    pub secret: SecretString,
+    /// The environment, from `COFFER_PLAID_ENV`.
+    pub environment: PlaidEnvironment,
+    /// The countries Link offers institutions from, from
+    /// `COFFER_PLAID_COUNTRY_CODES` (comma-separated ISO 3166-1 alpha-2,
+    /// default `US`).
+    pub country_codes: Vec<String>,
+}
+
+impl fmt::Debug for PlaidConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlaidConfig")
+            .field("environment", &self.environment)
+            .field("country_codes", &self.country_codes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for Config {
@@ -87,6 +140,7 @@ impl fmt::Debug for Config {
             .field("timezone", &self.timezone.iana_name())
             .field("sync_interval", &self.sync_interval)
             .field("simplefin_hosts", &self.simplefin_hosts)
+            .field("plaid", &self.plaid)
             .finish()
     }
 }
@@ -185,6 +239,7 @@ impl Config {
             timezone: parse_timezone(&vars)?,
             sync_interval: SignedDuration::from_hours(sync_hours),
             simplefin_hosts: parse_simplefin_hosts(&vars)?,
+            plaid: parse_plaid(&vars)?,
         })
     }
 
@@ -286,6 +341,114 @@ fn parse_simplefin_hosts(
     })
 }
 
+/// Reads Plaid's variables: `COFFER_PLAID_CLIENT_ID` and
+/// `COFFER_PLAID_SECRET_FILE` together, or neither for no Plaid at all, in
+/// which case the other variables mean nothing.
+fn parse_plaid(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<PlaidConfig>, ConfigError> {
+    const CLIENT_ID: &str = "COFFER_PLAID_CLIENT_ID";
+    const SECRET_FILE: &str = "COFFER_PLAID_SECRET_FILE";
+    let (client_id, secret_file) = match (vars(CLIENT_ID), vars(SECRET_FILE)) {
+        (None, None) => return Ok(None),
+        (Some(_), None) => return Err(ConfigError::Missing { var: SECRET_FILE }),
+        (None, Some(_)) => return Err(ConfigError::Missing { var: CLIENT_ID }),
+        (Some(client_id), Some(secret_file)) => (client_id, secret_file),
+    };
+    for (var, value) in [(CLIENT_ID, &client_id), (SECRET_FILE, &secret_file)] {
+        if value.is_empty() {
+            return Err(ConfigError::Invalid {
+                var,
+                reason: "must not be empty",
+            });
+        }
+    }
+    let environment = parse_plaid_environment(vars)?;
+    let country_codes = parse_plaid_country_codes(vars)?;
+    let secret = read_plaid_secret(SECRET_FILE, &secret_file)?;
+    Ok(Some(PlaidConfig {
+        client_id,
+        secret,
+        environment,
+        country_codes,
+    }))
+}
+
+fn parse_plaid_environment(
+    vars: &impl Fn(&str) -> Option<String>,
+) -> Result<PlaidEnvironment, ConfigError> {
+    const VAR: &str = "COFFER_PLAID_ENV";
+    let raw = vars(VAR).ok_or(ConfigError::Missing { var: VAR })?;
+    match raw.as_str() {
+        "sandbox" => Ok(PlaidEnvironment::Sandbox),
+        "production" => Ok(PlaidEnvironment::Production),
+        "development" => Err(ConfigError::Invalid {
+            var: VAR,
+            reason: "Plaid retired the development environment; use sandbox or production",
+        }),
+        _ => Err(ConfigError::Invalid {
+            var: VAR,
+            reason: "expected sandbox or production",
+        }),
+    }
+}
+
+/// Reads `COFFER_PLAID_COUNTRY_CODES`: only the shape of each code is
+/// checked, and Plaid refuses a code it does not serve.
+fn parse_plaid_country_codes(
+    vars: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<String>, ConfigError> {
+    const VAR: &str = "COFFER_PLAID_COUNTRY_CODES";
+    let raw = vars(VAR);
+    raw.as_deref()
+        .unwrap_or(DEFAULT_PLAID_COUNTRY_CODES)
+        .split(',')
+        .map(|code| {
+            let code = code.trim();
+            if code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()) {
+                Ok(code.to_owned())
+            } else {
+                Err(ConfigError::Invalid {
+                    var: VAR,
+                    reason: "expected comma-separated ISO 3166-1 alpha-2 codes, such as US,CA",
+                })
+            }
+        })
+        .collect()
+}
+
+/// Reads the secret from the file at `path`, without its trailing newline.
+/// Like the server key, the file must not be accessible to group or others;
+/// that is checked on the open file, so it cannot change in between.
+fn read_plaid_secret(var: &'static str, path: &str) -> Result<SecretString, ConfigError> {
+    let invalid = |reason| ConfigError::Invalid { var, reason };
+    let file = std::fs::File::open(path).map_err(|_| invalid("the file could not be read"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| invalid("the file could not be read"))?;
+    if !metadata.is_file() {
+        return Err(invalid("must name a regular file"));
+    }
+    #[cfg(unix)]
+    if std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o077 != 0 {
+        return Err(invalid(
+            "the file must not be group or world accessible (use mode 0600)",
+        ));
+    }
+    // Room for one byte over the limit, so that reading never reallocates
+    // and leaves a copy of the secret behind.
+    let mut text = Zeroizing::new(String::with_capacity(MAX_PLAID_SECRET_BYTES + 1));
+    file.take(u64::try_from(MAX_PLAID_SECRET_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_string(&mut text)
+        .map_err(|_| invalid("the file could not be read as UTF-8 text"))?;
+    if text.len() > MAX_PLAID_SECRET_BYTES {
+        return Err(invalid("the file is too long to hold a Plaid secret"));
+    }
+    let secret = text.trim_end_matches(['\r', '\n']);
+    if secret.is_empty() {
+        return Err(invalid("the file is empty"));
+    }
+    Ok(SecretString::from(secret))
+}
+
 /// Reads `COFFER_TIMEZONE`, an IANA time zone name; unset means `UTC`. The
 /// name is looked up in the system database when there is one, else in the
 /// copy built into the binary, so a container without `/usr/share/zoneinfo`
@@ -338,6 +501,7 @@ fn bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret as _;
     use std::collections::HashMap;
 
     fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -643,6 +807,286 @@ mod tests {
             ),
             "{err:?}"
         );
+    }
+
+    /// A variable lookup for a `Config` with Plaid's variables as given.
+    fn with_plaid(plaid: &[(&str, &str)]) -> Result<Config, ConfigError> {
+        let mut pairs = vec![
+            ("COFFER_PUBLIC_URL", "https://coffer.example"),
+            ("COFFER_DATA_DIR", "/data"),
+        ];
+        pairs.extend_from_slice(plaid);
+        Config::from_env(vars(&pairs))
+    }
+
+    /// Writes `contents` to a file of `mode` in `dir` and returns its path.
+    #[cfg(unix)]
+    fn secret_file(dir: &tempfile::TempDir, mode: u32, contents: &[u8]) -> String {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.path().join(format!("plaid-secret-{mode:o}"));
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
+    /// A complete, valid set of Plaid variables but for what `extra` adds.
+    #[cfg(unix)]
+    fn plaid_with_secret(path: &str, extra: &[(&'static str, &'static str)]) -> Config {
+        let mut pairs = vec![
+            ("COFFER_PLAID_CLIENT_ID", "client-id-MARKER"),
+            ("COFFER_PLAID_SECRET_FILE", path),
+            ("COFFER_PLAID_ENV", "sandbox"),
+        ];
+        pairs.extend_from_slice(extra);
+        with_plaid(&pairs).unwrap()
+    }
+
+    #[test]
+    fn plaid_is_optional() {
+        assert!(with_plaid(&[]).unwrap().plaid.is_none());
+        // The other variables mean nothing without the credentials.
+        let config = with_plaid(&[("COFFER_PLAID_ENV", "sandbox")]).unwrap();
+        assert!(config.plaid.is_none());
+    }
+
+    #[test]
+    fn plaid_requires_both_id_and_secret_file() {
+        let err = with_plaid(&[("COFFER_PLAID_CLIENT_ID", "id")]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::Missing {
+                    var: "COFFER_PLAID_SECRET_FILE"
+                }
+            ),
+            "the error names the variable"
+        );
+        let err = with_plaid(&[("COFFER_PLAID_SECRET_FILE", "/run/secret")]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::Missing {
+                    var: "COFFER_PLAID_CLIENT_ID"
+                }
+            ),
+            "the error names the variable"
+        );
+        for (var, id, file) in [
+            ("COFFER_PLAID_CLIENT_ID", "", "/run/secret"),
+            ("COFFER_PLAID_SECRET_FILE", "id", ""),
+        ] {
+            let err = with_plaid(&[
+                ("COFFER_PLAID_CLIENT_ID", id),
+                ("COFFER_PLAID_SECRET_FILE", file),
+                ("COFFER_PLAID_ENV", "sandbox"),
+            ])
+            .unwrap_err();
+            assert!(
+                matches!(err, ConfigError::Invalid { var: v, .. } if v == var),
+                "the error names the variable"
+            );
+        }
+    }
+
+    #[test]
+    fn plaid_env_rejects_development_with_explanation() {
+        let plaid = |env: Option<&'static str>| {
+            let mut pairs = vec![
+                ("COFFER_PLAID_CLIENT_ID", "id"),
+                ("COFFER_PLAID_SECRET_FILE", "/nonexistent/secret"),
+            ];
+            pairs.extend(env.map(|env| ("COFFER_PLAID_ENV", env)));
+            with_plaid(&pairs).unwrap_err()
+        };
+        let err = plaid(Some("development"));
+        assert!(
+            matches!(
+                err,
+                ConfigError::Invalid {
+                    var: "COFFER_PLAID_ENV",
+                    reason: "Plaid retired the development environment; use sandbox or production",
+                }
+            ),
+            "the error names the variable"
+        );
+        let err = plaid(None);
+        assert!(
+            matches!(
+                err,
+                ConfigError::Missing {
+                    var: "COFFER_PLAID_ENV"
+                }
+            ),
+            "the error names the variable"
+        );
+        for bad in ["", "Sandbox", "hunter2"] {
+            let err = plaid(Some(bad));
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_PLAID_ENV",
+                        ..
+                    }
+                ),
+                "the error names the variable"
+            );
+            assert!(!err.to_string().contains("hunter2"));
+        }
+    }
+
+    #[test]
+    fn plaid_environments_name_one_host_each() {
+        assert_eq!(PlaidEnvironment::Sandbox.host(), "sandbox.plaid.com");
+        assert_eq!(PlaidEnvironment::Production.host(), "production.plaid.com");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plaid_secret_file_permissions_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents = b"SECRET-MARKER\n";
+        for mode in [0o640, 0o604, 0o660, 0o644, 0o610] {
+            let path = secret_file(&dir, mode, contents);
+            let err = with_plaid(&[
+                ("COFFER_PLAID_CLIENT_ID", "id"),
+                ("COFFER_PLAID_SECRET_FILE", &path),
+                ("COFFER_PLAID_ENV", "production"),
+            ])
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_PLAID_SECRET_FILE",
+                        ..
+                    }
+                ),
+                "a file others can access is refused"
+            );
+            assert!(!err.to_string().contains("SECRET-MARKER"));
+        }
+        for mode in [0o600, 0o400] {
+            let path = secret_file(&dir, mode, contents);
+            let config = plaid_with_secret(&path, &[]);
+            let plaid = config.plaid.unwrap();
+            assert!(
+                plaid.secret.expose_secret() == "SECRET-MARKER",
+                "the secret is read without its newline"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plaid_secret_file_contents_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let read = |contents: &[u8]| {
+            let path = secret_file(&dir, 0o600, contents);
+            with_plaid(&[
+                ("COFFER_PLAID_CLIENT_ID", "id"),
+                ("COFFER_PLAID_SECRET_FILE", &path),
+                ("COFFER_PLAID_ENV", "sandbox"),
+            ])
+            .map(|config| config.plaid.unwrap().secret.expose_secret().to_owned())
+        };
+        for contents in [&b"abc"[..], b"abc\n", b"abc\r\n"] {
+            assert!(
+                read(contents).unwrap() == "abc",
+                "a trailing newline is trimmed"
+            );
+        }
+        let too_long = vec![b'a'; 4097];
+        for bad in [&b""[..], b"\n", b"\xff\xfe", &too_long] {
+            let err = read(bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_PLAID_SECRET_FILE",
+                        ..
+                    }
+                ),
+                "the error names the variable"
+            );
+        }
+        // Neither a missing file nor a directory, and no path in the error.
+        for path in [
+            dir.path().join("absent").to_str().unwrap().to_owned(),
+            dir.path().to_str().unwrap().to_owned(),
+        ] {
+            let err = with_plaid(&[
+                ("COFFER_PLAID_CLIENT_ID", "id"),
+                ("COFFER_PLAID_SECRET_FILE", &path),
+                ("COFFER_PLAID_ENV", "sandbox"),
+            ])
+            .unwrap_err();
+            assert!(
+                !err.to_string().contains(&path),
+                "the error must not show the path"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plaid_country_codes_default_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = secret_file(&dir, 0o600, b"s");
+        let codes = |extra: &[(&'static str, &'static str)]| {
+            plaid_with_secret(&path, extra).plaid.unwrap().country_codes
+        };
+        assert_eq!(codes(&[]), ["US"]);
+        assert_eq!(
+            codes(&[("COFFER_PLAID_COUNTRY_CODES", "US, CA,GB")]),
+            ["US", "CA", "GB"]
+        );
+        for bad in ["", "us", "USA", "U", "US,,CA", "U1", "US;CA"] {
+            let err = with_plaid(&[
+                ("COFFER_PLAID_CLIENT_ID", "id"),
+                ("COFFER_PLAID_SECRET_FILE", &path),
+                ("COFFER_PLAID_ENV", "sandbox"),
+                ("COFFER_PLAID_COUNTRY_CODES", bad),
+            ])
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_PLAID_COUNTRY_CODES",
+                        ..
+                    }
+                ),
+                "a malformed code list is refused"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plaid_config_debug_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = secret_file(&dir, 0o600, b"SECRET-MARKER\n");
+        let config = plaid_with_secret(&path, &[]);
+        let plaid = config.plaid.clone().unwrap();
+        assert!(
+            plaid.client_id == "client-id-MARKER",
+            "the client id is read"
+        );
+        for debug in [format!("{config:?}"), format!("{plaid:?}")] {
+            assert!(
+                !debug.contains("SECRET-MARKER"),
+                "the Debug output must not show the secret"
+            );
+            assert!(
+                !debug.contains("client-id-MARKER"),
+                "the Debug output must not show the client id"
+            );
+            assert!(
+                debug.contains("Sandbox"),
+                "the Debug output must show the environment"
+            );
+        }
     }
 
     #[test]
