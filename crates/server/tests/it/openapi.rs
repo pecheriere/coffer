@@ -26,7 +26,7 @@ use secrecy::ExposeSecret as _;
 use serde_json::Value;
 use tower::ServiceExt as _;
 
-const SNAPSHOT: &str = include_str!("../../../docs/api/openapi.json");
+const SNAPSHOT: &str = include_str!("../../../../docs/api/openapi.json");
 const MATCHED: HeaderName = HeaderName::from_static("x-test-matched-path");
 
 /// The OpenAPI document as JSON.

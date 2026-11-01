@@ -39,6 +39,9 @@ A compiler cache such as [sccache](https://github.com/mozilla/sccache)
 (`RUSTC_WRAPPER=sccache`) speeds up rebuilds after branch switches. It is
 optional and local only; CI does not use it.
 
+For work in parallel, use one git worktree per task; see "Parallel work" in
+`AGENTS.md`.
+
 ## Static assets
 
 Files under `crates/server/assets` are served at content-hashed URLs, so
