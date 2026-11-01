@@ -153,11 +153,17 @@ async fn serve_chunked(chunks: usize) -> u16 {
 async fn errors_do_not_leak_url_secrets() {
     let assert_clean = |err: &EgressError| {
         let shown = format!("{err} {err:?}");
-        assert!(!shown.contains("SECRET"), "{shown}");
+        assert!(
+            !shown.contains("SECRET"),
+            "the error must not contain the secret"
+        );
         let mut source = std::error::Error::source(err);
         while let Some(cause) = source {
             let shown = format!("{cause} {cause:?}");
-            assert!(!shown.contains("SECRET"), "{shown}");
+            assert!(
+                !shown.contains("SECRET"),
+                "the error must not contain the secret"
+            );
             source = cause.source();
         }
     };
@@ -194,7 +200,10 @@ async fn errors_do_not_leak_url_secrets() {
     let proxy = Url::parse(&format!("http://user:SECRETPW@127.0.0.1:{port}")).unwrap();
     let egress = Egress::new(Some(&proxy)).unwrap();
     let shown = format!("{egress:?}");
-    assert!(!shown.contains("SECRET"), "{shown}");
+    assert!(
+        !shown.contains("SECRET"),
+        "the error must not contain the secret"
+    );
     let err = egress
         .send(
             get_request("https://bridge.example/claim/SECRETPART?token=SECRETQ"),

@@ -96,10 +96,22 @@ async fn serve_logs_the_setup_link_when_no_admin_exists_and_stops_cleanly() {
 
     let log = run_and_stop(&server).await;
 
-    assert!(log.contains("https://coffer.test/setup/"), "{log}");
-    assert!(log.contains("coffer stopped"), "{log}");
-    assert!(log.contains("listen=127.0.0.1:"), "{log}");
-    assert!(!log.contains("Some("), "{log}");
+    assert!(
+        log.contains("https://coffer.test/setup/"),
+        "the log lacks the setup URL"
+    );
+    assert!(
+        log.contains("coffer stopped"),
+        "the log lacks the stop line"
+    );
+    assert!(
+        log.contains("listen=127.0.0.1:"),
+        "the log lacks the listen address"
+    );
+    assert!(
+        !log.contains("Some("),
+        "the log must not print a Debug Option"
+    );
 }
 
 #[tokio::test]
@@ -110,9 +122,18 @@ async fn serve_does_not_log_a_setup_link_once_an_admin_exists() {
 
     let log = run_and_stop(&server).await;
 
-    assert!(!log.contains("/setup/"), "{log}");
-    assert!(log.contains("coffer is serving"), "{log}");
-    assert!(log.contains("coffer stopped"), "{log}");
+    assert!(
+        !log.contains("/setup/"),
+        "the log must not print the setup path"
+    );
+    assert!(
+        log.contains("coffer is serving"),
+        "the log lacks the serving line"
+    );
+    assert!(
+        log.contains("coffer stopped"),
+        "the log lacks the stop line"
+    );
 }
 
 /// The real wiring (`open_state`, as `serve` builds it) registers

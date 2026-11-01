@@ -127,7 +127,7 @@ async fn backup_cli_writes_file() {
 
     let done = run(&["backup", dest.to_str().unwrap()], &env).await;
 
-    assert_eq!(done.code, ExitCode::SUCCESS, "{}", done.err);
+    assert_eq!(done.code, ExitCode::SUCCESS);
     #[cfg(unix)]
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&dest).unwrap().permissions())
@@ -236,12 +236,8 @@ async fn commands_refuse_a_data_dir_open_to_group_or_others() {
             .await
             .unwrap_or_else(|_| panic!("{args:?} did not refuse the data directory"));
         assert_eq!(refused.code, ExitCode::from(1), "{args:?}");
-        assert!(refused.err.contains(&shown), "{args:?}: {}", refused.err);
-        assert!(
-            refused.err.contains("chmod 700"),
-            "{args:?}: {}",
-            refused.err
-        );
+        assert!(refused.err.contains(&shown), "{args:?}");
+        assert!(refused.err.contains("chmod 700"), "{args:?}");
     }
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     assert!(!dest.exists());
@@ -259,7 +255,7 @@ async fn data_dir_is_created_private_and_the_database_is_owner_only() {
 
     let done = run(&["bootstrap-link"], &env).await;
 
-    assert_eq!(done.code, ExitCode::SUCCESS, "{}", done.err);
+    assert_eq!(done.code, ExitCode::SUCCESS);
     assert_eq!(mode(&data_dir), 0o700);
     assert_eq!(mode(&data_dir.join("coffer.db")), 0o600);
     for name in ["coffer.db-wal", "coffer.db-shm"] {
