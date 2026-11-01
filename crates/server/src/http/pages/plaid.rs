@@ -256,19 +256,23 @@ fn page_error(err: SyncError) -> PageError {
 #[cfg(test)]
 mod tests {
     use super::{PlaidEnvironment, plaid_link_csp};
+    use crate::secrets::mint_nonce;
 
     #[test]
     fn link_csp_allows_only_the_environment_host() {
-        let sandbox = plaid_link_csp(PlaidEnvironment::Sandbox, "NONCE");
-        let production = plaid_link_csp(PlaidEnvironment::Production, "NONCE");
+        let nonce = mint_nonce();
+        let sandbox = plaid_link_csp(PlaidEnvironment::Sandbox, &nonce);
+        let production = plaid_link_csp(PlaidEnvironment::Production, &nonce);
         assert_eq!(
             production,
-            "default-src 'self'; \
-             script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; \
-             frame-src https://cdn.plaid.com; \
-             connect-src 'self' https://production.plaid.com; \
-             style-src 'self' 'nonce-NONCE'; img-src 'self'; frame-ancestors 'none'; \
-             form-action 'self'; base-uri 'none'"
+            format!(
+                "default-src 'self'; \
+                 script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; \
+                 frame-src https://cdn.plaid.com; \
+                 connect-src 'self' https://production.plaid.com; \
+                 style-src 'self' 'nonce-{nonce}'; img-src 'self'; frame-ancestors 'none'; \
+                 form-action 'self'; base-uri 'none'"
+            )
         );
         assert!(!production.contains("sandbox.plaid.com"));
         assert!(!sandbox.contains("production.plaid.com"));
