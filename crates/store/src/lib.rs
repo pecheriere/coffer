@@ -53,6 +53,15 @@ pub use transactions::{
     TransactionFilter, TransactionRecord, UserFieldChanges,
 };
 
+/// How long a writer waits for the write lock before it fails. A sync
+/// applies each provider account in one transaction (spec: an interrupted
+/// run leaves only whole accounts), and matching a large first sync holds
+/// the lock for seconds: 2,000 records took 1.0 s in a release build on a
+/// desktop machine, so several on a small single-board server. Other
+/// writers (a PATCH, a page form, session activity) wait that out instead
+/// of failing.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(15);
+
 const DEFAULT_PAGE_LIMIT: u32 = 50;
 const MAX_PAGE_LIMIT: u32 = 200;
 
@@ -83,7 +92,7 @@ impl Store {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(BUSY_TIMEOUT)
             // Temporary tables and indices stay in memory: the container image
             // has no writable temporary directory, and household-scale data
             // keeps them small.

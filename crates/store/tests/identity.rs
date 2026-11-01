@@ -526,6 +526,25 @@ async fn concurrent_writers_do_not_fail_busy() {
     assert_eq!(store.list_members().await.unwrap().len(), 2);
 }
 
+/// A writer waits out a write transaction held for several seconds, as a
+/// large first sync holds one, instead of failing busy.
+#[tokio::test]
+async fn writers_wait_out_a_long_transaction() {
+    let (_dir, store) = open().await;
+    let holder = store.begin().await.unwrap();
+    let released = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        holder.commit().await
+    });
+
+    let mut tx = store.begin().await.unwrap();
+    tx.insert_member(new_member("alice", Role::Admin))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    released.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn transaction_reads_see_its_own_writes() {
     let (_dir, store) = open().await;
