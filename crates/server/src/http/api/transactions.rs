@@ -41,14 +41,14 @@ struct Listed<T>(Vec<T>);
 impl<'de, T: FromStr> Deserialize<'de> for Listed<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
+        if text.split(',').count() > MAX_LISTED_IDS {
+            return Err(D::Error::custom("too many ids"));
+        }
         let values = text
             .split(',')
             .map(|part| part.parse::<T>().ok())
             .collect::<Option<Vec<T>>>()
             .ok_or_else(|| D::Error::custom("not a list of ids"))?;
-        if values.len() > MAX_LISTED_IDS {
-            return Err(D::Error::custom("too many ids"));
-        }
         Ok(Self(values))
     }
 }
@@ -572,4 +572,34 @@ pub(super) async fn dismiss_duplicate(
             .dismiss_duplicate(&actor, path.transaction_id)
             .await?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Listed, MAX_LISTED_IDS};
+
+    fn listed(text: &str) -> Result<Listed<u32>, String> {
+        serde_json::from_value::<Listed<u32>>(serde_json::Value::String(text.to_owned()))
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn listed_values_parse_within_the_limit() {
+        assert_eq!(listed("1,2,3"), Ok(Listed(vec![1, 2, 3])));
+        let most = vec!["7"; MAX_LISTED_IDS].join(",");
+        assert_eq!(listed(&most).map(|ids| ids.0.len()), Ok(MAX_LISTED_IDS));
+        assert_eq!(listed("1,x").err().as_deref(), Some("not a list of ids"));
+    }
+
+    /// The count is checked before any part is parsed: an over-long list is
+    /// refused as such even when a part would not parse.
+    #[test]
+    fn listed_count_checked_before_parsing() {
+        let mut parts = vec!["7"; MAX_LISTED_IDS];
+        parts.push("x");
+        assert_eq!(
+            listed(&parts.join(",")).err().as_deref(),
+            Some("too many ids")
+        );
+    }
 }
