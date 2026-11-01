@@ -560,6 +560,10 @@ answers 403 `forbidden` with "this action needs <level> access to this
 account". A token without grants, every token created before grants, and
 every passkey session have uniform access at their scope, as in plan 2a. An
 account created after a token is visible to it only through an `all` grant.
+Grants change only from a passkey session, by the token's member or a member
+who may manage members, audited with the grants before and after. They can
+never be emptied, since that would silently widen the token: widening takes
+an explicit `all` grant.
 
 Actions that touch more than one account, or accounts not yet granted, need
 an `all` grant at the level shown: reading the audit log, listing unbound

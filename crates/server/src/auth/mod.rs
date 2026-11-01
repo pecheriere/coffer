@@ -80,6 +80,9 @@ pub enum AuthError {
     /// A grant names an account that does not exist.
     #[error("a granted account does not exist")]
     UnknownGrantedAccount,
+    /// A token that is revoked or expired takes no new grants.
+    #[error("this token is revoked or has expired")]
+    TokenInactive,
     /// The authenticator's response did not verify: a client error. A
     /// failed sign-in is reported as [`AuthError::LoginFailed`] instead.
     #[error("the passkey response could not be verified; try again")]

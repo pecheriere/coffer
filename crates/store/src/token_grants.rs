@@ -24,9 +24,32 @@ fn grant_from_row(row: &SqliteRow) -> Result<TokenGrant, StoreError> {
     })
 }
 
+/// The grants of one token, `all` first, then by account id.
+const SELECT_GRANTS: &str = "SELECT target, level FROM agent_token_grants WHERE token_id = ? \
+                             ORDER BY target = 'all' DESC, target";
+
 impl StoreTx {
+    /// The grants of `token`, as [`Store::token_grants`], read in this
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::token_grants`].
+    pub async fn token_grants(
+        &mut self,
+        token: AgentTokenId,
+    ) -> Result<Vec<TokenGrant>, StoreError> {
+        let rows = sqlx::query(SELECT_GRANTS)
+            .bind(token.to_string())
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        rows.iter().map(grant_from_row).collect()
+    }
+
     /// Replace every grant of `token` with `grants`; none leaves it with
-    /// uniform access. The caller has validated them.
+    /// uniform access, so only a new token may be given none. The caller has
+    /// validated them.
     ///
     /// # Errors
     ///
@@ -67,14 +90,11 @@ impl Store {
     /// is never dropped silently, since dropping the last one would widen
     /// the token to uniform access.
     pub async fn token_grants(&self, token: AgentTokenId) -> Result<Vec<TokenGrant>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT target, level FROM agent_token_grants WHERE token_id = ? \
-             ORDER BY target = 'all' DESC, target",
-        )
-        .bind(token.to_string())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(StoreError::from_sqlx)?;
+        let rows = sqlx::query(SELECT_GRANTS)
+            .bind(token.to_string())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
         rows.iter().map(grant_from_row).collect()
     }
 }

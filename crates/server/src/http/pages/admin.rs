@@ -119,7 +119,7 @@ async fn render_members(
                             (username(token.member)) " · " code { (token.prefix) "…" }
                             " · Created " (token.created_at) " · Last used "
                             (token.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
-                        }))
+                        }, &html! {}))
                     }
                 }
             }

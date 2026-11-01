@@ -2300,11 +2300,11 @@
           "identity"
         ],
         "summary": "Who the bearer token belongs to.",
-        "description": "The member who created the bearer token, and the token itself.",
+        "description": "The member who created the bearer token, the token itself, and the accounts it may use.",
         "operationId": "getMe",
         "responses": {
           "200": {
-            "description": "The token's member and the token.",
+            "description": "The token's member, the token and its access.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4055,6 +4055,55 @@
   },
   "components": {
     "schemas": {
+      "AccessView": {
+        "type": "object",
+        "description": "The accounts a token may use. A token without grants shows `all` equal\nto `ceiling` and no `accounts`.",
+        "required": [
+          "ceiling",
+          "all",
+          "accounts"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountGrantView"
+            },
+            "description": "The accounts a grant names, and the level really held on each. An\naccount neither here nor covered by `all` is hidden from the token."
+          },
+          "all": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountLevel",
+                "description": "The level on every account, including ones created later; `null`\nwithout an `all` grant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ceiling": {
+            "$ref": "#/components/schemas/AccountLevel",
+            "description": "The most the token's scope allows on any account."
+          }
+        }
+      },
+      "AccountGrantView": {
+        "type": "object",
+        "description": "The level a token holds on one account.",
+        "required": [
+          "account",
+          "level"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "level": {
+            "$ref": "#/components/schemas/AccountLevel"
+          }
+        }
+      },
       "AccountId": {
         "type": "string",
         "format": "uuid",
@@ -4076,6 +4125,15 @@
           "vehicle",
           "other_asset",
           "other_liability"
+        ]
+      },
+      "AccountLevel": {
+        "type": "string",
+        "description": "How much of one account an actor may use. Ordered\n`Balances < Transactions < Write`; each level includes those below it.",
+        "enum": [
+          "balances",
+          "transactions",
+          "write"
         ]
       },
       "AccountList": {
@@ -4964,9 +5022,14 @@
         "description": "The member and agent token behind the bearer token.",
         "required": [
           "member",
-          "agent"
+          "agent",
+          "access"
         ],
         "properties": {
+          "access": {
+            "$ref": "#/components/schemas/AccessView",
+            "description": "Which accounts the token may use."
+          },
           "agent": {
             "$ref": "#/components/schemas/AgentView"
           },

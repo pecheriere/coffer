@@ -92,6 +92,31 @@ impl AccountAccess {
         }
     }
 
+    /// The access as a report: uniform access shows `all` at the ceiling and
+    /// no account; every level is the one [`Self::level_for`] gives.
+    #[must_use]
+    pub fn summary(&self) -> AccessSummary {
+        match self {
+            Self::Uniform(level) => AccessSummary {
+                ceiling: *level,
+                all: Some(*level),
+                accounts: Vec::new(),
+            },
+            Self::Granted {
+                ceiling,
+                all,
+                accounts,
+            } => AccessSummary {
+                ceiling: *ceiling,
+                all: all.map(|all| all.min(*ceiling)),
+                accounts: accounts
+                    .keys()
+                    .filter_map(|account| Some((*account, self.level_for(*account)?)))
+                    .collect(),
+            },
+        }
+    }
+
     /// The accounts granted at least `at_least`, for filtering queries.
     #[must_use]
     pub fn scope(&self, at_least: AccountLevel) -> AccountScope {
@@ -120,6 +145,17 @@ impl AccountAccess {
             }
         }
     }
+}
+
+/// What an [`AccountAccess`] amounts to, for showing a token its own access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessSummary {
+    /// The most the actor's effective scope allows.
+    pub ceiling: AccountLevel,
+    /// The level on every account, including ones created later.
+    pub all: Option<AccountLevel>,
+    /// The level really held on each account a grant names, by account id.
+    pub accounts: Vec<(AccountId, AccountLevel)>,
 }
 
 /// What a grant covers: every account, or one.
@@ -1038,6 +1074,43 @@ mod tests {
         assert_eq!(
             access.scope(AccountLevel::Write),
             AccountScope::Only(vec![write])
+        );
+    }
+
+    #[test]
+    fn summary_reports_the_levels_really_held() {
+        assert_eq!(
+            AccountAccess::Uniform(AccountLevel::Transactions).summary(),
+            AccessSummary {
+                ceiling: AccountLevel::Transactions,
+                all: Some(AccountLevel::Transactions),
+                accounts: Vec::new(),
+            }
+        );
+        let (x, y) = (account(1), account(2));
+        let read = Actor {
+            member: MemberId::new(),
+            role: Role::Member,
+            via: Via::Agent {
+                token: AgentTokenId::new(),
+                scope: Scope::Read,
+            },
+        };
+        let summary = account_access_with_grants(
+            &read,
+            &[
+                grant(GrantTarget::All, AccountLevel::Balances),
+                grant(GrantTarget::Account(x), AccountLevel::Write),
+                grant(GrantTarget::Account(y), AccountLevel::Balances),
+            ],
+        )
+        .summary();
+        assert_eq!(summary.ceiling, AccountLevel::Transactions);
+        assert_eq!(summary.all, Some(AccountLevel::Balances));
+        assert_eq!(
+            summary.accounts.into_iter().collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([(x, AccountLevel::Transactions), (y, AccountLevel::Balances),]),
+            "capped at the scope"
         );
     }
 

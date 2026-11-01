@@ -270,7 +270,8 @@ impl From<AuthError> for Problem {
             AuthError::UsernameTaken
             | AuthError::LastPasskey
             | AuthError::LastAdmin
-            | AuthError::PasskeyAlreadyRegistered => {
+            | AuthError::PasskeyAlreadyRegistered
+            | AuthError::TokenInactive => {
                 Self::new(StatusCode::CONFLICT, ProblemCode::Conflict, "Conflict")
                     .with_detail(message)
             }

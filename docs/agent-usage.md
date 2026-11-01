@@ -11,7 +11,14 @@ operation, parameter and schema.
 1. Sign in to coffer with your passkey and open `/account`.
 2. Create an agent token: give it a name (for example `claude`), choose a
    scope and, preferably, an expiry.
-3. Copy the token now. It starts with `coffer_` and is shown exactly once;
+3. To limit it to chosen accounts, set the levels on the same form (see
+   [Account grants](#account-grants)). Left as they are, "All accounts" at
+   `write` and every account at `none`, the token has no grants: it sees
+   every account at its scope's level, and `write` is capped by the scope.
+   Lower "All accounts" to `none` and pick levels per account for a token
+   that sees only those. An account set below "All accounts" is refused,
+   because the better level would win, and so is `none` everywhere.
+4. Copy the token now. It starts with `coffer_` and is shown exactly once;
    coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
    an admin can also see and revoke every member's tokens from
    `/admin/members`.
@@ -49,6 +56,16 @@ scope: a `read` token's grants never exceed `transactions`. An account no
 grant names is hidden from the token. A token without grants sees every
 account at its scope's level, as before.
 
+Grants are set when the token is created and changed from `/account`, under
+the token's "Change account access" (a passkey session only: the token's own
+member, or an admin). A change applies at the token's next request and is
+audited as `token.grants` with the canonical
+text before and after (`all=balances,<id>=write`; `before` is `null` for a
+token that had no grants). A token that is revoked or expired takes no new
+grants (409). Grants can never be emptied, since no grants means uniform
+access: to widen a token, grant `all` explicitly. `GET /api/v1/me` reports a
+token's access.
+
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
   named in an error (a batch names the failing operation by index only).
@@ -74,16 +91,23 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 ```json
 {
   "member": {"id": "...", "username": "alice", "display_name": "Alice", "role": "admin", "disabled_at": null},
-  "agent": {"id": "...", "name": "claude", "scope": "read"}
+  "agent": {"id": "...", "name": "claude", "scope": "read"},
+  "access": {"ceiling": "transactions", "all": null, "accounts": [{"account": "...", "level": "balances"}]}
 }
 ```
+
+`access.ceiling` is the most the token's scope allows, `all` its level on
+every account (`null` without an `all` grant) and `accounts` the level it
+really has on each account a grant names. A token without grants shows
+`all` equal to `ceiling` and no `accounts`.
 
 ## Endpoints
 
 `GET /api/v1/openapi.json` needs no token. Every other operation needs at
 least `read`:
 
-- `GET /api/v1/me` identifies the member and token behind the request.
+- `GET /api/v1/me` identifies the member and token behind the request, and
+  the token's account access.
 - `GET /api/v1/members` returns `{"items": [{id, username, display_name, role, disabled_at}]}`.
 - `GET /api/v1/audit` returns `{"items": [...], "next": "<cursor>|null"}`, newest
   first. Query parameters: `entity_type`, `entity_id`, `member`, `agent`

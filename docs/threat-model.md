@@ -78,7 +78,14 @@
   and every session, has uniform access at its scope. Grants are read on
   every request from the store by the one access resolver; a grant that no
   longer parses fails the request rather than being dropped, since
-  dropping the last one would widen the token. The side channels are
+  dropping the last one would widen the token. Grants change only from a
+  passkey session, by the token's member or an admin (anyone else's token
+  answers like a missing one), and each change is audited with the grants
+  before and after. The list can never be emptied, for the same reason: a
+  token is widened only by an explicit `all` grant, which the audit log
+  shows. On `/account`, a form that selects no level at all is refused
+  rather than read as no restriction, and so is an account set below "All
+  accounts", which would look restricted and not be. The side channels are
   closed:
   - A hidden account, its transactions and the provider account bound to
     it answer exactly like missing ones (the same 404 body), in single
