@@ -278,8 +278,15 @@ fn restrict_umask() {
     rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
 }
 
-/// Opens the database and key and builds every service.
-async fn open_state(config: Config) -> Result<AppState, CliError> {
+/// Opens the database and key and builds every service, with the providers
+/// the configuration registers over the production egress client: the
+/// application state `serve` and the other commands run on.
+///
+/// # Errors
+///
+/// [`CliError`] when the database, the key, the egress client or a
+/// provider's configuration cannot be set up.
+pub async fn open_state(config: Config) -> Result<AppState, CliError> {
     let store = open_store(&config).await?;
     let key = Arc::new(ServerKey::load_or_create(&config.secret_key_file)?);
     let clock = Arc::new(SystemClock);

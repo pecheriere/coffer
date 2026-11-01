@@ -1,7 +1,7 @@
 //! Test helpers: a temporary server with a manual clock, software passkeys
 //! that drive identity ceremonies without HTTP, a scripted data provider,
-//! a capture of every log event, and a signal for when code under test logs
-//! a given event.
+//! a loopback mock of a provider's upstream, a capture of every log event,
+//! and a signal for when code under test logs a given event.
 //!
 //! Compiled only with the `testkit` feature; never part of a release build.
 
@@ -44,7 +44,7 @@ use webauthn_rs::prelude::{
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
-use crate::egress::Egress;
+use crate::egress::{Egress, HostAllowList};
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
 use crate::secrets::{SecretToken, ServerKey};
@@ -53,6 +53,7 @@ use crate::sync::provider::{
     Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider, ProviderError,
     ProviderFuture, ProviderKind, ProviderRegistry,
 };
+use crate::sync::simplefin::SimpleFin;
 use crate::vault::CredentialVault;
 
 /// Public URL (and `WebAuthn` origin) of the test server.
@@ -139,7 +140,16 @@ impl TestServer {
     /// Registers `provider` with the sync engine, replacing any provider of
     /// its kind.
     pub fn use_provider(&mut self, provider: Arc<dyn Provider>) {
-        let registry = registry(&self.config).with(provider);
+        self.use_registry(registry(&self.config).with(provider));
+    }
+
+    /// Makes the sync engine offer no provider at all, as a server whose
+    /// configuration no longer enables a connection's provider.
+    pub fn offer_no_provider(&mut self) {
+        self.use_registry(ProviderRegistry::default());
+    }
+
+    fn use_registry(&mut self, registry: ProviderRegistry) {
         self.sync = Arc::new(SyncService::new(
             self.store.clone(),
             self.clock.clone(),
@@ -148,6 +158,23 @@ impl TestServer {
             Arc::clone(&self.access),
             self.config.clone(),
         ));
+    }
+
+    /// This server with its `SimpleFin` provider talking to `mock` only: a
+    /// production [`SimpleFin`] over [`Egress::for_tests`], whose
+    /// allow-list is the mock's loopback port.
+    ///
+    /// # Panics
+    ///
+    /// If the mock's URL has no port.
+    #[must_use]
+    pub fn with_simplefin(mut self, mock: &MockUpstream) -> Self {
+        let port = mock.base.port().expect("the mock listens on a port");
+        self.use_provider(Arc::new(SimpleFin::new(
+            Egress::for_tests(),
+            HostAllowList::loopback(port),
+        )));
+        self
     }
 
     /// Creates a connection to `kind` owned by `owner`, with `plaintext`
@@ -578,6 +605,85 @@ impl Provider for FakeProvider {
             }
             result
         })
+    }
+}
+
+/// One request a [`MockUpstream`] received. Whether it carried an
+/// `Authorization` header is recorded, never its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRequest {
+    pub method: axum::http::Method,
+    pub path: String,
+    pub query: Option<String>,
+    pub authorization: bool,
+}
+
+/// A provider's upstream, mocked: `router` served over plain HTTP on
+/// `127.0.0.1` at an ephemeral port, recording every request. Stops when
+/// dropped.
+pub struct MockUpstream {
+    /// `http://127.0.0.1:<port>/`.
+    pub base: Url,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl fmt::Debug for MockUpstream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MockUpstream")
+            .field("base", &self.base.as_str())
+            .finish_non_exhaustive()
+    }
+}
+
+impl MockUpstream {
+    /// Starts serving `router`.
+    ///
+    /// # Panics
+    ///
+    /// If no loopback port can be bound.
+    pub async fn start(router: axum::Router) -> MockUpstream {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("bound address");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&requests);
+        let app = router.layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                lock(&recorder).push(RecordedRequest {
+                    method: request.method().clone(),
+                    path: request.uri().path().to_owned(),
+                    query: request.uri().query().map(str::to_owned),
+                    authorization: request
+                        .headers()
+                        .contains_key(axum::http::header::AUTHORIZATION),
+                });
+                next.run(request)
+            },
+        ));
+        let task = tokio::spawn(async move {
+            if axum::serve(listener, app).await.is_err() {
+                tracing::warn!("the mock upstream stopped");
+            }
+        });
+        MockUpstream {
+            base: Url::parse(&format!("http://{addr}/")).expect("loopback URL"),
+            requests,
+            task,
+        }
+    }
+
+    /// Every request received so far, oldest first.
+    #[must_use]
+    pub fn requests(&self) -> Vec<RecordedRequest> {
+        lock(&self.requests).clone()
+    }
+}
+
+impl Drop for MockUpstream {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 

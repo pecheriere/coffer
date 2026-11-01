@@ -23,7 +23,6 @@ use zeroize::Zeroizing;
 use super::AppState;
 use super::problem::{Problem, ProblemCode};
 use crate::auth::AuthError;
-use crate::ledger::LedgerError;
 use crate::secrets::ServerKey;
 
 /// The request header carrying the key.
@@ -229,7 +228,7 @@ pub struct CreateRequest<'a> {
 ///
 /// The problem `authorize` returns; the errors of [`reserve`]; the
 /// create's own error as a problem.
-pub async fn create<T, A, F>(
+pub async fn create<T, E, A, F>(
     state: &AppState,
     actor: &Actor,
     request: CreateRequest<'_>,
@@ -238,8 +237,9 @@ pub async fn create<T, A, F>(
 ) -> Result<Response, Problem>
 where
     T: Serialize,
+    E: Into<Problem>,
     A: AsyncFnOnce() -> Result<(), Problem>,
-    F: AsyncFnOnce(Option<IdempotencySlot>) -> Result<T, LedgerError>,
+    F: AsyncFnOnce(Option<IdempotencySlot>) -> Result<T, E>,
 {
     authorize().await?;
     let slot = match reserve(

@@ -1427,7 +1427,8 @@ async fn removal_proceeds_when_the_credentials_cannot_be_opened() {
 
 #[tokio::test]
 async fn removal_proceeds_when_the_provider_is_not_offered() {
-    let server = TestServer::new().await;
+    let mut server = TestServer::new().await;
+    server.offer_no_provider();
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     let alice = Actor {

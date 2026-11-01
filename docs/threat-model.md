@@ -38,6 +38,14 @@
   appear in logs, errors, the audit log or responses. A stolen database or
   backup does not reveal them without the server key; losing the server key
   means reconnecting every provider.
+- **Provider URLs cannot point coffer inward.** A SimpleFin setup token is
+  the base64 of a claim URL that a member pastes; the claim URL and the
+  access URL it returns must be `https` to a host in
+  `COFFER_SIMPLEFIN_HOSTS`, checked before anything is sent. The egress
+  client follows no redirect and, without a proxy, connects to public
+  addresses only. Setup tokens, claim and access URLs and provider response
+  bodies never reach an error, a log line, the audit log or a response:
+  provider error texts are fixed, with at most a status code.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session

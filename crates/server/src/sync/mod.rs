@@ -6,6 +6,7 @@ pub mod apply;
 pub mod connections;
 pub mod engine;
 pub mod provider;
+pub mod simplefin;
 
 use axum::http::StatusCode;
 use coffer_domain::policy::Denied;
@@ -60,7 +61,7 @@ pub enum SyncError {
 }
 
 /// Whole seconds until `retry_after` has passed, at least one.
-fn retry_seconds(retry_after: SignedDuration) -> u32 {
+pub(crate) fn retry_seconds(retry_after: SignedDuration) -> u32 {
     let mut seconds = retry_after.as_secs();
     if retry_after.subsec_nanos() > 0 {
         seconds = seconds.saturating_add(1);

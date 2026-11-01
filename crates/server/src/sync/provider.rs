@@ -23,6 +23,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::apply::Coverage;
+use super::simplefin::SimpleFin;
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
 
@@ -286,10 +287,16 @@ impl ProviderRegistry {
     ///
     /// [`ConfigError`] when a provider's configuration is unusable.
     pub fn from_config(config: &Config, egress: &Egress) -> Result<ProviderRegistry, ConfigError> {
-        // No provider is offered yet; each one added here reads its own
-        // settings from `config` and sends through `egress`.
-        let _ = (config, egress);
-        Ok(ProviderRegistry::default())
+        let mut registry = ProviderRegistry::default();
+        registry.insert(Arc::new(SimpleFin::new(
+            egress.clone(),
+            config.simplefin_hosts.clone(),
+        )));
+        Ok(registry)
+    }
+
+    fn insert(&mut self, provider: Arc<dyn Provider>) {
+        self.providers.insert(provider.kind(), provider);
     }
 
     /// The provider of `kind`, if this server offers it.
@@ -302,7 +309,7 @@ impl ProviderRegistry {
     #[cfg(feature = "testkit")]
     #[must_use]
     pub fn with(mut self, provider: Arc<dyn Provider>) -> ProviderRegistry {
-        self.providers.insert(provider.kind(), provider);
+        self.insert(provider);
         self
     }
 }

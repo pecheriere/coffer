@@ -295,6 +295,7 @@ async fn bearer_token_does_not_authenticate_pages() {
 
     for path in [
         "/account",
+        "/connections",
         "/admin/members",
         "/admin/invites",
         "/admin/household",
@@ -755,7 +756,7 @@ async fn root_sends_a_signed_in_member_home() {
 
 /// Every page a household sees, as (page, reply): sign-in, a bootstrap
 /// setup link, a new-member invite link, and the signed-in admin's account,
-/// members and invites pages. Bob is a member, so the members page lists
+/// connections, members, invites and household pages. Bob is a member, so the members page lists
 /// someone the admin manages.
 async fn every_page() -> Vec<(&'static str, Reply)> {
     let server = TestServer::new().await;

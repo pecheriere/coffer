@@ -5,6 +5,7 @@
 mod accounts;
 mod audit;
 mod categories;
+pub(crate) mod connections;
 pub mod extract;
 mod me;
 mod members;
@@ -55,6 +56,8 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(connections::create_simplefin))
+        .op(routes!(connections::reconnect_simplefin))
         .op(routes!(provider_accounts::list))
         .op(routes!(provider_accounts::bind))
         .op(routes!(provider_accounts::create_account))

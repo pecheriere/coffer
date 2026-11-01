@@ -38,6 +38,9 @@ pub enum ProblemCode {
     ProviderError,
     /// The provider refuses the connection's credentials: reconnect it.
     ReauthRequired,
+    /// The setup token is malformed, names a host coffer may not contact,
+    /// or was refused by the provider.
+    SetupTokenInvalid,
     /// Too many syncs of this connection; `Retry-After` says when to retry.
     SyncRateLimited,
     /// A sync of this connection is already queued or running.
@@ -71,6 +74,7 @@ impl ProblemCode {
             Self::IdempotencyInProgress => "idempotency_in_progress",
             Self::ProviderError => "provider_error",
             Self::ReauthRequired => "reauth_required",
+            Self::SetupTokenInvalid => "setup_token_invalid",
             Self::SyncRateLimited => "sync_rate_limited",
             Self::SyncInProgress => "sync_in_progress",
             Self::CurrencyMismatch => "currency_mismatch",
@@ -399,6 +403,7 @@ mod tests {
             ProblemCode::IdempotencyInProgress,
             ProblemCode::ProviderError,
             ProblemCode::ReauthRequired,
+            ProblemCode::SetupTokenInvalid,
             ProblemCode::SyncRateLimited,
             ProblemCode::SyncInProgress,
             ProblemCode::CurrencyMismatch,

@@ -37,6 +37,7 @@ getrandom.workspace = true
 http.workspace = true
 jiff = { workspace = true, features = ["serde"] }
 maud.workspace = true
+percent-encoding.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 rustls-platform-verifier.workspace = true

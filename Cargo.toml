@@ -49,7 +49,7 @@ webauthn-rs = "=0.5.5"
 openssl = "0.10.81"
 blake3 = "1.8"
 getrandom = "0.4.3"
-secrecy = "0.10.3"
+secrecy = { version = "0.10.3", features = ["serde"] }
 zeroize = "1.9.1"
 # Provider credential sealing (crates/server/src/vault.rs). Nonces come from
 # getrandom directly, so the default `getrandom` feature is off; `alloc` gives
@@ -61,6 +61,7 @@ http = "1.4"
 # Safe access to umask(2); already in the tree through tempfile.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs", "process"] }
 url = "2.5.8"
+percent-encoding = "2.3.2"
 # Outbound HTTPS (crates/server/src/egress.rs). rustls with the ring provider
 # and the platform verifier; reqwest gets a preconfigured rustls client, so
 # aws-lc-rs is never built, and no default feature (system proxy, HTTP/2,
@@ -79,7 +80,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # image has no /usr/share/zoneinfo.
 jiff = { version = "0.2.38", features = ["tzdb-bundle-always"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["raw_value"] }
 thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

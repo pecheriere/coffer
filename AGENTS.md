@@ -25,7 +25,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
-  engine that performs sync runs; the provider-agnostic apply step
+  `SimpleFin` provider; the engine that performs sync runs; the provider-agnostic apply step
   matching provider records onto transactions); `canonical` (changes to
   canonical transactions shared by `sync` and `ledger`: imported fields and
   duplicate candidates); `cli` and

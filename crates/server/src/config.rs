@@ -9,11 +9,14 @@ use jiff::tz::{TimeZone, TimeZoneDatabase};
 use thiserror::Error;
 use url::{Host, Url};
 
+use crate::egress::HostAllowList;
+
 const DEFAULT_LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
 const DEFAULT_INVITE_TTL_MINUTES: i64 = 30;
 const DEFAULT_SESSION_IDLE_HOURS: i64 = 168;
 const DEFAULT_SESSION_ABSOLUTE_DAYS: i64 = 30;
 const DEFAULT_SYNC_INTERVAL_HOURS: i64 = 6;
+const DEFAULT_SIMPLEFIN_HOSTS: &str = "bridge.simplefin.org,beta-bridge.simplefin.org";
 
 /// A configuration problem. Messages name the offending variable and never
 /// echo its value, which may be sensitive.
@@ -63,6 +66,10 @@ pub struct Config {
     /// `COFFER_SYNC_INTERVAL_HOURS` (1 to 24, default 6). A provider's own
     /// minimum interval can lengthen it.
     pub sync_interval: SignedDuration,
+    /// The hosts a `SimpleFin` setup token's claim URL and the access URL it
+    /// yields may name, from `COFFER_SIMPLEFIN_HOSTS` (comma-separated DNS
+    /// names, default `bridge.simplefin.org,beta-bridge.simplefin.org`).
+    pub simplefin_hosts: HostAllowList,
 }
 
 impl fmt::Debug for Config {
@@ -79,6 +86,7 @@ impl fmt::Debug for Config {
             .field("https_proxy", &https_proxy)
             .field("timezone", &self.timezone.iana_name())
             .field("sync_interval", &self.sync_interval)
+            .field("simplefin_hosts", &self.simplefin_hosts)
             .finish()
     }
 }
@@ -176,6 +184,7 @@ impl Config {
             https_proxy: parse_https_proxy(&vars)?,
             timezone: parse_timezone(&vars)?,
             sync_interval: SignedDuration::from_hours(sync_hours),
+            simplefin_hosts: parse_simplefin_hosts(&vars)?,
         })
     }
 
@@ -260,6 +269,21 @@ fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Ur
         return Err(invalid("must not have a query or fragment"));
     }
     Ok(Some(url))
+}
+
+/// Reads `COFFER_SIMPLEFIN_HOSTS`; unset means the public `SimpleFin`
+/// bridges.
+fn parse_simplefin_hosts(
+    vars: &impl Fn(&str) -> Option<String>,
+) -> Result<HostAllowList, ConfigError> {
+    const VAR: &str = "COFFER_SIMPLEFIN_HOSTS";
+    let raw = vars(VAR);
+    HostAllowList::parse(raw.as_deref().unwrap_or(DEFAULT_SIMPLEFIN_HOSTS)).map_err(|_| {
+        ConfigError::Invalid {
+            var: VAR,
+            reason: "expected comma-separated DNS host names",
+        }
+    })
 }
 
 /// Reads `COFFER_TIMEZONE`, an IANA time zone name; unset means `UTC`. The
@@ -607,5 +631,38 @@ mod tests {
             ),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn simplefin_hosts_default_to_the_public_bridges() {
+        let config = with_public_url("https://coffer.example").unwrap();
+        assert_eq!(
+            config.simplefin_hosts,
+            HostAllowList::parse("bridge.simplefin.org,beta-bridge.simplefin.org").unwrap()
+        );
+        let config = with_var("COFFER_SIMPLEFIN_HOSTS", "Bridge.Example.").unwrap();
+        assert_eq!(
+            config.simplefin_hosts,
+            HostAllowList::parse("bridge.example").unwrap()
+        );
+        for bad in [
+            "",
+            "10.0.0.1",
+            "*.example.org",
+            "https://bridge.example",
+            "a,,b",
+        ] {
+            let err = with_var("COFFER_SIMPLEFIN_HOSTS", bad).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::Invalid {
+                        var: "COFFER_SIMPLEFIN_HOSTS",
+                        ..
+                    }
+                ),
+                "{bad}: {err:?}"
+            );
+        }
     }
 }

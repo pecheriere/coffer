@@ -1531,6 +1531,285 @@
         ]
       }
     },
+    "/api/v1/connections/simplefin": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Connects `SimpleFin`.",
+        "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
+        "operationId": "createSimpleFinConnection",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSimpleFinConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connection, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`provider_error`: the bridge could not be reached or failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/connections/{connection_id}/simplefin/reconnect": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "summary": "Reconnects a connection with a new `SimpleFin` setup token.",
+        "description": "Claims a new setup token for a connection, typically one whose status is `reauth_required`, and replaces its access: the connection is `active` again, and its provider accounts and bindings stay. A sync is queued when the limits allow. A refused setup token answers `422 setup_token_invalid`. Needs `write`; reconnecting another member's connection needs `admin`.",
+        "operationId": "reconnectSimpleFin",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "description": "The connection's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ConnectionId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimpleFinReconnect"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection, reconnected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict` when the connection is removed, or was reconnected or removed meanwhile.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`provider_error`: the bridge could not be reached or failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "tags": [
@@ -4051,6 +4330,87 @@
         "format": "uuid",
         "description": "UUIDv7"
       },
+      "ConnectionState": {
+        "type": "string",
+        "description": "Where a connection stands.",
+        "enum": [
+          "active",
+          "error",
+          "reauth_required",
+          "removed"
+        ]
+      },
+      "ConnectionView": {
+        "type": "object",
+        "description": "A connection to a data provider. Never shows its credentials.",
+        "required": [
+          "id",
+          "provider",
+          "label",
+          "owner",
+          "status",
+          "last_error",
+          "last_attempt_at",
+          "last_success_at",
+          "next_sync_at",
+          "accounts"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAccountView"
+            },
+            "description": "Its provider accounts the actor may see."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ConnectionId"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last error, sanitized; `null` after a clean sync."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "next_sync_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the schedule syncs it next: the last attempt plus the longer of\nthe server's sync interval and the provider's minimum. `null` before\nthe first attempt and for connections the schedule skips."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/MemberId",
+            "description": "The member who added it."
+          },
+          "provider": {
+            "type": "string",
+            "description": "The provider's name, such as `simplefin`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConnectionState"
+          }
+        }
+      },
       "Currency": {
         "type": "string",
         "description": "An active ISO 4217 currency code; its exponent gives the minor unit (USD 2, JPY 0).",
@@ -4316,6 +4676,26 @@
         },
         "additionalProperties": false
       },
+      "NewSimpleFinConnection": {
+        "type": "object",
+        "description": "A `SimpleFin` connection to add.",
+        "required": [
+          "label",
+          "setup_token"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "1 to 100 characters, without control characters."
+          },
+          "setup_token": {
+            "type": "string",
+            "format": "password",
+            "description": "The setup token from the `SimpleFin` Bridge: the base64 of a claim\nURL on an allowed bridge host. Claimed once; never stored, logged or\nechoed."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewTransactionRequest": {
         "type": "object",
         "description": "A manual transaction to create.",
@@ -4481,6 +4861,7 @@
           "idempotency_in_progress",
           "provider_error",
           "reauth_required",
+          "setup_token_invalid",
           "sync_rate_limited",
           "sync_in_progress",
           "currency_mismatch",
@@ -4631,6 +5012,21 @@
           "write",
           "admin"
         ]
+      },
+      "SimpleFinReconnect": {
+        "type": "object",
+        "description": "A new setup token for an existing connection.",
+        "required": [
+          "setup_token"
+        ],
+        "properties": {
+          "setup_token": {
+            "type": "string",
+            "format": "password",
+            "description": "A new setup token from the `SimpleFin` Bridge."
+          }
+        },
+        "additionalProperties": false
       },
       "SourceRecordId": {
         "type": "string",
