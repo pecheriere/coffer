@@ -328,10 +328,12 @@ async fn relay_reaches_nothing_for_a_refused_destination() {
             "a refused destination must be refused as not allowed"
         );
     }
-    let err = egress
-        .send(get_request("http://bridge.example/x"), &allowed())
-        .await
-        .unwrap_err();
+    let mut plain_http = get_request("https://bridge.example/x");
+    plain_http
+        .url
+        .set_scheme("http")
+        .expect("the scheme can be changed");
+    let err = egress.send(plain_http, &allowed()).await.unwrap_err();
     assert!(
         matches!(err, EgressError::NotHttps),
         "plain http must be refused"
