@@ -336,7 +336,7 @@ fn parse_https_proxy(vars: &impl Fn(&str) -> Option<String>) -> Result<Option<Ur
 }
 
 /// Reads `COFFER_EGRESS_RELAY`: one IP address that can be connected to, with
-/// no port and no name. `proxied` says that a proxy is configured too, which
+/// no port and no name; private and loopback addresses are fine. `proxied` says that a proxy is configured too, which
 /// is refused: both would decide where connections go.
 fn parse_egress_relay(
     vars: &impl Fn(&str) -> Option<String>,
@@ -351,9 +351,15 @@ fn parse_egress_relay(
         .parse::<IpAddr>()
         .map_err(|_| invalid("expected one IP address, with no port and no host name"))?
         .to_canonical();
-    let broadcast = matches!(relay, IpAddr::V4(ip) if ip.is_broadcast());
-    if relay.is_unspecified() || relay.is_multicast() || broadcast {
-        return Err(invalid("must be a unicast address"));
+    let unreachable = match relay {
+        IpAddr::V4(ip) => ip.octets()[0] == 0 || ip.is_broadcast() || ip.is_multicast(),
+        // Link-local would need a zone, which an address here cannot carry.
+        IpAddr::V6(ip) => ip.is_unspecified() || ip.is_multicast() || ip.is_unicast_link_local(),
+    };
+    if unreachable {
+        return Err(invalid(
+            "cannot be connected to: must not be a this-network, IPv6 link-local, multicast or broadcast address",
+        ));
     }
     if proxied {
         return Err(invalid(

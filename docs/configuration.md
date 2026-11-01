@@ -27,7 +27,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_PLAID_ENV` | required with Plaid | `sandbox` or `production`; it selects the one Plaid API host coffer may reach (see [Outbound network](#outbound-network)). `development` is refused, since Plaid retired it. |
 | `COFFER_PLAID_COUNTRY_CODES` | `US` | Comma-separated ISO 3166-1 alpha-2 codes in capitals, such as `US,CA`: the countries whose institutions Link offers. Only the shape is checked; Plaid refuses a country it does not serve. |
 | `HTTPS_PROXY` | unset | Egress proxy for every outbound https request (`https_proxy` is read when `HTTPS_PROXY` is unset; an empty value counts as unset): `http://` or `https://` with a host, optional port and optional `user:password@`, nothing after the host but an optional `/`. coffer sends `CONNECT <host>:443` and never resolves target hosts itself, so the proxy enforces the public-address rule; the proxy's own address may be private. Its credentials never appear in logs or errors. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. |
-| `COFFER_EGRESS_RELAY` | unset | One IP address, IPv4 or IPv6, of an SNI-forwarding relay you control: no port, no host name, no brackets, no zone. Unspecified, multicast and broadcast addresses are refused, and so is an empty value. Every outbound connection goes to this address, on port 443, and coffer resolves nothing; see [Outbound network](#outbound-network). Setting it together with `HTTPS_PROXY` or `https_proxy` is refused. |
+| `COFFER_EGRESS_RELAY` | unset | One IP address, IPv4 or IPv6, of an SNI-forwarding relay you control: no port, no host name, no brackets, no zone. Addresses nothing can connect to are refused (`0.0.0.0/8`, `::`, link-local `fe80::/10`, multicast and broadcast), and so is an empty value; private and loopback addresses are accepted. Every outbound connection goes to this address, on port 443, and coffer resolves nothing; see [Outbound network](#outbound-network). Setting it together with `HTTPS_PROXY` or `https_proxy` is refused. |
 | `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). |
 | `COFFER_LOG_FORMAT` | text | `json` switches to JSON lines. Logs go to stderr. |
 
@@ -106,9 +106,11 @@ the public-address rule, which coffer can no longer check for the real host.
 Nothing else changes. The allow-list is still checked before anything is sent,
 https is still required, redirects are still not followed, and TLS is still
 verified end to end: the SNI and the certificate check use the real host name,
-so the relay sees which host is contacted but not the content, and one that
-terminates TLS itself is refused. Only this variable can set the address: a
-setup token, a provider or a request has no way to reach it.
+so the relay sees which host is contacted but not the content, unless it holds
+a certificate for that name from a CA the host trusts. So never add the relay's
+own CA to the CA bundle coffer uses: that lets the relay read and alter
+everything sent to the providers, credentials included. Only this variable can
+set the address: a setup token, a provider or a request has no way to reach it.
 
 Provider credentials are sealed under a key derived from the server key, so
 losing `secret.key` also means reconnecting every provider connection.

@@ -549,13 +549,14 @@ enum PublicResolver {
     /// to resolve.
     ProxyOnly(Option<Arc<str>>),
     /// A relay is configured: every name answers with this address, with no
-    /// lookup and no filter. Port 0 stands for the port of the URL.
+    /// lookup and no filter. The client keeps this port, since `check_url`
+    /// refuses a URL naming one of its own.
     Relay(SocketAddr),
 }
 
 impl PublicResolver {
     fn relay(relay: IpAddr) -> PublicResolver {
-        PublicResolver::Relay(SocketAddr::new(relay, 0))
+        PublicResolver::Relay(SocketAddr::new(relay, 443))
     }
 }
 
@@ -869,9 +870,7 @@ mod tests {
                 .await
                 .unwrap()
                 .collect();
-            // Port 0 makes the client use the URL's port, which `check_url`
-            // holds to 443.
-            assert_eq!(addrs, [SocketAddr::new(relay, 0)]);
+            assert_eq!(addrs, [SocketAddr::new(relay, 443)]);
         }
     }
 

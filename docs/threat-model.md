@@ -59,8 +59,9 @@
   private; only the environment can set it, never a setup token, a provider
   or a request. The operator trusts the relay to forward to the allowed hosts
   only and to apply the public-address rule, which coffer cannot check any
-  more, and the relay learns which hosts coffer contacts, and when. coffer
-  does not trust it with anything else: the allow-list, https and the ban on
+  more; the relay learns which hosts coffer contacts, and when, and it can
+  drop or delay every sync. coffer does not trust it with anything else: the
+  allow-list, https and the ban on
   redirects are unchanged, and TLS is verified against the real host name, so
   a relay cannot read or alter the traffic unless it holds a certificate for
   that name from a CA the host trusts. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored, so the

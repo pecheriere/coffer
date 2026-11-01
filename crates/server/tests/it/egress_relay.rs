@@ -29,6 +29,7 @@ use openssl::x509::extension::{
 use openssl::x509::{X509, X509Builder, X509NameBuilder, X509NameRef};
 use reqwest::{Method, StatusCode};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -380,34 +381,80 @@ fn config_with(extra: &[(&str, &str)]) -> Result<Config, ConfigError> {
 }
 
 /// The production client, built from configuration, connects to the relay
-/// without resolving: nothing listens on the relay's port 443 here, so the
-/// request fails connecting, or at TLS if something does. The name does not
-/// resolve at all, so the same request without the relay is a resolution
-/// failure.
+/// without resolving and without the public-address filter. `localhost` needs
+/// no DNS server and resolves only to addresses the filter refuses, so without
+/// the relay it is refused. With the relay it gets as far as connecting to
+/// port 443, where nothing should listen; a listener would fail at TLS, which
+/// is a transport failure too.
 #[tokio::test]
-async fn configured_relay_replaces_name_resolution() {
+async fn configured_relay_replaces_the_public_address_filter() {
+    let allowed = HostAllowList::parse("localhost").unwrap();
     for relay in ["127.0.0.1", "::1"] {
         let config = config_with(&[("COFFER_EGRESS_RELAY", relay)]).unwrap();
         let err = Egress::from_config(&config)
             .unwrap()
-            .send(get_request("https://bridge.example/x"), &allowed())
+            .send(get_request("https://localhost/x"), &allowed)
             .await
             .unwrap_err();
         assert!(
             matches!(err, EgressError::Transport { .. }),
-            "the relay must be connected to, with no resolution"
+            "the relay must be connected to, with no filter"
         );
     }
 
     let config = config_with(&[]).unwrap();
     let err = Egress::from_config(&config)
         .unwrap()
-        .send(get_request("https://bridge.example/x"), &allowed())
+        .send(get_request("https://localhost/x"), &allowed)
         .await
         .unwrap_err();
     assert!(
         matches!(err, EgressError::Resolution),
-        "without the relay the name must be resolved"
+        "without the relay the public-address filter must refuse the name"
+    );
+}
+
+/// Accepts one connection, sends its request line down the channel and
+/// refuses it, as an egress proxy would.
+async fn recording_proxy() -> (u16, mpsc::UnboundedReceiver<String>) {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        tx.send(line.trim_end().to_owned()).unwrap();
+        stream
+            .get_mut()
+            .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    (port, rx)
+}
+
+/// With no relay, configuration still sends everything through its proxy.
+#[tokio::test]
+async fn configured_proxy_is_used_when_there_is_no_relay() {
+    let (port, mut seen) = recording_proxy().await;
+    let proxy = format!("http://127.0.0.1:{port}");
+    let config = config_with(&[("HTTPS_PROXY", &proxy)]).unwrap();
+    let err = Egress::from_config(&config)
+        .unwrap()
+        .send(get_request("https://bridge.example/x"), &allowed())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, EgressError::Transport { .. }),
+        "the proxy's refusal must be a transport failure"
+    );
+    assert_eq!(
+        seen.recv().await.as_deref(),
+        Some("CONNECT bridge.example:443 HTTP/1.1")
     );
 }
 
@@ -416,7 +463,16 @@ fn relay_setting_accepts_one_ip_address() {
     for (raw, expected) in [
         ("10.0.0.7", IpAddr::from([10, 0, 0, 7])),
         ("127.0.0.1", IpAddr::from(Ipv4Addr::LOCALHOST)),
+        ("127.0.0.2", IpAddr::from([127, 0, 0, 2])),
+        ("192.0.2.10", IpAddr::from([192, 0, 2, 10])),
         ("198.51.100.9", IpAddr::from([198, 51, 100, 9])),
+        ("1.0.0.1", IpAddr::from([1, 0, 0, 1])),
+        // Just outside fe80::/10.
+        ("fec0::1", IpAddr::from([0xfec0, 0, 0, 0, 0, 0, 0, 1_u16])),
+        (
+            "2001:db8::1",
+            IpAddr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 1_u16]),
+        ),
         ("fd00::7", IpAddr::from([0xfd00, 0, 0, 0, 0, 0, 0, 7_u16])),
         ("::1", IpAddr::from(std::net::Ipv6Addr::LOCALHOST)),
         // An IPv4-mapped address means the IPv4 address it carries.
@@ -450,8 +506,14 @@ fn relay_setting_refuses_anything_but_one_usable_address() {
         "not an address",
         // Addresses nothing can be reached at.
         "0.0.0.0",
+        "0.1.2.3",
+        "0.255.255.255",
         "::",
         "::ffff:0.0.0.0",
+        "::ffff:0.1.2.3",
+        // Link-local, which needs the zone an address here cannot carry.
+        "fe80::1",
+        "febf::1",
         "224.0.0.1",
         "ff02::1",
         "255.255.255.255",
