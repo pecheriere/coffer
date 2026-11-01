@@ -377,9 +377,13 @@ fn redact_word(word: &str) -> std::borrow::Cow<'_, str> {
     let start = if let Some(end) = separator_end {
         end
     } else {
-        // Without a scheme, only `user:pass@` is a credential; an address
-        // such as `ops@example.org` is kept.
-        let start = word.find(char::is_alphanumeric).unwrap_or(at).min(at);
+        // Without a scheme, only `user:pass@` is a credential (the user may
+        // be empty: `:pass@`); an address such as `ops@example.org` is
+        // kept.
+        let start = word
+            .find(|c: char| c.is_alphanumeric() || c == ':' || c == '%')
+            .unwrap_or(at)
+            .min(at);
         let user = &lower[start..at];
         if !user.contains(':') && !user.contains("%3a") {
             return Cow::Borrowed(word);
@@ -450,6 +454,15 @@ mod tests {
         assert_eq!(
             sanitize_provider_message("https://u:\np@h.example"),
             "https://***@h.example"
+        );
+        // A scheme-less credential with an empty user is hidden too.
+        assert_eq!(
+            sanitize_provider_message("refused :pw@bridge.example/x"),
+            "refused ***@bridge.example/x"
+        );
+        assert_eq!(
+            sanitize_provider_message("refused %3Apw@bridge.example"),
+            "refused ***@bridge.example"
         );
         // Text without user information is kept.
         for kept in [
