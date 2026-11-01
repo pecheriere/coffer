@@ -257,35 +257,6 @@ impl StoreTx {
 }
 
 impl Store {
-    /// When each provider account of `connection` that the provider still
-    /// reports was last applied in full (`None` for one never applied).
-    /// "Still reports" means seen since the start of the connection's
-    /// latest run that applied data (`succeeded` or `partial`): an account
-    /// the provider stopped reporting before then is left out. Empty when
-    /// no run has applied data yet.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures, or a value that no longer parses.
-    pub async fn reported_provider_accounts_applied(
-        &self,
-        connection: ConnectionId,
-    ) -> Result<Vec<Option<Timestamp>>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT last_applied_at FROM provider_accounts WHERE connection_id = ?1 \
-             AND last_seen_at >= (SELECT MAX(started_at) FROM sync_runs \
-             WHERE connection_id = ?1 AND status IN ('succeeded', 'partial')) \
-             ORDER BY id",
-        )
-        .bind(connection.to_string())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(StoreError::from_sqlx)?;
-        rows.iter()
-            .map(|row| time_opt(row, "last_applied_at"))
-            .collect()
-    }
-
     /// The provider accounts of `connection`, or of every connection, oldest
     /// first.
     ///

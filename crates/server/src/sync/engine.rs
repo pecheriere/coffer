@@ -52,8 +52,8 @@ const UNSUPPORTED_CURRENCY: &str =
 const CURRENCY_DIFFERS: &str = "the provider reported a currency other than the bound account's";
 const BALANCE_UNREPRESENTABLE: &str =
     "the provider reported a balance with more decimals than the currency allows, or too large";
-const ACCOUNT_NOT_STORED: &str = "the account's data could not be stored; the next sync fetches \
-     it again from shortly before it was last stored";
+const ACCOUNT_NOT_STORED: &str =
+    "the account's data could not be stored; the next sync fetches the missing records again";
 const INTERNAL_FAILURE: &str = "the sync failed on the server";
 
 /// A sync run, as the API shows it.
@@ -299,12 +299,15 @@ impl SyncService {
         started_at: Timestamp,
     ) -> Result<SyncRunRecord, SyncError> {
         let connection = self.store.get_connection(run.connection).await?;
-        let applied = self
+        let accounts: Vec<(Timestamp, Option<Timestamp>)> = self
             .store
-            .reported_provider_accounts_applied(connection.id)
-            .await?;
+            .list_provider_accounts(Some(connection.id))
+            .await?
+            .iter()
+            .map(|account| (account.last_seen_at, account.last_applied_at))
+            .collect();
         let today = self.today();
-        match self.fetch(&connection, &applied, today).await {
+        match self.fetch(&connection, &accounts, today).await {
             Ok((result, mode)) => {
                 self.apply(run, &connection, result, mode, today, started_at)
                     .await
@@ -330,7 +333,7 @@ impl SyncService {
     async fn fetch(
         &self,
         connection: &ConnectionRecord,
-        applied: &[Option<Timestamp>],
+        accounts: &[(Timestamp, Option<Timestamp>)],
         today: Date,
     ) -> Result<(FetchResult, FetchMode), Failure> {
         let sealed = match (&connection.credentials, connection.status) {
@@ -353,7 +356,7 @@ impl SyncService {
                 overlap_days,
             } => (
                 Some(window_start(
-                    applied,
+                    accounts,
                     connection.last_success_at,
                     today,
                     &self.config.timezone,
@@ -686,15 +689,19 @@ fn failure(err: &SyncError) -> Failure {
 }
 
 /// The first day to fetch, so that every provider account the provider
-/// still reports gets the records it missed: `overlap_days` before the day
-/// its data was last applied, or the provider's maximum window for one
-/// never applied; the earliest of those over `applied`. Without any such
+/// reported within its maximum window gets the records it missed:
+/// `overlap_days` before the day its data was last applied, or the
+/// maximum window for one never applied; the earliest of those over
+/// `accounts` (each `(last seen, last applied)`). An account the provider
+/// left out of a few answers still counts, so its missing days are fetched
+/// when it returns; one not seen for longer than the window (a closed bank
+/// account) no longer holds every fetch at the maximum. Without any such
 /// account (the first run, or a connection reporting none), the same rule
 /// on the connection's last success. Never more than `max_days` before
 /// `today`, however long ago that was.
 #[must_use]
 fn window_start(
-    applied: &[Option<Timestamp>],
+    accounts: &[(Timestamp, Option<Timestamp>)],
     last_success: Option<Timestamp>,
     today: Date,
     timezone: &TimeZone,
@@ -702,22 +709,17 @@ fn window_start(
     overlap_days: i64,
 ) -> Date {
     let earliest = days_before(today, max_days);
+    let day = |at: Timestamp| at.to_zoned(timezone.clone()).date();
     let start = |at: Option<Timestamp>| match at {
         None => earliest,
-        Some(at) => {
-            let day = at.to_zoned(timezone.clone()).date();
-            days_before(day, overlap_days).max(earliest)
-        }
+        Some(at) => days_before(day(at), overlap_days).max(earliest),
     };
-    if applied.is_empty() {
-        start(last_success)
-    } else {
-        applied
-            .iter()
-            .map(|&at| start(at))
-            .min()
-            .unwrap_or(earliest)
-    }
+    accounts
+        .iter()
+        .filter(|&&(seen, _)| day(seen) >= earliest)
+        .map(|&(_, applied)| start(applied))
+        .min()
+        .unwrap_or_else(|| start(last_success))
 }
 
 /// `day` minus `days` (a negative count counts as none), saturating at the
@@ -961,12 +963,12 @@ mod tests {
             date(2026, 8, 2),
             "clamped after a long gap"
         );
-        // With reported accounts, the one applied longest ago decides, and
-        // one never applied gets the maximum window.
+        // With accounts seen within the window, the one applied longest ago
+        // decides, and one never applied gets the maximum window.
         let week_ago: jiff::Timestamp = "2026-10-24T12:00:00Z".parse().unwrap();
         assert_eq!(
             window_start(
-                &[Some(yesterday), Some(week_ago)],
+                &[(yesterday, Some(yesterday)), (yesterday, Some(week_ago))],
                 Some(yesterday),
                 today,
                 &utc,
@@ -977,7 +979,7 @@ mod tests {
         );
         assert_eq!(
             window_start(
-                &[Some(yesterday), None],
+                &[(yesterday, Some(yesterday)), (yesterday, None)],
                 Some(yesterday),
                 today,
                 &utc,
@@ -987,9 +989,36 @@ mod tests {
             date(2026, 8, 2)
         );
         assert_eq!(
-            window_start(&[Some(long_ago)], Some(yesterday), today, &utc, 90, 14),
+            window_start(
+                &[(yesterday, Some(long_ago))],
+                Some(yesterday),
+                today,
+                &utc,
+                90,
+                14
+            ),
             date(2026, 8, 2),
             "clamped for an account applied long ago"
+        );
+        // An account left out of recent answers still counts, so its missing
+        // days are fetched when it returns; one not seen within the window
+        // (a closed bank account) does not hold every fetch at the maximum.
+        let month_ago: jiff::Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
+        assert_eq!(
+            window_start(
+                &[(yesterday, Some(yesterday)), (month_ago, Some(month_ago))],
+                Some(yesterday),
+                today,
+                &utc,
+                90,
+                14
+            ),
+            date(2026, 9, 17)
+        );
+        assert_eq!(
+            window_start(&[(long_ago, None)], Some(yesterday), today, &utc, 90, 14),
+            date(2026, 10, 16),
+            "an account not seen within the window is left out"
         );
         assert_eq!(days_before(today, -3), today);
         assert_eq!(days_before(today, i64::MAX), jiff::civil::Date::MIN);
