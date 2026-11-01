@@ -1335,7 +1335,10 @@ async fn losing_reconnect_gives_up_its_credentials() {
         .await
         .unwrap();
     assert!(world.opens_to(world.connection, stored.credentials.unwrap(), RENEWED));
-    assert_eq!(world.fake.disconnects().len(), 1);
+    let disconnects = world.fake.disconnects();
+    assert_eq!(disconnects.len(), 1);
+    let gave_up_loser = disconnects[0].expose_secret() == PLAINTEXT;
+    assert!(gave_up_loser, "the loser's credentials are given up");
     assert_eq!(world.audit_actions("connection.reconnect").await.len(), 1);
 }
 
