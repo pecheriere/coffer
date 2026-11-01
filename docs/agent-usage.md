@@ -210,6 +210,14 @@ because it holds changes members made) and `split_mismatch` (its amount
 changed and its several splits no longer sum to it; saving valid splits
 clears it).
 
+`amount_raw` is the provider's amount exactly as it wrote it, in the
+provider's own sign, while the transaction's `amount` follows coffer's rule
+(negative is money out). For SimpleFin the two agree in sign. Plaid reports
+money out as positive, so for a Plaid record the sign of `amount_raw` is the
+opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
+`-1230` is 12.30 spent, not a refund. Always use `amount` to decide direction;
+`amount_raw` is for checking the digits.
+
 - `GET /api/v1/transactions` lists transactions, newest posting day first
   (ties newest first), as `{"items": [...], "next": "<cursor>|null"}`.
   Every parameter given must hold:
@@ -277,7 +285,7 @@ clears it).
 
 ### Connections and sync
 
-A connection links coffer to a data provider (today SimpleFin). It reports
+A connection links coffer to a data provider (SimpleFin or Plaid). It reports
 provider accounts; once a provider account is bound to a coffer account,
 syncs bring that account's transactions and balances. coffer syncs every
 connection on a schedule (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask
@@ -288,6 +296,11 @@ for a sync.
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
   `next_sync_at` and the provider accounts the token may see. Credentials
   are never returned.
+- Plaid connections appear in `GET /api/v1/connections` like any other
+  (`provider` is `plaid`), when the server is configured for Plaid. Connecting
+  one is a browser step: the member logs in to the bank through Plaid Link
+  from the Connections page, so no API call can create one, and an agent
+  that needs one asks the member to do it.
 - `POST /api/v1/connections/simplefin` (`write`) connects SimpleFin from
   `{"label": "...", "setup_token": "..."}`; accepts an `Idempotency-Key`.
   The setup token is claimed once and never stored or echoed.
@@ -299,8 +312,9 @@ for a sync.
   (`queued`, `running`, `succeeded`, `partial` or `failed`) and `detail`.
 - `DELETE /api/v1/connections/{connection_id}` (`write`) gives up the
   connection's access at the provider and marks it `removed` (204). Its
-  accounts and transactions stay. If the provider cannot be reached it is a
-  502 `provider_error` and nothing changes.
+  accounts and transactions stay. If the provider cannot be reached, or
+  refuses (Plaid keeps billing an Item until it is removed there), it is an
+  error and nothing changes: the connection stays and removing can be retried.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and
@@ -310,13 +324,15 @@ for a sync.
 
 Sync limits are the provider's: for SimpleFin, at most one requested sync
 per hour per connection, scheduled syncs at least two hours apart, and 16
-syncs in 24 hours. A sync request while a run is queued or running is a 409
+syncs in 24 hours; for Plaid, a requested sync 15 minutes after the last,
+scheduled syncs an hour apart, and 48 syncs in 24 hours. A sync request while a run is queued or running is a 409
 `sync_in_progress`: wait for that run. A request the limits refuse is a 429
 `sync_rate_limited` with a `Retry-After` header in seconds; do not retry
 before it has passed.
 
 When a connection's status is `reauth_required`, the provider no longer
-accepts its access. Ask the owner for a new SimpleFin setup token and send
+accepts its access. For Plaid, the member logs in again from the connection's
+Reconnect button in the browser; its accounts stay bound. For SimpleFin, ask the owner for a new setup token and send
 it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
 `{"setup_token": "..."}`: the connection becomes `active` again and keeps
 its provider accounts, bindings and history.

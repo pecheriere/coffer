@@ -17,7 +17,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
-  `pages/`); `ledger` (accounts and balances, categories,
+  `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
+  with a content security policy of their own); `ledger` (accounts and balances, categories,
   transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
@@ -25,7 +26,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
-  `SimpleFin` and Plaid providers; connections, sync requests and their rate limits,
+  `SimpleFin` provider and `sync::plaid` (`client.rs`, Plaid's API over
+  `egress`; `provider.rs`, the `Provider` implementation); connections, sync requests and their rate limits,
   and provider account binding; the engine that performs sync runs; the
   provider-agnostic apply step matching provider records onto transactions;
   the scheduler, whose worker performs queued runs and whose ticker queues
@@ -122,6 +124,10 @@ worktree when its branch has merged.
   compares it with the generated document and CI lints it with Spectral
   (`.spectral.yaml`, findings fixed in code, never by disabling a rule).
 - Errors use `thiserror`; no `unwrap`/`expect` outside tests.
+- A page may set its own `Content-Security-Policy` only for Plaid Link
+  (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
+  per-response nonce, never an `unsafe-*` source. Changes there are in the
+  threat model's accepted risks.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 

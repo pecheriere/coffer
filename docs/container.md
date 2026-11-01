@@ -103,15 +103,48 @@ container coffer binds every interface on port 8080, so publish that port
 only where the proxy alone can reach it: on `127.0.0.1` as above, or on a
 private Docker network shared with the proxy and not published at all.
 
+### Plaid secret
+
+Plaid needs `COFFER_PLAID_CLIENT_ID`, `COFFER_PLAID_ENV` and
+`COFFER_PLAID_SECRET_FILE` (see [configuration.md](configuration.md#plaid)).
+The secret is read from a file, which coffer refuses unless its mode is 0600
+or stricter. Container file secrets are often mounted 0444 (Docker and
+Compose secrets, Kubernetes secret volumes by default), and coffer refuses
+those at startup. Do not loosen the check; provide a file with the right mode:
+
+- A file in the data volume, written from standard input so the secret is on
+  no command line (here fed from a secret manager's output):
+
+  ```sh
+  <secret-source> | docker run --rm -i -v coffer-data:/data alpine sh -c \
+    'umask 077 && cat > /data/plaid-secret && chown 65532:65532 /data/plaid-secret'
+  ```
+
+  then set `COFFER_PLAID_SECRET_FILE=/data/plaid-secret`. The volume is then
+  a secret too: back it up like the server key.
+- Or a host file owned by `65532:65532` with mode 0600, bind-mounted
+  read-only (`-v /srv/coffer-plaid-secret:/run/plaid-secret:ro`). The mode
+  and owner are those of the host file.
+
+A symlink is followed and the mode of its target is checked, so a mount that
+links to a 0444 file is refused too. Every command that reads the
+configuration needs the file: run `bootstrap-link`, `recover-admin` and
+`backup` with `docker exec`, which uses the running container's environment
+and mounts. A throwaway `docker run` for them must mount the file and set the
+variables as well; `healthcheck` needs neither.
+
 ### Outbound network
 
 To sync provider connections the container needs outbound https (port 443)
-to the hosts in `COFFER_SIMPLEFIN_HOSTS`, and nowhere else. The image
+to the hosts in `COFFER_SIMPLEFIN_HOSTS`, and, when Plaid is configured, to
+`sandbox.plaid.com` or `production.plaid.com` (the one `COFFER_PLAID_ENV`
+selects), and nowhere else. The image
 carries a CA bundle to verify their certificates, so no host mount is
 needed. Enforce the allow-list outside the container too: route egress
 through a proxy that allows `CONNECT` to those hosts only and pass it as
 `HTTPS_PROXY`, or restrict the container's network with an SNI or firewall
-allow-list. Without any connection, coffer still serves everything except
+allow-list. Plaid Link runs in the member's browser, which must reach `cdn.plaid.com`
+and Plaid's hosts; the container does not. Without any connection, coffer still serves everything except
 syncing; see [configuration.md](configuration.md#outbound-network).
 
 ## Operator commands

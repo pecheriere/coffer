@@ -20,8 +20,8 @@
 3. **Agent to coffer.** Authenticated by a bearer token on `/api/v1` only.
 4. **Host operator to coffer.** Whoever controls the host and data directory.
 5. **coffer to data providers.** coffer makes outbound https requests to
-   provider hosts (today the SimpleFin Bridge) with the connection's
-   credentials, and treats every answer as untrusted input: amounts are
+   provider hosts (the SimpleFin Bridge, and Plaid when configured) with the
+   connection's credentials, and treats every answer as untrusted input: amounts are
    parsed as decimal text into integer minor units, texts are sanitized and
    bounded before they are stored, and provider error texts are reduced to
    fixed messages. The provider is trusted only for the data it reports.
@@ -62,6 +62,19 @@
   sanitizing (user information in URLs is redacted); any that holds the
   connection's access user or password is withheld and replaced by a fixed
   text.
+- **Plaid.** Plaid connects through Plaid Link in the member's browser;
+  coffer's server receives a one-time public token, exchanges it for an
+  access token and keeps only that token, sealed like every provider
+  credential (a small JSON document, bound to the connection id). The client
+  secret is read from a file that must be mode 0600 or stricter, and lives in
+  memory only. The server may reach only the configured Plaid host. On
+  disconnect coffer calls Plaid's `/item/remove`, since Plaid bills an Item
+  until it is removed. A removal that fails keeps the connection, so the
+  member can retry; only `ITEM_NOT_FOUND` (the Item is already gone) counts as
+  removed, and an Item that needs a new login is not removed until it has been
+  reconnected. Plaid's `error_message` and request id are deliberately not
+  kept: its free text can quote credentials, so coffer keeps only Plaid's error
+  type and code, which are restricted to capitals, digits and underscores.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
@@ -154,7 +167,43 @@
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can make coffer call a provider at most that budget
-  (16 times in 24 hours for SimpleFin) per connection.
+  (16 times in 24 hours for SimpleFin, 48 for Plaid) per connection.
+- **Plaid's script runs on the Link page.** Link needs Plaid's script from
+  `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
+  from that one URL and changes it in place, so coffer cannot pin a version or
+  use subresource integrity, and it may not be bundled or hosted by coffer.
+  The script runs with the page's DOM and origin: it can read the page's link
+  token and anti-forgery token, and make same-origin requests as the signed-in
+  member. The page holds no financial data, and a link token and a public
+  token each work once, but the CSRF token lets script act as the member for
+  that session. This is accepted: Plaid is already trusted with the bank
+  logins and the access token. The exposure is limited to the Link pages,
+  which alone carry a policy that allows the script: `script-src` adds that
+  one URL, `frame-src` `https://cdn.plaid.com`, and `connect-src` the
+  configured Plaid host. Every other page keeps `script-src 'self'` and
+  `style-src 'self'`.
+- **The Link policy differs from Plaid's documented ones.** Plaid's
+  documentation lists `'unsafe-inline'` for scripts and styles. coffer's policy
+  has no `unsafe-*` source. Plaid's script adds a stylesheet, which Link's
+  mobile overlay needs for its layout, and marks it with the nonce of its own
+  tag; so each Link response carries a fresh random nonce on that script tag
+  and `style-src 'self' 'nonce-...'`. Plaid's script checks at start-up
+  whether inline styles are supported, which produces exactly one
+  `style-src-elem` violation in the browser console: that one is expected, and
+  any other is a finding. Because Plaid may change its script, a future change
+  could break Link under this policy; that would be a finding to fix, not a reason to add `'unsafe-inline'`.
+- **Plaid's data is imported with care, not trusted.** A balance with more
+  decimals than its currency allows is rounded half-even to minor units, with
+  the exact text kept on the provider account; one too large to store is
+  dropped and the account shows a note. Transaction amounts are never rounded:
+  a record whose amount does not convert exactly is skipped and only counted.
+  A held cursor protects against loss: when an account's records keep failing
+  to store, coffer does not advance the Plaid sync cursor, so nothing is
+  lost, and every sync fetches those records again until they apply. A balance
+  Plaid sends in a form coffer cannot read (an exponent such as `1e3`) marks
+  that account unreadable and holds the cursor the same way. The cost is
+  repeated work and a connection that reports an error until the cause is
+  gone; showing and clearing a hold is issue #20.
 - **Some copies of provider secrets are not wiped.** While a SimpleFin
   setup token is claimed and while a sync fetches, the claim URL, the access
   URL and its user name pass through `url::Url` and `String` buffers (the
@@ -165,6 +214,10 @@
   of with `url::Url`, trading a well-tested parser for a home-made one on
   input an attacker can shape; reading them needs access to the server's
   memory, which already exposes the server key.
+- **A member can re-widen their own token.** Grants narrow what an agent
+  can do, not what its member can do: from a passkey session the member (or
+  an admin) can grant their token `all` again. The change needs a passkey,
+  never a token, and the audit log records the grants before and after.
 - **A restricted token still sees household-wide data.** Grants limit
   accounts, not the rest of the household: a token with grants still reads
   members, categories and connections (label, status, owner). Its changes
