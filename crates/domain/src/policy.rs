@@ -167,8 +167,11 @@ impl Serialize for GrantTarget {
 
 /// One grant of an agent token: `level` on `target`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenGrant {
+    /// The accounts the grant covers.
     pub target: GrantTarget,
+    /// The level granted on them.
     pub level: AccountLevel,
 }
 
@@ -179,12 +182,16 @@ pub const MAX_GRANTS: usize = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GrantError {
+    /// No grants were given.
     #[error("a token with grants needs at least one")]
     Empty,
-    #[error("a token has at most 100 grants")]
+    /// More than [`MAX_GRANTS`] grants were given.
+    #[error("a token has at most {MAX_GRANTS} grants")]
     TooMany,
+    /// A target was granted twice.
     #[error("each account, and all, is granted at most once")]
     DuplicateTarget,
+    /// A level is above [`grant_ceiling`] of the token's scope.
     #[error("a grant is above what the token's scope allows")]
     AboveScope,
 }
@@ -1074,6 +1081,10 @@ mod tests {
             serde_json::from_str::<Vec<TokenGrant>>(&json).unwrap(),
             grants
         );
+        assert!(
+            serde_json::from_str::<TokenGrant>(r#"{"target":"all","level":"write","x":1}"#)
+                .is_err()
+        );
         for bad in ["\"All\"", "\"\"", "\"not-an-id\"", "null"] {
             assert!(serde_json::from_str::<GrantTarget>(bad).is_err(), "{bad}");
         }
@@ -1125,8 +1136,6 @@ mod tests {
                 let level = access.level_for(id);
                 proptest::prop_assert_eq!(level.is_some(), best.is_some());
                 if let (Some(level), Some(best)) = (level, best) {
-                    proptest::prop_assert!(level <= ceiling);
-                    proptest::prop_assert!(level <= best);
                     proptest::prop_assert_eq!(level, best.min(ceiling));
                 }
                 for needed in LEVELS {
