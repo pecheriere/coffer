@@ -236,12 +236,19 @@ impl SyncService {
     }
 }
 
-/// Whether the outcome of a run that opened `opened` may still be recorded
-/// on the connection, now `stored`: it is not removed and holds the same
-/// sealed credentials. A reconnect while the run was fetching replaces
-/// them, and the run's outcome then says nothing about the new ones.
-fn still_current(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
+/// Whether the connection, now `stored`, still holds what a run that read
+/// `opened` used: it is not removed and has the same sealed credentials. A
+/// reconnect while the run was fetching replaces them.
+fn same_credentials(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
     stored.status != ConnectionStatus::Removed && stored.credentials == opened.credentials
+}
+
+/// Whether the outcome of a run that read `opened` may still be recorded on
+/// the connection, now `stored`: it has the same credentials and was not
+/// reauthorized since. Otherwise the run's outcome says nothing about the
+/// connection as it is now.
+fn still_current(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
+    same_credentials(stored, opened) && stored.reauth_generation == opened.reauth_generation
 }
 
 /// Refuses, with [`SyncError::Conflict`] and [`CONNECTION_REMOVED`], a

@@ -10,7 +10,7 @@ use jiff::civil::Date;
 
 use super::convert::{Converted, check_account, convert, valid_provider_account_id};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
-use super::{SyncService, still_current, write_balance};
+use super::{SyncService, same_credentials, still_current, write_balance};
 use crate::sync::SyncError;
 use crate::sync::apply::{AccountBatch, apply_account_batch};
 use crate::sync::provider::{
@@ -75,10 +75,14 @@ impl SyncService {
                 },
             )
             .await?;
-            if let (FetchMode::Cursor, Some(cursor), false) = (mode, result.cursor, totals.refetch)
-            {
-                tx.set_provider_state(connection.id, Some(cursor)).await?;
-            }
+        }
+        // A cursor belongs to the credentials it was given for, so it outlives
+        // a reauthorization: the records it covers were applied above.
+        if !removed
+            && same_credentials(&stored, connection)
+            && let (FetchMode::Cursor, Some(cursor), false) = (mode, result.cursor, totals.refetch)
+        {
+            tx.set_provider_state(connection.id, Some(cursor)).await?;
         }
         let finished = tx
             .finish_sync_run(run.id, status, Some(detail), now)
