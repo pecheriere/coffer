@@ -332,7 +332,7 @@ impl SyncService {
     }
 
     /// The household's current day.
-    fn today(&self) -> Date {
+    pub(super) fn today(&self) -> Date {
         self.clock
             .now()
             .to_zoned(self.config.timezone.clone())

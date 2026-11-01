@@ -72,7 +72,9 @@
   until it is removed. A removal that fails keeps the connection, so the
   member can retry; only `ITEM_NOT_FOUND` (the Item is already gone) counts as
   removed, and an Item that needs a new login is not removed until it has been
-  reconnected. Plaid's `error_message` and request id are deliberately not
+  reconnected. If coffer cannot reach Plaid to remove it, because Plaid is no
+  longer configured or the sealed token no longer opens, the removal is refused
+  and the token kept, so the Item is never orphaned while still billing. Plaid's `error_message` and request id are deliberately not
   kept: its free text can quote credentials, so coffer keeps only Plaid's error
   type and code, which are restricted to capitals, digits and underscores.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
@@ -166,8 +168,11 @@
   transactions, and removing the connection stops further imports.
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
-  leaked `write` token can make coffer call a provider at most that budget
-  (16 times in 24 hours for SimpleFin, 48 for Plaid) per connection.
+  leaked `write` token can start at most that budget of sync runs (16 in 24
+  hours for SimpleFin, 48 for Plaid) per connection. One run can make several
+  provider requests: for Plaid, up to 601 when it pages and restarts as often as
+  allowed. Removals are not budgeted, and a member's Link pages call Plaid
+  without a limit (issue #24).
 - **Plaid's script runs on the Link page.** Link needs Plaid's script from
   `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
   from that one URL and changes it in place, so coffer cannot pin a version or
@@ -213,7 +218,11 @@
   are freed, not zeroed. Wiping them would mean parsing URLs by hand instead
   of with `url::Url`, trading a well-tested parser for a home-made one on
   input an attacker can shape; reading them needs access to the server's
-  memory, which already exposes the server key.
+  memory, which already exposes the server key. The same applies to Plaid: each
+  request body holds the client secret and the access token in a buffer handed
+  to the HTTP client, response bodies grow through buffers freed unwiped before
+  they are wrapped, and the link token is an ordinary string in the rendered
+  page.
 - **A member can re-widen their own token.** Grants narrow what an agent
   can do, not what its member can do: from a passkey session the member (or
   an admin) can grant their token `all` again. The change needs a passkey,

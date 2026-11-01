@@ -55,6 +55,16 @@ impl ProviderKind {
             Self::Plaid => "plaid",
         }
     }
+
+    /// Whether the provider bills for a connection until coffer gives up its
+    /// credentials there, so erasing them first would leave it billing.
+    #[must_use]
+    pub fn bills_until_removed(self) -> bool {
+        match self {
+            Self::SimpleFin => false,
+            Self::Plaid => true,
+        }
+    }
 }
 
 impl fmt::Display for ProviderKind {

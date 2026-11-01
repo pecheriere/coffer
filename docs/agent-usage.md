@@ -316,6 +316,9 @@ for a sync.
   accounts and transactions stay. If the provider cannot be reached, or
   refuses (Plaid keeps billing an Item until it is removed there), it is an
   error and nothing changes: the connection stays and removing can be retried.
+  A Plaid connection also answers 409 and stays if the server can no longer
+  reach Plaid for it: Plaid is not configured, or its sealed token no longer
+  opens.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and

@@ -41,6 +41,8 @@ use crate::ledger::{Ledger, LedgerError};
 use crate::vault::SealedCredentials;
 
 const ALREADY_BOUND: &str = "the provider account is already bound";
+const CANNOT_GIVE_UP: &str = "the provider keeps billing this connection until it is removed there, \
+     and coffer cannot reach it: check the server's provider configuration and key, then retry";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NEEDS_RECONNECT: &str = "the connection needs reconnecting";
 const ACCOUNT_ALREADY_FED: &str =
@@ -342,7 +344,8 @@ async fn reactivate(
         }
         // A queued run uses the current credentials when it starts; a
         // running one cannot undo a reconnect that replaced them (the engine
-        // updates the status only for the credentials it used). Otherwise
+        // updates the status only for the credentials it used; update mode
+        // keeps them, so that case can be undone, see issue #22). Otherwise
         // the schedule syncs it once the limits allow.
         Err(SyncError::InProgress | SyncError::RateLimited { .. }) => Ok(()),
         Err(err) => Err(err),
@@ -839,7 +842,8 @@ impl SyncService {
     /// accounts, transactions and bindings stay; no sync writes anything
     /// for it once the removal commits. Credentials that cannot be opened,
     /// a provider this server no longer offers, or a provider that already
-    /// refuses them leave nothing to give up, and the removal goes ahead.
+    /// refuses them leave nothing to give up, and the removal goes ahead,
+    /// unless the provider bills until removed: then it is a conflict.
     ///
     /// # Errors
     ///
@@ -918,7 +922,16 @@ impl SyncService {
             );
             return Ok(());
         };
+        // A provider that bills until told otherwise must be told: its
+        // credentials are the only way to, so they are kept until they work.
+        let must_give_up = connection
+            .provider
+            .parse::<ProviderKind>()
+            .is_ok_and(ProviderKind::bills_until_removed);
         let Some(provider) = self.provider_of(connection) else {
+            if must_give_up {
+                return Err(SyncError::Conflict(CANNOT_GIVE_UP));
+            }
             tracing::warn!(
                 connection = %connection.id,
                 "connection removed without disconnecting: its provider is not offered"
@@ -929,6 +942,14 @@ impl SyncService {
         let credentials = match self.vault.open(connection.id, &sealed) {
             Ok(credentials) => credentials,
             Err(err) => {
+                if must_give_up {
+                    tracing::warn!(
+                        connection = %connection.id,
+                        error = ?err,
+                        "connection kept: its credentials cannot be opened"
+                    );
+                    return Err(SyncError::Conflict(CANNOT_GIVE_UP));
+                }
                 tracing::warn!(
                     connection = %connection.id,
                     error = ?err,
@@ -1075,7 +1096,16 @@ impl SyncService {
         authorize(actor, Action::ManageConnections)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let (view, _) = bind_in(&mut tx, now, actor, &access, provider_account, account).await?;
+        let (view, _) = bind_in(
+            &mut tx,
+            now,
+            self.today(),
+            actor,
+            &access,
+            provider_account,
+            account,
+        )
+        .await?;
         tx.commit().await?;
         tracing::info!(provider_account = %provider_account, account = %account, "provider account bound");
         Ok(view)
@@ -1143,8 +1173,16 @@ impl SyncService {
         })?;
         let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;
         authorize_account(actor, &access, record.id, AccountLevel::Write)?;
-        let (bound, balance) =
-            bind_in(&mut tx, now, actor, &access, provider_account, record.id).await?;
+        let (bound, balance) = bind_in(
+            &mut tx,
+            now,
+            self.today(),
+            actor,
+            &access,
+            provider_account,
+            record.id,
+        )
+        .await?;
         tx.commit().await?;
         tracing::info!(provider_account = %provider_account, account = %record.id, "account created and bound");
         Ok(LinkedAccountView {
@@ -1160,6 +1198,7 @@ impl SyncService {
 async fn bind_in(
     tx: &mut StoreTx,
     now: Timestamp,
+    today: Date,
     actor: &Actor,
     access: &AccountAccess,
     provider_account: ProviderAccountId,
@@ -1201,7 +1240,8 @@ async fn bind_in(
             .ok()
             .map(|balance_minor| BalanceSnapshot {
                 account,
-                on: reported.on,
+                // Never a future day, which would hide later balances.
+                on: reported.on.min(today),
                 balance_minor,
                 source: BalanceSource::Sync,
                 recorded_at: now,

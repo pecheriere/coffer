@@ -854,6 +854,59 @@ async fn disconnect_removes_item_or_fails_cleanly() {
     );
 }
 
+/// Erasing the only access token while the Item lives on would leave it
+/// billing with no way to remove it, so a Plaid connection stays until coffer
+/// can give it up: here its sealed token cannot be opened.
+#[tokio::test]
+async fn removal_refused_when_the_plaid_token_cannot_be_opened() {
+    let world = world().await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.set_connection_credentials(world.connection, Some(vec![0; 64]))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let before = world.connection().await;
+
+    let (status, problem) = world.delete_connection().await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], json!("conflict"));
+    let kept = world.connection().await;
+    assert_eq!(kept.status, before.status);
+    assert!(
+        kept.credentials == before.credentials,
+        "the sealed token is kept for when the key is restored"
+    );
+    assert!(world.script.seen(REMOVE).is_empty());
+}
+
+/// The same when Plaid is no longer configured on the server.
+#[tokio::test]
+async fn removal_refused_when_plaid_is_not_offered() {
+    let mut server = TestServer::new().await;
+    server.offer_no_provider();
+    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let member = server.authenticator().enroll(&link, "alice", "Alice").await;
+    let alice = Actor {
+        member,
+        role: Role::Admin,
+        via: Via::Session,
+    };
+    let connection = server
+        .seed_connection(ProviderKind::Plaid, "Plaid bank", member, CREDENTIALS)
+        .await;
+
+    let refused = server.sync.remove_connection(&alice, connection).await;
+
+    assert!(
+        matches!(refused, Err(SyncError::Conflict(_))),
+        "the removal is refused"
+    );
+    let kept = server.store.get_connection(connection).await.unwrap();
+    assert_ne!(kept.status, ConnectionStatus::Removed);
+    assert!(kept.credentials.is_some(), "the sealed token is kept");
+}
+
 /// An Item already gone at Plaid must not keep its connection forever.
 #[tokio::test]
 async fn disconnect_of_an_item_already_gone_succeeds() {

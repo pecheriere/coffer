@@ -497,6 +497,47 @@ async fn bind_brings_the_reported_balance() {
     );
 }
 
+/// A provider's balance dated in the future would stay the account's latest
+/// until that day, hiding every balance later syncs write.
+#[tokio::test]
+async fn bind_dates_a_future_balance_today() {
+    let world = world().await;
+    let mut future = reported("acct-1", "USD", None, Vec::new());
+    future.balance = Some((date(2099, 1, 1), DecimalAmount::parse("10.00").unwrap()));
+    world.sync_once(vec![future]).await;
+    let held = world.provider_account("acct-1").await;
+    let checking = world.account("Checking", "USD").await;
+
+    world
+        .server
+        .sync
+        .bind(&world.alice, held.id, checking)
+        .await
+        .unwrap();
+
+    let writer = world.token(Scope::Write).await;
+    let (_, account) = world
+        .call(
+            Method::GET,
+            &format!("/api/v1/accounts/{checking}"),
+            &writer,
+            None,
+        )
+        .await;
+    let today = world
+        .server
+        .clock
+        .now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .to_string();
+    assert_eq!(account["latest_balance"]["on"], json!(today));
+    assert_eq!(
+        account["latest_balance"]["balance"]["minor_units"],
+        json!(1000)
+    );
+}
+
 #[tokio::test]
 async fn create_account_and_bind_via_api() {
     let world = world().await;
