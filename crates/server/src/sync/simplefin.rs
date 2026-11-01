@@ -93,7 +93,7 @@ impl SimpleFin {
             .map_err(claim_egress_error)?;
         let response = self
             .egress
-            .send(
+            .send_limited(
                 OutboundRequest {
                     method: Method::POST,
                     url: claim,
@@ -102,6 +102,7 @@ impl SimpleFin {
                     body: None,
                 },
                 &self.hosts,
+                MAX_ACCESS_URL_BYTES,
             )
             .await
             .map_err(claim_egress_error)?;
@@ -121,9 +122,6 @@ impl SimpleFin {
                     status.as_u16()
                 )));
             }
-        }
-        if body.len() > MAX_ACCESS_URL_BYTES {
-            return Err(ProviderError::Invalid(CLAIM_ANSWER_INVALID.into()));
         }
         let text = std::str::from_utf8(&body)
             .map_err(|_| ProviderError::Invalid(CLAIM_ANSWER_INVALID.into()))?;

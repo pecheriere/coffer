@@ -51,7 +51,8 @@ pub enum EgressError {
     /// 60 s.
     #[error("request timed out")]
     Timeout,
-    /// The response body is larger than [`MAX_BODY_BYTES`].
+    /// The response body is larger than [`MAX_BODY_BYTES`], or than the
+    /// caller's limit (see [`Egress::send_limited`]).
     #[error("response body exceeds the size limit")]
     TooLarge,
     /// The connection, the TLS handshake, the proxy or the exchange failed.
@@ -162,6 +163,12 @@ impl HostAllowList {
     #[must_use]
     pub fn loopback(port: u16) -> HostAllowList {
         HostAllowList(vec![format!("127.0.0.1:{port}")])
+    }
+
+    /// An allow-list that allows nothing.
+    #[must_use]
+    pub fn none() -> HostAllowList {
+        HostAllowList(Vec::new())
     }
 
     fn allows_loopback(&self, url: &Url) -> bool {
@@ -350,6 +357,23 @@ impl Egress {
         request: OutboundRequest,
         allowed: &HostAllowList,
     ) -> Result<OutboundResponse, EgressError> {
+        self.send_limited(request, allowed, MAX_BODY_BYTES).await
+    }
+
+    /// As [`Egress::send`], with the body limited to `max_body` bytes (at
+    /// most [`MAX_BODY_BYTES`]): a declared length over it is refused before
+    /// reading, and reading stops as soon as the body would exceed it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Egress::send`].
+    pub async fn send_limited(
+        &self,
+        request: OutboundRequest,
+        allowed: &HostAllowList,
+        max_body: usize,
+    ) -> Result<OutboundResponse, EgressError> {
+        let max_body = max_body.min(MAX_BODY_BYTES);
         self.check_url(&request.url, allowed)?;
         let mut builder = self.client.request(request.method, request.url);
         for (name, value) in request.headers {
@@ -368,13 +392,13 @@ impl Egress {
         let status = response.status();
         if response
             .content_length()
-            .is_some_and(|len| usize::try_from(len).map_or(true, |len| len > MAX_BODY_BYTES))
+            .is_some_and(|len| usize::try_from(len).map_or(true, |len| len > max_body))
         {
             return Err(EgressError::TooLarge);
         }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(classify)? {
-            if chunk.len() > MAX_BODY_BYTES - body.len() {
+            if chunk.len() > max_body - body.len() {
                 return Err(EgressError::TooLarge);
             }
             body.extend_from_slice(&chunk);

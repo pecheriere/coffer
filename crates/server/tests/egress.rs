@@ -124,6 +124,34 @@ async fn oversized_body_refused() {
     assert_eq!(response.body.len(), MAX_BODY_BYTES);
 }
 
+/// A caller's smaller limit applies to a declared length and while reading
+/// a body of no declared length.
+#[tokio::test]
+async fn caller_body_limit_applies_while_reading() {
+    let router = Router::new()
+        .route(
+            "/declared",
+            get(|| async { vec![b'a'; 4096].into_response() }),
+        )
+        .route("/limit", get(|| async { vec![b'a'; 2048].into_response() }));
+    let port = serve(router).await;
+    let egress = Egress::for_tests();
+    let allowed = HostAllowList::loopback(port);
+    let send = |path: &str, port: u16, allowed: HostAllowList| {
+        let egress = egress.clone();
+        let url = format!("http://127.0.0.1:{port}{path}");
+        async move { egress.send_limited(get_request(&url), &allowed, 2048).await }
+    };
+
+    let declared = send("/declared", port, allowed.clone()).await;
+    assert!(matches!(declared, Err(EgressError::TooLarge)));
+    let chunked = serve_chunked(1).await;
+    let streamed = send("/", chunked, HostAllowList::loopback(chunked)).await;
+    assert!(matches!(streamed, Err(EgressError::TooLarge)));
+    let at_limit = send("/limit", port, allowed).await.unwrap();
+    assert_eq!(at_limit.body.len(), 2048);
+}
+
 /// Answers every connection with a chunked body (no declared length) of
 /// `chunks` chunks of 1 MiB.
 async fn serve_chunked(chunks: usize) -> u16 {
