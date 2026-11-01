@@ -17,7 +17,7 @@ use std::sync::Arc;
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
-use coffer_domain::money::{Currency, DecimalAmount};
+use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
@@ -54,7 +54,7 @@ const UNSUPPORTED_CURRENCY: &str =
     "the provider reported a currency that is not a supported ISO 4217 code";
 const CURRENCY_DIFFERS: &str = "the provider reported a currency other than the bound account's";
 const BALANCE_UNREPRESENTABLE: &str =
-    "the provider reported a balance with more decimals than the currency allows, or too large";
+    "the provider reported a balance too large to store, so it was left out";
 const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
 const INTERNAL_FAILURE: &str = "the sync failed on the server";
@@ -562,6 +562,7 @@ impl SyncService {
         let now = upsert.seen_at;
         let connection = upsert.connection;
         let holds_records = !data.transactions.is_empty() || !data.removed.is_empty();
+        // The exact text, whatever becomes of the value.
         upsert.balance = data.balance.as_ref().map(|(on, amount)| RawBalance {
             on: *on,
             amount_raw: amount.as_str().to_owned(),
@@ -572,7 +573,11 @@ impl SyncService {
         if tx.get_connection(connection).await?.status == ConnectionStatus::Removed {
             return Ok(AccountOutcome::ConnectionRemoved);
         }
-        let record = tx.upsert_provider_account(upsert).await?;
+        let record = if data.error.is_some() {
+            tx.upsert_failed_provider_account(upsert).await?
+        } else {
+            tx.upsert_provider_account(upsert).await?
+        };
 
         let checked = check_account(&mut tx, &record, &data).await?;
         let (account, currency) = match checked {
@@ -586,27 +591,21 @@ impl SyncService {
                 });
             }
         };
-        let Some(Converted {
+        let Converted {
             transactions,
             unusable,
-            balance,
-        }) = convert(
-            data.transactions,
-            data.unusable,
-            data.balance,
-            currency,
-            today,
-        )
-        else {
-            tx.set_provider_account_error(record.id, Some(BALANCE_UNREPRESENTABLE.to_owned()))
-                .await?;
-            tx.commit().await?;
-            return Ok(AccountOutcome::Failed {
-                refetch: holds_records,
-            });
+        } = convert(data.transactions, data.unusable, currency, today);
+        // A balance is a valuation: rounded to fit, and if it still cannot be
+        // stored the account's records apply without it.
+        let (balance, note) = match data.balance {
+            Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
+                Ok(minor) => (Some((on, minor)), None),
+                Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
+            },
+            None => (None, None),
         };
-        if record.error.is_some() {
-            tx.set_provider_account_error(record.id, None).await?;
+        if record.error != note {
+            tx.set_provider_account_error(record.id, note).await?;
         }
         let provider_account = record.id;
         let bound = account.clone();
@@ -644,7 +643,7 @@ impl SyncService {
         if tx.get_connection(upsert.connection).await?.status == ConnectionStatus::Removed {
             return Ok(());
         }
-        let record = tx.upsert_provider_account(upsert).await?;
+        let record = tx.upsert_failed_provider_account(upsert).await?;
         tx.set_provider_account_error(record.id, Some(ACCOUNT_NOT_STORED.to_owned()))
             .await?;
         tx.commit().await
@@ -815,7 +814,9 @@ async fn check_account(
     let Ok(currency) = Currency::parse(&data.currency) else {
         return Ok(Err(AccountRefusal {
             text: UNSUPPORTED_CURRENCY.to_owned(),
-            lasting: true,
+            // No currency at all may come with the next answer; one coffer
+            // does not support never becomes storable.
+            lasting: !data.currency.is_empty(),
         }));
     };
     let account = match record.account {
@@ -831,31 +832,24 @@ async fn check_account(
     Ok(Ok((account, currency)))
 }
 
-/// An account's records and balance in its currency's minor units.
+/// An account's records in its currency's minor units.
 struct Converted {
     transactions: Vec<NormalizedTransaction>,
     /// The provider's unusable records, then the records whose amount does
     /// not convert exactly.
     unusable: Vec<Option<String>>,
-    /// The balance and the day it describes.
-    balance: Option<(Date, i64)>,
 }
 
-/// The account's records and balance in `currency`'s minor units, a
-/// pending record without a date dated `today`. A record whose amount does
-/// not convert exactly, or a posted one without a date, joins `unusable`;
-/// `None` when the balance does not convert.
+/// The account's records in `currency`'s minor units, a pending record
+/// without a date dated `today`. A record whose amount does not convert
+/// exactly, or a posted one without a date, joins `unusable`: unlike a
+/// balance, which is a valuation, a ledger amount is never rounded.
 fn convert(
     records: Vec<ProviderTransaction>,
     mut unusable: Vec<Option<String>>,
-    balance: Option<(Date, DecimalAmount)>,
     currency: Currency,
     today: Date,
-) -> Option<Converted> {
-    let balance = match balance {
-        Some((on, amount)) => Some((on, amount.to_minor_units(currency).ok()?)),
-        None => None,
-    };
+) -> Converted {
     let mut transactions = Vec::with_capacity(records.len());
     for record in records {
         if record.posted_on.is_none() && !record.pending {
@@ -872,7 +866,7 @@ fn convert(
             date_reported: record.posted_on.is_some(),
             transacted_on: record.transacted_on,
             amount_minor,
-            amount_raw: record.amount.as_str().to_owned(),
+            amount_raw: record.amount_raw,
             description: record.description,
             payee: record.payee,
             memo: record.memo,
@@ -880,11 +874,10 @@ fn convert(
             replaces_provider_id: record.replaces_provider_id,
         });
     }
-    Some(Converted {
+    Converted {
         transactions,
         unusable,
-        balance,
-    })
+    }
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes

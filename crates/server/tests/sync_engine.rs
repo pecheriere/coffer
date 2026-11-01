@@ -191,6 +191,7 @@ fn txn(provider_id: &str, posted_on: Date, value: &str) -> ProviderTransaction {
         posted_on: Some(posted_on),
         transacted_on: None,
         amount: amount(value),
+        amount_raw: value.to_owned(),
         description: "COFFEE SHOP PURCHASE".into(),
         payee: None,
         memo: None,

@@ -178,6 +178,8 @@ pub struct ProviderTransaction {
     pub transacted_on: Option<Date>,
     /// Negative is money out of the account.
     pub amount: DecimalAmount,
+    /// The amount exactly as the provider wrote it, in its own sign.
+    pub amount_raw: String,
     pub description: String,
     pub payee: Option<String>,
     pub memo: Option<String>,
@@ -270,6 +272,15 @@ pub trait Provider: Send + Sync {
         &self,
         input: ConnectInput,
     ) -> ProviderFuture<'_, Result<SecretString, ProviderError>>;
+
+    /// Turns setup input into new credentials for an existing connection.
+    /// A provider whose credentials cannot be replaced refuses.
+    fn reconnect(
+        &self,
+        input: ConnectInput,
+    ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
+        self.connect(input)
+    }
 
     /// Fetches accounts, balances and transactions.
     fn fetch<'a>(

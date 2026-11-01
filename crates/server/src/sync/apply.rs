@@ -80,7 +80,8 @@ pub struct NormalizedTransaction {
     pub transacted_on: Option<Date>,
     /// Negative is money out of the account.
     pub amount_minor: i64,
-    /// The amount as the provider gave it.
+    /// The amount exactly as the provider wrote it, in its own sign:
+    /// `amount_minor` alone follows coffer's.
     pub amount_raw: String,
     pub description: String,
     pub payee: Option<String>,

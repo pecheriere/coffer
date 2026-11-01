@@ -54,7 +54,8 @@ pub struct SourceRecord {
     /// The canonical transaction; `None` while held.
     pub transaction: Option<TransactionId>,
     pub fields: ImportedFields,
-    /// The amount as the provider gave it (a decimal text).
+    /// The amount exactly as the provider wrote it, in its own sign (a
+    /// decimal text).
     pub amount_raw: String,
     pub fingerprint: String,
     pub fingerprint_version: u8,

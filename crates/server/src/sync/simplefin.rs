@@ -458,6 +458,7 @@ fn transaction(raw: &RawTransaction, request: &FetchRequest<'_>) -> Option<Provi
         provider_id: raw.id.clone(),
         posted_on: date,
         transacted_on,
+        amount_raw: amount.as_str().to_owned(),
         amount,
         description: raw.description.clone(),
         payee: raw.payee.clone(),

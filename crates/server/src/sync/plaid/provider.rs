@@ -46,11 +46,20 @@ const API_ERROR: &str = "API_ERROR";
 const INSTITUTION_ERROR: &str = "INSTITUTION_ERROR";
 /// The client's error type for a refusal whose body is not one of Plaid's.
 const UNREADABLE: &str = "UNREADABLE";
-/// Plaid's error codes for an Item or token that no longer exists.
-const ITEM_GONE: [&str; 2] = ["ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN"];
+/// Plaid's error code for an Item that no longer exists. `INVALID_ACCESS_TOKEN`
+/// is not one: it also answers a wrong environment or wrong keys, with the Item
+/// alive and billing.
+const ITEM_GONE: &str = "ITEM_NOT_FOUND";
+/// Plaid's error codes, during a fetch, for an Item trying again cannot bring
+/// back.
+const ITEM_DEAD: [&str; 2] = [ITEM_GONE, "USER_PERMISSION_REVOKED"];
 
 const DATA_CHANGED: &str = "Plaid data changed during sync; try again";
 const WRONG_INPUT: &str = "this connection is set up through Plaid Link";
+const UPDATE_MODE_ONLY: &str =
+    "a Plaid connection logs in again through Plaid Link, which keeps its Item";
+const REMOVAL_NEEDS_LOGIN: &str =
+    "Plaid could not remove the Item because it needs a new login; reconnect it first";
 const CREDENTIALS_UNUSABLE: &str =
     "the connection's Plaid credentials are not usable; reconnect it";
 const CREDENTIALS_NOT_STORABLE: &str = "Plaid's access token could not be stored";
@@ -274,7 +283,7 @@ impl Plaid {
         for _ in 0..MAX_PASSES {
             match self.gather(access_token, cursor).await {
                 Err(PlaidError::MutationDuringPagination) => {}
-                other => return other.map_err(provider_error),
+                other => return other.map_err(fetch_error),
             }
         }
         Err(ProviderError::Unavailable(DATA_CHANGED.into()))
@@ -286,7 +295,7 @@ impl Plaid {
             .client
             .accounts(&credentials.access_token)
             .await
-            .map_err(provider_error)?;
+            .map_err(fetch_error)?;
         let (gathered, cursor) = self
             .gather_with_restarts(&credentials.access_token, request.cursor)
             .await?;
@@ -310,10 +319,15 @@ impl Plaid {
         let credentials =
             Credentials::open(credentials).map_err(|_| ProviderError::ReauthRequired)?;
         match self.client.remove_item(&credentials.access_token).await {
-            Err(PlaidError::Api { error_code, .. }) if ITEM_GONE.contains(&error_code.as_str()) => {
+            Err(PlaidError::Api { error_code, .. }) if error_code == ITEM_GONE => {
                 // Already gone at Plaid: nothing is left to give up, and
                 // refusing would keep the connection forever.
                 Ok(())
+            }
+            // The engine takes a refused login as nothing left to give up,
+            // but this Item still exists and still bills.
+            Err(PlaidError::ItemLoginRequired) => {
+                Err(ProviderError::Invalid(REMOVAL_NEEDS_LOGIN.into()))
             }
             other => other.map_err(provider_error),
         }
@@ -390,7 +404,8 @@ fn readable_account(
             .iso_currency_code
             .as_deref()
             .or(record.unofficial_currency_code.as_deref());
-        if record_currency.is_some_and(|code| code != currency) {
+        // With no currency of its own the engine refuses the account whole.
+        if !currency.is_empty() && record_currency.is_some_and(|code| code != currency) {
             unusable.push(Some(record.transaction_id));
         } else {
             transactions.push(transaction(record));
@@ -442,6 +457,7 @@ fn transaction(record: PlaidTransaction) -> ProviderTransaction {
         provider_id: record.transaction_id,
         posted_on: Some(record.date),
         transacted_on: record.authorized_date,
+        amount_raw: record.amount.as_str().to_owned(),
         amount: record.amount.negated(),
         description: sanitize_provider_message(&record.name),
         payee: record
@@ -467,6 +483,17 @@ fn kind_hint(kind: &str, subtype: Option<&str>) -> Option<AccountKind> {
             Some(AccountKind::Retirement)
         }
         _ => None,
+    }
+}
+
+/// The provider error an error during a fetch stands for: as
+/// [`provider_error`], and an Item that is dead needs its member too.
+fn fetch_error(err: PlaidError) -> ProviderError {
+    match err {
+        PlaidError::Api { ref error_code, .. } if ITEM_DEAD.contains(&error_code.as_str()) => {
+            ProviderError::ReauthRequired
+        }
+        other => provider_error(other),
     }
 }
 
@@ -520,6 +547,17 @@ impl Provider for Plaid {
                 }
             }
         })
+    }
+
+    /// New credentials would name another Item and leave this one billing:
+    /// the member logs in again through update mode, which replaces nothing.
+    fn reconnect(
+        &self,
+        _input: ConnectInput,
+    ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
+        Box::pin(std::future::ready(Err(ProviderError::Invalid(
+            UPDATE_MODE_ONLY.into(),
+        ))))
     }
 
     fn fetch<'a>(

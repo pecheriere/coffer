@@ -146,6 +146,45 @@ async fn connection_lifecycle() {
 }
 
 #[tokio::test]
+async fn failed_report_creates_an_account_but_changes_no_known_field() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let mut tx = store.begin().await.unwrap();
+    let connection = tx
+        .insert_connection(NewConnection {
+            provider: "testbank",
+            label: ConnectionLabel::parse("Bank").unwrap(),
+            owner,
+            credentials: vec![1],
+            created_at: at(0),
+        })
+        .await
+        .unwrap();
+    let created = tx
+        .upsert_failed_provider_account(upsert(connection.id, "New", None, 1))
+        .await
+        .unwrap();
+    assert_eq!(created.name, "New");
+
+    let known = tx
+        .upsert_provider_account(upsert(connection.id, "Savings", None, 2))
+        .await
+        .unwrap();
+    let mut report = upsert(connection.id, "Other", None, 3);
+    report.institution = None;
+    report.currency_raw = String::new();
+    report.kind_hint = None;
+    let failed = tx.upsert_failed_provider_account(report).await.unwrap();
+
+    assert_eq!(failed.id, created.id);
+    assert_eq!(failed.name, known.name);
+    assert_eq!(failed.institution, known.institution);
+    assert_eq!(failed.currency_raw, known.currency_raw);
+    assert_eq!(failed.kind_hint, known.kind_hint);
+    assert_eq!(failed.last_seen_at, at(3));
+}
+
+#[tokio::test]
 async fn provider_account_refresh_keeps_binding_and_balance() {
     let (_dir, store) = open().await;
     let owner = member(&store).await;

@@ -506,7 +506,10 @@ async fn plaid_amount_sign_inverted() {
         "Corner Coffee"
     );
     assert!(!spent.pending);
-    assert_eq!(spent.sources[0].amount_raw, "-12");
+    assert_eq!(
+        spent.sources[0].amount_raw, "12",
+        "the provider's exact text, in its own sign"
+    );
     let income = transactions
         .iter()
         .find(|t| t.raw_description.as_str() == "SHOP income")
@@ -896,6 +899,12 @@ async fn unusable_credentials_fail_sync_and_do_not_block_removal() {
         .remove_connection(&world.alice, garbled)
         .await
         .unwrap();
+    let log = captured_log_text();
+    let warned = log.lines().any(|line| {
+        line.contains("removed without disconnecting") && line.contains(&garbled.to_string())
+    });
+    assert!(warned, "a removal that gave up nothing at Plaid is logged");
+    assert!(!log.contains(ACCESS_MARKER), "and quotes nothing");
 }
 
 /// One unreadable account leaves the others syncing. Its records were not
@@ -1146,6 +1155,10 @@ async fn unusable_cursor_is_refused() {
     let run = world.sync().await;
 
     assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(
+        run.detail.as_deref(),
+        Some("Plaid sent a sync cursor coffer could not store")
+    );
     assert_eq!(world.connection().await.provider_state, None);
 }
 
@@ -1271,6 +1284,11 @@ async fn access_token_absent_from_outcomes() {
     world.script.page(echoed.clone());
     let third = world.sync().await;
 
+    assert_eq!(world.script.seen(GET_ACCOUNTS).len(), 3, "Plaid was asked");
+    assert_eq!(world.script.seen(SYNC).len(), 1, "each answer was reached");
+    for run in [&first, &second, &third] {
+        assert_eq!(run.status, SyncRunStatus::Failed);
+    }
     let connection = world.connection().await;
     let log = captured_log_text();
     assert!(log.contains(&marker), "the capture still holds this test");
@@ -1286,50 +1304,346 @@ async fn access_token_absent_from_outcomes() {
     }
 }
 
-/// A reconnect that yields new credentials names another Item, for which the
-/// old cursor means nothing. A setup token of the other provider is refused
-/// without changing anything.
+/// New credentials would name another Item and leave the old one billing at
+/// Plaid: a Plaid connection logs in again through update mode only, so no
+/// input reconnects it, nothing reaches Plaid and the cursor stays.
 #[tokio::test]
-async fn reconnect_forgets_the_cursor_and_refuses_other_input() {
+async fn reconnect_refuses_every_input_and_keeps_the_cursor() {
     let world = world().await;
     world.script.page(page(&[], &[], &[], "old-item", false));
     world.sync().await;
+    let before = world.connection().await;
 
-    let refused = world
-        .server
-        .sync
-        .reconnect(
-            &world.alice,
-            world.connection,
-            ConnectInput::SimpleFinSetupToken(SecretString::from("x")),
-        )
-        .await;
+    for input in [
+        ConnectInput::SimpleFinSetupToken(SecretString::from("x")),
+        ConnectInput::PlaidPublicToken(SecretString::from("public-2")),
+    ] {
+        let refused = world
+            .server
+            .sync
+            .reconnect(&world.alice, world.connection, input)
+            .await;
+        assert!(
+            matches!(refused, Err(SyncError::Provider(ProviderError::Invalid(_)))),
+            "update mode is the only way back"
+        );
+    }
+
+    assert_eq!(
+        world.script.seen(EXCHANGE).len(),
+        0,
+        "nothing was exchanged"
+    );
+    let after = world.connection().await;
+    assert_eq!(after.provider_state.as_deref(), Some("old-item"));
     assert!(
-        matches!(refused, Err(SyncError::Provider(ProviderError::Invalid(_)))),
-        "a SimpleFin token does not reconnect a Plaid connection"
+        after.credentials == before.credentials,
+        "the credentials are kept"
+    );
+}
+
+/// `/item/remove` must not report success while the Item may keep billing: an
+/// invalid token can also mean a wrong environment or wrong keys, and an Item
+/// that needs a new login still exists.
+#[tokio::test]
+async fn removal_failures_leave_the_connection_unchanged() {
+    for body in [
+        json!({ "error_type": "INVALID_INPUT", "error_code": "INVALID_ACCESS_TOKEN" }).to_string(),
+        LOGIN_REQUIRED.to_owned(),
+        json!({ "error_type": "ITEM_ERROR", "error_code": "USER_PERMISSION_REVOKED" }).to_string(),
+    ] {
+        let world = world().await;
+        let before = world.connection().await;
+        world.script.reply(REMOVE, StatusCode::BAD_REQUEST, body);
+
+        let (status, _) = world.delete_connection().await;
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        let kept = world.connection().await;
+        assert_eq!(kept.status, before.status);
+        assert!(
+            kept.credentials == before.credentials,
+            "the credentials are kept"
+        );
+    }
+}
+
+/// Balances are valuations: one with more decimals than its currency applies
+/// rounded half-even, and the raw field keeps the exact text.
+#[tokio::test]
+async fn too_precise_balance_is_rounded_and_keeps_its_text() {
+    let world = world().await;
+    let retirement = world.bound("acct-401k").await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        accounts_answer(&[account_json("acct-401k", "investment", &json!(23631.9805))]),
+    );
+    world.script.page(page(
+        &[record("r1", "acct-401k", "1")],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Succeeded);
+    let balance = world
+        .server
+        .store
+        .latest_balance(retirement)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(balance.balance_minor, 2_363_198);
+    let provider_account = world.provider_account("acct-401k").await;
+    assert_eq!(provider_account.error, None);
+    assert_eq!(
+        provider_account.last_balance.unwrap().amount_raw,
+        "23631.9805"
+    );
+    assert_eq!(world.transactions(retirement).await.len(), 1);
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("cursor-1")
+    );
+}
+
+/// A balance too large to store is dropped and noted; the records still apply,
+/// the cursor moves, and a later usable balance clears the note.
+#[tokio::test]
+async fn too_large_balance_is_noted_and_records_still_apply() {
+    let world = world().await;
+    let bound = world.bound("acct-big").await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        accounts_answer(&[account_json(
+            "acct-big",
+            "depository",
+            &json!(999_999_999_999_999_999_u64),
+        )]),
+    );
+    world.script.page(page(
+        &[record("r1", "acct-big", "1")],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    world.sync().await;
+
+    assert_eq!(world.transactions(bound).await.len(), 1);
+    assert!(
+        world
+            .server
+            .store
+            .latest_balance(bound)
+            .await
+            .unwrap()
+            .is_none(),
+        "the balance is dropped"
+    );
+    let noted = world.provider_account("acct-big").await;
+    assert!(
+        noted.error.unwrap().contains("balance"),
+        "the provider account says why"
     );
     assert_eq!(
         world.connection().await.provider_state.as_deref(),
-        Some("old-item")
+        Some("cursor-1")
     );
 
     world.script.reply(
-        EXCHANGE,
+        GET_ACCOUNTS,
         StatusCode::OK,
-        json!({ "access_token": "access-2", "item_id": "item-2" }).to_string(),
+        accounts_answer(&[account_json("acct-big", "depository", &json!(5))]),
     );
-    world
-        .server
-        .sync
-        .reconnect(
-            &world.alice,
-            world.connection,
-            ConnectInput::PlaidPublicToken(SecretString::from("public-2")),
-        )
-        .await
-        .unwrap();
+    world.script.page(page(&[], &[], &[], "cursor-2", false));
+    world.sync().await;
 
+    assert_eq!(world.provider_account("acct-big").await.error, None);
+}
+
+/// A currency Plaid did not name may come with the next answer, so unlike an
+/// unsupported one it holds the cursor, whatever its records say.
+#[tokio::test]
+async fn missing_currency_holds_the_cursor() {
+    let world = world().await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        r#"{"accounts":[{"account_id":"acct-none","name":"None","type":"depository",
+            "balances":{"current":5,"iso_currency_code":null,"unofficial_currency_code":null}}]}"#,
+    );
+    world.script.page(page(
+        &[record("r1", "acct-none", "1")],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    let held = world.provider_account("acct-none").await;
+    assert!(held.error.unwrap().contains("currency"));
     assert_eq!(world.connection().await.provider_state, None);
+}
+
+/// A failed account's report says nothing about what it is: what a good sync
+/// learned about it stays.
+#[tokio::test]
+async fn failed_account_keeps_what_is_known() {
+    let world = world().await;
+    world.script.page(page(&[], &[], &[], "cursor-1", false));
+    world.sync().await;
+    let known = world.provider_account("acct-card").await;
+    assert_eq!(known.kind_hint, Some(AccountKind::CreditCard));
+
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        r#"{"accounts":[{"account_id":"acct-card","name":"Other","type":"depository",
+            "balances":{"current":1e2,"iso_currency_code":"EUR"}}]}"#,
+    );
+    world.script.page(page(&[], &[], &[], "cursor-2", false));
+    world.sync().await;
+
+    let failed = world.provider_account("acct-card").await;
+    assert!(failed.error.is_some(), "the failure is recorded");
+    assert_eq!(failed.name, known.name);
+    assert_eq!(failed.currency_raw, known.currency_raw);
+    assert_eq!(failed.kind_hint, known.kind_hint);
+}
+
+/// A dead Item cannot come back by trying again: scheduled syncs stop spending
+/// requests on it, from either request of a fetch.
+#[tokio::test]
+async fn dead_item_marks_reauth() {
+    for code in ["ITEM_NOT_FOUND", "USER_PERMISSION_REVOKED"] {
+        for path in [GET_ACCOUNTS, SYNC] {
+            let world = world().await;
+            world.script.reply(
+                path,
+                StatusCode::BAD_REQUEST,
+                json!({ "error_type": "ITEM_ERROR", "error_code": code }).to_string(),
+            );
+
+            let run = world.sync().await;
+
+            assert_eq!(run.status, SyncRunStatus::Failed);
+            assert_eq!(
+                world.connection().await.status,
+                ConnectionStatus::ReauthRequired
+            );
+        }
+    }
+}
+
+/// Binding the account to another currency can be undone, so its records are
+/// fetched again rather than passed by.
+#[tokio::test]
+async fn currency_differing_from_the_binding_holds_the_cursor() {
+    let world = world().await;
+    let bound = world.bound("acct-eur").await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        r#"{"accounts":[{"account_id":"acct-eur","name":"Euro","type":"depository",
+            "balances":{"current":5,"iso_currency_code":"EUR"}}]}"#,
+    );
+    let mut euros = record("r1", "acct-eur", "1");
+    euros["iso_currency_code"] = json!("EUR");
+    world
+        .script
+        .page(page(&[euros], &[], &[], "cursor-1", false));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert_eq!(world.transactions(bound).await.len(), 0);
+    assert_eq!(world.connection().await.provider_state, None);
+}
+
+/// A removal is a record too: a failed account holding only removals must see
+/// them again.
+#[tokio::test]
+async fn failed_account_with_only_removals_holds_the_cursor() {
+    let world = world().await;
+    world.bound("acct-bad").await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        r#"{"accounts":[{"account_id":"acct-bad","name":"Bad","type":"depository",
+            "balances":{"current":1e2,"iso_currency_code":"USD"}}]}"#,
+    );
+    world.script.page(page(
+        &[],
+        &[],
+        &[json!({ "transaction_id": "gone", "account_id": "acct-bad" })],
+        "cursor-1",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert_eq!(world.connection().await.provider_state, None);
+}
+
+/// The stored text is what Plaid wrote, and a zero never gains a sign.
+#[tokio::test]
+async fn amount_text_is_exact_and_zero_is_unsigned() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    world.script.reply(
+        GET_ACCOUNTS,
+        StatusCode::OK,
+        accounts_answer(&[
+            account_json("acct-checking", "depository", &json!(5)),
+            account_json("acct-card", "credit", &json!(0)),
+        ]),
+    );
+    world.script.page(page(
+        &[
+            record("zero", "acct-checking", "0"),
+            record("cents", "acct-checking", "4.5"),
+        ],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    world.sync().await;
+
+    let transactions = world.transactions(checking).await;
+    let text = |description: &str| {
+        transactions
+            .iter()
+            .find(|t| t.raw_description.as_str() == description)
+            .unwrap()
+            .sources[0]
+            .amount_raw
+            .clone()
+    };
+    assert_eq!(text("SHOP zero"), "0");
+    assert_eq!(text("SHOP cents"), "4.5");
+    assert_eq!(
+        world
+            .provider_account("acct-card")
+            .await
+            .last_balance
+            .unwrap()
+            .amount_raw,
+        "0",
+        "a zero balance owed gains no sign"
+    );
 }
 
 /// Plaid is offered exactly when it is configured, with its documented
@@ -1373,6 +1687,7 @@ fn simplefin_record(description: &str) -> ProviderTransaction {
         posted_on: Some(date(2027, 1, 10)),
         transacted_on: None,
         amount: DecimalAmount::parse("-1").unwrap(),
+        amount_raw: "-1".to_owned(),
         description: description.into(),
         payee: None,
         memo: None,

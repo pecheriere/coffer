@@ -593,7 +593,8 @@ impl SyncService {
     /// [`SyncError::NotFound`] for an unknown connection;
     /// [`SyncError::Conflict`] for a removed one; [`SyncError::Invalid`]
     /// when this server does not offer its provider;
-    /// [`SyncError::Provider`] when the provider refuses the input;
+    /// [`SyncError::Provider`] when the provider refuses the input, as Plaid
+    /// refuses every input (see [`Self::confirm_reauthorized`]);
     /// [`SyncError::Vault`] when the credentials cannot be sealed; storage
     /// failures.
     pub async fn reconnect(
@@ -609,7 +610,10 @@ impl SyncService {
         let provider = self
             .provider_of(&current)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
-        let credentials = provider.connect(input).await.map_err(SyncError::Provider)?;
+        let credentials = provider
+            .reconnect(input)
+            .await
+            .map_err(SyncError::Provider)?;
         let record = match self
             .store_reconnect(actor, &current, &credentials, provider.capabilities())
             .await
@@ -908,8 +912,15 @@ impl SyncService {
             }
         };
         match provider.disconnect(&credentials).await {
+            Ok(()) => Ok(()),
             // Credentials the provider refuses are already given up.
-            Ok(()) | Err(ProviderError::ReauthRequired) => Ok(()),
+            Err(ProviderError::ReauthRequired) => {
+                tracing::warn!(
+                    connection = %connection.id,
+                    "connection removed without disconnecting: the provider refused its credentials"
+                );
+                Ok(())
+            }
             Err(err) => {
                 tracing::warn!(connection = %connection.id, error = ?err, "disconnect failed");
                 Err(SyncError::Provider(err))
