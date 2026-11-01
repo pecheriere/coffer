@@ -114,6 +114,7 @@ impl World {
                     posted_on: Some(date(2027, 1, 10)),
                     transacted_on: None,
                     amount: DecimalAmount::parse("-12.50").unwrap(),
+                    amount_raw: "-12.50".to_owned(),
                     description: "COFFEE SHOP PURCHASE".into(),
                     payee: None,
                     memo: None,
@@ -139,6 +140,7 @@ impl World {
                 TokenName::parse("claude").unwrap(),
                 scope,
                 None,
+                Vec::new(),
             )
             .await
             .unwrap();
@@ -445,13 +447,17 @@ async fn delete_connection_keeps_transactions() {
     world.script_one_account();
     let run = world.queue_run().await;
     world.server.sync.run(run).await.unwrap();
-    let provider_account = world
+    let Ok(listed) = world
         .server
         .store
         .list_provider_accounts(Some(world.connection))
         .await
-        .unwrap()
-        .remove(0);
+    else {
+        panic!("the provider accounts can be listed");
+    };
+    let Some(provider_account) = listed.into_iter().next() else {
+        panic!("one provider account was synced");
+    };
     world
         .server
         .sync

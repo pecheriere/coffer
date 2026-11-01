@@ -42,6 +42,9 @@ pub enum SecretError {
     Random(getrandom::Error),
 }
 
+/// The length of a content security policy nonce, in bytes (128 bits).
+const NONCE_LEN: usize = 16;
+
 /// The kind of secret token; separates hash domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -98,6 +101,22 @@ pub fn mint(kind: TokenKind) -> SecretToken {
         TokenKind::Session | TokenKind::Invite => encoded,
     };
     SecretToken(SecretString::from(token))
+}
+
+/// Mints a content security policy nonce for one response: 16 random bytes,
+/// base64url without padding.
+///
+/// # Panics
+///
+/// Panics if the operating system cannot supply random bytes; a predictable
+/// nonce would be unsafe.
+#[must_use]
+pub fn mint_nonce() -> String {
+    let mut bytes = [0u8; NONCE_LEN];
+    if let Err(err) = getrandom::fill(bytes.as_mut_slice()) {
+        panic!("operating system random source failed: {err}");
+    }
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Returns the non-secret display prefix of an agent token: the first 12
@@ -202,6 +221,13 @@ mod tests {
     use super::*;
     use secrecy::ExposeSecret;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn nonces_are_128_bits_and_fresh() {
+        let first = mint_nonce();
+        assert_eq!(URL_SAFE_NO_PAD.decode(&first).unwrap().len(), 16);
+        assert_ne!(first, mint_nonce());
+    }
 
     #[test]
     fn key_created_with_0600_and_reloaded_identically() {

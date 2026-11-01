@@ -49,6 +49,7 @@ async fn token(world: &World, scope: Scope) -> (AgentTokenId, SecretToken) {
             TokenName::parse("claude").unwrap(),
             scope,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

@@ -73,7 +73,9 @@ pub struct NewLinkedAccountRequest {
     operation_id = "listProviderAccounts",
     tag = tags::CONNECTIONS,
     description = "The accounts every connection reports, oldest first; only those not yet \
-                   bound to an account with `unbound=true`. Needs `read`.",
+                   bound to an account with `unbound=true`. Needs `read`. A token with account \
+                   grants sees the bound ones whose account it sees, and the unbound ones only \
+                   with `all` at `transactions`.",
     security(("bearer" = [])),
     params(ProviderAccountListQuery),
     responses(
@@ -101,7 +103,8 @@ pub(super) async fn list(
     tag = tags::CONNECTIONS,
     description = "Binds an unbound provider account to an open account in the same currency. \
                    The records synced while it was unbound become the account's transactions, \
-                   and later syncs bring the rest. Needs `write` on the account.",
+                   and later syncs bring the rest. Needs `write` on the account; a token with \
+                   account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),
     request_body = BindRequest,
@@ -138,7 +141,7 @@ pub(super) async fn bind(
     description = "Creates an account in the provider account's currency, exactly as \
                    `createAccount` does, and binds the provider account to it, in one step. \
                    The records synced while it was unbound become the account's transactions. \
-                   Needs `write`.",
+                   Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),
     request_body = NewLinkedAccountRequest,

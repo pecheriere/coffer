@@ -20,8 +20,8 @@
 3. **Agent to coffer.** Authenticated by a bearer token on `/api/v1` only.
 4. **Host operator to coffer.** Whoever controls the host and data directory.
 5. **coffer to data providers.** coffer makes outbound https requests to
-   provider hosts (today the SimpleFin Bridge) with the connection's
-   credentials, and treats every answer as untrusted input: amounts are
+   provider hosts (the SimpleFin Bridge, and Plaid when configured) with the
+   connection's credentials, and treats every answer as untrusted input: amounts are
    parsed as decimal text into integer minor units, texts are sanitized and
    bounded before they are stored, and provider error texts are reduced to
    fixed messages. The provider is trusted only for the data it reports.
@@ -62,6 +62,21 @@
   sanitizing (user information in URLs is redacted); any that holds the
   connection's access user or password is withheld and replaced by a fixed
   text.
+- **Plaid.** Plaid connects through Plaid Link in the member's browser;
+  coffer's server receives a one-time public token, exchanges it for an
+  access token and keeps only that token, sealed like every provider
+  credential (a small JSON document, bound to the connection id). The client
+  secret is read from a file that must be mode 0600 or stricter, and lives in
+  memory only. The server may reach only the configured Plaid host. On
+  disconnect coffer calls Plaid's `/item/remove`, since Plaid bills an Item
+  until it is removed. A removal that fails keeps the connection, so the
+  member can retry; only `ITEM_NOT_FOUND` (the Item is already gone) counts as
+  removed, and an Item that needs a new login is not removed until it has been
+  reconnected. If coffer cannot reach Plaid to remove it, because Plaid is no
+  longer configured or the sealed token no longer opens, the removal is refused
+  and the token kept, so the Item is never orphaned while still billing. Plaid's `error_message` and request id are deliberately not
+  kept: its free text can quote credentials, so coffer keeps only Plaid's error
+  type and code, which are restricted to capitals, digits and underscores.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
@@ -70,6 +85,43 @@
   handler. An agent token is capped by its scope and by its member's role,
   and the member is re-read on every request, so disabling a member or
   changing a role takes effect immediately.
+- **Account grants narrow an agent token.** A token may carry grants: a
+  level (`balances`, `transactions`, `write`) on chosen accounts, or on
+  `all` accounts including ones created later. Its level on an account is
+  the best grant naming it, capped by its scope (a `read` token never
+  writes); an account no grant names is hidden. A token without grants,
+  and every session, has uniform access at its scope. Grants are read on
+  every request from the store by the one access resolver; a grant that no
+  longer parses fails the request rather than being dropped, since
+  dropping the last one would widen the token. Grants change only from a
+  passkey session, by the token's member or an admin (anyone else's token
+  answers like a missing one), and each change is audited with the grants
+  before and after. The list can never be emptied, for the same reason: a
+  token is widened only by an explicit `all` grant, which the audit log
+  shows. On `/account`, a form that selects no level at all is refused
+  rather than read as no restriction, and so is an account set at or below
+  "All accounts", which would look restricted and not be. The side channels are
+  closed:
+  - A hidden account, its transactions and the provider account bound to
+    it answer exactly like missing ones (the same 404 body), in single
+    reads, list filters, batch operations (the error names the operation's
+    index, never an id), merges and creates. Lists and their cursors are
+    filtered in the query, so hidden rows neither appear nor shorten a page.
+    As defence in depth, a transaction's duplicate candidates leave out those
+    in an account the token cannot read: the server pairs candidates and
+    merges only within one account, so none should exist.
+  - Whatever spans every account needs an `all` grant at `transactions` to
+    read (the audit log, unbound provider accounts, a connection's sync
+    runs, whose counts and errors cover all its accounts) or at `write` to
+    change (creating an account, binding a provider account, requesting a
+    sync, adding, reconnecting or removing a connection, creating or
+    changing a category or group), and is refused with a 403
+    that names no account otherwise.
+  - Connections list only the provider accounts the token may see.
+  - Idempotency keys belong to the credential that sent them, so a token
+    never receives a stored response another token (or the member's
+    session) earned, and a create is authorized before its key is
+    reserved, so a refused request leaves nothing behind.
 - **Agent tokens can never create, list or revoke tokens, nor issue
   enrollment links.** Those actions require a passkey session, so a leaked
   token cannot be used to mint more access or to enroll a new passkey.
@@ -116,8 +168,47 @@
   transactions, and removing the connection stops further imports.
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
-  leaked `write` token can make coffer call a provider at most that budget
-  (16 times in 24 hours for SimpleFin) per connection.
+  leaked `write` token can start at most that budget of sync runs (16 in 24
+  hours for SimpleFin, 48 for Plaid) per connection. One run can make several
+  provider requests: for Plaid, up to 601 when it pages and restarts as often as
+  allowed. Removals are not budgeted, and a member's Link pages call Plaid
+  without a limit (issue #24).
+- **Plaid's script runs on the Link page.** Link needs Plaid's script from
+  `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
+  from that one URL and changes it in place, so coffer cannot pin a version or
+  use subresource integrity, and it may not be bundled or hosted by coffer.
+  The script runs with the page's DOM and origin: it can read the page's link
+  token and anti-forgery token, and make same-origin requests as the signed-in
+  member. The page holds no financial data, and a link token and a public
+  token each work once, but the CSRF token lets script act as the member for
+  that session. This is accepted: Plaid is already trusted with the bank
+  logins and the access token. The exposure is limited to the Link pages,
+  which alone carry a policy that allows the script: `script-src` adds that
+  one URL, `frame-src` `https://cdn.plaid.com`, and `connect-src` the
+  configured Plaid host. Every other page keeps `script-src 'self'` and
+  `style-src 'self'`.
+- **The Link policy differs from Plaid's documented ones.** Plaid's
+  documentation lists `'unsafe-inline'` for scripts and styles. coffer's policy
+  has no `unsafe-*` source. Plaid's script adds a stylesheet, which Link's
+  mobile overlay needs for its layout, and marks it with the nonce of its own
+  tag; so each Link response carries a fresh random nonce on that script tag
+  and `style-src 'self' 'nonce-...'`. Plaid's script checks at start-up
+  whether inline styles are supported, which produces exactly one
+  `style-src-elem` violation in the browser console: that one is expected, and
+  any other is a finding. Because Plaid may change its script, a future change
+  could break Link under this policy; that would be a finding to fix, not a reason to add `'unsafe-inline'`.
+- **Plaid's data is imported with care, not trusted.** A balance with more
+  decimals than its currency allows is rounded half-even to minor units, with
+  the exact text kept on the provider account; one too large to store is
+  dropped and the account shows a note. Transaction amounts are never rounded:
+  a record whose amount does not convert exactly is skipped and only counted.
+  A held cursor protects against loss: when an account's records keep failing
+  to store, coffer does not advance the Plaid sync cursor, so nothing is
+  lost, and every sync fetches those records again until they apply. A balance
+  Plaid sends in a form coffer cannot read (an exponent such as `1e3`) marks
+  that account unreadable and holds the cursor the same way. The cost is
+  repeated work and a connection that reports an error until the cause is
+  gone; showing and clearing a hold is issue #20.
 - **Some copies of provider secrets are not wiped.** While a SimpleFin
   setup token is claimed and while a sync fetches, the claim URL, the access
   URL and its user name pass through `url::Url` and `String` buffers (the
@@ -127,7 +218,23 @@
   are freed, not zeroed. Wiping them would mean parsing URLs by hand instead
   of with `url::Url`, trading a well-tested parser for a home-made one on
   input an attacker can shape; reading them needs access to the server's
-  memory, which already exposes the server key.
+  memory, which already exposes the server key. The same applies to Plaid: each
+  request body holds the client secret and the access token in a buffer handed
+  to the HTTP client, response bodies grow through buffers freed unwiped before
+  they are wrapped, and the link token is an ordinary string in the rendered
+  page.
+- **A member can re-widen their own token.** Grants narrow what an agent
+  can do, not what its member can do: from a passkey session the member (or
+  an admin) can grant their token `all` again. The change needs a passkey,
+  never a token, and the audit log records the grants before and after.
+- **A restricted token still sees household-wide data.** Grants limit
+  accounts, not the rest of the household: a token with grants still reads
+  members, categories and connections (label, status, owner). Its changes
+  to what is shared stop there: changing categories, or adding a connection
+  (whose first sync queues work on accounts not yet granted), needs `all` at
+  `write`. A connection's last error, the provider's sanitized text, could
+  name an account the token cannot see, so it needs `all` at `transactions`;
+  without it the token sees only that the status says something is wrong.
 - **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
   infeasible; password-style guessing does not exist. Network access control
   is the defense against abuse volume.

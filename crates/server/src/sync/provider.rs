@@ -15,6 +15,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use coffer_domain::accounts::AccountKind;
+use coffer_domain::ids::MemberId;
 use coffer_domain::money::DecimalAmount;
 use jiff::SignedDuration;
 use jiff::civil::Date;
@@ -23,12 +24,16 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::apply::Coverage;
+use super::plaid::client::PlaidClient;
+use super::plaid::provider::Plaid;
 use super::simplefin::SimpleFin;
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
 
 /// The longest provider message kept, in characters.
 pub const MAX_PROVIDER_MESSAGE_CHARS: usize = 500;
+
+const NO_LINK_FLOW: &str = "this provider is not set up through a browser flow";
 
 /// A data provider coffer can connect to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -37,6 +42,8 @@ pub const MAX_PROVIDER_MESSAGE_CHARS: usize = 500;
 pub enum ProviderKind {
     /// `SimpleFin` Bridge.
     SimpleFin,
+    /// Plaid.
+    Plaid,
 }
 
 impl ProviderKind {
@@ -45,6 +52,17 @@ impl ProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SimpleFin => "simplefin",
+            Self::Plaid => "plaid",
+        }
+    }
+
+    /// Whether the provider bills for a connection until coffer gives up its
+    /// credentials there, so erasing them first would leave it billing.
+    #[must_use]
+    pub fn bills_until_removed(self) -> bool {
+        match self {
+            Self::SimpleFin => false,
+            Self::Plaid => true,
         }
     }
 }
@@ -66,6 +84,7 @@ impl FromStr for ProviderKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "simplefin" => Ok(Self::SimpleFin),
+            "plaid" => Ok(Self::Plaid),
             _ => Err(UnknownProvider),
         }
     }
@@ -102,6 +121,8 @@ pub struct Capabilities {
 pub enum ConnectInput {
     /// A `SimpleFin` setup token.
     SimpleFinSetupToken(SecretString),
+    /// The public token Plaid Link produced.
+    PlaidPublicToken(SecretString),
 }
 
 /// One fetch, as the engine asks for it.
@@ -167,6 +188,8 @@ pub struct ProviderTransaction {
     pub transacted_on: Option<Date>,
     /// Negative is money out of the account.
     pub amount: DecimalAmount,
+    /// The amount exactly as the provider wrote it, in its own sign.
+    pub amount_raw: String,
     pub description: String,
     pub payee: Option<String>,
     pub memo: Option<String>,
@@ -260,6 +283,15 @@ pub trait Provider: Send + Sync {
         input: ConnectInput,
     ) -> ProviderFuture<'_, Result<SecretString, ProviderError>>;
 
+    /// Turns setup input into new credentials for an existing connection.
+    /// A provider whose credentials cannot be replaced refuses.
+    fn reconnect(
+        &self,
+        input: ConnectInput,
+    ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
+        self.connect(input)
+    }
+
     /// Fetches accounts, balances and transactions.
     fn fetch<'a>(
         &'a self,
@@ -272,6 +304,19 @@ pub trait Provider: Send + Sync {
         &'a self,
         credentials: &'a SecretString,
     ) -> ProviderFuture<'a, Result<(), ProviderError>>;
+
+    /// A short-lived token that opens the provider's own setup flow in
+    /// `member`'s browser: for a new connection, or with `credentials` to
+    /// log an existing one in again. A provider without such a flow refuses.
+    fn link_token<'a>(
+        &'a self,
+        _member: MemberId,
+        _credentials: Option<&'a SecretString>,
+    ) -> ProviderFuture<'a, Result<SecretString, ProviderError>> {
+        Box::pin(std::future::ready(Err(ProviderError::Invalid(
+            NO_LINK_FLOW.into(),
+        ))))
+    }
 }
 
 /// The providers this server offers, by kind.
@@ -299,6 +344,15 @@ impl ProviderRegistry {
             egress.clone(),
             config.simplefin_hosts.clone(),
         )));
+        if let Some(plaid) = &config.plaid {
+            let client = PlaidClient::new(egress.clone(), plaid.clone()).map_err(|_| {
+                ConfigError::Invalid {
+                    var: "COFFER_PLAID_ENV",
+                    reason: "its host could not be used",
+                }
+            })?;
+            registry.insert(Arc::new(Plaid::new(client)));
+        }
         Ok(registry)
     }
 
@@ -574,6 +628,12 @@ mod tests {
             Ok(ProviderKind::SimpleFin)
         );
         assert_eq!(ProviderKind::SimpleFin.as_str(), "simplefin");
+        assert_eq!("plaid".parse::<ProviderKind>(), Ok(ProviderKind::Plaid));
+        assert_eq!(ProviderKind::Plaid.as_str(), "plaid");
+        assert_eq!(
+            serde_json::to_value(ProviderKind::Plaid).unwrap(),
+            serde_json::Value::from("plaid")
+        );
         assert_eq!(
             serde_json::to_value(ProviderKind::SimpleFin).unwrap(),
             serde_json::Value::from("simplefin")

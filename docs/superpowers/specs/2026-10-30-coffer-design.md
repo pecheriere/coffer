@@ -549,6 +549,40 @@ access at its scope; plan 2b adds per-token grants. Per-member visibility
 remains a non-goal. Hidden accounts answer exactly like missing ones (404); a
 visible account with too low a level answers 403 naming the level needed.
 
+An agent token may carry grants: up to 100, each naming `all` or one account
+and a level, no target twice, none above the token scope's ceiling (`read` →
+`transactions`; `write` and `admin` → `write`). The effective level on an
+account is min(best grant naming it or `all`, the ceiling of the token's
+effective scope, the member's own access), the member's own access being
+uniform `write`. An account no grant names is hidden: 404 `not_found`,
+exactly like a missing account; a visible account below the level needed
+answers 403 `forbidden` with "this action needs <level> access to this
+account". A token without grants, every token created before grants, and
+every passkey session have uniform access at their scope, as in plan 2a. An
+account created after a token is visible to it only through an `all` grant.
+Grants change only from a passkey session, by the token's member or a member
+who may manage members, audited with the grants before and after. They can
+never be emptied, since that would silently widen the token: widening takes
+an explicit `all` grant.
+
+Actions that touch more than one account, or accounts not yet granted, need
+an `all` grant at the level shown: reading the audit log, listing unbound
+provider accounts and reading a connection's sync runs (whose counts and
+errors cover all its accounts) and a connection's last error (which could
+name any of them; without it the field is empty and the status remains) need
+`transactions`; creating an account, binding a provider account, triggering
+a sync, adding a connection (whose first sync queues work on accounts not yet
+granted), reconnecting or removing one (which changes the feed of every
+account it serves) and creating or changing a category or category group
+(shared by every account) need `write`. Using an existing category on a split
+is governed by write access to that transaction's account. Without it the action answers 403 `forbidden` with "this action
+needs <level> access to every account". Idempotency keys belong to the
+credential that sent them (the session or one agent token), so no token
+replays a response another credential earned. Lists of account-scoped
+data (accounts, transactions, bound provider accounts) are filtered to the
+accounts granted at the level they show, and no list, aggregate, audit entry
+or error reveals a hidden account.
+
 ### 8.3 Provider credentials
 
 Provider credentials are sealed with XChaCha20-Poly1305 under a key derived
@@ -582,6 +616,21 @@ silent second transaction. When an imported amount changes and the transaction
 has one split, that split follows the amount (a `system:sync` change); with
 several splits they stay and the transaction is flagged.
 
+A transaction fed by several connections takes its imported fields (date,
+pending state, amount, description, payee, memo) from one of them, its owner:
+the connection of the earliest live posted source, or without a posted one, of
+the earliest live source. Earliest is by first sighting; live means not
+vanished from the current fetch and not of a removed connection. Only the
+owner's records write to the transaction. The others are kept up to date as
+sources and write nothing, so two providers describing one purchase differently
+never rewrite it in turn. Ownership moves only when a source changes: a record
+posts, a record attaches, or the owner's last record vanishes, in which case
+the transaction takes the next owner's fields once. A next owner with only
+pending records takes over too, but a pending record never overwrites a posted
+transaction, so a posted transaction keeps its fields until that owner's record
+posts. A removed connection's fields stay until the owner next reports a change. With one connection nothing
+differs: all its records write as they always did.
+
 ### 8.5 Outbound network
 
 §5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge
@@ -595,10 +644,37 @@ proxy's job. The exact host list lives in `docs/configuration.md`.
 ### 8.6 Plaid
 
 Plan 2b adds Plaid as a second provider behind the same interface. Link runs on
-one page whose CSP alone also allows `https://cdn.plaid.com`. The environments
+two pages, a new connection and a new login for an existing one, whose CSP alone
+also allows Plaid's script at its exact URL, frames from `https://cdn.plaid.com`
+and requests to the environment's API host. Plaid's script adds a stylesheet of
+its own, which Link needs for its layout on a phone: each response mints a nonce
+of at least 128 bits, put in `style-src` and on Plaid's script tag only, and never
+`'unsafe-inline'` or `'unsafe-eval'`. Every other page keeps the default policy,
+which has no nonce. The environments
 are `sandbox` and `production` (Plaid retired `development` in 2024).
 Transactions use `/transactions/sync` cursors, balances use `/accounts/get`,
-disconnect calls `/item/remove`, and 730 days of history are requested.
+disconnect calls `/item/remove`, and 730 days of history are requested. Only
+`ITEM_NOT_FOUND` counts as already gone on disconnect: any other refusal keeps
+the connection, because the Item may still be billing. A connection that needs
+a new login goes through Link's update mode, which keeps the access token and
+the cursor; it is never reconnected with new credentials, which would orphan a
+billing Item.
+
+A delta is reported once, so the cursor moves on only when every record it
+covers was stored or can never be. An account that fails while its records are
+in the fetch holds the saved cursor, and the next sync fetches them again; the
+apply step is idempotent, so the other accounts lose and repeat nothing. A
+currency coffer does not support cannot become storable by fetching again, and
+does not hold it; an account reported with no currency at all may get one, and
+does. A record that cannot be read is skipped and counted without failing its
+account.
+
+Balances are valuations, not ledger amounts, for every provider. One with more
+decimals than its currency allows is rounded half-even to minor units, and the
+provider account keeps the exact text. One that cannot be stored for any other
+reason (too large) is left out and noted on the provider account, while its
+records still apply and the cursor can move. Transaction amounts are never
+rounded: a record that does not convert exactly is unusable.
 
 ### 8.7 Household timezone
 

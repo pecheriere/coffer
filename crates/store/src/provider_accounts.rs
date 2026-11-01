@@ -20,12 +20,29 @@ macro_rules! columns {
     };
 }
 
-/// A balance as a provider gave it.
+/// The statement that inserts a provider account or, when it exists, sets
+/// `$on_conflict`.
+macro_rules! insert_provider_account {
+    ($on_conflict:literal) => {
+        concat!(
+            "INSERT INTO provider_accounts (id, connection_id, provider_account_id, name, \
+             institution, currency_raw, kind_hint, last_balance_raw, last_balance_on, \
+             first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (connection_id, provider_account_id) DO UPDATE SET ",
+            $on_conflict,
+            " RETURNING id"
+        )
+    };
+}
+
+/// A balance as a provider reported it, unconverted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawBalance {
     /// The day it describes.
     pub on: Date,
-    /// The amount as a decimal text, unconverted.
+    /// The amount as a decimal text with all its decimals, in coffer's sign:
+    /// a liability's amount owed is negative here even when the provider
+    /// reports it as positive.
     pub amount_raw: String,
 }
 
@@ -132,37 +149,56 @@ impl StoreTx {
         &mut self,
         upsert: ProviderAccountUpsert,
     ) -> Result<ProviderAccountRecord, StoreError> {
+        const SQL: &str = insert_provider_account!(
+            "name = excluded.name, institution = excluded.institution, \
+             currency_raw = excluded.currency_raw, kind_hint = excluded.kind_hint, \
+             last_balance_raw = COALESCE(excluded.last_balance_raw, last_balance_raw), \
+             last_balance_on = COALESCE(excluded.last_balance_on, last_balance_on), \
+             last_seen_at = excluded.last_seen_at"
+        );
+        self.write_provider_account(SQL, upsert).await
+    }
+
+    /// Create a provider account a fetch reported as failed, or note that it
+    /// was seen: a failed report says nothing about what the account is, so
+    /// an existing account keeps its name, currency, kind and balance.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a connection that does not exist.
+    pub async fn upsert_failed_provider_account(
+        &mut self,
+        upsert: ProviderAccountUpsert,
+    ) -> Result<ProviderAccountRecord, StoreError> {
+        const SQL: &str = insert_provider_account!("last_seen_at = excluded.last_seen_at");
+        self.write_provider_account(SQL, upsert).await
+    }
+
+    async fn write_provider_account(
+        &mut self,
+        sql: &'static str,
+        upsert: ProviderAccountUpsert,
+    ) -> Result<ProviderAccountRecord, StoreError> {
         let seen = upsert.seen_at.as_millisecond();
         let (balance_on, balance_raw) = match upsert.balance {
             Some(balance) => (Some(balance.on.to_string()), Some(balance.amount_raw)),
             None => (None, None),
         };
-        let (id,): (String,) = sqlx::query_as(
-            "INSERT INTO provider_accounts (id, connection_id, provider_account_id, name, \
-             institution, currency_raw, kind_hint, last_balance_raw, last_balance_on, \
-             first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (connection_id, provider_account_id) DO UPDATE SET \
-             name = excluded.name, institution = excluded.institution, \
-             currency_raw = excluded.currency_raw, kind_hint = excluded.kind_hint, \
-             last_balance_raw = COALESCE(excluded.last_balance_raw, last_balance_raw), \
-             last_balance_on = COALESCE(excluded.last_balance_on, last_balance_on), \
-             last_seen_at = excluded.last_seen_at \
-             RETURNING id",
-        )
-        .bind(ProviderAccountId::new().to_string())
-        .bind(upsert.connection.to_string())
-        .bind(&upsert.provider_account_id)
-        .bind(&upsert.name)
-        .bind(upsert.institution.as_deref())
-        .bind(&upsert.currency_raw)
-        .bind(upsert.kind_hint.map(AccountKind::as_str))
-        .bind(balance_raw)
-        .bind(balance_on)
-        .bind(seen)
-        .bind(seen)
-        .fetch_one(&mut *self.tx)
-        .await
-        .map_err(StoreError::from_sqlx)?;
+        let (id,): (String,) = sqlx::query_as(sql)
+            .bind(ProviderAccountId::new().to_string())
+            .bind(upsert.connection.to_string())
+            .bind(&upsert.provider_account_id)
+            .bind(&upsert.name)
+            .bind(upsert.institution.as_deref())
+            .bind(&upsert.currency_raw)
+            .bind(upsert.kind_hint.map(AccountKind::as_str))
+            .bind(balance_raw)
+            .bind(balance_on)
+            .bind(seen)
+            .bind(seen)
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
         let id = id.parse().map_err(StoreError::backend)?;
         fetch_provider_account(&mut *self.tx, id).await
     }

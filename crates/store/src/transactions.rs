@@ -486,7 +486,46 @@ fn stored_notes(notes: Option<&Notes>) -> Option<&str> {
     notes.map(Notes::as_str).filter(|notes| !notes.is_empty())
 }
 
+async fn accounts_of(
+    conn: &mut SqliteConnection,
+    ids: &[TransactionId],
+) -> Result<HashMap<TransactionId, AccountId>, StoreError> {
+    let mut accounts = HashMap::new();
+    if ids.is_empty() {
+        return Ok(accounts);
+    }
+    let mut query =
+        QueryBuilder::<Sqlite>::new("SELECT id, account_id FROM transactions WHERE id IN (");
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(id.to_string());
+    }
+    separated.push_unseparated(")");
+    let rows = query
+        .build()
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+    for row in &rows {
+        accounts.insert(parsed(row, "id")?, parsed(row, "account_id")?);
+    }
+    Ok(accounts)
+}
+
 impl StoreTx {
+    /// The accounts of `ids`, as [`Store::accounts_of_transactions`], read
+    /// in this transaction.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::accounts_of_transactions`].
+    pub async fn accounts_of_transactions(
+        &mut self,
+        ids: &[TransactionId],
+    ) -> Result<HashMap<TransactionId, AccountId>, StoreError> {
+        accounts_of(&mut self.tx, ids).await
+    }
+
     /// Create a transaction, manual or imported.
     ///
     /// # Errors
@@ -670,6 +709,19 @@ impl StoreTx {
 }
 
 impl Store {
+    /// The accounts of `ids`, for the ones that exist.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a stored id that no longer parses.
+    pub async fn accounts_of_transactions(
+        &self,
+        ids: &[TransactionId],
+    ) -> Result<HashMap<TransactionId, AccountId>, StoreError> {
+        let mut conn = self.pool.acquire().await.map_err(StoreError::from_sqlx)?;
+        accounts_of(&mut conn, ids).await
+    }
+
     /// Fetch a transaction with its splits.
     ///
     /// # Errors

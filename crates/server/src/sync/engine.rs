@@ -5,16 +5,19 @@
 //! applied and the household's `today`, then applies each provider account
 //! in its own store transaction, so a failing account leaves nothing of
 //! itself behind, never blocks the others, and is fetched again from where
-//! it stopped. The outcome is recorded on the connection, its
-//! provider accounts and the run. Every provider text is sanitized before
-//! it is stored, and nothing about the credentials is ever logged.
+//! it stopped. A cursor provider's cursor moves on only once every record it
+//! covers was stored or can never be: a failed account's records would
+//! otherwise never be reported again. The outcome is recorded on the
+//! connection, its provider accounts and the run. Every provider text is
+//! sanitized before it is stored, and nothing about the credentials is ever
+//! logged.
 
 use std::sync::Arc;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
-use coffer_domain::money::{Currency, DecimalAmount};
+use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
@@ -51,7 +54,7 @@ const UNSUPPORTED_CURRENCY: &str =
     "the provider reported a currency that is not a supported ISO 4217 code";
 const CURRENCY_DIFFERS: &str = "the provider reported a currency other than the bound account's";
 const BALANCE_UNREPRESENTABLE: &str =
-    "the provider reported a balance with more decimals than the currency allows, or too large";
+    "the provider reported a balance too large to store, so it was left out";
 const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
 const INTERNAL_FAILURE: &str = "the sync failed on the server";
@@ -123,7 +126,11 @@ impl std::fmt::Debug for SyncService {
 /// How one provider account fared.
 enum AccountOutcome {
     Applied(ApplyReport),
-    Failed,
+    /// Nothing of it was applied. `refetch` says the fetch held records of
+    /// it that a later fetch could still store.
+    Failed {
+        refetch: bool,
+    },
     /// The connection was removed before the account could be applied:
     /// nothing of it was written.
     ConnectionRemoved,
@@ -150,6 +157,8 @@ struct Totals {
     report: ApplyReport,
     /// Whether the connection was removed while the run applied its data.
     connection_removed: bool,
+    /// Whether some failed account's records must be fetched again.
+    refetch: bool,
 }
 
 impl Totals {
@@ -171,7 +180,10 @@ impl Totals {
                 total.held += report.held;
                 total.skipped += report.skipped;
             }
-            AccountOutcome::Failed => self.failed_accounts += 1,
+            AccountOutcome::Failed { refetch } => {
+                self.failed_accounts += 1;
+                self.refetch |= refetch;
+            }
             AccountOutcome::ConnectionRemoved => {}
         }
     }
@@ -320,7 +332,7 @@ impl SyncService {
     }
 
     /// The household's current day.
-    fn today(&self) -> Date {
+    pub(super) fn today(&self) -> Date {
         self.clock
             .now()
             .to_zoned(self.config.timezone.clone())
@@ -475,7 +487,8 @@ impl SyncService {
                 },
             )
             .await?;
-            if let (FetchMode::Cursor, Some(cursor)) = (mode, result.cursor) {
+            if let (FetchMode::Cursor, Some(cursor), false) = (mode, result.cursor, totals.refetch)
+            {
                 tx.set_provider_state(connection.id, Some(cursor)).await?;
             }
         }
@@ -495,6 +508,7 @@ impl SyncService {
         data: ProviderAccountData,
         today: Date,
     ) -> AccountOutcome {
+        let holds_records = !data.transactions.is_empty() || !data.removed.is_empty();
         if !valid_provider_account_id(&data.provider_account_id) {
             // Nothing can be recorded on an account without a usable id:
             // the run counts it among the accounts with errors.
@@ -502,7 +516,9 @@ impl SyncService {
                 connection = %connection,
                 "provider account with an invalid id skipped"
             );
-            return AccountOutcome::Failed;
+            return AccountOutcome::Failed {
+                refetch: holds_records,
+            };
         }
         let now = self.clock.now();
         let upsert = ProviderAccountUpsert {
@@ -530,7 +546,9 @@ impl SyncService {
                         "could not record a provider account's failure"
                     );
                 }
-                AccountOutcome::Failed
+                AccountOutcome::Failed {
+                    refetch: holds_records,
+                }
             }
         }
     }
@@ -543,6 +561,8 @@ impl SyncService {
     ) -> Result<AccountOutcome, SyncError> {
         let now = upsert.seen_at;
         let connection = upsert.connection;
+        let holds_records = !data.transactions.is_empty() || !data.removed.is_empty();
+        // The exact text, whatever becomes of the value.
         upsert.balance = data.balance.as_ref().map(|(on, amount)| RawBalance {
             on: *on,
             amount_raw: amount.as_str().to_owned(),
@@ -553,37 +573,41 @@ impl SyncService {
         if tx.get_connection(connection).await?.status == ConnectionStatus::Removed {
             return Ok(AccountOutcome::ConnectionRemoved);
         }
-        let record = tx.upsert_provider_account(upsert).await?;
+        // A report with an error or no currency says nothing about what the
+        // account is, and the account is refused below.
+        let record = if data.error.is_some() || data.currency.is_empty() {
+            tx.upsert_failed_provider_account(upsert).await?
+        } else {
+            tx.upsert_provider_account(upsert).await?
+        };
 
         let checked = check_account(&mut tx, &record, &data).await?;
         let (account, currency) = match checked {
             Ok(checked) => checked,
-            Err(error) => {
-                tx.set_provider_account_error(record.id, Some(error))
+            Err(refusal) => {
+                tx.set_provider_account_error(record.id, Some(refusal.text))
                     .await?;
                 tx.commit().await?;
-                return Ok(AccountOutcome::Failed);
+                return Ok(AccountOutcome::Failed {
+                    refetch: holds_records && !refusal.lasting,
+                });
             }
         };
-        let Some(Converted {
+        let Converted {
             transactions,
             unusable,
-            balance,
-        }) = convert(
-            data.transactions,
-            data.unusable,
-            data.balance,
-            currency,
-            today,
-        )
-        else {
-            tx.set_provider_account_error(record.id, Some(BALANCE_UNREPRESENTABLE.to_owned()))
-                .await?;
-            tx.commit().await?;
-            return Ok(AccountOutcome::Failed);
+        } = convert(data.transactions, data.unusable, currency, today);
+        // A balance is a valuation: rounded to fit, and if it still cannot be
+        // stored the account's records apply without it.
+        let (balance, note) = match data.balance {
+            Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
+                Ok(minor) => (Some((on, minor)), None),
+                Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
+            },
+            None => (None, None),
         };
-        if record.error.is_some() {
-            tx.set_provider_account_error(record.id, None).await?;
+        if record.error != note {
+            tx.set_provider_account_error(record.id, note).await?;
         }
         let provider_account = record.id;
         let bound = account.clone();
@@ -621,7 +645,7 @@ impl SyncService {
         if tx.get_connection(upsert.connection).await?.status == ConnectionStatus::Removed {
             return Ok(());
         }
-        let record = tx.upsert_provider_account(upsert).await?;
+        let record = tx.upsert_failed_provider_account(upsert).await?;
         tx.set_provider_account_error(record.id, Some(ACCOUNT_NOT_STORED.to_owned()))
             .await?;
         tx.commit().await
@@ -757,23 +781,45 @@ fn valid_provider_account_id(id: &str) -> bool {
     (1..=MAX_PROVIDER_ID_CHARS).contains(&id.chars().count()) && !id.chars().any(char::is_control)
 }
 
-/// The bound account and the currency to convert amounts in, or the error
-/// to record on the provider account.
+/// Why an account's data cannot be applied.
+struct AccountRefusal {
+    /// What to record on the provider account.
+    text: String,
+    /// Fetching its records again cannot help: coffer cannot hold them.
+    lasting: bool,
+}
+
+impl AccountRefusal {
+    fn passing(text: String) -> Self {
+        Self {
+            text,
+            lasting: false,
+        }
+    }
+}
+
+/// The bound account and the currency to convert amounts in, or why they
+/// cannot be used.
 async fn check_account(
     tx: &mut StoreTx,
     record: &ProviderAccountRecord,
     data: &ProviderAccountData,
-) -> Result<Result<(Option<AccountRecord>, Currency), String>, SyncError> {
+) -> Result<Result<(Option<AccountRecord>, Currency), AccountRefusal>, SyncError> {
     if let Some(error) = &data.error {
         let error = sanitize_provider_message(error);
-        return Ok(Err(if error.is_empty() {
+        return Ok(Err(AccountRefusal::passing(if error.is_empty() {
             ACCOUNT_ERROR.to_owned()
         } else {
             error
-        }));
+        })));
     }
     let Ok(currency) = Currency::parse(&data.currency) else {
-        return Ok(Err(UNSUPPORTED_CURRENCY.to_owned()));
+        return Ok(Err(AccountRefusal {
+            text: UNSUPPORTED_CURRENCY.to_owned(),
+            // No currency at all may come with the next answer; one coffer
+            // does not support never becomes storable.
+            lasting: !data.currency.is_empty(),
+        }));
     };
     let account = match record.account {
         Some(id) => Some(tx.get_account(id).await?),
@@ -783,36 +829,29 @@ async fn check_account(
         .as_ref()
         .is_some_and(|account| account.currency != currency)
     {
-        return Ok(Err(CURRENCY_DIFFERS.to_owned()));
+        return Ok(Err(AccountRefusal::passing(CURRENCY_DIFFERS.to_owned())));
     }
     Ok(Ok((account, currency)))
 }
 
-/// An account's records and balance in its currency's minor units.
+/// An account's records in its currency's minor units.
 struct Converted {
     transactions: Vec<NormalizedTransaction>,
     /// The provider's unusable records, then the records whose amount does
     /// not convert exactly.
     unusable: Vec<Option<String>>,
-    /// The balance and the day it describes.
-    balance: Option<(Date, i64)>,
 }
 
-/// The account's records and balance in `currency`'s minor units, a
-/// pending record without a date dated `today`. A record whose amount does
-/// not convert exactly, or a posted one without a date, joins `unusable`;
-/// `None` when the balance does not convert.
+/// The account's records in `currency`'s minor units, a pending record
+/// without a date dated `today`. A record whose amount does not convert
+/// exactly, or a posted one without a date, joins `unusable`: unlike a
+/// balance, which is a valuation, a ledger amount is never rounded.
 fn convert(
     records: Vec<ProviderTransaction>,
     mut unusable: Vec<Option<String>>,
-    balance: Option<(Date, DecimalAmount)>,
     currency: Currency,
     today: Date,
-) -> Option<Converted> {
-    let balance = match balance {
-        Some((on, amount)) => Some((on, amount.to_minor_units(currency).ok()?)),
-        None => None,
-    };
+) -> Converted {
     let mut transactions = Vec::with_capacity(records.len());
     for record in records {
         if record.posted_on.is_none() && !record.pending {
@@ -829,7 +868,7 @@ fn convert(
             date_reported: record.posted_on.is_some(),
             transacted_on: record.transacted_on,
             amount_minor,
-            amount_raw: record.amount.as_str().to_owned(),
+            amount_raw: record.amount_raw,
             description: record.description,
             payee: record.payee,
             memo: record.memo,
@@ -837,16 +876,15 @@ fn convert(
             replaces_provider_id: record.replaces_provider_id,
         });
     }
-    Some(Converted {
+    Converted {
         transactions,
         unusable,
-        balance,
-    })
+    }
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
 /// the day's value or source.
-async fn write_balance(
+pub(super) async fn write_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     account: AccountId,
@@ -929,7 +967,7 @@ mod tests {
         );
         assert_eq!(outcome(&totals, false, false).0, SyncRunStatus::Succeeded);
         assert_eq!(outcome(&totals, false, true).0, SyncRunStatus::Partial);
-        totals.add(&AccountOutcome::Failed);
+        totals.add(&AccountOutcome::Failed { refetch: false });
         assert!(
             totals
                 .detail(false)

@@ -1,5 +1,6 @@
 //! The signed-in member's own passkeys, agent tokens and appearance.
 
+use std::collections::BTreeMap;
 use std::str::FromStr as _;
 
 use axum::extract::{Path, State};
@@ -8,8 +9,10 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use coffer_domain::identity::{Actor, ColorScheme, Scope, ThemeName, TokenName, role_ceiling};
-use coffer_domain::ids::{AgentTokenId, PasskeyId};
-use coffer_domain::policy::{Action, authorize};
+use coffer_domain::ids::{AccountId, AgentTokenId, PasskeyId};
+use coffer_domain::policy::{
+    AccountLevel, Action, GrantTarget, TokenGrant, authorize, grant_ceiling, validate_grants,
+};
 use coffer_store::{AgentTokenRecord, PasskeyRecord};
 use jiff::{SignedDuration, Timestamp};
 use maud::{Markup, html};
@@ -23,11 +26,27 @@ use super::{ApiJson, PageError, PageForm, PageSession};
 use crate::auth::{AuthError, CeremonyId};
 use crate::http::AppState;
 use crate::http::problem::Problem;
+use crate::ledger::accounts::AccountView;
 use crate::secrets::SecretToken;
 use crate::themes::{self, THEMES, Theme};
 
 /// Longest token lifetime the form accepts.
 const MAX_EXPIRY_DAYS: u32 = 3650;
+
+/// The form field and option of no grant.
+const NO_LEVEL: &str = "none";
+
+/// What a grants form says above its selects.
+const LIMIT_HELP: &str = "Which accounts it may use. All accounts covers every account, including \
+                          new ones, as far as the scope allows. To limit this token to chosen \
+                          accounts, set All accounts to none, then choose their levels.";
+
+/// The levels a form offers, lowest first.
+const LEVELS: [AccountLevel; 3] = [
+    AccountLevel::Balances,
+    AccountLevel::Transactions,
+    AccountLevel::Write,
+];
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -36,6 +55,7 @@ pub fn routes() -> Router<AppState> {
         .route("/account/passkeys/{id}/remove", post(remove_passkey))
         .route("/account/tokens", post(create_token))
         .route("/account/tokens/{id}/revoke", post(revoke_token))
+        .route("/account/tokens/{id}/grants", post(set_token_grants))
         .route("/auth/passkeys/begin", post(begin_passkey))
         .route("/auth/passkeys/finish", post(finish_passkey))
 }
@@ -78,7 +98,20 @@ async fn render(
         .list_passkeys(actor.member)
         .await
         .map_err(AuthError::from)?;
-    let tokens = state.agent_tokens.list_own(&actor).await?;
+    let mut tokens = Vec::new();
+    for token in state.agent_tokens.list_own(&actor).await? {
+        let grants = state
+            .store
+            .token_grants(token.id)
+            .await
+            .map_err(AuthError::from)?;
+        tokens.push((token, grants));
+    }
+    let accounts = state
+        .ledger
+        .list_accounts(&actor, true)
+        .await
+        .map_err(|err| PageError(err.into()))?;
     let household = state.appearance.household_theme().await;
     let now = state.clock.now();
     let csrf = &viewer.csrf;
@@ -102,37 +135,17 @@ async fn render(
                 (empty_state(look, "No agent tokens yet. Create one below to let an agent use coffer on your behalf."))
             } @else {
                 ul.items {
-                    @for token in &tokens {
+                    @for (token, grants) in &tokens {
                         (token_item(token, now, csrf, &format!("/account/tokens/{}/revoke", token.id), &html! {
                             code { (token.prefix) "…" }
                             " · Expires "
                             (token.expires_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
-                        }))
+                            " · " (grants_summary(grants, &accounts))
+                        }, &grants_editor(token, grants, &accounts, now, csrf)))
                     }
                 }
             }
-            h3 { "Create a token" }
-            form method="post" action="/account/tokens" {
-                (csrf_field(csrf))
-                label.field {
-                    "Name"
-                    input #token-name .input type="text" name="name" maxlength="64" required;
-                }
-                label.field {
-                    "Scope"
-                    select #token-scope .input name="scope" {
-                        @for scope in scopes_up_to(role_ceiling(actor.role)) {
-                            option value=(scope.as_str()) { (scope.as_str()) }
-                        }
-                    }
-                }
-                label.field {
-                    "Expires after (days, optional)"
-                    input #token-expiry .input type="number" name="expires_days" min="1"
-                        max=(MAX_EXPIRY_DAYS);
-                }
-                button.btn.btn-primary type="submit" { "Create token" }
-            }
+            (new_token_form(role_ceiling(actor.role), &accounts, csrf))
         }
     };
     let frame = Frame {
@@ -142,6 +155,132 @@ async fn render(
         narrow: false,
     };
     Ok(page(&frame, "Account", &content))
+}
+
+fn new_token_form(ceiling: Scope, accounts: &[AccountView], csrf: &str) -> Markup {
+    html! {
+        h3 { "Create a token" }
+        form method="post" action="/account/tokens" {
+            (csrf_field(csrf))
+            label.field {
+                "Name"
+                input #token-name .input type="text" name="name" maxlength="64" required;
+            }
+            label.field {
+                "Scope"
+                select #token-scope .input name="scope" {
+                    @for scope in scopes_up_to(ceiling) {
+                        option value=(scope.as_str()) { (scope.as_str()) }
+                    }
+                }
+            }
+            label.field {
+                "Expires after (days, optional)"
+                input #token-expiry .input type="number" name="expires_days" min="1"
+                    max=(MAX_EXPIRY_DAYS);
+            }
+            p.item-meta {
+                (LIMIT_HELP)
+            }
+            (level_field("All accounts", "all", Some(AccountLevel::Write), AccountLevel::Write))
+            @for account in accounts.iter().filter(|account| !account.closed) {
+                (level_field(&account.name, &account_field(account.id), None, AccountLevel::Write))
+            }
+            button.btn.btn-primary type="submit" { "Create token" }
+        }
+    }
+}
+
+/// One level select: none, then the levels up to `ceiling`.
+fn level_field(
+    label: &str,
+    name: &str,
+    selected: Option<AccountLevel>,
+    ceiling: AccountLevel,
+) -> Markup {
+    html! {
+        label.field {
+            (label)
+            select.input name=(name) {
+                option value=(NO_LEVEL) selected[selected.is_none()] { (NO_LEVEL) }
+                @for level in LEVELS.into_iter().filter(|level| *level <= ceiling) {
+                    option value=(level.as_str()) selected[selected == Some(level)] {
+                        (level.as_str())
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn account_field(account: AccountId) -> String {
+    format!("account_{account}")
+}
+
+/// A token's grants in words, naming accounts.
+fn grants_summary(grants: &[TokenGrant], accounts: &[AccountView]) -> String {
+    if grants.is_empty() {
+        return "All accounts, as far as its scope allows".to_owned();
+    }
+    grants
+        .iter()
+        .map(|grant| {
+            let target = match grant.target {
+                GrantTarget::All => "All accounts",
+                GrantTarget::Account(id) => accounts
+                    .iter()
+                    .find(|account| account.id == id)
+                    .map_or("An unknown account", |account| account.name.as_str()),
+            };
+            format!("{target}: {}", grant.level.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The form changing a working token's grants: its current levels, for every
+/// open account and every closed one it holds a grant on (without a select,
+/// saving would take that grant away). A token without grants starts at all
+/// accounts as far as its scope allows, which is the access it has.
+fn grants_editor(
+    token: &AgentTokenRecord,
+    grants: &[TokenGrant],
+    accounts: &[AccountView],
+    now: Timestamp,
+    csrf: &str,
+) -> Markup {
+    if !token_active(token, now) {
+        return html! {};
+    }
+    let ceiling = grant_ceiling(token.scope);
+    let level_of = |target: GrantTarget| {
+        grants
+            .iter()
+            .find(|grant| grant.target == target)
+            .map(|grant| grant.level)
+    };
+    let all = if grants.is_empty() {
+        Some(ceiling)
+    } else {
+        level_of(GrantTarget::All)
+    };
+    html! {
+        details.item-detail {
+            summary { "Change account access" }
+            form method="post" action={ "/account/tokens/" (token.id) "/grants" } {
+                (csrf_field(csrf))
+                p.item-meta { (LIMIT_HELP) }
+                (level_field("All accounts", "all", all, ceiling))
+                @for account in accounts {
+                    @let level = level_of(GrantTarget::Account(account.id));
+                    @if !account.closed || level.is_some() {
+                        (level_field(&account.name, &account_field(account.id), level, ceiling))
+                    }
+                }
+                button.btn type="submit" { "Save access" }
+            }
+        }
+    }
 }
 
 fn passkeys_card(passkeys: &[PasskeyRecord], csrf: &str) -> Markup {
@@ -259,15 +398,16 @@ async fn set_appearance(
 
 /// One agent token in a list: its name and `meta`, chips for its scope and
 /// status (quiet once it no longer works), and a revoke form posting to
-/// `revoke` while it is active.
+/// `revoke` while it is active, then `detail` across the item's full width.
 pub(super) fn token_item(
     token: &AgentTokenRecord,
     now: Timestamp,
     csrf: &str,
     revoke: &str,
     meta: &Markup,
+    detail: &Markup,
 ) -> Markup {
-    let active = token.revoked_at.is_none() && token.expires_at.is_none_or(|at| at > now);
+    let active = token_active(token, now);
     html! {
         li.item {
             div.item-main {
@@ -286,8 +426,13 @@ pub(super) fn token_item(
                     }
                 }
             }
+            (detail)
         }
     }
+}
+
+fn token_active(token: &AgentTokenRecord, now: Timestamp) -> bool {
+    token.revoked_at.is_none() && token.expires_at.is_none_or(|at| at > now)
 }
 
 fn scopes_up_to(ceiling: Scope) -> impl Iterator<Item = Scope> {
@@ -322,6 +467,93 @@ struct NewTokenForm {
     scope: String,
     #[serde(default)]
     expires_days: String,
+    /// The level selects, see [`GrantChoices`].
+    #[serde(flatten)]
+    levels: BTreeMap<String, String>,
+}
+
+/// What a form's level selects chose: fields `all` and `account_<id>`, each
+/// `none` or a level. Anything else is refused whole and never echoed.
+struct GrantChoices {
+    all: Option<AccountLevel>,
+    accounts: Vec<TokenGrant>,
+}
+
+impl GrantChoices {
+    fn parse(levels: &BTreeMap<String, String>) -> Result<Self, PageError> {
+        let mut all = None;
+        let mut accounts = Vec::new();
+        for (field, value) in levels {
+            let level = level_choice(value)?;
+            if field == "all" {
+                all = level;
+                continue;
+            }
+            let account = field
+                .strip_prefix("account_")
+                .and_then(|id| AccountId::from_str(id).ok())
+                .ok_or_else(|| PageError::invalid("the form could not be read"))?;
+            if let Some(level) = level {
+                accounts.push(TokenGrant {
+                    target: GrantTarget::Account(account),
+                    level,
+                });
+            }
+        }
+        Ok(Self { all, accounts })
+    }
+
+    /// The grants chosen. The best grant on an account wins, so an account
+    /// set at or below All accounts would look restricted and not be: that
+    /// is refused, whether All accounts was chosen or left at its default.
+    fn into_grants(self) -> Result<Vec<TokenGrant>, PageError> {
+        if self
+            .accounts
+            .iter()
+            .any(|grant| Some(grant.level) <= self.all)
+        {
+            return Err(PageError::invalid(
+                "All accounts already gives this level to every account; to limit this token \
+                 to chosen accounts, set All accounts to none",
+            ));
+        }
+        let all = self.all.map(|level| TokenGrant {
+            target: GrantTarget::All,
+            level,
+        });
+        Ok(all.into_iter().chain(self.accounts).collect())
+    }
+}
+
+fn level_choice(value: &str) -> Result<Option<AccountLevel>, PageError> {
+    if value == NO_LEVEL {
+        return Ok(None);
+    }
+    LEVELS
+        .into_iter()
+        .find(|level| level.as_str() == value)
+        .map(Some)
+        .ok_or_else(|| PageError::invalid("a level must be none, balances, transactions or write"))
+}
+
+/// The grants of a new token. All accounts is capped at the scope, so the
+/// form's default fits every scope, and at the scope's ceiling it means no
+/// restriction: no grants. A form without selects is the same. Every level
+/// `none` is refused rather than read as no restriction.
+fn new_token_grants(
+    scope: Scope,
+    levels: &BTreeMap<String, String>,
+) -> Result<Vec<TokenGrant>, PageError> {
+    if levels.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ceiling = grant_ceiling(scope);
+    let mut choices = GrantChoices::parse(levels)?;
+    choices.all = choices.all.map(|level| level.min(ceiling));
+    let unrestricted = choices.all == Some(ceiling);
+    let grants = choices.into_grants()?;
+    validate_grants(scope, &grants).map_err(AuthError::InvalidGrants)?;
+    Ok(if unrestricted { Vec::new() } else { grants })
 }
 
 async fn create_token(
@@ -333,9 +565,10 @@ async fn create_token(
     let name = TokenName::parse(&form.name).map_err(AuthError::Invalid)?;
     let scope = Scope::from_str(&form.scope).map_err(AuthError::Invalid)?;
     let expires_at = expiry(&state, &form.expires_days)?;
+    let grants = new_token_grants(scope, &form.levels)?;
     let (record, secret) = state
         .agent_tokens
-        .create(&actor, name, scope, expires_at)
+        .create(&actor, name, scope, expires_at, grants)
         .await?;
     let created = Created {
         name: record.name.to_string(),
@@ -376,9 +609,36 @@ async fn revoke_token(
     Ok(Redirect::to("/account"))
 }
 
+#[derive(Deserialize)]
+struct GrantsForm {
+    #[serde(default)]
+    csrf: String,
+    /// The level selects, see [`GrantChoices`].
+    #[serde(flatten)]
+    levels: BTreeMap<String, String>,
+}
+
+/// Replaces a token's grants. Every level `none` is refused, by the service:
+/// a token is widened only by an explicit All accounts level.
+async fn set_token_grants(
+    State(state): State<AppState>,
+    session: PageSession,
+    Path(id): Path<String>,
+    PageForm(form): PageForm<GrantsForm>,
+) -> Result<Redirect, PageError> {
+    let actor = session.verify(&state, &form.csrf)?;
+    let id = AgentTokenId::from_str(&id).map_err(|_| PageError::not_found())?;
+    let grants = GrantChoices::parse(&form.levels)?.into_grants()?;
+    state
+        .agent_tokens
+        .replace_grants(&actor, id, grants)
+        .await?;
+    Ok(Redirect::to("/account"))
+}
+
 /// The session and anti-forgery header of a ceremony request, as a
 /// JSON-style rejection.
-fn json_session(
+pub(super) fn json_session(
     session: Result<PageSession, PageError>,
     state: &AppState,
     headers: &HeaderMap,

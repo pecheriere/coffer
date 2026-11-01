@@ -3,7 +3,8 @@
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
 //! request a sync and remove a connection; each needs the session's
-//! anti-forgery token, and a setup token is never shown back.
+//! anti-forgery token, and a setup token is never shown back. When Plaid is
+//! configured it links to the Plaid Link pages.
 
 use std::collections::HashMap;
 
@@ -97,6 +98,7 @@ async fn render(
     let can_manage = authorize(&actor, Action::ManageConnections).is_ok();
     let csrf = &viewer.csrf;
     let timezone = &state.config.timezone;
+    let plaid_offered = state.config.plaid.is_some();
     let content = html! {
         h1 { "Connections" }
         @if let Some(notice) = &notice {
@@ -109,7 +111,7 @@ async fn render(
         }
         @for connection in &connections {
             @let may_remove = authorize(&actor, Action::RemoveConnection { owner: connection.owner }).is_ok();
-            (connection_card(connection, &account_names, timezone, csrf, can_manage, may_remove))
+            (connection_card(connection, &account_names, timezone, csrf, can_manage, may_remove, plaid_offered))
         }
         @if can_manage {
             section.card {
@@ -130,6 +132,13 @@ async fn render(
                             required;
                     }
                     button.btn.btn-primary type="submit" { "Connect" }
+                }
+            }
+            @if plaid_offered {
+                section.card {
+                    h2 { "Connect with Plaid" }
+                    p { "Log in to your bank through Plaid. coffer keeps only the access it grants, encrypted." }
+                    a.btn.btn-primary href="/connections/plaid/new" { "Connect with Plaid" }
                 }
             }
         }
@@ -158,7 +167,9 @@ fn connection_card(
     csrf: &str,
     can_manage: bool,
     may_remove: bool,
+    plaid_offered: bool,
 ) -> Markup {
+    let plaid = connection.provider == ProviderKind::Plaid.as_str();
     let live = connection.status != ConnectionState::Removed;
     let id = connection.id;
     html! {
@@ -196,7 +207,12 @@ fn connection_card(
                     }
                 }
             }
-            @if may_remove && connection.status == ConnectionState::ReauthRequired {
+            @if may_remove && plaid && plaid_offered && connection.status == ConnectionState::ReauthRequired {
+                h3 { "Reconnect" }
+                p { "Plaid needs a new login to this institution; its accounts stay bound." }
+                a.btn.btn-primary href={ "/connections/" (id) "/plaid/reconnect" } { "Reconnect" }
+            }
+            @if may_remove && !plaid && connection.status == ConnectionState::ReauthRequired {
                 h3 { "Reconnect" }
                 p { "SimpleFin no longer accepts this connection's access. Paste a new setup token to restore it; its accounts stay bound." }
                 form method="post" action={ "/connections/" (id) "/simplefin/reconnect" } {
@@ -336,7 +352,7 @@ fn notice_for(err: &SyncError, form: FormKind) -> Option<Notice> {
         SyncError::RateLimited { retry_after } => Notice {
             status: StatusCode::TOO_MANY_REQUESTS,
             message: format!(
-                "SimpleFin allows another sync of this connection in {}.",
+                "The provider allows another sync of this connection in {}.",
                 wait_text(*retry_after)
             ),
             retry_after: Some(retry_seconds(*retry_after)),

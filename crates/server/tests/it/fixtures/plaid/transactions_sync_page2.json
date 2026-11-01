@@ -1,0 +1,43 @@
+{
+  "added": [
+    {
+      "account_id": "acct-checking",
+      "amount": -1500.25,
+      "authorized_date": null,
+      "date": "2027-01-12",
+      "iso_currency_code": "USD",
+      "merchant_name": null,
+      "name": "PAYROLL DEPOSIT",
+      "pending": false,
+      "pending_transaction_id": null,
+      "transaction_id": "txn-credit",
+      "unofficial_currency_code": null
+    }
+  ],
+  "modified": [
+    {
+      "account_id": "acct-checking",
+      "amount": 13,
+      "authorized_date": "2027-01-09",
+      "date": "2027-01-10",
+      "iso_currency_code": "USD",
+      "merchant_name": "Corner Coffee",
+      "name": "CORNER COFFEE 0001",
+      "pending": false,
+      "pending_transaction_id": null,
+      "transaction_id": "txn-integer",
+      "unofficial_currency_code": null
+    }
+  ],
+  "removed": [
+    {
+      "account_id": "acct-checking",
+      "transaction_id": "txn-gone"
+    }
+  ],
+  "next_cursor": "cursor-page-2",
+  "has_more": false,
+  "transactions_update_status": "HISTORICAL_UPDATE_COMPLETE",
+  "accounts": [],
+  "request_id": "fixtureRequest05"
+}

@@ -308,7 +308,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
     let vault = Arc::new(CredentialVault::new(&key));
     let agent_tokens = Arc::new(AgentTokens::new(store.clone(), key, clock.clone()));
     let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
-    let access = Arc::new(AccessResolver::new());
+    let access = Arc::new(AccessResolver::new(store.clone()));
     let ledger = Arc::new(Ledger::new(
         store.clone(),
         clock.clone(),

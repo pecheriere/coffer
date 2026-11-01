@@ -1,0 +1,9 @@
+{
+  "display_message": null,
+  "documentation_url": "https://plaid.com/docs/errors/item/",
+  "error_code": "ITEM_LOGIN_REQUIRED",
+  "error_message": "the login details of this item have changed and a user login is required to update this information",
+  "error_type": "ITEM_ERROR",
+  "request_id": "fixtureRequest07",
+  "suggested_action": null
+}

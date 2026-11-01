@@ -452,6 +452,7 @@ dependencies = [
  "maud",
  "openssl",
  "percent-encoding",
+ "proptest",
  "reqwest",
  "rustix",
  "rustls",

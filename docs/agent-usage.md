@@ -11,7 +11,16 @@ operation, parameter and schema.
 1. Sign in to coffer with your passkey and open `/account`.
 2. Create an agent token: give it a name (for example `claude`), choose a
    scope and, preferably, an expiry.
-3. Copy the token now. It starts with `coffer_` and is shown exactly once;
+3. To limit it to chosen accounts, set the levels on the same form (see
+   [Account grants](#account-grants)). Left as they are, "All accounts" at
+   `write` and every account at `none`, the token has no grants: it sees
+   every account at its scope's level, and `write` is capped by the scope.
+   To limit it to chosen accounts you must set "All accounts" to `none`,
+   then pick their levels. Picking an account while "All accounts" stays at
+   that level or above is refused, because the better level would win and
+   the token would still reach every account. `none` everywhere is refused
+   too.
+4. Copy the token now. It starts with `coffer_` and is shown exactly once;
    coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
    an admin can also see and revoke every member's tokens from
    `/admin/members`.
@@ -33,6 +42,54 @@ disabled the token loses power at the next request. Tokens can never create,
 list or revoke tokens, nor issue enrollment links; those need a passkey
 session.
 
+## Account grants
+
+A token may also be limited to chosen accounts. Each grant gives a level on
+one account, or on `all` accounts (including ones created later):
+
+| Level | Allows on the account |
+|---|---|
+| `balances` | The account and its balances. |
+| `transactions` | Also its transactions and their source records. |
+| `write` | Also every change to them. |
+
+The token's level on an account is the best grant naming it, capped by its
+scope: a `read` token's grants never exceed `transactions`. An account no
+grant names is hidden from the token. A token without grants sees every
+account at its scope's level, as before.
+
+Grants are set when the token is created and changed from `/account`, under
+the token's "Change account access" (a passkey session only: the token's own
+member, or an admin). A change applies at the token's next request and is
+audited as `token.grants` with the canonical
+text before and after (`all=balances,<id>=write`; `before` is `null` for a
+token that had no grants). A token that is revoked or expired takes no new
+grants (409). Grants can never be emptied, since no grants means uniform
+access: to widen a token, grant `all` explicitly. `GET /api/v1/me` reports a
+token's access.
+
+- A hidden account, its transactions and its provider accounts answer
+  exactly like ones that do not exist: 404 `not_found`, never listed, never
+  named in an error (a batch names the failing operation by index only) or
+  in another transaction's `duplicate_candidates`.
+- A visible account below the level needed is a 403 `forbidden` whose
+  detail names the level: "this action needs transactions access to this
+  account". `GET /api/v1/transactions` silently leaves out the accounts the
+  token sees only at `balances`; naming one in `account=` is the 403.
+- Actions that span every account need an `all` grant: reading the audit
+  log and a connection's sync runs need `all` at `transactions`; creating
+  an account, binding a provider account, requesting a sync, adding,
+  reconnecting or removing a connection, and creating or changing a category
+  or category group need `all` at `write`. Without it
+  they are a 403 whose detail says "this action needs write access to
+  every account" (or `transactions`). Unbound provider accounts are listed
+  (in `GET /api/v1/provider-accounts` and in connections) only with `all`
+  at `transactions`; bound ones follow their account. A connection's
+  `last_error` could name any account it serves, so without `all` at
+  `transactions` it is `null`; its `status` still shows the problem. Using
+  an existing category on a split needs only `write` on the transaction's
+  account.
+
 ## First call
 
 ```sh
@@ -42,16 +99,23 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 ```json
 {
   "member": {"id": "...", "username": "alice", "display_name": "Alice", "role": "admin", "disabled_at": null},
-  "agent": {"id": "...", "name": "claude", "scope": "read"}
+  "agent": {"id": "...", "name": "claude", "scope": "read"},
+  "access": {"ceiling": "transactions", "all": null, "accounts": [{"account": "...", "level": "balances"}]}
 }
 ```
+
+`access.ceiling` is the most the token's scope allows, `all` its level on
+every account (`null` without an `all` grant) and `accounts` the level it
+really has on each account a grant names. A token without grants shows
+`all` equal to `ceiling` and no `accounts`.
 
 ## Endpoints
 
 `GET /api/v1/openapi.json` needs no token. Every other operation needs at
 least `read`:
 
-- `GET /api/v1/me` identifies the member and token behind the request.
+- `GET /api/v1/me` identifies the member and token behind the request, and
+  the token's account access.
 - `GET /api/v1/members` returns `{"items": [{id, username, display_name, role, disabled_at}]}`.
 - `GET /api/v1/audit` returns `{"items": [...], "next": "<cursor>|null"}`, newest
   first. Query parameters: `entity_type`, `entity_id`, `member`, `agent`
@@ -146,6 +210,14 @@ because it holds changes members made) and `split_mismatch` (its amount
 changed and its several splits no longer sum to it; saving valid splits
 clears it).
 
+`amount_raw` is the provider's amount exactly as it wrote it, in the
+provider's own sign, while the transaction's `amount` follows coffer's rule
+(negative is money out). For SimpleFin the two agree in sign. Plaid reports
+money out as positive, so for a Plaid record the sign of `amount_raw` is the
+opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
+`-1230` is 12.30 spent, not a refund. Always use `amount` to decide direction;
+`amount_raw` is for checking the digits.
+
 - `GET /api/v1/transactions` lists transactions, newest posting day first
   (ties newest first), as `{"items": [...], "next": "<cursor>|null"}`.
   Every parameter given must hold:
@@ -213,9 +285,10 @@ clears it).
 
 ### Connections and sync
 
-A connection links coffer to a data provider (today SimpleFin). It reports
+A connection links coffer to a data provider (SimpleFin or Plaid). It reports
 provider accounts; once a provider account is bound to a coffer account,
-syncs bring that account's transactions and balances. coffer syncs every
+syncs bring that account's transactions and balances. Binding applies the
+records already held and the balance last reported. coffer syncs every
 connection on a schedule (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask
 for a sync.
 
@@ -224,6 +297,11 @@ for a sync.
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
   `next_sync_at` and the provider accounts the token may see. Credentials
   are never returned.
+- Plaid connections appear in `GET /api/v1/connections` like any other
+  (`provider` is `plaid`), when the server is configured for Plaid. Connecting
+  one is a browser step: the member logs in to the bank through Plaid Link
+  from the Connections page, so no API call can create one, and an agent
+  that needs one asks the member to do it.
 - `POST /api/v1/connections/simplefin` (`write`) connects SimpleFin from
   `{"label": "...", "setup_token": "..."}`; accepts an `Idempotency-Key`.
   The setup token is claimed once and never stored or echoed.
@@ -235,8 +313,12 @@ for a sync.
   (`queued`, `running`, `succeeded`, `partial` or `failed`) and `detail`.
 - `DELETE /api/v1/connections/{connection_id}` (`write`) gives up the
   connection's access at the provider and marks it `removed` (204). Its
-  accounts and transactions stay. If the provider cannot be reached it is a
-  502 `provider_error` and nothing changes.
+  accounts and transactions stay. If the provider cannot be reached, or
+  refuses (Plaid keeps billing an Item until it is removed there), it is an
+  error and nothing changes: the connection stays and removing can be retried.
+  A Plaid connection also answers 409 and stays if the server can no longer
+  reach Plaid for it: Plaid is not configured, or its sealed token no longer
+  opens.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and
@@ -246,13 +328,15 @@ for a sync.
 
 Sync limits are the provider's: for SimpleFin, at most one requested sync
 per hour per connection, scheduled syncs at least two hours apart, and 16
-syncs in 24 hours. A sync request while a run is queued or running is a 409
+syncs in 24 hours; for Plaid, a requested sync 15 minutes after the last,
+scheduled syncs an hour apart, and 48 syncs in 24 hours. A sync request while a run is queued or running is a 409
 `sync_in_progress`: wait for that run. A request the limits refuse is a 429
 `sync_rate_limited` with a `Retry-After` header in seconds; do not retry
 before it has passed.
 
 When a connection's status is `reauth_required`, the provider no longer
-accepts its access. Ask the owner for a new SimpleFin setup token and send
+accepts its access. For Plaid, the member logs in again from the connection's
+Reconnect button in the browser; its accounts stay bound. For SimpleFin, ask the owner for a new setup token and send
 it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
 `{"setup_token": "..."}`: the connection becomes `active` again and keeps
 its provider accounts, bindings and history.
@@ -282,7 +366,9 @@ create. A retry with the same key and the same request within 24 hours gets
 the first response back instead of creating again. The same key with a
 different request is a 422 `idempotency_key_reuse`; while the first request
 is still running, a retry is a 409 `idempotency_in_progress` (retry later).
-Keys belong to your member, so use a fresh key per intended create.
+Keys belong to the token that sent them (or to your passkey session): the
+same key from another token is a separate request, never a replay. Use a
+fresh key per intended create.
 
 ## Errors
 

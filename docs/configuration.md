@@ -4,7 +4,10 @@ coffer is configured only through environment variables. Invalid values are
 rejected at startup with an error that names the variable and never echoes
 its value. The `serve`, `bootstrap-link`, `recover-admin` and `backup`
 commands read the same configuration; `healthcheck` reads only
-`COFFER_LISTEN`. The container image and how to run it are described in
+`COFFER_LISTEN`. When Plaid is configured, that includes reading the Plaid
+secret file, so each of those commands needs it present and readable with the
+right mode, even `backup` and `recover-admin`. `healthcheck` and `openapi` do
+not read it. The container image and how to run it are described in
 [container.md](container.md).
 
 | Variable | Default | Constraints |
@@ -19,6 +22,10 @@ commands read the same configuration; `healthcheck` reads only
 | `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
+| `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
+| `COFFER_PLAID_SECRET_FILE` | unset | Path to a file holding the Plaid secret for the environment in `COFFER_PLAID_ENV`; trailing newlines are removed. It must be a regular file of at most 4096 bytes, not empty, with mode 0600 or stricter (no group or other bit set): any other mode is refused at startup. A symlink is followed and the mode of its target is checked. The secret is read from the file, never from a variable, so it stays out of `docker inspect` and the process environment. |
+| `COFFER_PLAID_ENV` | required with Plaid | `sandbox` or `production`; it selects the one Plaid API host coffer may reach (see [Outbound network](#outbound-network)). `development` is refused, since Plaid retired it. |
+| `COFFER_PLAID_COUNTRY_CODES` | `US` | Comma-separated ISO 3166-1 alpha-2 codes in capitals, such as `US,CA`: the countries whose institutions Link offers. Only the shape is checked; Plaid refuses a country it does not serve. |
 | `HTTPS_PROXY` | unset | Egress proxy for every outbound https request (`https_proxy` is read when `HTTPS_PROXY` is unset; an empty value counts as unset): `http://` or `https://` with a host, optional port and optional `user:password@`, nothing after the host but an optional `/`. coffer sends `CONNECT <host>:443` and never resolves target hosts itself, so the proxy enforces the public-address rule; the proxy's own address may be private. Its credentials never appear in logs or errors. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. |
 | `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). |
 | `COFFER_LOG_FORMAT` | text | `json` switches to JSON lines. Logs go to stderr. |
@@ -58,10 +65,20 @@ makes outbound https requests. It connects only to:
 
 - the hosts in `COFFER_SIMPLEFIN_HOSTS` (by default `bridge.simplefin.org`
   and `beta-bridge.simplefin.org`), on port 443;
-- in later releases, Plaid's API hosts and the exchange-rate source's host,
-  documented here when they are added.
+- when Plaid is configured, only the host `COFFER_PLAID_ENV` selects,
+  `sandbox.plaid.com` or `production.plaid.com`, on port 443. The other
+  Plaid environment's host is refused;
+- in a later release, the exchange-rate source's host, documented here when
+  it is added.
 
-Every other destination is refused before a connection is opened. Target
+Every other destination is refused before a connection is opened. That
+covers what coffer's server connects to. Plaid Link, the login dialog, runs in
+the member's browser, not in coffer: the browser loads Plaid's script and
+frame from `cdn.plaid.com` and calls the configured Plaid API host, so the
+device that connects a bank must reach those, and Plaid's own hosts it opens
+after that (see Plaid's Link documentation). coffer's server never contacts
+`cdn.plaid.com`. coffer widens its content security policy only on the Link
+pages, to those two hosts; see the [threat model](threat-model.md). Target
 hosts must resolve to public addresses: coffer refuses loopback, private,
 link-local and other special-purpose addresses, so a setup token cannot point
 it at the local network. Redirects are never followed. `NO_PROXY`,
@@ -78,6 +95,30 @@ To enforce the same allow-list outside coffer, use one of:
 
 Provider credentials are sealed under a key derived from the server key, so
 losing `secret.key` also means reconnecting every provider connection.
+
+## Plaid
+
+Plaid is optional. To offer it, create a Plaid account, then set
+`COFFER_PLAID_CLIENT_ID`, `COFFER_PLAID_ENV` and `COFFER_PLAID_SECRET_FILE`
+(the secret for that environment). Members then connect a bank from the
+Connections page, in the browser: Plaid Link needs a person to log in to the
+bank, so an agent cannot start it. Agents can still list, sync and remove
+Plaid connections through the API.
+
+Create the secret file so that the secret never appears on a command line or
+in shell history: set `umask 077`, then write the file from your secret
+manager's output. For a container, see
+[container.md](container.md#plaid-secret).
+
+Sync limits for Plaid: a requested sync at least 15 minutes after the last
+one, scheduled syncs at least an hour apart, and 48 syncs in 24 hours, per
+connection.
+
+OAuth banks: coffer sets no redirect URI. Plaid documents that OAuth works on
+web without one, opening the bank in a popup (a new tab on mobile). The cost
+is that people on mobile who open coffer inside a webview, such as the
+browser built into a mail or social app, are blocked, because those browsers
+often do not support popups. Tell them to open coffer in a normal browser.
 
 ## Endpoints
 

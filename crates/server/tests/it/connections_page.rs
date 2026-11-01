@@ -36,7 +36,7 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
 #[derive(Default)]
 struct Script {
     claims: Mutex<VecDeque<String>>,
-    accounts: Mutex<VecDeque<String>>,
+    account_replies: Mutex<VecDeque<String>>,
 }
 
 fn answer(queue: &Mutex<VecDeque<String>>, headers: &HeaderMap) -> Response {
@@ -60,7 +60,7 @@ fn bridge(script: Arc<Script>) -> Router {
         )
         .route(
             "/simplefin/accounts",
-            get(move |headers: HeaderMap| async move { answer(&script.accounts, &headers) }),
+            get(move |headers: HeaderMap| async move { answer(&script.account_replies, &headers) }),
         )
 }
 
@@ -136,7 +136,7 @@ impl World {
 
     async fn sync_fixture(&self, connection: ConnectionId) {
         self.script
-            .accounts
+            .account_replies
             .lock()
             .unwrap()
             .push_back(ACCOUNTS_FIRST.to_owned());
@@ -401,7 +401,7 @@ async fn sync_form_reports_the_wait_when_rate_limited() {
     assert_eq!(queued.status, StatusCode::SEE_OTHER);
     world
         .script
-        .accounts
+        .account_replies
         .lock()
         .unwrap()
         .push_back(ACCOUNTS_FIRST.to_owned());
@@ -413,6 +413,10 @@ async fn sync_form_reports_the_wait_when_rate_limited() {
     assert_eq!(limited.header(header::RETRY_AFTER), "3600");
     assert!(limited.body.contains("role=\"alert\""));
     assert!(limited.body.contains("1 hour"));
+    assert!(
+        limited.body.contains("The provider allows another sync"),
+        "the notice fits every provider"
+    );
     assert_inline_free(&limited);
     assert_eq!(world.run_count(connection).await, 1);
 }

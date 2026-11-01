@@ -138,13 +138,13 @@
           "accounts"
         ],
         "summary": "Creates a manual account.",
-        "description": "Creates a manual account, with an opening balance if given. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a manual account, with an opening balance if given. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createAccount",
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
             "required": false,
             "schema": {
               "type": [
@@ -769,7 +769,7 @@
           "audit"
         ],
         "summary": "Audit events, newest first.",
-        "description": "Audit events, newest first, narrowed by the query. Needs `read`. Pages with the opaque `next` cursor.",
+        "description": "Audit events, newest first, narrowed by the query. Needs `read`; a token with account grants also needs `all` at `transactions`. Pages with the opaque `next` cursor.",
         "operationId": "listAudit",
         "parameters": [
           {
@@ -1039,13 +1039,13 @@
           "categories"
         ],
         "summary": "Creates a category.",
-        "description": "Creates a category in an existing group. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a category in an existing group. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createCategory",
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
             "required": false,
             "schema": {
               "type": [
@@ -1170,7 +1170,7 @@
           "categories"
         ],
         "summary": "Changes a category.",
-        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Needs `write`.",
+        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updateCategory",
         "parameters": [
           {
@@ -1288,13 +1288,13 @@
           "categories"
         ],
         "summary": "Creates a category group.",
-        "description": "Creates a category group. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a category group. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createCategoryGroup",
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
             "required": false,
             "schema": {
               "type": [
@@ -1419,7 +1419,7 @@
           "categories"
         ],
         "summary": "Changes a category group.",
-        "description": "Changes the fields given: name, position or archived. Every category of an archived group counts as archived. Needs `write`.",
+        "description": "Changes the fields given: name, position or archived. Every category of an archived group counts as archived. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updateCategoryGroup",
         "parameters": [
           {
@@ -1537,7 +1537,7 @@
           "connections"
         ],
         "summary": "Every connection.",
-        "description": "Every connection, removed ones included, oldest first: its status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`.",
+        "description": "Every connection, removed ones included, oldest first: its status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`. The last error could name any account the connection serves: a token with account grants gets it only with `all` at `transactions`, otherwise it is `null` and the status still shows the problem.",
         "operationId": "listConnections",
         "responses": {
           "200": {
@@ -1634,13 +1634,13 @@
           "connections"
         ],
         "summary": "Connects `SimpleFin`.",
-        "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
+        "description": "Claims a `SimpleFin` setup token and stores the access it grants, sealed, as a new connection owned by the token's member; its first sync is queued. The claim URL must name an allowed bridge host: a setup token that is malformed, names another host or is refused by the bridge answers `422 setup_token_invalid`. Needs `write`; a token with account grants also needs `all` at `write`, since its first sync queues work on every account it reports. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of claiming again.",
         "operationId": "createSimpleFinConnection",
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
             "required": false,
             "schema": {
               "type": [
@@ -1775,7 +1775,7 @@
           "connections"
         ],
         "summary": "Removes a connection.",
-        "description": "Gives up the connection's access at the provider, erases its credentials and marks it `removed`. Its accounts, transactions and provider accounts stay; it is never synced again. Needs `write`; removing another member's connection needs `admin`.",
+        "description": "Gives up the connection's access at the provider, erases its credentials and marks it `removed`. Its accounts, transactions and provider accounts stay; it is never synced again. Needs `write`; removing another member's connection needs `admin`; a token with account grants also needs `all` at `write`.",
         "operationId": "removeConnection",
         "parameters": [
           {
@@ -1896,7 +1896,7 @@
           "connections"
         ],
         "summary": "Reconnects a connection with a new `SimpleFin` setup token.",
-        "description": "Claims a new setup token for a connection, typically one whose status is `reauth_required`, and replaces its access: the connection is `active` again, and its provider accounts and bindings stay. A sync is queued when the limits allow. A refused setup token answers `422 setup_token_invalid`. Needs `write`; reconnecting another member's connection needs `admin`.",
+        "description": "Claims a new setup token for a connection, typically one whose status is `reauth_required`, and replaces its access: the connection is `active` again, and its provider accounts and bindings stay. A sync is queued when the limits allow. A refused setup token answers `422 setup_token_invalid`. Needs `write`; reconnecting another member's connection needs `admin`; a token with account grants also needs `all` at `write`.",
         "operationId": "reconnectSimpleFin",
         "parameters": [
           {
@@ -2034,7 +2034,7 @@
           "connections"
         ],
         "summary": "Requests a sync of a connection.",
-        "description": "Queues a manual sync of the connection, attributed to the token; the server performs it shortly after. Follow it with `GET /api/v1/connections/{connection_id}/sync-runs`. The provider's limits apply: a minimum interval between syncs and a daily budget. Needs `write`.",
+        "description": "Queues a manual sync of the connection, attributed to the token; the server performs it shortly after. Follow it with `GET /api/v1/connections/{connection_id}/sync-runs`. The provider's limits apply: a minimum interval between syncs and a daily budget. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "syncConnection",
         "parameters": [
           {
@@ -2172,7 +2172,7 @@
           "connections"
         ],
         "summary": "A connection's sync runs.",
-        "description": "The connection's sync runs, newest first: who requested each, its status and what it did. Needs `read`. Pages with the opaque `next` cursor.",
+        "description": "The connection's sync runs, newest first: who requested each, its status and what it did. Needs `read`; a token with account grants also needs `all` at `transactions`. Pages with the opaque `next` cursor.",
         "operationId": "listSyncRuns",
         "parameters": [
           {
@@ -2300,11 +2300,11 @@
           "identity"
         ],
         "summary": "Who the bearer token belongs to.",
-        "description": "The member who created the bearer token, and the token itself.",
+        "description": "The member who created the bearer token, the token itself, and the accounts it may use.",
         "operationId": "getMe",
         "responses": {
           "200": {
-            "description": "The token's member and the token.",
+            "description": "The token's member, the token and its access.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2516,7 +2516,7 @@
           "connections"
         ],
         "summary": "The provider accounts the token may see.",
-        "description": "The accounts every connection reports, oldest first; only those not yet bound to an account with `unbound=true`. Needs `read`.",
+        "description": "The accounts every connection reports, oldest first; only those not yet bound to an account with `unbound=true`. Needs `read`. A token with account grants sees the bound ones whose account it sees, and the unbound ones only with `all` at `transactions`.",
         "operationId": "listProviderAccounts",
         "parameters": [
           {
@@ -2624,7 +2624,7 @@
           "connections"
         ],
         "summary": "Binds a provider account to an account.",
-        "description": "Binds an unbound provider account to an open account in the same currency. The records synced while it was unbound become the account's transactions, and later syncs bring the rest. Needs `write` on the account.",
+        "description": "Binds an unbound provider account to an open account in the same currency. The records synced while it was unbound become the account's transactions, and later syncs bring the rest. Needs `write` on the account; a token with account grants also needs `all` at `write`.",
         "operationId": "bindProviderAccount",
         "parameters": [
           {
@@ -2752,7 +2752,7 @@
           "connections"
         ],
         "summary": "Creates an account for a provider account and binds it.",
-        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions. Needs `write`.",
+        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "createAccountForProviderAccount",
         "parameters": [
           {
@@ -3117,7 +3117,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 128 visible ASCII characters naming this create, unique per member for 24 hours.",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
             "required": false,
             "schema": {
               "type": [
@@ -4055,6 +4055,55 @@
   },
   "components": {
     "schemas": {
+      "AccessView": {
+        "type": "object",
+        "description": "The accounts a token may use. A token without grants shows `all` equal\nto `ceiling` and no `accounts`.",
+        "required": [
+          "ceiling",
+          "all",
+          "accounts"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountGrantView"
+            },
+            "description": "The accounts a grant names, and the level really held on each. An\naccount neither here nor covered by `all` is hidden from the token."
+          },
+          "all": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountLevel",
+                "description": "The level on every account, including ones created later; `null`\nwithout an `all` grant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ceiling": {
+            "$ref": "#/components/schemas/AccountLevel",
+            "description": "The most the token's scope allows on any account."
+          }
+        }
+      },
+      "AccountGrantView": {
+        "type": "object",
+        "description": "The level a token holds on one account.",
+        "required": [
+          "account",
+          "level"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "level": {
+            "$ref": "#/components/schemas/AccountLevel"
+          }
+        }
+      },
       "AccountId": {
         "type": "string",
         "format": "uuid",
@@ -4076,6 +4125,15 @@
           "vehicle",
           "other_asset",
           "other_liability"
+        ]
+      },
+      "AccountLevel": {
+        "type": "string",
+        "description": "How much of one account an actor may use. Ordered\n`Balances < Transactions < Write`; each level includes those below it.",
+        "enum": [
+          "balances",
+          "transactions",
+          "write"
         ]
       },
       "AccountList": {
@@ -4964,9 +5022,14 @@
         "description": "The member and agent token behind the bearer token.",
         "required": [
           "member",
-          "agent"
+          "agent",
+          "access"
         ],
         "properties": {
+          "access": {
+            "$ref": "#/components/schemas/AccessView",
+            "description": "Which accounts the token may use."
+          },
           "agent": {
             "$ref": "#/components/schemas/AgentView"
           },
@@ -5547,7 +5610,7 @@
         "properties": {
           "amount_raw": {
             "type": "string",
-            "description": "The amount as the provider gave it, unconverted."
+            "description": "The amount exactly as the provider wrote it, in its own sign."
           },
           "connection": {
             "$ref": "#/components/schemas/ConnectionId"

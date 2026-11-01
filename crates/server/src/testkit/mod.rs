@@ -43,12 +43,14 @@ use webauthn_rs::prelude::{
 
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
-use crate::config::Config;
+use crate::config::{Config, PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, HostAllowList};
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
 use crate::secrets::{SecretToken, ServerKey};
 use crate::sync::engine::SyncService;
+use crate::sync::plaid::client::PlaidClient;
+use crate::sync::plaid::provider::Plaid;
 use crate::sync::provider::{
     Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider, ProviderError,
     ProviderFuture, ProviderKind, ProviderRegistry,
@@ -89,6 +91,7 @@ pub struct TestServer {
     pub vault: Arc<CredentialVault>,
     /// The sync engine, over the providers registered so far.
     pub sync: Arc<SyncService>,
+    registry: ProviderRegistry,
     _dir: Option<TempDir>,
 }
 
@@ -140,7 +143,7 @@ impl TestServer {
     /// Registers `provider` with the sync engine, replacing any provider of
     /// its kind.
     pub fn use_provider(&mut self, provider: Arc<dyn Provider>) {
-        self.use_registry(registry(&self.config).with(provider));
+        self.use_registry(self.registry.clone().with(provider));
     }
 
     /// Makes the sync engine offer no provider at all, as a server whose
@@ -150,6 +153,7 @@ impl TestServer {
     }
 
     fn use_registry(&mut self, registry: ProviderRegistry) {
+        self.registry = registry.clone();
         self.sync = Arc::new(SyncService::new(
             self.store.clone(),
             self.clock.clone(),
@@ -174,6 +178,21 @@ impl TestServer {
             Egress::for_tests(),
             HostAllowList::loopback(port),
         )));
+        self
+    }
+
+    /// This server configured for Plaid (sandbox), with a provider talking
+    /// to `mock` only, beside the providers registered so far.
+    #[must_use]
+    pub fn with_plaid(mut self, mock: &MockUpstream) -> Self {
+        let config = PlaidConfig {
+            client_id: "test-client-id".to_owned(),
+            secret: SecretString::from("test-plaid-secret"),
+            environment: PlaidEnvironment::Sandbox,
+            country_codes: vec!["US".to_owned()],
+        };
+        self.config.plaid = Some(config.clone());
+        self.use_provider(Arc::new(Plaid::new(PlaidClient::for_tests(mock, config))));
         self
     }
 
@@ -293,17 +312,18 @@ impl TestServer {
         ));
         let appearance = Arc::new(Appearance::new(store.clone(), clock.clone()));
         let vault = Arc::new(CredentialVault::new(&key));
-        let access = Arc::new(AccessResolver::new());
+        let access = Arc::new(AccessResolver::new(store.clone()));
         let ledger = Arc::new(Ledger::new(
             store.clone(),
             clock.clone(),
             Arc::clone(&access),
         ));
+        let registry = registry(&config);
         let sync = Arc::new(SyncService::new(
             store.clone(),
             clock.clone(),
             Arc::clone(&vault),
-            Arc::new(registry(&config)),
+            Arc::new(registry.clone()),
             Arc::clone(&access),
             config.clone(),
         ));
@@ -320,6 +340,7 @@ impl TestServer {
             ledger,
             vault,
             sync,
+            registry,
             _dir: dir,
         }
     }
@@ -395,10 +416,12 @@ impl TestServer {
 /// The providers the configuration registers, as in production, over a
 /// test egress client, each with an allow-list that allows nothing: no
 /// test reaches a real provider host. A test points a provider at a
-/// loopback mock instead ([`TestServer::with_simplefin`]).
+/// loopback mock instead ([`TestServer::with_simplefin`],
+/// [`TestServer::with_plaid`]).
 fn registry(config: &Config) -> ProviderRegistry {
     let config = Config {
         simplefin_hosts: HostAllowList::none(),
+        plaid: None,
         ..config.clone()
     };
     ProviderRegistry::from_config(&config, &Egress::for_tests()).expect("provider registry")
@@ -576,7 +599,8 @@ impl Provider for FakeProvider {
         &self,
         input: ConnectInput,
     ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
-        let ConnectInput::SimpleFinSetupToken(token) = input;
+        let (ConnectInput::SimpleFinSetupToken(token) | ConnectInput::PlaidPublicToken(token)) =
+            input;
         let gate = lock(&self.connect_gate).take();
         Box::pin(async move {
             if let Some(gate) = gate {

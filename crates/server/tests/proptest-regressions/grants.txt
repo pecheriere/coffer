@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 88b84f12264ca751f35b5044c4c28d20671e66c059638df5004f4235c3ec9548 # shrinks to household = Household { scope: Read, all: Some(Balances), accounts: [None] }
+cc c9ca696ee3e69c983a9ad1d36a35e2939d6ad518488cec94b3539922c9bdb29e # shrinks to household = Household { scope: Read, all: None, accounts: [Some(Balances), None] }

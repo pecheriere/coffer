@@ -197,7 +197,9 @@ impl Ledger {
     ///
     /// # Errors
     ///
-    /// [`LedgerError::Denied`] without [`Action::WriteHousehold`];
+    /// [`LedgerError::Denied`] without [`Action::WriteHousehold`], or
+    /// without write access to every account (a new account is visible to
+    /// a restricted token only through its `all` grant);
     /// [`LedgerError::Invalid`] for an invalid name; storage failures.
     pub async fn create_account(
         &self,
@@ -206,6 +208,8 @@ impl Ledger {
         slot: Option<IdempotencySlot>,
     ) -> Result<AccountView, LedgerError> {
         authorize(actor, Action::WriteHousehold)?;
+        self.authorize_every_account_access(actor, AccountLevel::Write)
+            .await?;
         let valid = ValidNewAccount::parse(input)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;

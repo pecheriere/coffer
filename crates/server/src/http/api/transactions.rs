@@ -264,7 +264,7 @@ pub(super) async fn list(
     params(
         ("Idempotency-Key" = Option<String>, Header,
          description = "1 to 128 visible ASCII characters naming this create, unique per \
-                        member for 24 hours."),
+                        token (or session) for 24 hours."),
     ),
     request_body = NewTransactionRequest,
     responses(

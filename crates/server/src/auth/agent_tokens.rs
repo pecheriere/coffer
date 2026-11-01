@@ -7,9 +7,11 @@ use std::sync::Arc;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Scope, TokenName, Via};
 use coffer_domain::ids::AgentTokenId;
-use coffer_domain::policy::{Action, authorize, check_token_scope};
+use coffer_domain::policy::{
+    Action, GrantTarget, TokenGrant, authorize, check_token_scope, validate_grants,
+};
 use coffer_domain::time::Clock;
-use coffer_store::{AgentTokenRecord, Member, NewAgentToken, Store, StoreError};
+use coffer_store::{AgentTokenRecord, Member, NewAgentToken, Store, StoreError, StoreTx};
 use jiff::{SignedDuration, Timestamp};
 use secrecy::ExposeSecret as _;
 
@@ -41,24 +43,33 @@ impl AgentTokens {
 
     /// Creates a token for the acting member and returns it with its record.
     /// The secret is returned only here; listings carry just its prefix.
+    /// Without `grants` the token has uniform access at its scope; with
+    /// them, only the accounts they name, at their levels.
     ///
     /// # Errors
     ///
     /// [`AuthError::Denied`] unless the actor signed in with a passkey
     /// ([`Action::ManageOwnCredentials`]) and `scope` is within the member's
-    /// role ceiling; storage failures.
+    /// role ceiling; [`AuthError::InvalidGrants`] when `grants` break a
+    /// rule of [`validate_grants`]; [`AuthError::UnknownGrantedAccount`]
+    /// when one names an account that does not exist; storage failures.
     pub async fn create(
         &self,
         actor: &Actor,
         name: TokenName,
         scope: Scope,
         expires_at: Option<Timestamp>,
+        grants: Vec<TokenGrant>,
     ) -> Result<(AgentTokenRecord, SecretToken), AuthError> {
         authorize(actor, Action::ManageOwnCredentials)?;
         check_token_scope(actor.role, scope)?;
+        if !grants.is_empty() {
+            validate_grants(scope, &grants).map_err(AuthError::InvalidGrants)?;
+        }
         let now = self.clock.now();
         let secret = mint(TokenKind::Agent);
         let mut tx = self.store.begin().await?;
+        accounts_exist(&mut tx, &grants).await?;
         let record = tx
             .insert_agent_token(NewAgentToken {
                 member: actor.member,
@@ -70,6 +81,7 @@ impl AgentTokens {
                 expires_at,
             })
             .await?;
+        tx.replace_token_grants(record.id, &grants).await?;
         tx.append_audit(
             now,
             &AuditEntry {
@@ -77,12 +89,84 @@ impl AgentTokens {
                 action: "token.create".to_owned(),
                 entity_type: "agent_token".to_owned(),
                 entity_id: record.id.to_string(),
-                changes: token_changes(&record),
+                changes: if grants.is_empty() {
+                    token_changes(&record)
+                } else {
+                    token_changes(&record).set("grants", grants_text(&grants))
+                },
             },
         )
         .await?;
         tx.commit().await?;
         Ok((record, secret))
+    }
+
+    /// Replaces the grants of a token: the actor's own, or anyone's with
+    /// [`Action::ManageMembers`]. Only a member signed in with a passkey may
+    /// do either; agents never manage tokens. The change applies at the
+    /// token's next request. The same grants again record nothing.
+    ///
+    /// The list can never be emptied: no grants means uniform access, so an
+    /// empty list would silently widen a restricted token. To widen one,
+    /// grant [`GrantTarget::All`], which the audit log shows.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::Denied`] unless the actor signed in with a passkey;
+    /// [`AuthError::NotFound`] for an unknown token, and also for another
+    /// member's token when the actor may not manage members, so existence
+    /// is not revealed; [`AuthError::TokenInactive`] for a revoked or
+    /// expired one; [`AuthError::InvalidGrants`] when `grants` break a rule
+    /// of [`validate_grants`], an empty list included;
+    /// [`AuthError::UnknownGrantedAccount`] when one names an account that
+    /// does not exist; storage failures.
+    pub async fn replace_grants(
+        &self,
+        actor: &Actor,
+        id: AgentTokenId,
+        grants: Vec<TokenGrant>,
+    ) -> Result<(), AuthError> {
+        authorize(actor, Action::ManageOwnCredentials)?;
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let record = match tx.get_agent_token(id).await {
+            Ok(record)
+                if record.member == actor.member
+                    || authorize(actor, Action::ManageMembers).is_ok() =>
+            {
+                record
+            }
+            Ok(_) | Err(StoreError::NotFound) => return Err(AuthError::NotFound),
+            Err(err) => return Err(err.into()),
+        };
+        if record.revoked_at.is_some() || record.expires_at.is_some_and(|at| at <= now) {
+            return Err(AuthError::TokenInactive);
+        }
+        validate_grants(record.scope, &grants).map_err(AuthError::InvalidGrants)?;
+        accounts_exist(&mut tx, &grants).await?;
+        let before = tx.token_grants(id).await?;
+        let after_text = grants_text(&grants);
+        if grants_text(&before) == after_text {
+            return Ok(());
+        }
+        tx.replace_token_grants(id, &grants).await?;
+        tx.append_audit(
+            now,
+            &AuditEntry {
+                actor: actor.into(),
+                action: "token.grants".to_owned(),
+                entity_type: "agent_token".to_owned(),
+                entity_id: id.to_string(),
+                changes: if before.is_empty() {
+                    AuditChanges::new().set("grants", after_text)
+                } else {
+                    AuditChanges::new().change("grants", grants_text(&before), after_text)
+                },
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// The acting member's own tokens, including revoked and expired ones.
@@ -227,6 +311,20 @@ impl AgentTokens {
     }
 }
 
+/// Checks that every account `grants` names exists.
+async fn accounts_exist(tx: &mut StoreTx, grants: &[TokenGrant]) -> Result<(), AuthError> {
+    for grant in grants {
+        if let GrantTarget::Account(account) = grant.target {
+            match tx.get_account(account).await {
+                Ok(_) => {}
+                Err(StoreError::NotFound) => return Err(AuthError::UnknownGrantedAccount),
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What a token's audit entries record: who it belongs to and what it may
 /// do, never the secret or its hash.
 fn token_changes(record: &AgentTokenRecord) -> AuditChanges {
@@ -235,4 +333,17 @@ fn token_changes(record: &AgentTokenRecord) -> AuditChanges {
         .set("name", record.name.as_str())
         .set("scope", record.scope.as_str())
         .set("expires_at", record.expires_at)
+}
+
+/// The canonical text of `grants` for the audit log: `all` first, then by
+/// account id, each `target=level`, comma-separated
+/// (`all=balances,<id>=write`).
+fn grants_text(grants: &[TokenGrant]) -> String {
+    let mut sorted = grants.to_vec();
+    sorted.sort_by_key(|grant| grant.target);
+    sorted
+        .iter()
+        .map(|grant| format!("{}={}", grant.target, grant.level.as_str()))
+        .collect::<Vec<_>>()
+        .join(",")
 }

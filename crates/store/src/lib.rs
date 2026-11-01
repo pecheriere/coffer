@@ -19,6 +19,7 @@ mod provider_accounts;
 mod sessions;
 mod sources;
 mod sync_runs;
+mod token_grants;
 mod transactions;
 
 use std::path::Path;
@@ -40,7 +41,7 @@ pub use connections::{
     UnknownConnectionStatus,
 };
 pub use error::StoreError;
-pub use idempotency::Reservation;
+pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
@@ -279,8 +280,90 @@ pub struct Page<T> {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
+    use sqlx::Row as _;
 
     use super::*;
+
+    /// Migration 0010 drops idempotency keys it cannot attribute to a
+    /// credential, on a database that holds some, and its primary key lets
+    /// two credentials of one member use the same key.
+    #[tokio::test]
+    async fn idempotency_migration_drops_old_keys_and_scopes_new_ones_by_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(dir.path().join("coffer.db"))
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        let migrator = sqlx::migrate!("./migrations");
+        for migration in migrator.iter().filter(|migration| migration.version < 10) {
+            sqlx::raw_sql(migration.sql.clone())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let member = coffer_domain::ids::MemberId::new().to_string();
+        sqlx::query(
+            "INSERT INTO members (id, username, display_name, role, created_at) \
+             VALUES (?, 'alice', '', 'admin', 0)",
+        )
+        .bind(&member)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO idempotency_keys (member_id, key, request_hash, state, created_at) \
+             VALUES (?, 'old', ?, 'pending', 0)",
+        )
+        .bind(&member)
+        .bind(vec![0_u8; 32])
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for migration in migrator.iter().filter(|migration| migration.version == 10) {
+            sqlx::raw_sql(migration.sql.clone())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let count = |pool: sqlx::SqlitePool| async move {
+            sqlx::query("SELECT count(*) AS n FROM idempotency_keys")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get::<i64, _>("n")
+        };
+        assert_eq!(count(pool.clone()).await, 0, "old keys are gone");
+        let insert = "INSERT INTO idempotency_keys \
+             (member_id, credential, key, request_hash, state, created_at) \
+             VALUES (?, ?, 'same', ?, 'pending', 0)";
+        for credential in ["session", "019a0000-0000-7000-8000-000000000000"] {
+            sqlx::query(insert)
+                .bind(&member)
+                .bind(credential)
+                .bind(vec![0_u8; 32])
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(count(pool.clone()).await, 2, "one key per credential");
+        assert!(
+            sqlx::query(insert)
+                .bind(&member)
+                .bind("session")
+                .bind(vec![0_u8; 32])
+                .execute(&pool)
+                .await
+                .is_err(),
+            "a credential uses a key once"
+        );
+    }
 
     #[tokio::test]
     async fn corrupt_rows_are_backend_errors() {

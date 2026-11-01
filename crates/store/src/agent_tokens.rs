@@ -57,6 +57,28 @@ fn token_from_row(row: &SqliteRow) -> Result<AgentTokenRecord, StoreError> {
 }
 
 impl StoreTx {
+    /// A token by id, revoked and expired ones included, read in this
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound`; backend failures.
+    pub async fn get_agent_token(
+        &mut self,
+        id: AgentTokenId,
+    ) -> Result<AgentTokenRecord, StoreError> {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            columns!(),
+            " FROM agent_tokens WHERE id = ?"
+        ))
+        .bind(id.to_string())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        token_from_row(&row)
+    }
+
     /// Create an agent token.
     ///
     /// # Errors

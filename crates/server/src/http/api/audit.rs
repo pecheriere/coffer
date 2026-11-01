@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use coffer_domain::audit::{AuditActor, AuditChanges};
 use coffer_domain::ids::{AgentTokenId, AuditEventId, MemberId};
-use coffer_domain::policy::{Action, authorize};
+use coffer_domain::policy::{AccountLevel, Action, authorize, authorize_every_account};
 use coffer_store::{AuditEvent, AuditFilter, PageRequest, StoreError};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -114,8 +114,9 @@ impl From<&AuditEvent> for AuditEventView {
     path = "/api/v1/audit",
     operation_id = "listAudit",
     tag = tags::AUDIT,
-    description = "Audit events, newest first, narrowed by the query. Needs `read`. \
-                   Pages with the opaque `next` cursor.",
+    description = "Audit events, newest first, narrowed by the query. Needs `read`; a \
+                   token with account grants also needs `all` at `transactions`. Pages with the \
+                   opaque `next` cursor.",
     security(("bearer" = [])),
     params(AuditQuery),
     responses(
@@ -129,6 +130,10 @@ pub(super) async fn list(
     TypedQuery(query): TypedQuery<AuditQuery>,
 ) -> Result<Json<AuditPage>, Problem> {
     authorize(&actor, Action::ReadHousehold)?;
+    // Entries name and describe every account, so a token reads them only
+    // if it sees every account's transactions.
+    let access = state.access.resolve(&actor).await?;
+    authorize_every_account(&actor, &access, AccountLevel::Transactions)?;
     let filter = AuditFilter {
         entity_type: query.entity_type,
         entity_id: query.entity_id,

@@ -235,7 +235,8 @@ impl From<Denied> for Problem {
             DenyReason::SessionRequired
             | DenyReason::InsufficientScope { .. }
             | DenyReason::ScopeAboveRole
-            | DenyReason::AccountLevel { .. } => {
+            | DenyReason::AccountLevel { .. }
+            | DenyReason::EveryAccount { .. } => {
                 Self::new(StatusCode::FORBIDDEN, ProblemCode::Forbidden, "Forbidden")
                     .with_detail(denied_message(denied))
             }
@@ -269,7 +270,8 @@ impl From<AuthError> for Problem {
             AuthError::UsernameTaken
             | AuthError::LastPasskey
             | AuthError::LastAdmin
-            | AuthError::PasskeyAlreadyRegistered => {
+            | AuthError::PasskeyAlreadyRegistered
+            | AuthError::TokenInactive => {
                 Self::new(StatusCode::CONFLICT, ProblemCode::Conflict, "Conflict")
                     .with_detail(message)
             }
@@ -285,7 +287,9 @@ impl From<AuthError> for Problem {
                 "Too many passkey prompts",
             )
             .with_detail(message),
-            AuthError::Invalid(_) => Self::new(
+            AuthError::Invalid(_)
+            | AuthError::InvalidGrants(_)
+            | AuthError::UnknownGrantedAccount => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 ProblemCode::Invalid,
                 "Invalid value",

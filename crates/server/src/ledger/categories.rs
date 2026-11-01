@@ -187,7 +187,7 @@ impl Ledger {
         input: CategoryGroupInput,
         slot: Option<IdempotencySlot>,
     ) -> Result<CategoryGroupView, LedgerError> {
-        authorize(actor, Action::WriteHousehold)?;
+        self.authorize_category_write(actor).await?;
         let name = group_name(&input.name)?;
         let position = check_position(input.position)?;
         let now = self.clock.now();
@@ -233,7 +233,7 @@ impl Ledger {
         id: CategoryGroupId,
         patch: CategoryGroupPatch,
     ) -> Result<CategoryGroupView, LedgerError> {
-        authorize(actor, Action::WriteHousehold)?;
+        self.authorize_category_write(actor).await?;
         let name = patch.name.as_deref().map(group_name).transpose()?;
         let position = check_position(patch.position)?;
         let now = self.clock.now();
@@ -288,7 +288,7 @@ impl Ledger {
         input: CategoryInput,
         slot: Option<IdempotencySlot>,
     ) -> Result<CategoryView, LedgerError> {
-        authorize(actor, Action::WriteHousehold)?;
+        self.authorize_category_write(actor).await?;
         let name = category_name(&input.name)?;
         let position = check_position(input.position)?;
         let now = self.clock.now();
@@ -340,7 +340,7 @@ impl Ledger {
         id: CategoryId,
         patch: CategoryPatch,
     ) -> Result<CategoryView, LedgerError> {
-        authorize(actor, Action::WriteHousehold)?;
+        self.authorize_category_write(actor).await?;
         let name = patch.name.as_deref().map(category_name).transpose()?;
         let position = check_position(patch.position)?;
         let now = self.clock.now();

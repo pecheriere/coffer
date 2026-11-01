@@ -458,6 +458,7 @@ fn transaction(raw: &RawTransaction, request: &FetchRequest<'_>) -> Option<Provi
         provider_id: raw.id.clone(),
         posted_on: date,
         transacted_on,
+        amount_raw: amount.as_str().to_owned(),
         amount,
         description: raw.description.clone(),
         payee: raw.payee.clone(),
@@ -500,8 +501,14 @@ impl Provider for SimpleFin {
         &self,
         input: ConnectInput,
     ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
-        let ConnectInput::SimpleFinSetupToken(token) = input;
-        Box::pin(async move { self.claim(&token).await })
+        Box::pin(async move {
+            match input {
+                ConnectInput::SimpleFinSetupToken(token) => self.claim(&token).await,
+                ConnectInput::PlaidPublicToken(_) => {
+                    Err(ProviderError::Invalid(TOKEN_INVALID.into()))
+                }
+            }
+        })
     }
 
     fn fetch<'a>(
@@ -528,9 +535,10 @@ mod tests {
 
     use super::{
         ACCOUNT_UNREADABLE, ACCOUNT_WITHOUT_ID, ERROR_WITHHELD, FetchRequest, FetchResult,
-        claim_url, parse_account_set, withhold_credentials,
+        SimpleFin, claim_url, parse_account_set, withhold_credentials,
     };
-    use crate::sync::provider::ProviderError;
+    use crate::egress::{Egress, HostAllowList};
+    use crate::sync::provider::{ConnectInput, Provider as _, ProviderError};
 
     fn request<'a>(credentials: &'a SecretString, timezone: &'a TimeZone) -> FetchRequest<'a> {
         FetchRequest {
@@ -550,6 +558,15 @@ mod tests {
             &request(&credentials, &utc),
             date(2027, 1, 1),
         )
+    }
+
+    #[tokio::test]
+    async fn another_provider_input_is_refused() {
+        let provider = SimpleFin::new(Egress::for_tests(), HostAllowList::none());
+        let refused = provider
+            .connect(ConnectInput::PlaidPublicToken(SecretString::from("x")))
+            .await;
+        assert!(matches!(refused, Err(ProviderError::Invalid(_))));
     }
 
     #[test]

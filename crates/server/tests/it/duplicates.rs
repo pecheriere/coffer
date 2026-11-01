@@ -73,6 +73,7 @@ async fn world() -> World {
             TokenName::parse("claude").unwrap(),
             Scope::Write,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -1011,6 +1012,7 @@ async fn read_token_cannot_merge() {
             TokenName::parse("reader").unwrap(),
             Scope::Read,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

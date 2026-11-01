@@ -76,7 +76,7 @@ async fn mint(
     world
         .server
         .agent_tokens
-        .create(actor, name("claude"), scope, expires_at)
+        .create(actor, name("claude"), scope, expires_at, Vec::new())
         .await
         .unwrap()
 }
@@ -351,7 +351,7 @@ async fn agent_cannot_create_tokens() {
     let err = world
         .server
         .agent_tokens
-        .create(&agent, name("child"), Scope::Read, None)
+        .create(&agent, name("child"), Scope::Read, None, Vec::new())
         .await
         .unwrap_err();
 
@@ -369,7 +369,13 @@ async fn member_cannot_mint_admin_token() {
     let err = world
         .server
         .agent_tokens
-        .create(&bob_actor(&world), name("too much"), Scope::Admin, None)
+        .create(
+            &bob_actor(&world),
+            name("too much"),
+            Scope::Admin,
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap_err();
 

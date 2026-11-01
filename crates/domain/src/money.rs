@@ -339,9 +339,13 @@ impl DecimalAmount {
         }
     }
 
-    /// The same amount with the opposite sign.
+    /// The same amount with the opposite sign. Zero has no sign: it stays as
+    /// it is written.
     #[must_use]
     pub fn negated(&self) -> DecimalAmount {
+        if self.0.bytes().all(|b| matches!(b, b'0' | b'.')) {
+            return self.clone();
+        }
         match self.0.strip_prefix('-') {
             Some(unsigned) => Self(unsigned.to_owned()),
             None => Self(format!("-{}", self.0)),
@@ -360,6 +364,31 @@ impl DecimalAmount {
     /// the currency's exponent, and [`MoneyError::Overflow`] when the result
     /// does not fit an `i64`.
     pub fn to_minor_units(&self, currency: Currency) -> Result<i64, MoneyError> {
+        let (negative, magnitude, dropped) = self.split_at_minor_unit(currency);
+        if dropped.bytes().any(|b| b != b'0') {
+            return Err(MoneyError::TooPrecise);
+        }
+        signed_minor_units(negative, magnitude)
+    }
+
+    /// The amount in `currency`'s minor units, rounded half-even when it has
+    /// more decimals. For a valuation such as a balance; a ledger amount is
+    /// exact ([`Self::to_minor_units`]).
+    ///
+    /// # Errors
+    /// Returns [`MoneyError::Overflow`] when the result does not fit an `i64`.
+    pub fn to_minor_units_rounded(&self, currency: Currency) -> Result<i64, MoneyError> {
+        let (negative, magnitude, dropped) = self.split_at_minor_unit(currency);
+        let mut digits = dropped.bytes();
+        let first = digits.next().unwrap_or(b'0');
+        let beyond_half = digits.any(|b| b != b'0');
+        let round_up = first > b'5' || (first == b'5' && (beyond_half || magnitude % 2 == 1));
+        signed_minor_units(negative, magnitude + i128::from(round_up))
+    }
+
+    /// Whether the amount is negative, its magnitude in `currency`'s minor
+    /// units, and the decimals beyond them.
+    fn split_at_minor_unit(&self, currency: Currency) -> (bool, i128, &str) {
         let (negative, unsigned) = match self.0.strip_prefix('-') {
             Some(unsigned) => (true, unsigned),
             None => (false, self.0.as_str()),
@@ -367,9 +396,6 @@ impl DecimalAmount {
         let (int, frac) = unsigned.split_once('.').unwrap_or((unsigned, ""));
         let exponent = usize::from(currency.exponent());
         let (kept, dropped) = frac.split_at(frac.len().min(exponent));
-        if dropped.bytes().any(|b| b != b'0') {
-            return Err(MoneyError::TooPrecise);
-        }
         // At most 18 + 3 digits: an i128 cannot overflow.
         let padding = exponent - kept.len();
         let magnitude = int
@@ -377,9 +403,13 @@ impl DecimalAmount {
             .chain(kept.bytes())
             .chain(std::iter::repeat_n(b'0', padding))
             .fold(0_i128, |acc, digit| acc * 10 + i128::from(digit - b'0'));
-        let signed = if negative { -magnitude } else { magnitude };
-        i64::try_from(signed).map_err(|_| MoneyError::Overflow)
+        (negative, magnitude, dropped)
     }
+}
+
+fn signed_minor_units(negative: bool, magnitude: i128) -> Result<i64, MoneyError> {
+    let signed = if negative { -magnitude } else { magnitude };
+    i64::try_from(signed).map_err(|_| MoneyError::Overflow)
 }
 
 impl From<DecimalAmount> for String {
@@ -576,6 +606,49 @@ mod tests {
         assert_eq!(amount.negated().as_str(), "-12.30");
         assert_eq!(amount.negated().negated().as_str(), "12.30");
         assert_eq!(amount.negated().to_minor_units(usd()), Ok(-1230));
+        for zero in ["0", "0.00", "00"] {
+            let zero = DecimalAmount::parse(zero).unwrap();
+            assert_eq!(zero.negated().as_str(), zero.as_str(), "zero has no sign");
+        }
+    }
+
+    #[test]
+    fn rounding_to_minor_units_is_half_even() {
+        let jpy = Currency::parse("JPY").unwrap();
+        let rounded = |text: &str, currency| {
+            DecimalAmount::parse(text)
+                .unwrap()
+                .to_minor_units_rounded(currency)
+        };
+        for (text, minor) in [
+            ("23631.9805", 2_363_198),
+            ("1.005", 100),
+            ("1.015", 102),
+            ("1.0051", 101),
+            ("1.0049999", 100),
+            ("1.009", 101),
+            ("-1.005", -100),
+            ("-1.015", -102),
+            ("-1.0051", -101),
+            ("-0.001", 0),
+            ("12.3", 1230),
+            ("12", 1200),
+            ("0.995", 100),
+        ] {
+            assert_eq!(rounded(text, usd()), Ok(minor), "{text}");
+        }
+        assert_eq!(rounded("2.5", jpy), Ok(2));
+        assert_eq!(rounded("3.5", jpy), Ok(4));
+        assert_eq!(
+            rounded("999999999999999999", usd()),
+            Err(MoneyError::Overflow)
+        );
+        assert_eq!(rounded("92233720368547758.07", usd()), Ok(i64::MAX));
+        assert_eq!(
+            rounded("92233720368547758.075", usd()),
+            Err(MoneyError::Overflow),
+            "rounding up past the largest value overflows"
+        );
     }
 
     #[test]
@@ -617,6 +690,7 @@ mod tests {
             let parsed = DecimalAmount::parse(&text).unwrap();
             proptest::prop_assert_eq!(parsed.as_str(), text.as_str());
             proptest::prop_assert_eq!(parsed.to_minor_units(currency), Ok(minor));
+            proptest::prop_assert_eq!(parsed.to_minor_units_rounded(currency), Ok(minor));
         }
     }
 }

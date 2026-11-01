@@ -66,6 +66,7 @@ async fn agent(world: &World, scope: Scope) -> Actor {
             TokenName::parse("claude").unwrap(),
             scope,
             None,
+            Vec::new(),
         )
         .await
         .unwrap();

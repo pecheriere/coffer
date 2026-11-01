@@ -32,7 +32,9 @@ use coffer_store::{
     ImportedFields, NewTransaction, SourceRecord, StoreError, StoreTx, TransactionRecord,
 };
 
-use super::transactions::{TransactionView, attribution, current_splits, splits_value};
+use super::transactions::{
+    TransactionView, attribution, current_splits, hide_candidates_in_tx, splits_value,
+};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::canonical::{
     apply_imported_fields, drop_candidate, drop_stale_candidates, posted_connections,
@@ -289,8 +291,11 @@ impl Ledger {
         }
         drop_stale_candidates(&mut tx, now, &actor.into(), target.id, &HashSet::new()).await?;
         let record = tx.get_transaction(target.id).await?;
+        let mut views = [TransactionView::new(&record)];
+        hide_candidates_in_tx(&mut tx, &access, &mut views).await?;
         tx.commit().await?;
-        Ok(TransactionView::new(&record))
+        let [view] = views;
+        Ok(view)
     }
 
     /// Moves `source` out of `transaction` into a new imported transaction
@@ -402,8 +407,8 @@ impl Ledger {
 
     /// Clears a transaction's `PossibleDuplicate` flag and forgets its
     /// candidates; a candidate that lists it back forgets it too, its own
-    /// flag clearing when no candidate is left. A transaction neither flagged nor listing candidates is
-    /// returned as it is, and nothing is recorded.
+    /// flag clearing when no candidate is left. A transaction neither flagged
+    /// nor listing candidates is returned as it is, and nothing is recorded.
     ///
     /// # Errors
     ///

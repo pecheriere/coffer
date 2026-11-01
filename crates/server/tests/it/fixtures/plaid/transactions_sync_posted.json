@@ -1,0 +1,29 @@
+{
+  "added": [
+    {
+      "account_id": "acct-card",
+      "amount": 4.75,
+      "authorized_date": "2027-01-11",
+      "date": "2027-01-13",
+      "iso_currency_code": "USD",
+      "merchant_name": "Sandbox Grocer",
+      "name": "SANDBOX GROCER",
+      "pending": false,
+      "pending_transaction_id": "txn-pending",
+      "transaction_id": "txn-posted",
+      "unofficial_currency_code": null
+    }
+  ],
+  "modified": [],
+  "removed": [
+    {
+      "account_id": "acct-card",
+      "transaction_id": "txn-pending"
+    }
+  ],
+  "next_cursor": "cursor-page-3",
+  "has_more": false,
+  "transactions_update_status": "HISTORICAL_UPDATE_COMPLETE",
+  "accounts": [],
+  "request_id": "fixtureRequest06"
+}

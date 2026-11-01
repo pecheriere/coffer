@@ -69,6 +69,7 @@ rustix.workspace = true
 [dev-dependencies]
 # Enables the testkit feature for this crate's own integration tests.
 coffer-server = { workspace = true, features = ["testkit"] }
+proptest.workspace = true
 
 [build-dependencies]
 blake3.workspace = true

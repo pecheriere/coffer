@@ -7,6 +7,7 @@ use axum::response::Response;
 use coffer_domain::accounts::{AccountKind, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
+use coffer_domain::policy::AccountLevel;
 use coffer_store::PageRequest;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
@@ -135,13 +136,14 @@ pub(super) async fn list(
     operation_id = "createAccount",
     tag = tags::ACCOUNTS,
     description = "Creates a manual account, with an opening balance if given. Needs \
-                   `write`. With an `Idempotency-Key`, a retry of the same request within 24 \
+                   `write`; a token with account grants also needs `all` at `write`. With an \
+                   `Idempotency-Key`, a retry of the same request within 24 \
                    hours returns the first response instead of creating again.",
     security(("bearer" = [])),
     params(
         ("Idempotency-Key" = Option<String>, Header,
          description = "1 to 128 visible ASCII characters naming this create, unique per \
-                        member for 24 hours."),
+                        token (or session) for 24 hours."),
     ),
     request_body = NewAccountRequest,
     responses(
@@ -176,7 +178,13 @@ pub(super) async fn create(
         uri: &uri,
         body: &bytes,
     };
-    let authorize = async || idempotency::write_household(&actor);
+    let authorize = async || {
+        idempotency::write_household(&actor)?;
+        Ok(state
+            .ledger
+            .authorize_every_account_access(&actor, AccountLevel::Write)
+            .await?)
+    };
     idempotency::create(&state, &actor, request, authorize, async |slot| {
         state.ledger.create_account(&actor, input, slot).await
     })
