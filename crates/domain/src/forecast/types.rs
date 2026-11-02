@@ -109,8 +109,8 @@ pub struct ItemInput {
     pub spending: Option<PlanSpending>,
     /// Spending linked to a goal, positive for money spent. 0 for anything else.
     pub goal_spent_minor: i64,
-    /// Whether what is linked to this goal is on both counted cash and an account that isn't
-    /// the household's. False for anything else.
+    /// Whether what is linked to this goal is on both the household's accounts and an account
+    /// that isn't the household's. False for anything else.
     pub goal_linked_both_sides: bool,
     /// The months a person settled it for. Only a stored recurring bill or one-off
     /// outflow has any: a what-if can't settle, and the ledger refuses anything else.
@@ -274,7 +274,7 @@ pub enum HintEffect {
     /// An inflow still counts as income, which may overstate what is free.
     StillIncome,
     /// An inflow into an account that isn't the household's isn't the household's income, so
-    /// it stays out of the number.
+    /// it stays out of the number. That is already right: removing the hint would add it.
     LeftOut,
 }
 
@@ -491,8 +491,8 @@ pub enum Caution {
     },
     /// A goal's due date has passed with money still to find.
     GoalOverdue { goal: LineSource, due_on: Date },
-    /// One goal has spending linked to it on both counted cash and an account that isn't the
-    /// household's. A contribution and the payment it funded would then both lower its need,
+    /// One goal has spending linked to it on both the household's accounts, counted or not,
+    /// and an account that isn't the household's. A contribution and the payment it funded would then both lower its need,
     /// and the data can't tell, so the number stays and stops being firm. Link the payment or
     /// the contribution, never both. A finished goal raises nothing.
     GoalLinkedBothSides { goal: LineSource },

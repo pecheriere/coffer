@@ -38,8 +38,8 @@ pub struct ForecastData {
     pub settlements: Vec<SettlementRecord>,
     /// Spending linked to each goal, positive for money spent.
     pub goal_spent: Vec<(PlannedItemId, i64)>,
-    /// The goals with spending linked on both counted cash and an account that isn't the
-    /// household's, ordered by id.
+    /// The goals with spending linked on both the household's accounts and an account that
+    /// isn't the household's, ordered by id.
     pub goals_linked_both_sides: Vec<PlannedItemId>,
     pub category_spent: Vec<CategorySpentRow>,
     pub loose_ends: Vec<LooseEndsRow>,
@@ -127,18 +127,6 @@ macro_rules! spendable {
 macro_rules! the_households {
     () => {
         "a.belongs_to = 'household'"
-    };
-}
-
-/// An account `a` whose spending comes out of counted cash: switched in and of a spendable
-/// class, and open or a closed card, whose debt still counts.
-macro_rules! out_of_counted_cash {
-    () => {
-        concat!(
-            "(a.include_in_forecast = 1 AND ",
-            spendable!(),
-            " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability'))"
-        )
     };
 }
 
@@ -248,16 +236,18 @@ const GOAL_SPENT: &str = concat!(
        AND ",
     counts_against_goal!(),
     " AND t.posted_on <= ?1 AND ( \
-       NOT ",
-    out_of_counted_cash!(),
-    " OR t.posted_on <= COALESCE(b.on_date, '') \
+       NOT (a.include_in_forecast = 1 AND ",
+    spendable!(),
+    " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
+       OR t.posted_on <= COALESCE(b.on_date, '') \
      ) GROUP BY s.goal_id ORDER BY s.goal_id"
 );
 
-/// The goals with money spent on them both out of counted cash and on an account that isn't
-/// the household's: a contribution and the payment it funded may both be linked. What
-/// [`GOAL_SPENT`] would count, but for the balance date: a charge newer than a balance lowers
-/// the need as soon as a balance shows it, so it is one side already.
+/// The goals with money spent on them both on the household's accounts, counted or not, and
+/// on an account that isn't the household's: a contribution and the payment it funded may both
+/// be linked. The need falling twice is what overstates the surplus, wherever the household's
+/// side came from. What [`GOAL_SPENT`] would count, but for the balance date: a charge newer
+/// than a balance lowers the need as soon as a balance shows it, so it is one side already.
 const GOALS_LINKED_BOTH_SIDES: &str = concat!(
     "SELECT s.goal_id AS goal \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
@@ -267,7 +257,7 @@ const GOALS_LINKED_BOTH_SIDES: &str = concat!(
      AND s.minor_units < 0 AND ",
     counts_against_goal!(),
     " AND t.posted_on <= ?1 GROUP BY s.goal_id HAVING MAX(",
-    out_of_counted_cash!(),
+    the_households!(),
     ") = 1 AND MAX(NOT ",
     the_households!(),
     ") = 1 ORDER BY s.goal_id"

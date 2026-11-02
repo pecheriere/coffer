@@ -540,11 +540,36 @@ async fn a_goal_linked_to_the_tuition_alone_raises_nothing() {
     assert_eq!(forecast["status"], "firm");
 }
 
-/// A household account switched out never touched counted cash, so it isn't one of the sides.
-#[tokio::test]
-async fn a_goal_linked_on_an_excluded_account_and_a_held_one_raises_nothing() {
-    let (world, checking, category, goal) = saving_for_a_goal().await;
+/// 500.00 linked on `side` and 500.00 of tuition on the 529, with Checking at 3,000.00.
+async fn link_both_sides(
+    world: &World,
+    checking: AccountId,
+    side: AccountId,
+    category: CategoryId,
+    goal: &Value,
+) {
     world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(side, "2026-11-02", 50_000, category, goal)
+        .await;
+    let fund = world.college_fund().await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, goal)
+        .await;
+}
+
+/// The need falls twice whether or not the household's side touched counted cash, so nothing
+/// is left of it and Checking's 3,000.00 is all surplus, which only the caution questions.
+fn assert_goal_questioned(forecast: &Value) {
+    assert_eq!(totals(forecast)["goals"], usd(0));
+    assert_eq!(forecast["surplus"], usd(300_000));
+    assert_eq!(forecast["status"], "provisional");
+    assert_eq!(kinds(forecast, "cautions"), ["goal_linked_both_sides"]);
+}
+
+#[tokio::test]
+async fn a_goal_linked_on_a_switched_out_account_and_a_held_one_says_so() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
     let side = world
         .account_with(
             "Side",
@@ -553,18 +578,79 @@ async fn a_goal_linked_on_an_excluded_account_and_a_held_one_raises_nothing() {
             json!({"include_in_forecast": false}),
         )
         .await;
+
+    link_both_sides(&world, checking, side, category, &goal).await;
+
+    assert_goal_questioned(&world.forecast().await);
+}
+
+#[tokio::test]
+async fn a_goal_linked_on_a_brokerage_and_a_held_one_says_so() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let side = world
+        .account_with("Brokerage", "brokerage", "USD", json!({}))
+        .await;
+
+    link_both_sides(&world, checking, side, category, &goal).await;
+
+    assert_goal_questioned(&world.forecast().await);
+}
+
+#[tokio::test]
+async fn a_goal_linked_on_a_closed_account_and_a_held_one_says_so() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let side = world
+        .account_with("Old", "checking", "USD", json!({}))
+        .await;
+
+    link_both_sides(&world, checking, side, category, &goal).await;
+    world.close(side).await;
+
+    assert_goal_questioned(&world.forecast().await);
+}
+
+/// One held account funding another: the forecast can't tell, which the docs say.
+#[tokio::test]
+async fn a_goal_linked_on_two_held_accounts_raises_nothing() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
     let fund = world.college_fund().await;
-    world
-        .spend_linked(side, "2026-11-02", 10_000, category, &goal)
+    let other = world
+        .account_with("For a child", "custodial", "USD", json!({}))
         .await;
     world
-        .spend_linked(fund, "2026-11-03", 10_000, category, &goal)
+        .spend_linked(fund, "2026-11-02", 10_000, category, &goal)
+        .await;
+    world
+        .spend_linked(other, "2026-11-03", 10_000, category, &goal)
         .await;
 
     assert_eq!(world.forecast().await["cautions"], json!([]));
 }
 
-/// Linked on counted cash and newer than its balance, it hasn't lowered the need yet, but it
+/// A charge is a side even after its refund: removing the link is what clears the caution.
+#[tokio::test]
+async fn a_refunded_charge_is_still_a_side() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    let fund = world.college_fund().await;
+    world
+        .spend_linked(checking, "2026-11-02", 50_000, category, &goal)
+        .await;
+    world
+        .spend_linked(checking, "2026-11-03", -50_000, category, &goal)
+        .await;
+    world
+        .spend_linked(fund, "2026-11-04", 50_000, category, &goal)
+        .await;
+
+    assert_eq!(
+        kinds(&world.forecast().await, "cautions"),
+        ["goal_linked_both_sides"]
+    );
+}
+
+/// Linked on Checking and newer than its balance, it hasn't lowered the need yet, but it
 /// will on the next balance, so it says so already.
 #[tokio::test]
 async fn a_goal_link_newer_than_the_balance_is_a_side_too() {

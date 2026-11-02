@@ -7234,7 +7234,7 @@
           },
           {
             "type": "object",
-            "description": "One goal has spending linked to it on both counted cash and an account that isn't the\nhousehold's. A contribution and the payment it funded would then both lower its need,\nand the data can't tell, so the number stays and stops being firm. Link the payment or\nthe contribution, never both. A finished goal raises nothing.",
+            "description": "One goal has spending linked to it on both the household's accounts, counted or not,\nand an account that isn't the household's. A contribution and the payment it funded would then both lower its need,\nand the data can't tell, so the number stays and stops being firm. Link the payment or\nthe contribution, never both. A finished goal raises nothing.",
             "required": [
               "goal",
               "kind"

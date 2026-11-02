@@ -213,12 +213,12 @@ fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     )
 }
 
-/// A goal with spending linked on both counted cash and money that isn't the household's.
+/// A goal with spending linked on both the household's accounts and money that isn't its own.
 /// `goal` starts the sentence.
 fn both_sides_sentence(goal: &str) -> String {
     format!(
-        "{goal} has spending linked to it on both counted cash and an account that isn't the \
-         household's. If one paid for the other, the same money lowers what it still needs \
+        "{goal} has spending linked to it on both the household's own accounts and an account \
+         that isn't the household's. If one paid for the other, the same money lowers what it still needs \
          twice, so there may be less to invest than this shows. Link the payment or the \
          contribution, never both."
     )
@@ -244,7 +244,8 @@ fn hint_sentence(
         ),
         HintEffect::LeftOut => format!(
             "{item} is expected to arrive in {account}, which isn't the household's money, so it \
-             stays out of the number."
+             stays out of the number. That is already right: don't remove the hint just to clear \
+             this. If it isn't expected, mark the item inactive."
         ),
     }
 }
@@ -624,6 +625,27 @@ mod tests {
             &names,
         );
         assert!(sentence.contains("settle that bill for the month"));
+    }
+
+    /// Removing the hint would clear the caution and add the money to the number.
+    #[test]
+    fn income_left_out_says_not_to_remove_the_hint() {
+        let Named {
+            goal,
+            account,
+            names,
+            ..
+        } = named();
+        let sentence = said(
+            &Caution::ItemHintNotCounted {
+                item: goal,
+                account,
+                effect: HintEffect::LeftOut,
+            },
+            &names,
+        );
+        assert!(sentence.contains("don't remove the hint"));
+        assert!(sentence.contains("mark the item inactive"));
     }
 
     #[test]

@@ -203,8 +203,12 @@ forecast raises `goal_one_off_overlap` when it sees the likely case.
 **Link the payment or the contribution, never both.** A goal paid from an account
 that isn't the household's, such as tuition from a 529, may have been funded by a
 contribution from checking. Linking both lowers its need twice for the same money, so
-the surplus reads too high. Either link alone is fine. Linking both raises
-`goal_linked_both_sides`, and the number stays `provisional` until one link goes.
+the surplus reads too high, wherever on the household's accounts the contribution
+came from. Either link alone is fine. Linking both raises `goal_linked_both_sides`,
+and the number stays `provisional` until one link goes. A charge counts as a side
+even after its refund, so it is removing a link that clears the caution, which errs
+toward holding more. The rule also covers one held account funding another, which the
+forecast can't see or warn about: link one of them only.
 
 **Goal links on splits.** Spending counts against a goal only when the split
 that records it names the goal, with `goal` on the split:
@@ -570,8 +574,8 @@ and the fields shown:
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
-| `goal_linked_both_sides` (`goal`) | One goal has spending linked to it on both counted cash and an account that isn't the household's, such as a contribution from checking and the tuition it paid from a 529. If so, the same money lowers its need twice and the surplus is too high; the data can't tell, so the number stays. A finished goal raises nothing. | Link the payment or the contribution, never both. Ask which one, and remove the other's link. |
-| `item_hint_not_counted` (`item`, `account`, `effect`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). `effect` says what became of it. `still_needed`: an outflow counts anyway, since overstating the need is safe. `left_out`: an inflow into an account that isn't the household's stays out of the number, since it isn't the household's income. `still_income`: an inflow into any other uncounted account still counts, which may overstate what is free. With `include_income` off, an inflow raises nothing. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
+| `goal_linked_both_sides` (`goal`) | One goal has spending linked to it on both the household's accounts, counted or not, and an account that isn't the household's, such as a contribution from checking and the tuition it paid from a 529. If so, the same money lowers its need twice and the surplus is too high; the data can't tell, so the number stays. A finished goal raises nothing. | Link the payment or the contribution, never both. Ask which one, and remove the other's link. |
+| `item_hint_not_counted` (`item`, `account`, `effect`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). `effect` says what became of it. `still_needed`: an outflow counts anyway, since overstating the need is safe. `left_out`: an inflow into an account that isn't the household's stays out of the number, since it isn't the household's income. `still_income`: an inflow into any other uncounted account still counts, which may overstate what is free. With `include_income` off, an inflow raises nothing. | For `still_needed` or `still_income`: fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. For `left_out`: the number is already right, so don't remove the hint just to clear the caution, since that adds the money to the number. If the money isn't expected, set the item `active: false`. |
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. | Categorize it with the [review workflow](agent-usage.md#review-workflow). |
 | `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget or hide an unpaid bill. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
