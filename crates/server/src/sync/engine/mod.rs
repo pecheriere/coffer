@@ -218,26 +218,27 @@ impl SyncService {
             }
             Err(err) => {
                 tracing::error!(run = %run, connection = %started.connection, error = ?err, "sync run failed");
-                self.abandon(run).await;
+                if let Err(abandon_err) = self.abandon(run).await {
+                    tracing::error!(run = %run, error = ?abandon_err, "could not mark the sync run failed");
+                }
                 Err(err)
             }
         }
     }
 
     /// Marks `run` failed after a storage error or a panic, whether it is
-    /// still queued or running, if the store allows; a run that already
-    /// finished is left as it is.
-    pub(super) async fn abandon(&self, run: SyncRunId) {
-        let finished = async {
-            let mut tx = self.store.begin().await?;
-            tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
-                .await?;
-            tx.commit().await
-        }
-        .await;
-        if let Err(err) = finished {
-            tracing::error!(run = %run, error = ?err, "could not mark the sync run failed");
-        }
+    /// still queued or running. A run that already finished is left as it is,
+    /// and says so with [`StoreError::Conflict`].
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Conflict`] for a finished run; any other error means the
+    /// store did not allow it, and the run is as it was.
+    pub(super) async fn abandon(&self, run: SyncRunId) -> Result<(), StoreError> {
+        let mut tx = self.store.begin().await?;
+        tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
+            .await?;
+        tx.commit().await
     }
 
     async fn perform(

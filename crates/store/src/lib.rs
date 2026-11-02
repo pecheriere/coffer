@@ -324,6 +324,39 @@ impl Store {
         Ok(())
     }
 
+    /// Make every later update that finishes a sync run, marking it
+    /// succeeded, partial or failed, fail with a backend error, as a store
+    /// outage would, until [`Self::clear_sync_run_finish_failure_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_sync_run_finish_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS injected_sync_run_finish_failure \
+             BEFORE UPDATE ON sync_runs WHEN NEW.status NOT IN ('queued', 'running') \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Ends [`Self::inject_sync_run_finish_failure_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be dropped.
+    pub async fn clear_sync_run_finish_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query("DROP TRIGGER IF EXISTS injected_sync_run_finish_failure")
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
     /// Make every later insertion of a connection labelled
     /// [`INJECTED_FAILURE_LABEL`] fail with a backend error.
     ///

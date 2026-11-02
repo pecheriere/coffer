@@ -8,9 +8,11 @@
 //! still going at shutdown is dropped: each provider account commits in its
 //! own transaction, so only whole accounts are left behind, and the next
 //! start marks the run failed. Errors are logged and retried with a
-//! backoff. A panic ends one run or one pass of a task, which starts again;
-//! the log says it happened, never what it said, since a [`JoinError`]'s text
-//! holds the panic's message (the panic hook has logged where it was).
+//! backoff, and a run that could not be marked failed after an error or a
+//! panic is retried the same way. A panic ends one run or one pass of a task,
+//! which starts again; the log says it happened, never what it said, since a
+//! [`JoinError`]'s text holds the panic's message (the panic hook has logged
+//! where it was).
 //!
 //! [`JoinError`]: tokio::task::JoinError
 
@@ -18,9 +20,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use coffer_domain::ids::ConnectionId;
+use coffer_domain::ids::{ConnectionId, SyncRunId};
 use coffer_domain::sync::SyncTrigger;
-use coffer_store::ConnectionStatus;
+use coffer_store::{ConnectionStatus, StoreError};
 use jiff::{SignedDuration, Timestamp};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -290,6 +292,14 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
             // The engine logged it and marked the run failed when it could.
             Ok(Err(err)) => {
                 tracing::warn!(run = %run.id, error = %err, "a queued sync run could not be performed");
+                // Not these: the run is not this worker's to fail.
+                let ours = !matches!(
+                    err,
+                    SyncError::InProgress | SyncError::Invalid(_) | SyncError::NotFound
+                );
+                if ours && !fail_run(&sync, run.id, &mut stop).await {
+                    return;
+                }
                 backoff.next()
             }
             Err(err) => {
@@ -298,12 +308,39 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
                     panicked = err.is_panic(),
                     "a sync run ended abnormally"
                 );
-                sync.abandon(run.id).await;
+                if !fail_run(&sync, run.id, &mut stop).await {
+                    return;
+                }
                 backoff.next()
             }
         };
         if !pause(&mut stop, delay).await {
             return;
+        }
+    }
+}
+
+/// Marks `run`, which this worker's task has ended, failed, retrying with a
+/// backoff until the store allows it, so that the connection is never left
+/// answering [`SyncError::InProgress`] until a restart. Only this run is
+/// touched, so no run still going can be failed by it. `false` if told to
+/// stop first; the run is then left for the next start's recovery.
+async fn fail_run(sync: &SyncService, run: SyncRunId, stop: &mut watch::Receiver<bool>) -> bool {
+    let mut backoff = Backoff::default();
+    loop {
+        let attempt = tokio::select! {
+            () = stopped(stop) => return false,
+            attempt = sync.abandon(run) => attempt,
+        };
+        match attempt {
+            // Marked failed now, or already finished.
+            Ok(()) | Err(StoreError::Conflict(_)) => return true,
+            Err(err) => {
+                tracing::error!(run = %run, error = ?err, "could not mark the sync run failed; trying again");
+                if !pause(stop, backoff.next()).await {
+                    return false;
+                }
+            }
         }
     }
 }

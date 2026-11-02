@@ -185,8 +185,10 @@ What happens next depends on where the panic was:
   `idempotency_in_progress` until the reservation lapses, within 5 minutes.
 - **In a sync run:** the log also has `a sync run ended abnormally` with its
   id, the run is marked failed, and the next queued run follows. If a store
-  error stops the run being marked failed, the log says so and the run stays
-  marked running until the next restart.
+  error stops the run being marked failed, the log says so and the worker
+  tries again, waiting up to a minute between attempts, until the store takes
+  it. Until then the connection answers that a sync is in progress; if the
+  server stops first, the next start marks the run failed.
 - **In the sync scheduler itself:** the log also has
   `a sync scheduler task ended abnormally; starting it again`, and the task
   starts again after a wait of up to a minute.
