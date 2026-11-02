@@ -2,8 +2,8 @@
 //! errors, and the provider accounts it reports by name and binding. No
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
-//! request a sync, remove a connection, forget one that cannot be given
-//! up (see [`forget`]) and bind a provider account to an
+//! request a sync, remove a connection, forget one whose sealed token
+//! cannot be opened (see [`forget`]) and bind a provider account to an
 //! account (see [`bind`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
@@ -193,8 +193,8 @@ struct Shared<'a> {
     csrf: &'a str,
     can_manage: bool,
     plaid_offered: bool,
-    /// The connections the viewer may forget: removal is refused because
-    /// coffer cannot give their credentials up.
+    /// The connections the viewer may forget: their sealed token cannot be
+    /// opened, so removal cannot give the credentials up.
     forgettable: &'a HashSet<ConnectionId>,
 }
 
