@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod audit;
+pub mod forecast;
 pub mod identity;
 pub mod ids;
 pub mod matching;
