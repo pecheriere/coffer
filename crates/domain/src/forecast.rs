@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Span;
 use jiff::civil::Date;
 
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_need};
@@ -20,7 +20,7 @@ mod types;
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
-    ForecastStatus, GoalLine, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
+    ForecastStatus, GoalLine, HintEffect, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
     MonthCurrency, MonthItem, NewerSpending, NotCountedReason, SettledLine, UnboundAccount,
 };
 
@@ -33,11 +33,18 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     let end_exclusive = months_after(input.as_of, input.horizon_months);
     let income_end_exclusive = same_day_after(input.as_of, input.horizon_months);
     let buckets = buckets(input.as_of, end_exclusive)?;
+    let held: BTreeSet<AccountId> = input
+        .accounts
+        .iter()
+        .filter(|account| account.belongs_to != BelongsTo::Household)
+        .map(|account| account.id)
+        .collect();
     let window = Window {
         as_of: input.as_of,
         end_exclusive,
         income_end_exclusive,
         buckets: &buckets,
+        held: &held,
     };
     let reduction = reduction::reduce(input, end_exclusive)?;
 
@@ -74,7 +81,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     let no_surplus = blockers
         .iter()
         .any(|blocker| !matches!(blocker, Blocker::MixedCurrencies { .. }));
-    let mut cautions = cautions(input, &accounts, &items, &reduction, &book)?;
+    let mut cautions = cautions(input, &accounts, &items, &reduction, &book, &held)?;
     let (totals, months) = settle(book, &buckets, input, no_surplus, &mut cautions)?;
 
     let surplus = match (blockers.is_empty(), totals.as_slice()) {
@@ -147,6 +154,8 @@ struct Window<'a> {
     /// the clamped day adds no income.
     income_end_exclusive: Date,
     buckets: &'a [Bucket],
+    /// The accounts that aren't the household's: income expected in one isn't its income.
+    held: &'a BTreeSet<AccountId>,
 }
 
 /// The part of the window in one calendar month.
@@ -185,7 +194,8 @@ struct Tally {
     cash: i128,
     outflows: i128,
     goals: i128,
-    /// Every planned inflow in the window, counted or not.
+    /// Every planned inflow in the window, counted or not, but for one expected in an account
+    /// that isn't the household's.
     inflows: i128,
     floor: i128,
     months: Vec<MonthTally>,
@@ -242,8 +252,9 @@ impl Book {
     }
 }
 
-/// A closed card's debt does not close with it, so one that still owes counts,
-/// unless the household has switched it out.
+/// Money that isn't the household's never counts, and that is the reason whatever else
+/// holds, since a flag can't change it (spec §8.11 B4, B8). A closed card's debt does not
+/// close with it, so one that still owes counts, unless the household has switched it out.
 fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
     let spendable = matches!(
         account.liquidity,
@@ -253,7 +264,9 @@ fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
         && account
             .balance
             .is_some_and(|balance| balance.minor_units < 0);
-    if account.closed && owing && account.include_in_forecast {
+    if account.belongs_to != BelongsTo::Household {
+        Some(NotCountedReason::NotHousehold)
+    } else if account.closed && owing && account.include_in_forecast {
         None
     } else if account.closed {
         Some(NotCountedReason::Closed)
@@ -316,44 +329,51 @@ fn dated_line(
     if gross == 0 && unpaid == 0 {
         return Ok(None);
     }
+    // Listed, and nowhere else: not even its currency is in use.
+    let held_inflow = !outflow
+        && item
+            .account_hint
+            .is_some_and(|hint| window.held.contains(&hint));
 
-    month_counts.fill(0);
-    let mut bucket = 0;
-    for &on in &dates {
-        while window
-            .buckets
-            .get(bucket)
-            .is_some_and(|found| found.end_exclusive <= on)
-        {
-            bucket += 1;
+    if !held_inflow {
+        month_counts.fill(0);
+        let mut bucket = 0;
+        for &on in &dates {
+            while window
+                .buckets
+                .get(bucket)
+                .is_some_and(|found| found.end_exclusive <= on)
+            {
+                bucket += 1;
+            }
+            if let Some(count) = month_counts.get_mut(bucket) {
+                *count += 1;
+            }
         }
-        if let Some(count) = month_counts.get_mut(bucket) {
-            *count += 1;
-        }
-    }
 
-    let tally = book.tally(currency);
-    if outflow {
-        tally.outflows += gross - reduced_by + unpaid;
-    } else {
-        tally.inflows += gross;
-    }
-    for (index, (count, month)) in month_counts.iter().zip(&mut tally.months).enumerate() {
-        // The reduction only touches occurrences in the first bucket, where a budget's
-        // whole month lands, and a gap is still to be paid from there.
-        let adjusted = if index == 0 { unpaid - reduced_by } else { 0 };
-        let minor_units = count * amount + adjusted;
+        let tally = book.tally(currency);
         if outflow {
-            month.outflows += minor_units;
+            tally.outflows += gross - reduced_by + unpaid;
         } else {
-            month.inflows += minor_units;
+            tally.inflows += gross;
         }
-        month.itemize(item.source, minor_units, currency)?;
+        for (index, (count, month)) in month_counts.iter().zip(&mut tally.months).enumerate() {
+            // The reduction only touches occurrences in the first bucket, where a budget's
+            // whole month lands, and a gap is still to be paid from there.
+            let adjusted = if index == 0 { unpaid - reduced_by } else { 0 };
+            let minor_units = count * amount + adjusted;
+            if outflow {
+                month.outflows += minor_units;
+            } else {
+                month.inflows += minor_units;
+            }
+            month.itemize(item.source, minor_units, currency)?;
+        }
     }
 
     let counted = if outflow {
         gross - reduced_by + unpaid
-    } else if include_income {
+    } else if include_income && !held_inflow {
         gross
     } else {
         0
@@ -572,6 +592,7 @@ fn cautions(
     items: &[ItemLine],
     reduction: &Reduction,
     book: &Book,
+    held: &BTreeSet<AccountId>,
 ) -> Result<Vec<Caution>, ForecastError> {
     let mut cautions = Vec::new();
     if input.as_of != input.today {
@@ -610,8 +631,26 @@ fn cautions(
         .map(|line| line.account)
         .collect();
     for line in items {
-        item_cautions(line, input, &counted, &mut cautions);
+        item_cautions(line, input, &counted, held, &mut cautions);
     }
+    // From the items and not their lines: a goal the links have fully paid has no line, which
+    // is when they may have overstated it most.
+    cautions.extend(
+        input
+            .items
+            .iter()
+            .filter(|item| {
+                item.goal_linked_both_sides
+                    && matches!(
+                        item.schedule,
+                        PlanSchedule::Goal {
+                            completed: false,
+                            ..
+                        }
+                    )
+            })
+            .map(|item| Caution::GoalLinkedBothSides { goal: item.source }),
+    );
     for (&(category, currency), &amount) in &reduction.not_seen {
         cautions.push(Caution::BillNotSeen {
             category,
@@ -694,13 +733,14 @@ fn account_cautions(account: &AccountInput, input: &ForecastInput, cautions: &mu
     );
 }
 
-/// A hint at an uncounted account matters only if the item reached the number,
+/// A hint at an uncounted account matters only if the item could reach the number,
 /// which an inflow does not with income off. A goal listed here counts something,
 /// so a finished or fully spent one raises nothing.
 fn item_cautions(
     line: &ItemLine,
     input: &ForecastInput,
     counted: &BTreeSet<AccountId>,
+    held: &BTreeSet<AccountId>,
     cautions: &mut Vec<Caution>,
 ) {
     let in_the_number = line.direction == PlanDirection::Outflow || input.include_income;
@@ -711,6 +751,13 @@ fn item_cautions(
         cautions.push(Caution::ItemHintNotCounted {
             item: line.source,
             account,
+            effect: if line.direction == PlanDirection::Outflow {
+                HintEffect::StillNeeded
+            } else if held.contains(&account) {
+                HintEffect::LeftOut
+            } else {
+                HintEffect::StillIncome
+            },
         });
     }
     let Some(goal) = line.goal else {

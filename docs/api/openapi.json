@@ -7234,15 +7234,38 @@
           },
           {
             "type": "object",
-            "description": "An item is hinted at an account that does not count. It is counted\nanyway, since overstating the need is the safe direction.",
+            "description": "One goal has spending linked to it on both the household's accounts, counted or not,\nand an account that isn't the household's. A contribution and the payment it funded would then both lower its need,\nand the data can't tell, so the number stays and stops being firm. Link the payment or\nthe contribution, never both. A finished goal raises nothing.",
+            "required": [
+              "goal",
+              "kind"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "goal_linked_both_sides"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An item is hinted at an account that does not count, and `effect` says what became\nof it.",
             "required": [
               "item",
               "account",
+              "effect",
               "kind"
             ],
             "properties": {
               "account": {
                 "$ref": "#/components/schemas/AccountId"
+              },
+              "effect": {
+                "$ref": "#/components/schemas/HintEffect"
               },
               "item": {
                 "$ref": "#/components/schemas/LineSource"
@@ -7519,7 +7542,7 @@
           },
           "excluded_inflows": {
             "$ref": "#/components/schemas/Money",
-            "description": "Planned inflows left out because `include_income` is off."
+            "description": "Planned inflows left out because `include_income` is off. Income expected in an account\nthat isn't the household's isn't among them, since turning it on wouldn't add it."
           },
           "floor": {
             "$ref": "#/components/schemas/Money"
@@ -7982,6 +8005,15 @@
           }
         }
       },
+      "HintEffect": {
+        "type": "string",
+        "description": "What became of an item hinted at an account that does not count.",
+        "enum": [
+          "still_needed",
+          "still_income",
+          "left_out"
+        ]
+      },
       "HouseholdSettings": {
         "type": "object",
         "description": "The household's settings: those of a forecast and the display currency.",
@@ -8148,7 +8180,7 @@
           },
           "counted": {
             "$ref": "#/components/schemas/Money",
-            "description": "What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow\nunless `include_income`."
+            "description": "What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow unless\n`include_income`, and always for one hinted at an account that isn't the household's."
           },
           "direction": {
             "$ref": "#/components/schemas/PlanDirection"
@@ -8462,7 +8494,7 @@
           },
           "inflows": {
             "$ref": "#/components/schemas/Money",
-            "description": "Planned inflows, whether or not `include_income` counts them."
+            "description": "Planned inflows, whether or not `include_income` counts them, but for one hinted at an\naccount that isn't the household's."
           },
           "items": {
             "type": "array",
@@ -9248,10 +9280,28 @@
         "type": "string",
         "description": "Why an account's balance is not part of the cash available.",
         "enum": [
+          "not_household",
           "excluded_by_flag",
           "closed",
           "not_cash"
         ]
+      },
+      "NotHouseholdRow": {
+        "type": "object",
+        "description": "What categorized money did on accounts that aren't the household's, in one month and\ncurrency.",
+        "required": [
+          "month",
+          "net"
+        ],
+        "properties": {
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "net": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Net, negative for money out: a grant is negative, money coming in positive."
+          }
+        }
       },
       "OpenApiDocument": {
         "type": "object",
@@ -9332,6 +9382,7 @@
           "rows",
           "goals",
           "uncategorized",
+          "not_the_households",
           "settled",
           "rollovers",
           "partial_months"
@@ -9343,6 +9394,13 @@
               "$ref": "#/components/schemas/GoalRow"
             },
             "description": "Ordered by month and goal."
+          },
+          "not_the_households": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotHouseholdRow"
+            },
+            "description": "Categorized money on accounts that aren't the household's. Never in `actual`. Ordered\nby month and currency, the reported months only."
           },
           "partial_months": {
             "type": "array",

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use jiff::civil::Date;
 use serde::Serialize;
 
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId};
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -56,6 +56,9 @@ pub struct AccountInput {
     pub name: String,
     pub currency: Currency,
     pub liquidity: LiquidityClass,
+    /// Whose money it is. Only the household's can count, whatever else holds (spec §8.11
+    /// B8).
+    pub belongs_to: BelongsTo,
     pub include_in_forecast: bool,
     pub closed: bool,
     /// The latest balance on or before `as_of`.
@@ -106,6 +109,9 @@ pub struct ItemInput {
     pub spending: Option<PlanSpending>,
     /// Spending linked to a goal, positive for money spent. 0 for anything else.
     pub goal_spent_minor: i64,
+    /// Whether what is linked to this goal is on both the household's accounts and an account
+    /// that isn't the household's. False for anything else.
+    pub goal_linked_both_sides: bool,
     /// The months a person settled it for. Only a stored recurring bill or one-off
     /// outflow has any: a what-if can't settle, and the ledger refuses anything else.
     pub settled: BTreeMap<CalendarMonth, SettlementKind>,
@@ -247,7 +253,8 @@ pub struct CurrencyTotals {
     pub floor: Money,
     /// Planned inflows counted: 0 unless `include_income`.
     pub planned_inflows: Money,
-    /// Planned inflows left out because `include_income` is off.
+    /// Planned inflows left out because `include_income` is off. Income expected in an account
+    /// that isn't the household's isn't among them, since turning it on wouldn't add it.
     pub excluded_inflows: Money,
     /// `planned_outflows + goals + floor - planned_inflows`.
     pub cash_needed: Money,
@@ -255,6 +262,20 @@ pub struct CurrencyTotals {
     /// `mixed_currencies` applies.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub surplus: Option<Money>,
+}
+
+/// What became of an item hinted at an account that does not count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum HintEffect {
+    /// An outflow still counts as needed, since overstating the need is the safe direction.
+    StillNeeded,
+    /// An inflow still counts as income, which may overstate what is free.
+    StillIncome,
+    /// An inflow into an account that isn't the household's isn't the household's income, so
+    /// it stays out of the number. That is already right: removing the hint would add it.
+    LeftOut,
 }
 
 /// One account and what it contributed.
@@ -278,6 +299,9 @@ pub struct AccountLine {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NotCountedReason {
+    /// The money is someone else's, or given away (spec §8.11 B8). Nothing about the
+    /// account's flags changes this: only saying it is the household's does.
+    NotHousehold,
     /// The account is switched out of the forecast.
     ExcludedByFlag,
     Closed,
@@ -311,8 +335,8 @@ pub struct ItemLine {
     /// What a recurring bill or one-off dated earlier this month, before the window,
     /// still needs: the part its category's spending does not cover.
     pub unpaid: Money,
-    /// What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow
-    /// unless `include_income`.
+    /// What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow unless
+    /// `include_income`, and always for one hinted at an account that isn't the household's.
     pub counted: Money,
     /// The sinking fund's own figures, for a goal.
     #[cfg_attr(feature = "openapi", schema(required))]
@@ -369,7 +393,8 @@ pub struct MonthCurrency {
     pub currency: Currency,
     /// Planned outflows after this month's reduction.
     pub outflows: Money,
-    /// Planned inflows, whether or not `include_income` counts them.
+    /// Planned inflows, whether or not `include_income` counts them, but for one hinted at an
+    /// account that isn't the household's.
     pub inflows: Money,
     /// What goals add to their need this month. The first month holds all they
     /// had accrued before it.
@@ -466,11 +491,17 @@ pub enum Caution {
     },
     /// A goal's due date has passed with money still to find.
     GoalOverdue { goal: LineSource, due_on: Date },
-    /// An item is hinted at an account that does not count. It is counted
-    /// anyway, since overstating the need is the safe direction.
+    /// One goal has spending linked to it on both the household's accounts, counted or not,
+    /// and an account that isn't the household's. A contribution and the payment it funded would then both lower its need,
+    /// and the data can't tell, so the number stays and stops being firm. Link the payment or
+    /// the contribution, never both. A finished goal raises nothing.
+    GoalLinkedBothSides { goal: LineSource },
+    /// An item is hinted at an account that does not count, and `effect` says what became
+    /// of it.
     ItemHintNotCounted {
         item: LineSource,
         account: AccountId,
+        effect: HintEffect,
     },
     /// Uncategorized spending this month might have reduced a recurring item.
     UncategorizedSpending {

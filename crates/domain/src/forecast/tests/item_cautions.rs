@@ -4,7 +4,9 @@ use jiff::civil::date;
 
 use super::{assert_provisional, cash, goal, household, inflow};
 use super::{line, one_off, run, usd, usd_totals};
-use crate::forecast::{AccountInput, Caution, ForecastInput, ForecastStatus, ItemInput};
+use crate::forecast::{
+    AccountInput, Caution, ForecastInput, ForecastStatus, HintEffect, ItemInput,
+};
 use crate::ids::{AccountId, CategoryId};
 
 fn car_goal(category: CategoryId, due_on: jiff::civil::Date) -> ItemInput {
@@ -182,6 +184,7 @@ fn item_hinted_at_uncounted_account_counts_and_warns() {
         [Caution::ItemHintNotCounted {
             item: source,
             account: side_id,
+            effect: HintEffect::StillNeeded,
         }],
         "the need may be overstated"
     );
@@ -221,4 +224,144 @@ fn hints_that_change_nothing_do_not_warn() {
         [],
         "a counted hint, an item outside the window, income left out"
     );
+}
+
+fn linked_both_sides(completed: bool) -> ItemInput {
+    let mut item = ItemInput {
+        goal_linked_both_sides: true,
+        ..goal(
+            "Tuition",
+            usd(1_000),
+            date(2026, 1, 1),
+            date(2027, 1, 1),
+            1_000,
+        )
+    };
+    item.schedule = crate::plan::PlanSchedule::Goal {
+        start_on: date(2026, 1, 1),
+        due_on: date(2027, 1, 1),
+        completed,
+    };
+    item
+}
+
+/// Fully spent, so it has no line, which is exactly when the links may have overstated it.
+#[test]
+fn a_goal_linked_both_sides_warns_with_no_line_of_its_own() {
+    let tuition = linked_both_sides(false);
+    let source = tuition.source;
+    let forecast = run(&ForecastInput {
+        items: vec![tuition],
+        ..household()
+    });
+    assert_eq!(
+        forecast.cautions,
+        [Caution::GoalLinkedBothSides { goal: source }]
+    );
+    assert_provisional(&forecast);
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)), "the number stays");
+}
+
+#[test]
+fn a_finished_goal_linked_both_sides_raises_nothing() {
+    let forecast = run(&ForecastInput {
+        items: vec![linked_both_sides(true)],
+        ..household()
+    });
+    assert_eq!(forecast.cautions, []);
+    assert_eq!(forecast.status, ForecastStatus::Firm);
+}
+
+/// `item` hinted at `account`, beside a counted Checking holding 1,000,000, with income on.
+fn hinted_at(account: AccountInput, item: ItemInput) -> crate::forecast::Forecast {
+    let id = account.id;
+    run(&ForecastInput {
+        include_income: true,
+        accounts: vec![cash("Checking", usd(1_000_000)), account],
+        items: vec![ItemInput {
+            account_hint: Some(id),
+            ..item
+        }],
+        ..household()
+    })
+}
+
+fn held_fund() -> AccountInput {
+    AccountInput {
+        belongs_to: crate::accounts::BelongsTo::SomeoneElse,
+        include_in_forecast: false,
+        ..cash("Fund", usd(0))
+    }
+}
+
+fn gift(amount: crate::money::Money) -> ItemInput {
+    inflow(one_off(
+        "Gift",
+        amount,
+        date(2026, 12, 1),
+        CategoryId::new(),
+    ))
+}
+
+#[test]
+fn an_inflow_hinted_at_a_held_account_is_left_out() {
+    let forecast = hinted_at(held_fund(), gift(usd(10_000)));
+
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+    assert_eq!(usd_totals(&forecast).excluded_inflows, usd(0));
+    assert_eq!(line(&forecast, "Gift").counted, usd(0));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::ItemHintNotCounted {
+            effect: HintEffect::LeftOut,
+            ..
+        }]
+    ));
+}
+
+/// Its currency isn't in use: nothing of it reaches the number.
+#[test]
+fn an_inflow_in_another_currency_hinted_at_a_held_account_mixes_nothing() {
+    let forecast = hinted_at(held_fund(), gift(super::eur(10_000)));
+
+    assert_eq!(forecast.blockers, []);
+    assert_eq!(forecast.totals.len(), 1);
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+}
+
+/// Out of this ruling's scope: the household's own money switched out still counts as income,
+/// and the caution says so.
+#[test]
+fn an_inflow_hinted_at_an_excluded_household_account_still_counts() {
+    let side = AccountInput {
+        include_in_forecast: false,
+        ..cash("Side", usd(0))
+    };
+    let forecast = hinted_at(side, gift(usd(10_000)));
+
+    assert_eq!(forecast.surplus, Some(usd(1_010_000)));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::ItemHintNotCounted {
+            effect: HintEffect::StillIncome,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn an_outflow_hinted_at_a_held_account_still_counts() {
+    let forecast = hinted_at(
+        held_fund(),
+        one_off("Bill", usd(10_000), date(2026, 12, 1), CategoryId::new()),
+    );
+
+    assert_eq!(forecast.surplus, Some(usd(990_000)));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::ItemHintNotCounted {
+            effect: HintEffect::StillNeeded,
+            ..
+        }]
+    ));
 }
