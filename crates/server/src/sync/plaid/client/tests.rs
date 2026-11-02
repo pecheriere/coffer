@@ -1,8 +1,8 @@
 use secrecy::{ExposeSecret as _, SecretString};
 
 use super::{
-    AccessTokenFields, AccountsAnswer, MAX_ACCOUNTS, PlaidAccount, PlaidClient, PlaidError,
-    PlaidRequest, PlaidTransaction, RawSyncPage, SyncPage, code_or_unknown, read,
+    AccessTokenFields, AccountsAnswer, MAX_ACCOUNTS, MAX_PAGE_RECORDS, PlaidAccount, PlaidClient,
+    PlaidError, PlaidRequest, PlaidTransaction, RawSyncPage, SyncPage, code_or_unknown, read,
 };
 use crate::config::{PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, EgressError, HostAllowList};
@@ -94,6 +94,32 @@ fn an_account_list_is_held_up_to_one_past_the_limit() {
     );
     assert!(
         read::<AccountsAnswer<'_>>(broken.as_bytes()).is_err(),
+        "malformed JSON past the limit is still refused"
+    );
+}
+
+/// Each list of a page is held up to one past the limit, whatever its length,
+/// and the rest must still be valid JSON.
+#[test]
+fn a_page_list_is_held_up_to_one_past_the_limit() {
+    let page = |count: usize| {
+        format!(
+            r#"{{"added":[{}],"modified":[],"removed":[],"next_cursor":"c","has_more":false}}"#,
+            vec!["{}"; count].join(",")
+        )
+    };
+    let held = |count: usize| {
+        let body = page(count);
+        read::<RawSyncPage<'_>>(body.as_bytes())
+            .unwrap()
+            .added
+            .len()
+    };
+    assert_eq!(held(MAX_PAGE_RECORDS), MAX_PAGE_RECORDS);
+    assert_eq!(held(MAX_PAGE_RECORDS * 5), MAX_PAGE_RECORDS + 1);
+    let broken = page(MAX_PAGE_RECORDS * 2).replacen("{}]", "{},oops]", 1);
+    assert!(
+        read::<RawSyncPage<'_>>(broken.as_bytes()).is_err(),
         "malformed JSON past the limit is still refused"
     );
 }
