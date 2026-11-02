@@ -5,4 +5,5 @@ mod duplicates;
 mod foundation;
 mod identity;
 mod ledger;
+mod plan;
 mod sync;

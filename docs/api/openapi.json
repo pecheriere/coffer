@@ -2510,6 +2510,566 @@
         }
       }
     },
+    "/api/v1/plan-items": {
+      "get": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Every planned item the token may see.",
+        "description": "The planned items, ordered by id. Inactive items are listed only with `include_inactive=true`. Needs `read`. A token with account grants sees an item with an account hint only if it holds `transactions` on that account, and one without a hint only if it holds `transactions` on some account: a token holding only `balances` gets an empty list. A goal and a one-off describing the same expense are both counted; nothing de-duplicates them.",
+        "operationId": "listPlanItems",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "description": "Also list inactive items (default `false`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The planned items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannedItemList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Creates a planned item.",
+        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "operationId": "createPlanItem",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlannedItemInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The planned item, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannedItemView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The household already holds 500 planned items, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plan-items/{item_id}": {
+      "get": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "One planned item.",
+        "description": "One planned item. Needs `read`. An item the token may not see (see `listPlanItems`) answers exactly like one that does not exist.",
+        "operationId": "getPlanItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The planned item's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PlannedItemId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The planned item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannedItemView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Deletes a planned item.",
+        "description": "Deletes a planned item; the audit log keeps what it held. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "operationId": "deletePlanItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The planned item's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PlannedItemId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The planned item is deleted."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Changes a planned item.",
+        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "operationId": "updatePlanItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The planned item's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PlannedItemId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlannedItemPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The planned item as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannedItemView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/provider-accounts": {
       "get": {
         "tags": [
@@ -4990,6 +5550,16 @@
         },
         "additionalProperties": false
       },
+      "IntervalUnit": {
+        "type": "string",
+        "description": "The unit of a recurring schedule's interval.",
+        "enum": [
+          "days",
+          "weeks",
+          "months",
+          "years"
+        ]
+      },
       "LinkedAccountView": {
         "type": "object",
         "description": "An account created for a provider account, and the provider account\nbound to it.",
@@ -5364,6 +5934,337 @@
           }
         },
         "additionalProperties": false
+      },
+      "PlanDirection": {
+        "type": "string",
+        "description": "Whether a planned item takes money out or brings it in.",
+        "enum": [
+          "outflow",
+          "inflow"
+        ]
+      },
+      "PlanSchedule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The k-th occurrence is `anchor_on + k × every unit`, always counted\nfrom the anchor, so a month-end anchor clamps without drifting.",
+            "required": [
+              "every",
+              "unit",
+              "anchor_on",
+              "type"
+            ],
+            "properties": {
+              "anchor_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The first occurrence."
+              },
+              "end_on": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date",
+                "description": "The last day an occurrence may fall on."
+              },
+              "every": {
+                "type": "integer",
+                "format": "int32",
+                "description": "How many `unit`s lie between occurrences: 1 to 999.",
+                "maximum": 999,
+                "minimum": 1
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "recurring"
+                ]
+              },
+              "unit": {
+                "$ref": "#/components/schemas/IntervalUnit"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A single date.",
+            "required": [
+              "on",
+              "type"
+            ],
+            "properties": {
+              "on": {
+                "type": "string",
+                "format": "date"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "one_off"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A sinking fund, set aside linearly from `start_on` to `due_on`.",
+            "required": [
+              "start_on",
+              "due_on",
+              "type"
+            ],
+            "properties": {
+              "completed": {
+                "type": "boolean",
+                "description": "A completed goal needs no more money."
+              },
+              "due_on": {
+                "type": "string",
+                "format": "date"
+              },
+              "start_on": {
+                "type": "string",
+                "format": "date"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "goal"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "When a planned item falls due."
+      },
+      "PlannedItemId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "PlannedItemInput": {
+        "type": "object",
+        "description": "A planned item to create.",
+        "required": [
+          "name",
+          "category",
+          "amount",
+          "direction",
+          "schedule"
+        ],
+        "properties": {
+          "account_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "An open account it is expected on. An item with a hint is visible only\nto tokens holding `transactions` on that account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it counts, `true` by default."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "A positive magnitude, 1 to 10^15 minor units: `direction` says which\nway the money goes."
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId",
+            "description": "An `expense` category for an outflow, an `income` one for an inflow;\nnot archived, nor in an archived group."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PlanDirection",
+            "description": "A goal must be an `outflow`."
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters, without control characters."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 2000 characters; newlines are the only control characters\nallowed. `\"\"` is no notes."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/PlanSchedule",
+            "description": "Its type never changes once it exists."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlannedItemList": {
+        "type": "object",
+        "description": "The planned items the token may see. At most 500 exist, so a list has no\ncursor.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedItemView"
+            }
+          }
+        }
+      },
+      "PlannedItemPatch": {
+        "type": "object",
+        "description": "Changes to a planned item. An absent field stays as it is.",
+        "properties": {
+          "account_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "An open account; `null` removes the hint."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "A positive magnitude, 1 to 10^15 minor units."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "An `expense` category for an outflow, an `income` one for an inflow;\nnot archived, nor in an archived group."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanDirection",
+                "description": "A goal must be an `outflow`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 100 characters, without control characters."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 2000 characters; newlines are the only control characters\nallowed. `null` or `\"\"` clears them."
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanSchedule",
+                "description": "Replaces the whole schedule, whose `type` must stay the item's own: a\ngoal's `completed` goes back to `false` unless it is sent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlannedItemView": {
+        "type": "object",
+        "description": "A planned item.",
+        "required": [
+          "id",
+          "name",
+          "category",
+          "amount",
+          "direction",
+          "account_hint",
+          "notes",
+          "active",
+          "schedule",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "The account it is expected on; `null` for none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "An inactive item stays stored, but is left out of forecasts and of\nlists that don't ask for it."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "A positive magnitude: `direction` says which way the money goes."
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PlanDirection"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PlannedItemId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/PlanSchedule"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "ProblemBody": {
         "type": "object",
@@ -6099,6 +7000,10 @@
     {
       "name": "transactions",
       "description": "Transactions, their splits into categories, and their review: listing, search, single changes and atomic batches."
+    },
+    {
+      "name": "plan",
+      "description": "The household's spending plan: recurring items, one-offs and goals. Amounts are positive magnitudes with a direction."
     },
     {
       "name": "connections",
