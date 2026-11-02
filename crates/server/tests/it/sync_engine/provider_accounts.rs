@@ -11,7 +11,7 @@ use coffer_store::ConnectionStatus;
 #[tokio::test]
 async fn new_provider_accounts_appear_unbound_and_hold_records() {
     let world = world().await;
-    let start = world.days_ago(90);
+    let start = world.days_ago(88);
     world.fake.push(Ok(fetched(vec![provider_account(
         "acct-new",
         "USD",
@@ -54,7 +54,7 @@ async fn currency_problem_isolated_to_one_account() {
     let usd_c = world.account("C", "USD").await;
     world.bound("acct-b", "EUR", usd_b).await;
     world.bound("acct-c", "USD", usd_c).await;
-    let start = world.days_ago(90);
+    let start = world.days_ago(88);
     let day = world.days_ago(1);
     world.fake.push(Ok(fetched(vec![
         provider_account(
@@ -115,7 +115,7 @@ async fn account_failure_rolls_back_only_that_account() {
     world.bound("acct-x", "USD", failing).await;
     world.bound("acct-y", "USD", healthy).await;
     world.server.inject_source_insert_failure().await;
-    let start = world.days_ago(90);
+    let start = world.days_ago(88);
     let day = world.days_ago(1);
     let mut x = provider_account(
         "acct-x",
@@ -175,7 +175,7 @@ async fn connection_errors_alongside_data_are_partial() {
     let mut result = fetched(vec![provider_account(
         "acct-1",
         "USD",
-        world.days_ago(90),
+        world.days_ago(88),
         vec![txn("t-1", world.days_ago(1), "-5")],
     )]);
     result.connection_errors = vec![

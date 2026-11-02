@@ -26,8 +26,8 @@ async fn fetch_sends_window_and_basic_auth() {
     let request = &requests[0];
     assert_eq!(request.method, Method::GET);
     assert_eq!(request.path, "/simplefin/accounts");
-    // The first sync asks for 90 days before today (2027-01-15, UTC).
-    let start = date(2026, 10, 17)
+    // The first sync asks for 88 days before today (2027-01-15, UTC).
+    let start = date(2026, 10, 19)
         .to_zoned(TimeZone::UTC)
         .unwrap()
         .timestamp()
@@ -52,11 +52,11 @@ async fn fetch_sends_window_and_basic_auth() {
 #[tokio::test]
 async fn start_date_is_household_midnight_across_dst() {
     let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
-    // Noon on 2027-01-30 in Los Angeles: 90 days back is 2026-11-01.
+    // Noon on 2027-01-28 in Los Angeles: 88 days back is 2026-11-01.
     world
         .server
         .clock
-        .set("2027-01-30T20:00:00Z".parse().unwrap());
+        .set("2027-01-28T20:00:00Z".parse().unwrap());
     let connection = world.seeded().await;
     world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
 
@@ -70,6 +70,39 @@ async fn start_date_is_household_midnight_across_dst() {
         requests[0].query.as_deref(),
         Some(format!("start-date={}&pending=1", midnight.as_second()).as_str())
     );
+}
+
+/// The bridge refuses a window of more than 90 days and caps it. The
+/// window starts at midnight, so it must start less than 90 days before
+/// the moment of the request, even late in the evening, west and east of
+/// UTC.
+#[tokio::test]
+async fn start_date_is_within_the_bridge_limit_west_and_east_of_utc() {
+    for (zone, now) in [
+        ("America/Los_Angeles", "2027-02-16T07:30:00Z"),
+        ("Pacific/Auckland", "2027-02-15T10:30:00Z"),
+    ] {
+        let world = world_with_env(&[("COFFER_TIMEZONE", zone)]).await;
+        let at: jiff::Timestamp = now.parse().unwrap();
+        world.server.clock.set(at);
+        let connection = world.seeded().await;
+        world.script.bridge_reply(Reply::ok(ACCOUNTS_FIRST));
+
+        world.sync(connection).await;
+
+        let requests = world.mock.requests();
+        let query = requests[0].query.as_deref().unwrap();
+        let start: i64 = query
+            .strip_prefix("start-date=")
+            .and_then(|rest| rest.split('&').next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            at.as_second() - start < 90 * 24 * 60 * 60,
+            "the window must start less than 90 days before the request"
+        );
+    }
 }
 
 /// The default test server offers `SimpleFin` as production does, with an

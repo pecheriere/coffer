@@ -40,6 +40,54 @@ fn removal_mid_run_outcomes() {
     );
 }
 
+/// The bridge refuses a window of more than 90 days. In every time zone,
+/// at every moment of a day, the first window of `SimpleFin` starts less
+/// than 90 days before the request. The last second of a day is the worst
+/// case: the window starts at midnight, and a clock change inside the
+/// window makes its days longer than 24 hours.
+#[test]
+fn simplefin_first_window_is_within_the_bridge_limit_in_every_time_zone() {
+    use crate::egress::{Egress, HostAllowList};
+    use crate::sync::provider::{FetchMode, Provider as _};
+    use crate::sync::simplefin::SimpleFin;
+
+    let FetchMode::Window { max_days, .. } =
+        SimpleFin::new(Egress::for_tests(), HostAllowList::none())
+            .capabilities()
+            .mode
+    else {
+        panic!("SimpleFin must fetch by window");
+    };
+    let first: jiff::Timestamp = "2026-06-01T00:00:00Z".parse().unwrap();
+    let mut worst = 0;
+    for name in jiff::tz::db().available() {
+        let timezone = TimeZone::get(name.as_str()).unwrap();
+        for day in 0..800 {
+            let midnight = first
+                .to_zoned(timezone.clone())
+                .date()
+                .checked_add(jiff::Span::new().days(day + 1))
+                .unwrap()
+                .to_zoned(timezone.clone())
+                .unwrap();
+            let now = midnight
+                .timestamp()
+                .checked_sub(jiff::Span::new().seconds(1))
+                .unwrap();
+            let today = now.to_zoned(timezone.clone()).date();
+            let start = window_start(&[], None, today, &timezone, max_days, 14)
+                .to_zoned(timezone.clone())
+                .unwrap()
+                .timestamp();
+            worst = worst.max(now.as_second() - start.as_second());
+        }
+    }
+    assert!(
+        worst < 90 * 24 * 60 * 60,
+        "the first window must start less than 90 days before the request in every time zone"
+    );
+}
+
 #[test]
 fn window_rules() {
     let utc = TimeZone::UTC;

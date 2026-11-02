@@ -38,7 +38,7 @@ async fn first_window_is_max_then_overlap() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[0].window_start,
-        Some(first_today.checked_sub(Span::new().days(90)).unwrap()),
+        Some(first_today.checked_sub(Span::new().days(88)).unwrap()),
         "the first run asks for the provider's maximum window"
     );
     let success_day = first_success
@@ -51,7 +51,7 @@ async fn first_window_is_max_then_overlap() {
     );
     assert_eq!(
         requests[2].window_start,
-        Some(world.days_ago(90)),
+        Some(world.days_ago(88)),
         "after a long gap the window is clamped to the maximum"
     );
     assert!(requests.iter().all(|request| request.cursor.is_none()));
@@ -70,7 +70,7 @@ async fn failed_account_keeps_its_window() {
     world.server.inject_source_insert_failure().await;
     let day = SignedDuration::from_hours(24);
     let fetch = |world: &World, x_fails: bool| {
-        let start = world.days_ago(90);
+        let start = world.days_ago(88);
         let on = world.days_ago(1);
         let mut x = vec![txn(&format!("x-{on}"), on, "-1")];
         if x_fails {
@@ -108,7 +108,7 @@ async fn failed_account_keeps_its_window() {
     assert_eq!(requests.len(), 4);
     assert_eq!(
         requests[1].window_start,
-        Some(world.days_ago(90 + 10)),
+        Some(world.days_ago(88 + 10)),
         "an account never applied gets the maximum window"
     );
     assert_eq!(
