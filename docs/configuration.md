@@ -198,7 +198,7 @@ fields as claims.** With `COFFER_LOG_FORMAT=json`, on one line:
 | `page` | The page's route template, such as `/invite/{token}`, never its real path, query or fragment. A path that is no known page is `other`. |
 | `script` | The path of `coffer.js` or `plaid-link.js`, `none` if the report names no script, and `other` for anything else, another origin included. |
 | `line`, `column` | Numbers in that script, `0` when unknown. |
-| `client_message` | At most 200 characters of letters, numbers, punctuation and symbols, with whitespace reduced to single spaces. A word shaped like a credential (`eyJ` with a dot, `-----BEGIN`) is replaced by `[token]`, and one that looks like an address by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. It is `[withheld]` from a page that is `other`, and for an `error` whose script is not one of coffer's. |
+| `client_message` | At most 200 characters of letters, numbers, punctuation and symbols, with whitespace reduced to single spaces. A word shaped like a credential (`eyJ` with a dot, `-----BEGIN`) is replaced by `[token]`, and one that looks like an address by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. It is `[withheld]` from a page that is `other`, for an `error` whose script is not one of coffer's, and for an `unhandled_rejection` from `/connections`. |
 
 To find them in JSON logs:
 
@@ -315,4 +315,6 @@ the live data directory. The server key (`secret.key`) is not part of the
 backup; without it, restored agent tokens and sessions no longer validate and
 must be recreated, and provider credentials (sealed under a key derived from
 it) cannot be opened, so every provider connection must be reconnected, while
-passkeys keep working.
+passkeys keep working. An older version refuses to start on a database a newer one has
+migrated (v0.3.0 on one migrated by a later version, for example), so rolling back needs a
+backup taken before the upgrade.

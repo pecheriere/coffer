@@ -3,6 +3,9 @@
 //! Each amount was rounded on its own, so a total is the plain sum of its rows
 //! and any breakdown adds up to it (N4). It answers from `input.accounts` alone:
 //! a row or a date of anything else is ignored (N2).
+//!
+//! The household and each bucket are one [`section`] over their own accounts (§8.11 B6), so
+//! nothing in one can reach another, and nothing here adds two sections together.
 
 use std::collections::BTreeMap;
 
@@ -11,11 +14,11 @@ use jiff::civil::Date;
 use super::daily::DailyValue;
 use super::periods::{PeriodEnd, period_ends};
 use super::types::{
-    AccountPoint, AccountSeries, ConversionState, LiquidityLine, NetWorthBlocker, NetWorthCaution,
-    NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport, NetWorthStatus, NotCountedReason,
-    RateMissingReason, ReportAccount,
+    AccountPoint, AccountSeries, ConversionState, LiquidityLine, NetWorthBlocker, NetWorthBucket,
+    NetWorthCaution, NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport, NetWorthStatus,
+    NotCountedReason, RateMissingReason, ReportAccount,
 };
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::fx::{RATE_STALE_AFTER_DAYS, RateLeg, is_euro};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
@@ -29,9 +32,18 @@ const CLASSES: [LiquidityClass; 5] = [
     LiquidityClass::LongTermLiability,
 ];
 
+/// What one group of accounts comes to: the household's, or one bucket's.
+struct Section {
+    status: NetWorthStatus,
+    points: Vec<NetWorthPoint>,
+    accounts: Vec<AccountSeries>,
+    blockers: Vec<NetWorthBlocker>,
+    cautions: Vec<NetWorthCaution>,
+}
+
 /// One included account's row on one point.
 struct Line<'a> {
-    /// Its position in `input.accounts`.
+    /// Its position in the section's members.
     index: usize,
     holder: &'a ReportAccount,
     row: &'a DailyValue,
@@ -42,7 +54,7 @@ struct Line<'a> {
 /// An included account with no row on a point's day, though it had values by
 /// then: a hole in the daily values, which must not read as money leaving.
 struct Absent<'a> {
-    /// Its position in `input.accounts`.
+    /// Its position in the section's members.
     index: usize,
     holder: &'a ReportAccount,
 }
@@ -70,13 +82,13 @@ pub fn net_worth_report(input: &NetWorthInput) -> Result<NetWorthReport, NetWort
     let through = match input.through {
         Some(through) if !input.rebuild_needed => through,
         _ => {
-            return Ok(report(
-                input,
+            let rebuilding = section_of(
                 Vec::new(),
                 Vec::new(),
-                rebuilding(),
+                vec![NetWorthBlocker::Rebuilding],
                 Vec::new(),
-            ));
+            );
+            return Ok(report(input, rebuilding, Vec::new()));
         }
     };
     let end = answerable.min(through);
@@ -86,28 +98,86 @@ pub fn net_worth_report(input: &NetWorthInput) -> Result<NetWorthReport, NetWort
         Vec::new()
     };
 
-    let days = gather(input, &periods);
+    let household: Vec<&ReportAccount> = input
+        .accounts
+        .iter()
+        .filter(|one| one.belongs_to == BelongsTo::Household)
+        .collect();
+    let answer = section(input, &household, through, &periods)?;
+    let buckets = buckets_of(input)
+        .into_iter()
+        .map(|((_, beneficiary), (belongs_to, members))| {
+            let own = section(input, &members, through, &periods)?;
+            Ok(NetWorthBucket {
+                belongs_to,
+                beneficiary: beneficiary.map(str::to_owned),
+                status: own.status,
+                points: own.points,
+                accounts: own.accounts,
+                blockers: own.blockers,
+                cautions: own.cautions,
+            })
+        })
+        .collect::<Result<Vec<_>, NetWorthError>>()?;
+    Ok(report(input, answer, buckets))
+}
+
+/// A bucket's place among the others, by what it is alone: `someone_else` first, and within
+/// one no label first, then labels by bytes. The household's accounts are in none.
+type BucketPlace<'a> = (u8, Option<&'a str>);
+
+/// The accounts of each bucket in its place, each list in input order.
+fn buckets_of(
+    input: &NetWorthInput,
+) -> BTreeMap<BucketPlace<'_>, (BelongsTo, Vec<&ReportAccount>)> {
+    let mut buckets: BTreeMap<BucketPlace<'_>, (BelongsTo, Vec<&ReportAccount>)> = BTreeMap::new();
+    for one in &input.accounts {
+        let rank = match one.belongs_to {
+            BelongsTo::Household => continue,
+            BelongsTo::SomeoneElse => 0,
+            BelongsTo::GivenAway => 1,
+        };
+        buckets
+            .entry((rank, one.beneficiary.as_deref()))
+            .or_insert_with(|| (one.belongs_to, Vec::new()))
+            .1
+            .push(one);
+    }
+    buckets
+}
+
+/// Whether `holder` is in its section's sums at all: a household account by its flag, and
+/// every account of a bucket, whose only reason to be there is that it isn't counted in net
+/// worth.
+fn is_included(holder: &ReportAccount) -> bool {
+    holder.include_in_net_worth || holder.belongs_to != BelongsTo::Household
+}
+
+/// The one calculation, over `members` alone: no other account's row, date or caution can
+/// reach what it answers.
+fn section(
+    input: &NetWorthInput,
+    members: &[&ReportAccount],
+    through: Date,
+    periods: &[PeriodEnd],
+) -> Result<Section, NetWorthError> {
+    let days = gather(input, members, periods);
     let points = days
         .iter()
         .map(|day| point(day, input.display))
         .collect::<Result<Vec<_>, _>>()?;
-    let accounts = series(input, &days);
-    let blockers = blockers(input, &periods, &days);
-    let cautions = cautions(input, through, &periods, &days);
-    Ok(report(input, points, accounts, blockers, cautions))
+    let accounts = series(input, members, &days);
+    let blockers = blockers(input, members, periods, &days);
+    let cautions = cautions(input, through, periods, &days);
+    Ok(section_of(points, accounts, blockers, cautions))
 }
 
-fn rebuilding() -> Vec<NetWorthBlocker> {
-    vec![NetWorthBlocker::Rebuilding]
-}
-
-fn report(
-    input: &NetWorthInput,
+fn section_of(
     points: Vec<NetWorthPoint>,
     accounts: Vec<AccountSeries>,
     blockers: Vec<NetWorthBlocker>,
     cautions: Vec<NetWorthCaution>,
-) -> NetWorthReport {
+) -> Section {
     let status = if !blockers.is_empty() {
         NetWorthStatus::Unavailable
     } else if cautions.is_empty() {
@@ -115,12 +185,7 @@ fn report(
     } else {
         NetWorthStatus::Provisional
     };
-    NetWorthReport {
-        display_currency: input.display,
-        interval: input.interval,
-        from: input.from,
-        to: input.to,
-        through: input.through,
+    Section {
         status,
         points,
         accounts,
@@ -129,14 +194,38 @@ fn report(
     }
 }
 
+fn report(
+    input: &NetWorthInput,
+    household: Section,
+    buckets: Vec<NetWorthBucket>,
+) -> NetWorthReport {
+    NetWorthReport {
+        display_currency: input.display,
+        interval: input.interval,
+        from: input.from,
+        to: input.to,
+        through: input.through,
+        status: household.status,
+        points: household.points,
+        accounts: household.accounts,
+        blockers: household.blockers,
+        cautions: household.cautions,
+        buckets,
+    }
+}
+
 /// The rows of included accounts on each period's last day and the holes among
 /// them, leaving out a period holding neither a counted row nor a hole.
-fn gather<'a>(input: &'a NetWorthInput, periods: &[PeriodEnd]) -> Vec<Day<'a>> {
-    let included: BTreeMap<_, _> = input
-        .accounts
+fn gather<'a>(
+    input: &'a NetWorthInput,
+    members: &[&'a ReportAccount],
+    periods: &[PeriodEnd],
+) -> Vec<Day<'a>> {
+    let included: BTreeMap<_, _> = members
         .iter()
+        .copied()
         .enumerate()
-        .filter(|(_, holder)| holder.include_in_net_worth)
+        .filter(|(_, holder)| is_included(holder))
         .map(|(index, holder)| (holder.id, (index, holder)))
         .collect();
     let mut by_day: BTreeMap<Date, Vec<Line<'a>>> = periods
@@ -282,9 +371,12 @@ fn money(minor: i128, currency: Currency) -> Result<Money, NetWorthError> {
     })
 }
 
-fn series(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<AccountSeries> {
-    input
-        .accounts
+fn series(
+    input: &NetWorthInput,
+    members: &[&ReportAccount],
+    days: &[Day<'_>],
+) -> Vec<AccountSeries> {
+    members
         .iter()
         .enumerate()
         .map(|(index, holder)| AccountSeries {
@@ -292,8 +384,8 @@ fn series(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<AccountSeries> {
             name: holder.name.clone(),
             liquidity: holder.liquidity,
             currency: holder.currency,
-            counted: holder.include_in_net_worth,
-            not_counted: (!holder.include_in_net_worth).then_some(NotCountedReason::ExcludedByFlag),
+            counted: is_included(holder),
+            not_counted: (!is_included(holder)).then_some(NotCountedReason::ExcludedByFlag),
             first_on: input
                 .first_on
                 .iter()
@@ -331,6 +423,7 @@ fn account_points(index: usize, days: &[Day<'_>]) -> Vec<AccountPoint> {
 
 fn blockers(
     input: &NetWorthInput,
+    members: &[&ReportAccount],
     periods: &[PeriodEnd],
     days: &[Day<'_>],
 ) -> Vec<NetWorthBlocker> {
@@ -340,7 +433,7 @@ fn blockers(
     }
     // Periods asked for and none counted is the same answer as no account: a
     // range wholly after `through` has none to ask for, and a caution of its own.
-    let none_included = !input.accounts.iter().any(|one| one.include_in_net_worth);
+    let none_included = !members.iter().any(|one| is_included(one));
     if none_included || (days.is_empty() && !periods.is_empty()) {
         blockers.push(NetWorthBlocker::NoCountedAccounts);
     }

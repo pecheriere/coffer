@@ -5,7 +5,9 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use coffer_domain::accounts::{AccountKind, AccountName, ConnectionLabel, LiquidityClass};
+use coffer_domain::accounts::{
+    AccountKind, AccountName, BelongsTo, ConnectionLabel, LiquidityClass,
+};
 use coffer_domain::identity::{DisplayName, Role, Username};
 use coffer_domain::ids::{AccountId, ConnectionId, MemberId, SyncRunId};
 use coffer_domain::money::Currency;
@@ -293,6 +295,9 @@ async fn provider_account_refresh_keeps_binding_and_balance() {
             include_in_net_worth: true,
             include_in_forecast: true,
             created_at: at(0),
+            belongs_to: BelongsTo::Household,
+            belongs_to_overridden: false,
+            beneficiary: None,
         })
         .await
         .unwrap();
@@ -697,6 +702,9 @@ async fn connection_binding_is_per_connection() {
             include_in_net_worth: true,
             include_in_forecast: true,
             created_at: at(0),
+            belongs_to: BelongsTo::Household,
+            belongs_to_overridden: false,
+            beneficiary: None,
         })
         .await
         .unwrap();

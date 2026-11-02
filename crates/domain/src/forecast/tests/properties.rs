@@ -384,7 +384,8 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             return Err("a budget's month was not held back".to_owned());
         }
         let unpaid: i128 = lines().map(|line| wide(line.unpaid)).sum();
-        if unpaid != (figures.earlier_bills - figures.spent).max(0) {
+        // A month of net refunds pays nothing, and doesn't add to what a bill owes either.
+        if unpaid != (figures.earlier_bills - figures.spent.max(0)).max(0) {
             return Err("a bill's gap is wrong".to_owned());
         }
         let warned: i128 = forecast

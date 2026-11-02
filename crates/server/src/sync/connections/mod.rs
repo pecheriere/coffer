@@ -11,7 +11,7 @@
 //! value is dropped at once). No audit entry,
 //! log line, error or view ever holds them.
 
-use coffer_domain::accounts::{AccountKind, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass, suggest_kind};
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
@@ -31,7 +31,7 @@ use super::engine::SyncService;
 use super::provider::ProviderKind;
 use crate::http::idempotency::IdempotencySlot;
 use crate::ledger::LedgerError;
-use crate::ledger::accounts::AccountView;
+use crate::ledger::accounts::{AccountView, assert_no_debug};
 
 mod binding;
 mod forget;
@@ -90,9 +90,12 @@ pub struct ProviderAccountView {
     pub institution: Option<String>,
     /// The currency as the provider gave it.
     pub currency: String,
-    /// The kind the provider suggests, if any.
+    /// The kind the provider reports, if any.
     #[schema(required)]
     pub kind_hint: Option<AccountKind>,
+    /// A guess from the provider's name. Never applied: send `kind`.
+    #[schema(required)]
+    pub suggested_kind: Option<AccountKind>,
     /// The coffer account it is bound to; `null` while unbound.
     #[schema(required)]
     pub account: Option<AccountId>,
@@ -107,6 +110,12 @@ pub struct ProviderAccountView {
 
 impl From<ProviderAccountRecord> for ProviderAccountView {
     fn from(record: ProviderAccountRecord) -> Self {
+        // Computed here, at read, and kept nowhere (spec §8.11 B12).
+        let suggested_kind = if record.account.is_none() && record.kind_hint.is_none() {
+            suggest_kind(&record.name)
+        } else {
+            None
+        };
         Self {
             id: record.id,
             connection: record.connection,
@@ -114,6 +123,7 @@ impl From<ProviderAccountRecord> for ProviderAccountView {
             institution: record.institution,
             currency: record.currency_raw,
             kind_hint: record.kind_hint,
+            suggested_kind,
             account: record.account,
             balance: record.last_balance.map(|balance| RawBalanceView {
                 on: balance.on,
@@ -160,8 +170,9 @@ pub struct ConnectionView {
     pub accounts: Vec<ProviderAccountView>,
 }
 
-/// An account to create for a provider account and bind to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An account to create for a provider account and bind to it. It has no `Debug`, so its
+/// beneficiary can't reach a log line.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NewLinkedAccountInput {
     /// By default the provider account's name.
     pub name: Option<String>,
@@ -169,9 +180,17 @@ pub struct NewLinkedAccountInput {
     pub kind: Option<AccountKind>,
     /// By default the kind's class.
     pub liquidity: Option<LiquidityClass>,
-    pub include_in_net_worth: bool,
-    pub include_in_forecast: bool,
+    /// By default what the kind and `belongs_to` lead to.
+    pub include_in_net_worth: Option<bool>,
+    /// By default what the kind and `belongs_to` lead to.
+    pub include_in_forecast: Option<bool>,
+    /// By default the kind's.
+    pub belongs_to: Option<BelongsTo>,
+    /// Empty is the same as `None`. A provider's text never fills it.
+    pub beneficiary: Option<String>,
 }
+
+assert_no_debug!(NewLinkedAccountInput);
 
 /// An account created for a provider account, and the provider account
 /// bound to it.

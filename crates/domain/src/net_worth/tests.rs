@@ -8,11 +8,12 @@ use super::{
     CurrencyState, DailyValue, NetWorthInput, NetWorthInterval, NetWorthPoint, NetWorthReport,
     ReportAccount, SnapshotPoint, daily_values,
 };
-use crate::accounts::{BalanceSource, LiquidityClass};
+use crate::accounts::{BalanceSource, BelongsTo, LiquidityClass};
 use crate::fx::{RateBook, RateHistory, RateObservation};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 
+mod buckets;
 mod daily;
 mod golden;
 mod periods;
@@ -79,6 +80,8 @@ fn holding(n: u128, code: &str, liquidity: LiquidityClass, snapshots: &[(Date, i
             liquidity,
             include_in_net_worth: true,
             closed_on: None,
+            belongs_to: BelongsTo::Household,
+            beneficiary: None,
         },
         snapshots: snapshots
             .iter()

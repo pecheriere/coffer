@@ -1,7 +1,11 @@
 //! Accounts and their daily balance snapshots.
 
+use coffer_domain::accounts::belonging::{
+    Belonging, BelongingAsked, BeneficiaryChange, resolve_belonging,
+};
 use coffer_domain::accounts::{
-    AccountKind, AccountName, BalanceSource, LiquidityClass, default_liquidity,
+    AccountError, AccountKind, AccountName, BalanceSource, BelongsTo, Beneficiary, LiquidityClass,
+    default_liquidity,
 };
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
@@ -57,10 +61,10 @@ impl BalanceView {
 }
 
 /// An account.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the API contract: four independent flags an agent reads as JSON booleans"
+    reason = "the API contract: five independent flags an agent reads as JSON booleans"
 )]
 pub struct AccountView {
     pub id: AccountId,
@@ -80,6 +84,31 @@ pub struct AccountView {
     #[schema(required)]
     pub latest_balance: Option<BalanceView>,
     pub created_at: Timestamp,
+    /// Whose money it is. It defaults from `kind` and follows a change of `kind` until it is
+    /// chosen, then stays. An account that isn't `household` counts in neither net worth nor
+    /// the forecast.
+    pub belongs_to: BelongsTo,
+    /// Whether `belongs_to` was chosen rather than defaulted from `kind`. A defaulted one
+    /// follows a change of `kind`; a chosen one stays.
+    pub belongs_to_overridden: bool,
+    /// Who or what an account that isn't `household` is held for; `null` when it says nobody.
+    #[schema(required)]
+    pub beneficiary: Option<String>,
+}
+
+/// Leaves out `beneficiary`, which may be a child's name: a view's `Debug` can reach a log line.
+impl std::fmt::Debug for AccountView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountView")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("currency", &self.currency)
+            .field("liquidity", &self.liquidity)
+            .field("belongs_to", &self.belongs_to)
+            .field("source", &self.source)
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AccountView {
@@ -105,6 +134,12 @@ impl AccountView {
             closed: record.closed_at.is_some(),
             latest_balance: latest.map(|snapshot| BalanceView::new(snapshot, record.currency)),
             created_at: record.created_at,
+            belongs_to: record.belongs_to,
+            belongs_to_overridden: record.belongs_to_overridden,
+            beneficiary: record
+                .beneficiary
+                .as_ref()
+                .map(|label| label.as_str().to_owned()),
         }
     }
 }
@@ -128,34 +163,79 @@ pub struct OpeningBalance {
     pub minor_units: i64,
 }
 
-/// An account to create.
-#[derive(Debug, Clone)]
+/// An account to create. It has no `Debug`, so its beneficiary can't reach a log line.
+#[derive(Clone)]
 pub struct NewAccountInput {
     pub name: String,
     pub kind: AccountKind,
     pub currency: Currency,
     /// `None` takes the default class of `kind`.
     pub liquidity: Option<LiquidityClass>,
-    pub include_in_net_worth: bool,
-    pub include_in_forecast: bool,
+    /// `None` is what the kind and `belongs_to` lead to.
+    pub include_in_net_worth: Option<bool>,
+    /// `None` is what the kind and `belongs_to` lead to.
+    pub include_in_forecast: Option<bool>,
+    /// `None` takes the default of `kind`.
+    pub belongs_to: Option<BelongsTo>,
+    /// Empty is the same as `None`.
+    pub beneficiary: Option<String>,
     pub opening_balance: Option<OpeningBalance>,
 }
 
 /// Changes to an account; absent (or `null`) fields stay as they are. The
 /// currency cannot change.
-#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[derive(Clone, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountPatch {
     /// 1 to 100 characters, without control characters.
     pub name: Option<String>,
-    /// A new kind; a defaulted liquidity class follows it.
+    /// A new kind; a defaulted liquidity class and a defaulted `belongs_to` follow it, and
+    /// the flags with `belongs_to`.
     pub kind: Option<AccountKind>,
     /// A chosen liquidity class, kept from then on whatever the kind.
     pub liquidity: Option<LiquidityClass>,
+    /// `true` is refused on an account that isn't the household's.
     pub include_in_net_worth: Option<bool>,
+    /// `true` is refused on an account that isn't the household's.
     pub include_in_forecast: Option<bool>,
     /// `true` closes the account, `false` reopens it.
     pub closed: Option<bool>,
+    /// Whose money it is, kept from then on whatever the kind. Moving away from `household`
+    /// turns both flags off. Moving back turns on any this request doesn't name and removes
+    /// the beneficiary.
+    pub belongs_to: Option<BelongsTo>,
+    /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
+    /// something visible and no control, format or separator characters. `""` (or only plain
+    /// spaces) removes it, since absent keeps it.
+    pub beneficiary: Option<String>,
+}
+
+/// Refuses a type holding a beneficiary as text if it ever implements `Debug`, so that the label
+/// can't reach a log line through one. When `$type: Debug`, both impls below apply and `_` can't
+/// be inferred, which fails the build (`static_assertions` does this too, not worth a dependency).
+macro_rules! assert_no_debug {
+    ($($type:ty),+ $(,)?) => {
+        $(const _: fn() = || {
+            trait AmbiguousIfDebug<Marker> {
+                fn check() {}
+            }
+            impl<T: ?Sized> AmbiguousIfDebug<()> for T {}
+            impl<T: ?Sized + std::fmt::Debug> AmbiguousIfDebug<u8> for T {}
+            let _ = <$type as AmbiguousIfDebug<_>>::check;
+        };)+
+    };
+}
+pub(crate) use assert_no_debug;
+
+assert_no_debug!(NewAccountInput, AccountPatch, ValidNewAccount);
+
+/// What `beneficiary` asks of an account.
+///
+/// # Errors
+///
+/// [`LedgerError::Invalid`] for text that can't be a beneficiary.
+pub(crate) fn parse_beneficiary(asked: Option<&str>) -> Result<BeneficiaryChange, LedgerError> {
+    BeneficiaryChange::parse(asked).map_err(refused)
 }
 
 /// `name` as an account name.
@@ -168,26 +248,96 @@ pub(crate) fn parse_name(name: &str) -> Result<AccountName, LedgerError> {
     AccountName::parse(name).map_err(|_| LedgerError::Invalid(NAME_INVALID))
 }
 
-/// An account to create whose input has been validated, so that a refused
-/// request never takes the write lock.
-#[derive(Debug, Clone)]
+/// An account to create whose input has been validated and whose belonging is decided. A
+/// create does this before taking the write lock. A bind has to read the provider's hint
+/// first, so the rule's refusals come inside its transaction, which they roll back; it checks
+/// the syntax of a name and a label before that.
 pub(crate) struct ValidNewAccount {
     name: AccountName,
+    belonging: Belonging,
     input: NewAccountInput,
 }
 
 impl ValidNewAccount {
-    /// Validates `input`.
+    /// Validates `input` and decides whose money it is, from its final kind: a bind calls this
+    /// after the provider's hint has decided that.
     ///
     /// # Errors
     ///
-    /// [`LedgerError::Invalid`] for an invalid name.
+    /// [`LedgerError::Invalid`] for an invalid name or beneficiary, or for what
+    /// [`resolve_belonging`] refuses.
     pub(crate) fn parse(input: NewAccountInput) -> Result<Self, LedgerError> {
+        let asked = BelongingAsked {
+            belongs_to: input.belongs_to,
+            beneficiary: parse_beneficiary(input.beneficiary.as_deref())?,
+            include_in_net_worth: input.include_in_net_worth,
+            include_in_forecast: input.include_in_forecast,
+        };
         Ok(Self {
             name: parse_name(&input.name)?,
+            belonging: resolve_belonging(None, input.kind, &asked).map_err(refused)?,
             input,
         })
     }
+}
+
+/// An account value refused, in the error's fixed words, which never hold the input.
+fn refused(err: AccountError) -> LedgerError {
+    LedgerError::Invalid(err.message())
+}
+
+fn beneficiary_text(beneficiary: Option<&Beneficiary>) -> Option<&str> {
+    beneficiary.map(Beneficiary::as_str)
+}
+
+/// Adds to `changes` and `audited` what `resolved` changes of `current`.
+fn change_belonging(
+    current: &AccountRecord,
+    resolved: Belonging,
+    changes: &mut AccountChanges,
+    mut audited: AuditChanges,
+) -> AuditChanges {
+    if resolved.belongs_to != current.belongs_to {
+        audited = audited.change(
+            "belongs_to",
+            current.belongs_to.as_str(),
+            resolved.belongs_to.as_str(),
+        );
+        changes.belongs_to = Some(resolved.belongs_to);
+    }
+    if resolved.overridden != current.belongs_to_overridden {
+        audited = audited.change(
+            "belongs_to_overridden",
+            current.belongs_to_overridden,
+            resolved.overridden,
+        );
+        changes.belongs_to_overridden = Some(resolved.overridden);
+    }
+    if resolved.beneficiary != current.beneficiary {
+        audited = audited.change(
+            "beneficiary",
+            beneficiary_text(current.beneficiary.as_ref()),
+            beneficiary_text(resolved.beneficiary.as_ref()),
+        );
+        changes.beneficiary = Some(resolved.beneficiary);
+    }
+    if resolved.include_in_net_worth != current.include_in_net_worth {
+        audited = audited.change(
+            "include_in_net_worth",
+            current.include_in_net_worth,
+            resolved.include_in_net_worth,
+        );
+        changes.include_in_net_worth = Some(resolved.include_in_net_worth);
+    }
+    if resolved.include_in_forecast != current.include_in_forecast {
+        audited = audited.change(
+            "include_in_forecast",
+            current.include_in_forecast,
+            resolved.include_in_forecast,
+        );
+        changes.include_in_forecast = Some(resolved.include_in_forecast);
+    }
+    audited
 }
 
 impl Ledger {
@@ -200,7 +350,8 @@ impl Ledger {
     /// [`LedgerError::Denied`] without [`Action::WriteHousehold`], or
     /// without write access to every account (a new account is visible to
     /// a restricted token only through its `all` grant);
-    /// [`LedgerError::Invalid`] for an invalid name; storage failures.
+    /// [`LedgerError::Invalid`] for an invalid name or beneficiary, or for what
+    /// [`resolve_belonging`] refuses; storage failures.
     pub async fn create_account(
         &self,
         actor: &Actor,
@@ -234,7 +385,11 @@ impl Ledger {
         actor: &Actor,
         valid: ValidNewAccount,
     ) -> Result<(AccountRecord, Option<BalanceSnapshot>), LedgerError> {
-        let ValidNewAccount { name, input } = valid;
+        let ValidNewAccount {
+            name,
+            belonging,
+            input,
+        } = valid;
         let (liquidity, liquidity_overridden) = match input.liquidity {
             Some(chosen) => (chosen, true),
             None => (default_liquidity(input.kind), false),
@@ -247,9 +402,12 @@ impl Ledger {
                 currency: input.currency,
                 liquidity,
                 liquidity_overridden,
-                include_in_net_worth: input.include_in_net_worth,
-                include_in_forecast: input.include_in_forecast,
+                include_in_net_worth: belonging.include_in_net_worth,
+                include_in_forecast: belonging.include_in_forecast,
                 created_at: now,
+                belongs_to: belonging.belongs_to,
+                belongs_to_overridden: belonging.overridden,
+                beneficiary: belonging.beneficiary,
             })
             .await?;
         let mut changes = AuditChanges::new()
@@ -259,7 +417,12 @@ impl Ledger {
             .set("liquidity", record.liquidity.as_str())
             .set("liquidity_overridden", record.liquidity_overridden)
             .set("include_in_net_worth", record.include_in_net_worth)
-            .set("include_in_forecast", record.include_in_forecast);
+            .set("include_in_forecast", record.include_in_forecast)
+            .set("belongs_to", record.belongs_to.as_str())
+            .set("belongs_to_overridden", record.belongs_to_overridden);
+        if let Some(beneficiary) = &record.beneficiary {
+            changes = changes.set("beneficiary", beneficiary.as_str());
+        }
         let opening = match input.opening_balance {
             Some(opening) => {
                 let snapshot = BalanceSnapshot {
@@ -291,14 +454,16 @@ impl Ledger {
     }
 
     /// Changes an account. Setting `kind` without `liquidity` re-defaults
-    /// the liquidity class unless it was chosen. A patch that changes
-    /// nothing writes nothing.
+    /// the liquidity class unless it was chosen, and [`resolve_belonging`]
+    /// decides whose money it is and its flags from the kind as it will be.
+    /// A patch that changes nothing writes nothing.
     ///
     /// # Errors
     ///
     /// [`LedgerError::NotFound`] for an unknown or hidden account;
     /// [`LedgerError::Denied`] without write access to it;
-    /// [`LedgerError::Invalid`] for an invalid name; storage failures.
+    /// [`LedgerError::Invalid`] for an invalid name or beneficiary, or for
+    /// what [`resolve_belonging`] refuses; storage failures.
     pub async fn update_account(
         &self,
         actor: &Actor,
@@ -308,6 +473,12 @@ impl Ledger {
         let access = self.access.resolve(actor).await?;
         authorize_account(actor, &access, id, AccountLevel::Write)?;
         let name = patch.name.as_deref().map(parse_name).transpose()?;
+        let asked = BelongingAsked {
+            belongs_to: patch.belongs_to,
+            beneficiary: parse_beneficiary(patch.beneficiary.as_deref())?,
+            include_in_net_worth: patch.include_in_net_worth,
+            include_in_forecast: patch.include_in_forecast,
+        };
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_account(id).await?;
@@ -338,24 +509,15 @@ impl Ledger {
             audited = audited.change("liquidity", current.liquidity.as_str(), liquidity.as_str());
             changes.liquidity = Some(liquidity);
         }
-        if let Some(include) = patch
-            .include_in_net_worth
-            .filter(|include| *include != current.include_in_net_worth)
-        {
-            audited = audited.change(
-                "include_in_net_worth",
-                current.include_in_net_worth,
-                include,
-            );
-            changes.include_in_net_worth = Some(include);
-        }
-        if let Some(include) = patch
-            .include_in_forecast
-            .filter(|include| *include != current.include_in_forecast)
-        {
-            audited = audited.change("include_in_forecast", current.include_in_forecast, include);
-            changes.include_in_forecast = Some(include);
-        }
+        let belonging = Belonging {
+            belongs_to: current.belongs_to,
+            overridden: current.belongs_to_overridden,
+            beneficiary: current.beneficiary.clone(),
+            include_in_net_worth: current.include_in_net_worth,
+            include_in_forecast: current.include_in_forecast,
+        };
+        let resolved = resolve_belonging(Some(&belonging), kind, &asked).map_err(refused)?;
+        audited = change_belonging(&current, resolved, &mut changes, audited);
         let was_closed = current.closed_at.is_some();
         if let Some(closed) = patch.closed.filter(|closed| *closed != was_closed) {
             audited = audited.change("closed", was_closed, closed);

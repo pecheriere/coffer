@@ -219,20 +219,35 @@ pub(crate) fn parse_label(input: &str, max: usize) -> Option<String> {
 /// control characters. Rejection is the given error variant.
 macro_rules! label_type {
     ($(#[$meta:meta])* $name:ident, $error:ident::$variant:ident, max = $max:literal) => {
+        $crate::identity::label_type!(
+            $(#[$meta])*
+            #[derive(Debug)]
+            $name,
+            $error::$variant,
+            max = $max,
+            rule = " without control characters",
+            check = $crate::identity::parse_label
+        );
+    };
+    // A label with a stricter `check`, which also leaves `Debug` to the caller.
+    (
+        $(#[$meta:meta])* $name:ident, $error:ident::$variant:ident, max = $max:literal,
+        rule = $rule:literal, check = $check:path
+    ) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        #[derive(Clone, PartialEq, Eq, Hash)]
         pub struct $name(String);
 
         impl $name {
             /// The most characters it may have.
             pub const MAX_CHARS: usize = $max;
 
-            #[doc = concat!("Trims and validates `input`: 1 to ", stringify!($max), " characters, no control characters.")]
+            #[doc = concat!("Trims and validates `input`: 1 to ", stringify!($max), " characters", $rule, ".")]
             ///
             /// # Errors
             #[doc = concat!("Returns [`", stringify!($error), "::", stringify!($variant), "`] when `input` is invalid.")]
             pub fn parse(input: &str) -> Result<Self, $error> {
-                $crate::identity::parse_label(input, Self::MAX_CHARS)
+                $check(input, Self::MAX_CHARS)
                     .map(Self)
                     .ok_or($error::$variant)
             }
@@ -260,7 +275,9 @@ macro_rules! label_type {
                     .description(Some(concat!(
                         "1 to ",
                         stringify!($max),
-                        " characters without control characters; surrounding whitespace is trimmed."
+                        " characters",
+                        $rule,
+                        "; surrounding whitespace is trimmed."
                     )))
                     .into()
             }

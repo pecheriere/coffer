@@ -29,6 +29,7 @@ const TOKEN_WORD: &str = "[token]";
 /// Braille pattern.
 const BLANK_LOOKING: [char; 5] = ['\u{115f}', '\u{1160}', '\u{2800}', '\u{3164}', '\u{ffa0}'];
 
+const CONNECTIONS: &str = "/connections";
 const LINK_NEW: &str = "/connections/plaid/new";
 const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 
@@ -41,12 +42,18 @@ const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 /// never reads what a page shows into an error. **A page whose scripts handle
 /// amounts or names breaks that, so it stays out**, as the forecast and net worth
 /// pages do, and a report from it says only that something failed.
+///
+/// A rejection names no script, so nothing shows it is coffer's. Its text is kept, except from
+/// [`CONNECTIONS`], whose forms hold a label that may be a child's name. That stops another script
+/// on the page, a browser extension's say, quoting one by accident. It can't stop one that means
+/// to forge a report, which anyone can post with any kind and text: every report is logged as
+/// `trust="untrusted"`.
 const PAGES: [&str; 10] = [
     "/login",
     "/setup/{token}",
     "/invite/{token}",
     "/account",
-    "/connections",
+    CONNECTIONS,
     LINK_NEW,
     LINK_RECONNECT,
     "/admin/members",
@@ -123,14 +130,15 @@ impl ScriptReport {
     /// The message is kept only when it is known to come from coffer's own code:
     /// from a page in [`PAGES`] and, for an error, which names its script, from
     /// one of coffer's scripts. A password manager's script, say, can throw text
-    /// holding the page's content.
+    /// holding the page's content. A rejection from `/connections` is withheld too: see [`PAGES`].
     pub(super) fn into_report(self, public_url: &Url) -> Report {
         let page = page_template(public_url, &self.page);
         let script = script_path(public_url, &self.script);
         let foreign_error = self.kind == Kind::Error && (script == OTHER || script == NONE);
+        let rejection_by_a_form = self.kind == Kind::UnhandledRejection && page == CONNECTIONS;
         Report {
             kind: self.kind,
-            message: if page == OTHER || foreign_error {
+            message: if page == OTHER || foreign_error || rejection_by_a_form {
                 WITHHELD.to_owned()
             } else {
                 clean_message(&self.message)

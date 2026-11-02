@@ -305,8 +305,10 @@ impl World {
                     name: None,
                     kind: Some(kind),
                     liquidity: None,
-                    include_in_net_worth: true,
-                    include_in_forecast: true,
+                    include_in_net_worth: Some(true),
+                    include_in_forecast: Some(true),
+                    belongs_to: None,
+                    beneficiary: None,
                 },
             )
             .await

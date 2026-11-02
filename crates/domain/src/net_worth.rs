@@ -12,8 +12,8 @@ pub use periods::{MAX_POINTS, NetWorthInterval, PeriodEnd, period_ends};
 pub use report::net_worth_report;
 pub use types::{
     AccountPoint, AccountSeries, ConversionState, CurrencyState, LiquidityLine, NetWorthBlocker,
-    NetWorthCaution, NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport, NetWorthStatus,
-    NetWorthValueError, NotCountedReason, RateMissingReason, ReportAccount,
+    NetWorthBucket, NetWorthCaution, NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport,
+    NetWorthStatus, NetWorthValueError, NotCountedReason, RateMissingReason, ReportAccount,
 };
 
 #[cfg(test)]

@@ -9,8 +9,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 ## Crate map
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
-  audit entry types, money, accounts, transactions, matching, sync run
-  triggers and statuses, clock; `plan` (planned items, schedules, goals,
+  audit entry types, money, transactions, matching, sync run
+  triggers and statuses, clock; `accounts`, with whose money an account is
+  (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual; `fx`, exchange rates held
   exactly and conversion through the euro; `net_worth`, the daily values, the
@@ -49,7 +50,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
   `SimpleFin` provider and `sync::plaid` (`client.rs`, Plaid's API over
-  `egress`; `provider.rs`, the `Provider` implementation); connections, sync requests and their rate limits,
+  `egress`; `provider.rs`, the `Provider` implementation; `kinds.rs`, what
+  Plaid says an account is); connections, sync requests and their rate limits,
   and provider account binding; the engine that performs sync runs; the
   provider-agnostic apply step matching provider records onto transactions;
   the scheduler, whose worker performs queued runs and whose ticker queues
@@ -133,6 +135,10 @@ worktree when its branch has merged.
   resolves (never built by hand). A `Denied` becomes a problem only through
   `impl From<Denied> for Problem`. Whether a planned item exists for an actor
   is decided only by `plan_item_visible`, whose hidden answer is the missing one.
+- **An account that isn't the household's is out of every count through its flags,
+  held by a CHECK, and anything reading by class alone must also read `belongs_to`**
+  (spec §8.11 B4, B8). Net worth reports it in buckets, and nothing adds a bucket to
+  anything.
 - Money is an integer in minor units with its ISO 4217 currency
   (`coffer_domain::money`); negative is money out of the account, except a
   planned item's amount, a positive magnitude with a `direction`. No
@@ -164,7 +170,8 @@ worktree when its branch has merged.
 - A page whose scripts handle amounts or names stays out of `PAGES` in
   `http/browser_reports/fields.rs`, so a browser report's free text from it is
   never logged, and first-party scripts never put page data in an error's
-  message. The threat model says why.
+  message. `/connections` stays in it with rejections withheld, since its forms hold a
+  beneficiary label. The threat model says why.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 

@@ -160,7 +160,7 @@ async fn grants_go_with_their_token() {
 
 impl World {
     /// Member "bob", signed in with a passkey.
-    async fn bob(&self) -> Actor {
+    pub(super) async fn bob(&self) -> Actor {
         let invite = self
             .server
             .identity

@@ -5,7 +5,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use coffer_domain::accounts::{AccountKind, AccountName, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, TransactionId};
 use coffer_domain::money::Currency;
 use coffer_domain::transactions::{Description, TransactionOrigin};
@@ -35,6 +35,9 @@ async fn new_account(tx: &mut StoreTx, name: &str) -> AccountId {
         include_in_net_worth: true,
         include_in_forecast: true,
         created_at: at(0),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     })
     .await
     .unwrap()

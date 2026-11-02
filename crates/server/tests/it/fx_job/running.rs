@@ -176,19 +176,21 @@ async fn the_migration_s_rebuild_runs_at_start() {
 
     let running = start(service(&server, None));
     filled_through(&server.store, MONDAY).await;
+    // Another connection sees the commit before the job is woken to log it, and stopping then
+    // would drop the job with the line unwritten.
+    until(|| async {
+        let logged = captured_log_text();
+        let (_, after) = logged.split_once(&start_log).unwrap();
+        after
+            .lines()
+            .any(|line| line.contains("INFO") && line.contains("rows=41"))
+    })
+    .await;
     running.stop().await;
 
     let state = server.store.net_worth_state().await.unwrap();
     assert!(!state.rebuild_needed);
     assert_eq!(rows_of(&server.store, usd).await.len(), 41);
-    let logged = captured_log_text();
-    let (_, after) = logged.split_once(&start_log).unwrap();
-    assert!(
-        after
-            .lines()
-            .any(|line| line.contains("INFO") && line.contains("rows=41")),
-        "the row count is not logged"
-    );
 }
 
 /// The table's day moves while a fetch hangs: two tasks, not one.

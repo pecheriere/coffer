@@ -13,7 +13,9 @@ use jiff::civil::Date;
 
 use super::{LinkedAccountView, NewLinkedAccountInput, ProviderAccountView, audit, visible};
 use crate::ledger::Ledger;
-use crate::ledger::accounts::{AccountView, NewAccountInput, ValidNewAccount, parse_name};
+use crate::ledger::accounts::{
+    AccountView, NewAccountInput, ValidNewAccount, parse_beneficiary, parse_name,
+};
 use crate::sync::SyncError;
 use crate::sync::apply::apply_held;
 use crate::sync::engine::{SyncService, ensure_not_removed, oldest_kept_day, write_balance};
@@ -99,6 +101,35 @@ impl SyncService {
         Ok(view)
     }
 
+    /// Refuses, as [`SyncService::create_account_and_bind`] would, an actor who may not create an
+    /// account for the provider account, so that a form is authorized before it is read.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] and [`SyncError::NotFound`] as there; storage failures.
+    pub async fn authorize_create_account(
+        &self,
+        actor: &Actor,
+        provider_account: ProviderAccountId,
+    ) -> Result<(), SyncError> {
+        let access = self.authorize_creating(actor).await?;
+        let current = self.store.get_provider_account(provider_account).await?;
+        if visible(&access, &current) {
+            Ok(())
+        } else {
+            Err(SyncError::NotFound)
+        }
+    }
+
+    /// The access of an actor who may create and bind an account.
+    async fn authorize_creating(&self, actor: &Actor) -> Result<AccountAccess, SyncError> {
+        authorize(actor, Action::WriteHousehold)?;
+        authorize(actor, Action::ManageConnections)?;
+        let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, AccountLevel::Write)?;
+        Ok(access)
+    }
+
     /// Creates an account for the provider account and binds it, in one
     /// transaction: kind from the input, else the provider's hint; name
     /// from the input, else the provider account's; currency the provider
@@ -110,7 +141,9 @@ impl SyncService {
     /// [`SyncError::Denied`] without [`Action::WriteHousehold`],
     /// [`Action::ManageConnections`] or write access to every account;
     /// [`SyncError::NotFound`] for an unknown provider account;
-    /// [`SyncError::Invalid`] without a kind or for an invalid name;
+    /// [`SyncError::Invalid`] without a kind, for an invalid name or
+    /// beneficiary, for a flag asked on for money that isn't the household's,
+    /// or for a beneficiary on money that is;
     /// [`SyncError::CurrencyMismatch`] when the provider's currency is not a
     /// supported ISO 4217 code; the errors of [`SyncService::bind`].
     pub async fn create_account_and_bind(
@@ -119,13 +152,11 @@ impl SyncService {
         provider_account: ProviderAccountId,
         input: NewLinkedAccountInput,
     ) -> Result<LinkedAccountView, SyncError> {
-        authorize(actor, Action::WriteHousehold)?;
-        authorize(actor, Action::ManageConnections)?;
+        let access = self.authorize_creating(actor).await?;
         if let Some(name) = &input.name {
             parse_name(name)?;
         }
-        let access = self.access.resolve(actor).await?;
-        authorize_every_account(actor, &access, AccountLevel::Write)?;
+        parse_beneficiary(input.beneficiary.as_deref())?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_provider_account(provider_account).await?;
@@ -157,6 +188,8 @@ impl SyncService {
             liquidity: input.liquidity,
             include_in_net_worth: input.include_in_net_worth,
             include_in_forecast: input.include_in_forecast,
+            belongs_to: input.belongs_to,
+            beneficiary: input.beneficiary,
             opening_balance: None,
         })?;
         let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;

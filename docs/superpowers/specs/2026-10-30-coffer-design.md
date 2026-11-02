@@ -1142,3 +1142,140 @@ naming one says so. Unbuilt until the owner asks for it (plan 4, Task 10).
 **N15. Not in this plan:** a forecast across currencies (N1), entering a rate by hand for a currency the ECB doesn't publish,
 each member's display currency, separate buckets (#38) and unvested RSUs (#44). Buckets
 filter accounts at read and vesting adds accounts or balances, so neither changes the table.
+
+### 8.11 Accounts for other people and purposes
+
+Decisions made while planning issue #38 and #39 (plan 5). Where they differ from an earlier
+section, they govern. In particular B10 narrows R6's "actuals cover every account", B1 adds to
+§6.1's kinds, B6 replaces what N15 left open, and B8 narrows R16 for an inflow hinted at such an
+account. Names in examples are generic.
+
+**B1. Three more kinds.** `education` (a 529 and similar), `custodial` (UTMA, UGMA) and
+`charitable` (a donor-advised fund). Charitable giving is its own kind, as the owner decided on
+#38: money in a donor-advised fund has already been given away, even before it is granted. A
+brokerage account merely earmarked for giving is still the household's, and stays `brokerage`.
+
+**B2. Whose money it is, apart from what it is.** Every account has `belongs_to`:
+
+| Value | Means | By default for |
+|---|---|---|
+| `household` | The household's own money. | every other kind |
+| `someone_else` | Held for someone, or for a purpose beyond the household's own. | `education`, `custodial` |
+| `given_away` | No longer the household's, whatever has happened to it since. | `charitable` |
+
+A kind can't carry this alone: a brokerage account held for a child and a 529 are different kinds
+with the same answer, and a 529 a parent means to spend on themselves is an `education` account
+that is the household's. It says how coffer treats the money and is not a legal statement: who
+legally owns a 529 or a custodial account, and how a tax form treats it, is outside it. It
+defaults from the kind and follows a change of kind until it is chosen, then stays, as the
+liquidity class does (§6.1).
+
+**B3. A class for each kind.** All three default to `invested`, overridable like any class. A
+class says what the money is, and `belongs_to` whose. So the forecast, which counts `cash` and
+`short_term_liability` only, leaves them out twice over, and a custodial savings account a member
+sets to `cash` still stays out (B4).
+
+**B4. One gate, and no contradictory state.** An account that isn't `household` counts in neither
+net worth nor the forecast, and can't be made to: `include_in_net_worth` and `include_in_forecast`
+are false on it, a CHECK on the table holds that, and asking for `true` answers 422. Overriding
+means saying whose money it is: a member who counts a 529 as their own sets `belongs_to` to
+`household`, which is audited, and the account then counts like any other. So there is never an
+account "held for someone, but counted", and every existing reader of the two flags stays right
+without knowing about this. A `household` account keeps both flags as before, for money that is
+the household's and that it would rather not count.
+
+Moving an account away from `household` turns both flags off. Moving it back turns on any the same
+request doesn't name, as a new account has them, and clears its beneficiary. The answer shows the
+result and the audit entry each change.
+
+**B5. A beneficiary is a label, not a person.** `beneficiary` is an optional free-text label, 1 to
+64 characters with something visible and no control, format or separator characters other than the
+plain space, on an account that isn't `household`, and refused on one that is: a child, or a
+purpose such as a family fund. It isn't a member, since a child has no login, and it isn't a record
+of its own. A record would need endpoints, a delete rule and a household-wide list of names that a
+restricted token must not read, to save retyping a name on two or three accounts. Labels compare
+exactly after trimming, so two spellings make two buckets, and the forms offer the labels the
+actor can already see. A provider's text never fills it. It may be a child's name, so it is never
+logged, its `Debug` is redacted, it is shown only with its account, and goes in the audit log as an account's name does.
+
+**B6. A report has buckets.** `GET /api/v1/reports/net-worth` keeps its shape for the household's
+money and adds `buckets`: one per `belongs_to` and exact `beneficiary` among the accounts that
+aren't `household`, with no label first, in a fixed order. Each is the same calculation as the
+household's over its own accounts: its own `status`, `points`, `accounts`, `blockers` and
+`cautions`, closing and rounding as in N4 and N9. A bucket's account is listed only in its bucket,
+so the top-level `accounts` and every number beside it are what they would be without it.
+
+No total adds a bucket to the household's or one bucket to another: this is money the household
+said isn't its own, and a sum would be one more number that looks like net worth. Nothing about a
+bucket touches the household's `status`, so a missing rate on a child's account doesn't make net
+worth provisional. A household with only buckets still has `no_counted_accounts`, and its buckets
+answer. Rows go on accruing for every account, as flags and classes apply at read (N3), so
+`belongs_to` needs no rebuild, and changing it changes the account's whole history at once. An
+account given away part way through its life has no date for that; if that ever matters it needs
+an effective date of its own.
+
+**B7. A token's view of a bucket follows its grants.** A bucket is made from the accounts the actor
+sees at `balances`, and sums those, unmarked, as in N2: a token holding one of a child's two
+accounts sees a bucket of one, and a hidden account's label, currency and existence show nowhere.
+`belongs_to` and `beneficiary` read with the account, at `balances`, and change with `write` on it.
+
+**B8. Forecast and allocation.** A forecast lists such an account with `not_counted:
+"not_household"`. A later target allocation and rebalancing (#3) reads `belongs_to = household`
+only, whatever the class: that is why nothing here adds a third flag. A planned outflow hinted at
+such an account still counts, with R16's caution; hint a contribution at the account paying it. A
+planned inflow hinted at one stays out of the number, with the same caution, since it isn't the
+household's income, and with `include_income` off it raises nothing.
+
+**B9. Money going in is spending.** A contribution from a counted account to one that isn't the
+household's is a real outflow, so it belongs in an `expense` category. It then reads as `actual` in
+plan versus actual, pays a planned bill as R9 says, and lowers the surplus, and net worth falls as
+the bucket rises, which is what happened. A `transfer` category means money moved within the
+household, which this isn't: there it is in no `actual` (R6), though the forecast's cash still
+falls and an unpaid bill keeps counting, the safe direction. R17 already refuses a `transfer`
+category on a planned item. Nothing can check this until transfer links exist (#72), so it is a
+rule for members and agents, in the docs. Those links must read a link out of the household as an
+outflow.
+
+Money coming back, such as a 529 paying a household's tuition bill into checking, is a refund in
+the `expense` category it paid for, or `income`, on the household's side.
+
+**B10. Money inside is not the household's spending.** A transaction on such an account syncs,
+matches and can be categorized as usual, but its splits stay out of plan versus actual: a grant from
+a donor-advised fund categorized as charity would otherwise count a second time, after the
+contribution. R6's "money stays visible" holds through the report's `not_the_households`, per month
+and currency. A split linked to a goal stays on the goal's line: a member linked it on purpose, and
+a tuition goal paid from a 529 does need less from counted cash (R10). It reduces no budget and
+pays no bill, since a forecast's spending is on counted accounts (R10), so a bill paid that way is
+settled (R9a).
+
+Link the payment or the contribution, never both. A goal linked on both the household's accounts,
+counted or not, and such an account may have its need lowered twice for the same money, once as the contribution and once as
+the tuition it paid, and the data can't tell that from two separate payments. So the number doesn't
+change, and the caution `goal_linked_both_sides` names the goal and makes the forecast `provisional`.
+Each link alone raises nothing. A link newer than its balance is a side already, and a charge R10a
+leaves out is none. A charge counts as a side even after its refund, so removing a link is what
+clears the caution, which errs toward holding more. A finished goal raises nothing. The rule also
+covers one held account funding another, which the forecast can't see or warn about.
+
+**B11. Nothing is reclassified.** Existing accounts stay as they are, `household`, whatever their
+name says, since a guess here moves net worth. A member changes an `other_asset` that is really a
+529 by patching its `kind`, and `belongs_to` and a defaulted class follow. CHECKs can't change in
+place, so the migration rebuilds `accounts` and `provider_accounts`, in one transaction and row
+for row.
+
+**B12. A suggested kind is a guess a member confirms.** A provider account's name may suggest a
+kind, computed at read and never stored. It is shown when binding and answered as `suggested_kind`.
+It is never applied by itself: a bind with no `kind` still falls back only to the provider's own
+`kind_hint`, and otherwise answers 422. A provider's name may hold personal text, so nothing about a
+suggestion is logged or audited. Only an unambiguous match suggests: a whole word, and two kinds
+matching at the same strength suggest nothing. A name holding `hsa`, `h s a` or `health savings`
+suggests nothing, whatever else it holds: a health savings account isn't cash, and none of the kinds
+is one. `thrift savings plan` is retirement, while another name with `thrift` and `savings` is a
+thrift's cash account, so it's `savings`. A form says it's a guess to check, and also names the
+kind, as its select shows it, when that kind leaves the account out of net worth. A bind form
+refused doesn't put the guess back in its row, which may be what the member rejected: only a
+provider's own hint is preselected there. Plaid's subtypes `529`, `education savings account`,
+`utma` and `ugma` become `kind_hint`s.
+
+**B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
+page for manual accounts (#49), and an effective date for `belongs_to`.

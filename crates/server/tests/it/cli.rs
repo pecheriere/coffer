@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::identity::{Actor, Role, Username, Via};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
@@ -337,6 +337,9 @@ async fn holding(store: &Store) -> AccountId {
         include_in_net_worth: true,
         include_in_forecast: true,
         created_at: SystemClock.now(),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     })
     .await
     .unwrap();

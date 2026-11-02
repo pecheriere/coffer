@@ -8,7 +8,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use coffer_domain::accounts::{AccountKind, AccountName, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClass};
 use coffer_domain::fx::{
     FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateObservation,
 };
@@ -380,6 +380,9 @@ async fn account_in(store: &Store, code: &str) -> AccountId {
         include_in_net_worth: true,
         include_in_forecast: true,
         created_at: at(0),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     })
     .await
     .unwrap();

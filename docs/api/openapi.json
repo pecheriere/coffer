@@ -375,7 +375,7 @@
           "accounts"
         ],
         "summary": "Changes an account.",
-        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. Needs `write` on the account.",
+        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. It also moves `belongs_to` to the new kind's default unless that was chosen, and `include_in_net_worth` and `include_in_forecast` go with it: both off when it moves away from `household`; when it moves back, each on unless this request names it `false`, and the beneficiary removed. Needs `write` on the account.",
         "operationId": "updateAccount",
         "parameters": [
           {
@@ -4242,7 +4242,7 @@
           "connections"
         ],
         "summary": "Creates an account for a provider account and binds it.",
-        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions and the balances reported meanwhile its history. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions and the balances reported meanwhile its history. With no `kind` it takes the provider's `kind_hint`, and without one is refused with a 422: `suggested_kind` is a guess from the name and is never applied. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "createAccountForProviderAccount",
         "parameters": [
           {
@@ -4370,7 +4370,7 @@
           "reports"
         ],
         "summary": "Net worth over time.",
-        "description": "What the household is worth, period by period, in the display currency.\n\nA point is the value on the last day of its period, or on the last day available when it says `partial`: `on` is that day and `period_start` the first day of the period inside the range. A week ends on Sunday. Each account's latest balance on or before `on` counts, so a balance carries forward until a newer one. A period where nothing counts is left out, and at most 1,000 periods are answered: a longer range is 422, whatever is stored. `through` is the last day with values: no later day, and no day after today, is a point.\n\n`total` is the sum of the counted accounts' amounts, each converted and rounded on its own, so every breakdown adds up to it. It is `null`, never a partial sum, when one of them has no amount: `unconverted` names the accounts, and a caution says why. A `by_liquidity` line is `null` the same way. `by_currency` is the native sum per currency, with no rate involved, so nothing is omitted; only an account with no value that day can't be in it.\n\nIn `accounts`, each account says whether it counts, its `first_on` (a jump that day is an account arriving, not money) and its `closed_on` (a closed account stops counting that day unless it still owes). Its `points` say the `balance` in its own currency, `balance_on`, the date of the snapshot that balance comes from, `balance_source`, the `amount` in the display currency and `rate_on`, the older of the dates of the rates used: a weekend reports Friday's.\n\n`status` says how far to trust it. `firm` is numbers with nothing to warn about. `provisional` is numbers with `cautions`. `unavailable` is `blockers`: `display_currency_not_set` (an admin has to choose one, and points still hold `by_currency`), `rebuilding` (no points until the values are rebuilt) or `no_counted_accounts` (not a net worth of zero).\n\nThe cautions: `rate_missing`, with a reason of `not_fetched_yet`, `not_published`, `fetch_failing`, `provider_off` or `none_that_early`; `rate_stale`, a rate more than a week older than its day, as for a discontinued currency; `amount_too_large`, a conversion that doesn't fit; `balance_stale`, an old balance on the latest point; `to_date_not_yet_filled`, later days not answered yet; `daily_value_missing`, an account with no value on a day after its first, which is a hole and not money leaving; `nothing_counted_after_last_point`, so the last point isn't the value now; `liability_balance_positive`, perhaps a wrong sign, added as it stands; and `closed_account_owing`, a debt still counting.\n\nNeeds `read`. **A token with account grants gets the sum of the accounts it can see at `balances`, and nothing marks it as partial**, since that would reveal that there are others. An agent holding such a token must not report the sum as the whole household's. Nothing in the answer depends on an account the token can't see, except that rates are stored once for the household: a currency the token sees has its rates as soon as anyone's use fetched them. Amounts are integer minor units. It writes nothing.",
+        "description": "What the household is worth, period by period, in the display currency.\n\nA point is the value on the last day of its period, or on the last day available when it says `partial`: `on` is that day and `period_start` the first day of the period inside the range. A week ends on Sunday. Each account's latest balance on or before `on` counts, so a balance carries forward until a newer one. A period where nothing counts is left out, and at most 1,000 periods are answered: a longer range is 422, whatever is stored. `through` is the last day with values: no later day, and no day after today, is a point.\n\n`total` is the sum of the counted accounts' amounts, each converted and rounded on its own, so every breakdown adds up to it. It is `null`, never a partial sum, when one of them has no amount: `unconverted` names the accounts, and a caution says why. A `by_liquidity` line is `null` the same way. `by_currency` is the native sum per currency, with no rate involved, so nothing is omitted; only an account with no value that day can't be in it.\n\nIn `accounts`, each account that is the household's says whether it counts, its `first_on` (a jump that day is an account arriving, not money) and its `closed_on` (a closed account stops counting that day unless it still owes). Its `points` say the `balance` in its own currency, `balance_on`, the date of the snapshot that balance comes from, `balance_source`, the `amount` in the display currency and `rate_on`, the older of the dates of the rates used: a weekend reports Friday's.\n\n`status` says how far to trust it. `firm` is numbers with nothing to warn about. `provisional` is numbers with `cautions`. `unavailable` is `blockers`: `display_currency_not_set` (an admin has to choose one, and points still hold `by_currency`), `rebuilding` (no points until the values are rebuilt) or `no_counted_accounts` (not a net worth of zero).\n\nThe cautions: `rate_missing`, with a reason of `not_fetched_yet`, `not_published`, `fetch_failing`, `provider_off` or `none_that_early`; `rate_stale`, a rate more than a week older than its day, as for a discontinued currency; `amount_too_large`, a conversion that doesn't fit; `balance_stale`, an old balance on the latest point; `to_date_not_yet_filled`, later days not answered yet; `daily_value_missing`, an account with no value on a day after its first, which is a hole and not money leaving; `nothing_counted_after_last_point`, so the last point isn't the value now; `liability_balance_positive`, perhaps a wrong sign, added as it stands; and `closed_account_owing`, a debt still counting.\n\n`buckets` holds the money that isn't the household's, in no number above: **nothing adds a bucket to `total`, or one bucket to another**, and nothing about one touches the household's `status`, `points`, `accounts`, `blockers` or `cautions`. There is one per `belongs_to` and exact `beneficiary`, so two spellings of a name are two buckets: `someone_else` before `given_away`, and within one no label (`beneficiary` is `null`) first, then labels by their bytes. Each is the same calculation over its own accounts, listed only there, all of them `counted` in that bucket, with its own `status`, `points`, `accounts`, `blockers` and `cautions`. There, `no_counted_accounts` means nothing in it has a value in this range. It answers from balances as they stand and whose money an account is now: moving an account moves its whole history. While `rebuilding`, `buckets` is empty.\n\nNeeds `read`. **A token with account grants gets the sum of the accounts it can see at `balances`, and nothing marks it as partial**, since that would reveal that there are others. An agent holding such a token must not report the sum as the whole household's. A bucket is made from those same accounts and sums them, unmarked: holding one of a child's two accounts, it sees a bucket of one. Nothing in the answer depends on an account the token can't see, except that rates are stored once for the household: a currency the token sees has its rates as soon as anyone's use fetched them. A sum too large to represent, in the household's money or a bucket's the token sees, refuses the whole report with 422. Amounts are integer minor units. It writes nothing.",
         "operationId": "getNetWorth",
         "parameters": [
           {
@@ -5879,6 +5879,9 @@
           "mortgage",
           "brokerage",
           "retirement",
+          "education",
+          "custodial",
+          "charitable",
           "equity_comp",
           "property",
           "vehicle",
@@ -5968,6 +5971,24 @@
         "type": "object",
         "description": "Changes to an account; absent (or `null`) fields stay as they are. The\ncurrency cannot change.",
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is, kept from then on whatever the kind. Moving away from `household`\nturns both flags off. Moving back turns on any this request doesn't name and removes\nthe beneficiary."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain\nspaces) removes it, since absent keeps it."
+          },
           "closed": {
             "type": [
               "boolean",
@@ -5979,19 +6000,21 @@
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "`true` is refused on an account that isn't the household's."
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "`true` is refused on an account that isn't the household's."
           },
           "kind": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "A new kind; a defaulted liquidity class follows it."
+                "description": "A new kind; a defaulted liquidity class and a defaulted `belongs_to` follow it, and\nthe flags with `belongs_to`."
               },
               {
                 "type": "null"
@@ -6105,7 +6128,7 @@
           },
           "counted": {
             "type": "boolean",
-            "description": "Whether it is included in net worth at all. A point says whether that day\ncounted."
+            "description": "Whether it is included in the sums this list sits beside at all, the household's or\nits bucket's and never both: true in a bucket is not a place in net worth. A point\nsays whether that day counted."
           },
           "currency": {
             "$ref": "#/components/schemas/Currency"
@@ -6166,9 +6189,27 @@
           "source",
           "closed",
           "latest_balance",
-          "created_at"
+          "created_at",
+          "belongs_to",
+          "belongs_to_overridden",
+          "beneficiary"
         ],
         "properties": {
+          "belongs_to": {
+            "$ref": "#/components/schemas/BelongsTo",
+            "description": "Whose money it is. It defaults from `kind` and follows a change of `kind` until it is\nchosen, then stays. An account that isn't `household` counts in neither net worth nor\nthe forecast."
+          },
+          "belongs_to_overridden": {
+            "type": "boolean",
+            "description": "Whether `belongs_to` was chosen rather than defaulted from `kind`. A defaulted one\nfollows a change of `kind`; a chosen one stays."
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't `household` is held for; `null` when it says nobody."
+          },
           "closed": {
             "type": "boolean"
           },
@@ -6543,6 +6584,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "BelongsTo": {
+        "type": "string",
+        "description": "Whose money an account holds, apart from what kind of account it is. It says how\ncoffer treats the money and is not a legal statement.",
+        "enum": [
+          "household",
+          "someone_else",
+          "given_away"
+        ]
       },
       "BindRequest": {
         "type": "object",
@@ -7184,15 +7234,38 @@
           },
           {
             "type": "object",
-            "description": "An item is hinted at an account that does not count. It is counted\nanyway, since overstating the need is the safe direction.",
+            "description": "One goal has spending linked to it on both the household's accounts, counted or not,\nand an account that isn't the household's. A contribution and the payment it funded would then both lower its need,\nand the data can't tell, so the number stays and stops being firm. Link the payment or\nthe contribution, never both. A finished goal raises nothing.",
+            "required": [
+              "goal",
+              "kind"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "goal_linked_both_sides"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An item is hinted at an account that does not count, and `effect` says what became\nof it.",
             "required": [
               "item",
               "account",
+              "effect",
               "kind"
             ],
             "properties": {
               "account": {
                 "$ref": "#/components/schemas/AccountId"
+              },
+              "effect": {
+                "$ref": "#/components/schemas/HintEffect"
               },
               "item": {
                 "$ref": "#/components/schemas/LineSource"
@@ -7469,7 +7542,7 @@
           },
           "excluded_inflows": {
             "$ref": "#/components/schemas/Money",
-            "description": "Planned inflows left out because `include_income` is off."
+            "description": "Planned inflows left out because `include_income` is off. Income expected in an account\nthat isn't the household's isn't among them, since turning it on wouldn't add it."
           },
           "floor": {
             "$ref": "#/components/schemas/Money"
@@ -7932,6 +8005,15 @@
           }
         }
       },
+      "HintEffect": {
+        "type": "string",
+        "description": "What became of an item hinted at an account that does not count.",
+        "enum": [
+          "still_needed",
+          "still_income",
+          "left_out"
+        ]
+      },
       "HouseholdSettings": {
         "type": "object",
         "description": "The household's settings: those of a forecast and the display currency.",
@@ -8098,7 +8180,7 @@
           },
           "counted": {
             "$ref": "#/components/schemas/Money",
-            "description": "What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow\nunless `include_income`."
+            "description": "What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow unless\n`include_income`, and always for one hinted at an account that isn't the household's."
           },
           "direction": {
             "$ref": "#/components/schemas/PlanDirection"
@@ -8412,7 +8494,7 @@
           },
           "inflows": {
             "$ref": "#/components/schemas/Money",
-            "description": "Planned inflows, whether or not `include_income` counts them."
+            "description": "Planned inflows, whether or not `include_income` counts them, but for one hinted at an\naccount that isn't the household's."
           },
           "items": {
             "type": "array",
@@ -8492,7 +8574,65 @@
             }
           }
         ],
-        "description": "Why there is no number to trust. `display_currency_not_set`: an admin has to choose\none, and points still hold their sums per currency. `rebuilding`: the daily values are\nbeing rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in\nthis range, which is not a net worth of zero."
+        "description": "Why there is no number to trust. `display_currency_not_set`: an admin has to choose\none, and points still hold their sums per currency. `rebuilding`: the daily values are\nbeing rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in\nthis range, which is not a net worth of zero; on a bucket, nothing in it has a value in this\nrange."
+      },
+      "NetWorthBucket": {
+        "type": "object",
+        "description": "One `belongs_to` and exact `beneficiary` among the visible accounts that aren't the\nhousehold's: the same calculation as the household's, over its own accounts alone. No\ntotal adds it to net worth or to another bucket.",
+        "required": [
+          "belongs_to",
+          "beneficiary",
+          "status",
+          "points",
+          "accounts",
+          "blockers",
+          "cautions"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSeries"
+            },
+            "description": "Every visible account in this bucket, and in no other list."
+          },
+          "belongs_to": {
+            "$ref": "#/components/schemas/BelongsTo",
+            "description": "Whose money it is: never `household`."
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` when no name was given. Two spellings of a name are two buckets."
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthBlocker"
+            },
+            "description": "Why this bucket has no number; not empty exactly when `status` is `unavailable`."
+          },
+          "cautions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthCaution"
+            },
+            "description": "What keeps this bucket's numbers but stops them being firm."
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthPoint"
+            },
+            "description": "One per period holding a balance of this bucket or a missing value, oldest first."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NetWorthStatus",
+            "description": "How far to trust this bucket's numbers: its own, whatever the household's is."
+          }
+        }
       },
       "NetWorthCaution": {
         "oneOf": [
@@ -8833,7 +8973,8 @@
           "points",
           "accounts",
           "blockers",
-          "cautions"
+          "cautions",
+          "buckets"
         ],
         "properties": {
           "accounts": {
@@ -8841,7 +8982,7 @@
             "items": {
               "$ref": "#/components/schemas/AccountSeries"
             },
-            "description": "Every visible account, with whether it counts."
+            "description": "Every visible account that is the household's, with whether it counts."
           },
           "blockers": {
             "type": "array",
@@ -8849,6 +8990,13 @@
               "$ref": "#/components/schemas/NetWorthBlocker"
             },
             "description": "Why there is no number; not empty exactly when `status` is `unavailable`."
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthBucket"
+            },
+            "description": "Money that isn't the household's, in no number above and added to nothing:\n`someone_else` before `given_away`, and within one no label first, then labels by\ntheir bytes."
           },
           "cautions": {
             "type": "array",
@@ -8920,6 +9068,24 @@
           "currency"
         ],
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,\n`given_away` for `charitable`, otherwise `household`). A value given here stays over a\nlater change of kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain spaces) is\nthe same as absent."
+          },
           "currency": {
             "$ref": "#/components/schemas/Currency",
             "description": "Fixed for the account's life."
@@ -8929,14 +9095,14 @@
               "boolean",
               "null"
             ],
-            "description": "Count the account in the forecast (default `true`)."
+            "description": "Count the account in the forecast (default true, and always false for an account that isn't the household's)"
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in net worth (default `true`)."
+            "description": "Count the account in net worth (default true, and always false for an account that isn't the household's)"
           },
           "kind": {
             "$ref": "#/components/schemas/AccountKind"
@@ -8974,25 +9140,43 @@
         "type": "object",
         "description": "An account to create for a provider account.",
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,\n`given_away` for `charitable`, otherwise `household`). A value given here stays over a\nlater change of kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain spaces) is\nthe same as absent."
+          },
           "include_in_forecast": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in the forecast (default `true`)."
+            "description": "Count the account in the forecast (default true, and always false for an account that isn't the household's)"
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in net worth (default `true`)."
+            "description": "Count the account in net worth (default true, and always false for an account that isn't the household's)"
           },
           "kind": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "By default the kind the provider suggests; required when it suggests\nnone."
+                "description": "By default `kind_hint`, the kind the provider reports; required when it reports none.\n`suggested_kind` is never the default: to use it, ask a member first, then send it here."
               },
               {
                 "type": "null"
@@ -9096,10 +9280,28 @@
         "type": "string",
         "description": "Why an account's balance is not part of the cash available.",
         "enum": [
+          "not_household",
           "excluded_by_flag",
           "closed",
           "not_cash"
         ]
+      },
+      "NotHouseholdRow": {
+        "type": "object",
+        "description": "What categorized money did on accounts that aren't the household's, in one month and\ncurrency.",
+        "required": [
+          "month",
+          "net"
+        ],
+        "properties": {
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "net": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Net, negative for money out: a grant is negative, money coming in positive."
+          }
+        }
       },
       "OpenApiDocument": {
         "type": "object",
@@ -9180,6 +9382,7 @@
           "rows",
           "goals",
           "uncategorized",
+          "not_the_households",
           "settled",
           "rollovers",
           "partial_months"
@@ -9191,6 +9394,13 @@
               "$ref": "#/components/schemas/GoalRow"
             },
             "description": "Ordered by month and goal."
+          },
+          "not_the_households": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotHouseholdRow"
+            },
+            "description": "Categorized money on accounts that aren't the household's. Never in `actual`. Ordered\nby month and currency, the reported months only."
           },
           "partial_months": {
             "type": "array",
@@ -9752,6 +9962,7 @@
           "institution",
           "currency",
           "kind_hint",
+          "suggested_kind",
           "account",
           "balance",
           "error",
@@ -9807,7 +10018,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "The kind the provider suggests, if any."
+                "description": "The kind the provider reports, if any."
               },
               {
                 "type": "null"
@@ -9820,6 +10031,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "suggested_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountKind",
+                "description": "A guess from the provider's name. Never applied: send `kind`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

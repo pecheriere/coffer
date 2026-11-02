@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use coffer_domain::accounts::LiquidityClass;
+use coffer_domain::accounts::{BelongsTo, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
@@ -110,6 +110,34 @@ pub(super) fn blocker_sentence(blocker: NetWorthBlocker) -> &'static str {
     }
 }
 
+/// Why a bucket has no number. Its accounts never count towards net worth, so that blocker's
+/// usual words would say nothing about it, and the sums are promised only if it has some.
+pub(super) fn bucket_blocker_sentence(blocker: NetWorthBlocker, has_sums: bool) -> &'static str {
+    match blocker {
+        NetWorthBlocker::NoCountedAccounts => {
+            "None of these accounts has a value in this range, which is not a balance of zero."
+        }
+        NetWorthBlocker::DisplayCurrencyNotSet if !has_sums => {
+            "No display currency is chosen, so there is no single total."
+        }
+        NetWorthBlocker::DisplayCurrencyNotSet | NetWorthBlocker::Rebuilding => {
+            blocker_sentence(blocker)
+        }
+    }
+}
+
+/// A bucket's heading. A report's type doesn't rule out `Household`, which never has a bucket,
+/// so it reads as what it is rather than panicking on a page.
+pub(super) fn bucket_heading(belongs_to: BelongsTo, beneficiary: Option<&str>) -> String {
+    match (belongs_to, beneficiary) {
+        (BelongsTo::Household, _) => "The household's".to_owned(),
+        (BelongsTo::SomeoneElse, Some(label)) => format!("Held for {label}"),
+        (BelongsTo::SomeoneElse, None) => "Held for someone else".to_owned(),
+        (BelongsTo::GivenAway, Some(label)) => format!("Given away: {label}"),
+        (BelongsTo::GivenAway, None) => "Given away".to_owned(),
+    }
+}
+
 fn rate_reason(reason: RateMissingReason) -> &'static str {
     match reason {
         RateMissingReason::NotFetchedYet => "coffer hasn't fetched its rates yet",
@@ -120,8 +148,68 @@ fn rate_reason(reason: RateMissingReason) -> &'static str {
     }
 }
 
+/// How a caution speaks of the money: counted in net worth, or in a bucket, which counts in
+/// nothing and may have no total to speak of.
+struct CautionWords {
+    stands: &'static str,
+    stood: &'static str,
+    keeps: &'static str,
+    last: &'static str,
+    nothing_open: &'static str,
+    all_closed: &'static str,
+    from_before: &'static str,
+    out_of_date: &'static str,
+}
+
+const IN_NET_WORTH: CautionWords = CautionWords {
+    stands: "it counts as it stands",
+    stood: "that counted as it stood",
+    keeps: "which keeps counting",
+    last: "when last counted",
+    nothing_open: "Nothing counts",
+    all_closed: "every account counted by then has closed",
+    from_before: "The number here is",
+    out_of_date: "the total",
+};
+
+const IN_A_BUCKET: CautionWords = CautionWords {
+    stands: "it's in this bucket's figures as it stands",
+    stood: "that was in this bucket's figures as it stood",
+    keeps: "which stays in this bucket's figures",
+    last: "when last in this bucket's figures",
+    nothing_open: "This bucket has no open account",
+    all_closed: "every account in it had closed by then",
+    from_before: "The number here is",
+    out_of_date: "the total",
+};
+
+const IN_A_BUCKET_WITH_NO_TOTAL: CautionWords = CautionWords {
+    from_before: "The figures here are",
+    out_of_date: "the figures",
+    ..IN_A_BUCKET
+};
+
 /// What might change the numbers.
 pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> String {
+    worded_caution(caution, names, &IN_NET_WORTH)
+}
+
+/// What might change a bucket's numbers, in words true of money in no net worth, and of a
+/// bucket showing no total if it has none.
+pub(super) fn bucket_caution_sentence(
+    caution: &NetWorthCaution,
+    names: &Names<'_>,
+    has_a_total: bool,
+) -> String {
+    let words = if has_a_total {
+        &IN_A_BUCKET
+    } else {
+        &IN_A_BUCKET_WITH_NO_TOTAL
+    };
+    worded_caution(caution, names, words)
+}
+
+fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &CautionWords) -> String {
     match caution {
         NetWorthCaution::RateMissing {
             currency,
@@ -157,10 +245,11 @@ pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> 
             on,
             age_days,
         } => format!(
-            "The balance of {} is {} old, from {}, so the total may be out of date.",
+            "The balance of {} is {} old, from {}, so {} may be out of date.",
             names.account(*account),
             days(*age_days),
             day(*on),
+            words.out_of_date,
         ),
         NetWorthCaution::ToDateNotYetFilled { through } => format!(
             "coffer has worked out values up to {}, so later days aren't shown yet.",
@@ -177,51 +266,64 @@ pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> 
             stretch(*first_on, *last_on),
         ),
         NetWorthCaution::NothingCountedAfterLastPoint { from, to } => format!(
-            "Nothing counts from {} to {}, since every account counted by then has closed. The \
-             number here is from before that, not the value now.",
-            day(*from),
-            day(*to),
+            "{} {}, since {}. {} from before that, not the value now.",
+            words.nothing_open,
+            stretch(*from, *to),
+            words.all_closed,
+            words.from_before,
         ),
         NetWorthCaution::LiabilityBalancePositive { account, balance } => {
-            positive_liability_sentence(*account, *balance, names)
+            positive_liability_sentence(*account, *balance, names, words)
         }
         NetWorthCaution::ClosedAccountOwing { account, balance } => {
-            closed_owing_sentence(*account, *balance, names)
+            closed_owing_sentence(*account, *balance, names, words)
         }
     }
 }
 
 /// A caution's `balance` is from the last point it held, so it's said in the present only
 /// if the latest point still shows it.
-fn positive_liability_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+fn positive_liability_sentence(
+    account: AccountId,
+    balance: Money,
+    names: &Names<'_>,
+    words: &CautionWords,
+) -> String {
     let in_hand = |point: &AccountPoint| point.balance.minor_units > 0;
     let name = names.account_first(account);
     let amount = magnitude(balance);
     if names.holds_now(account, in_hand) {
         format!(
             "{name} is a card or loan, but shows {amount} in hand rather than owed. It may have \
-             been entered with the wrong sign, and it counts as it stands."
+             been entered with the wrong sign, and {}.",
+            words.stands,
         )
     } else {
         format!(
             "{name} showed {amount} in hand{}, though it is a card or loan. It may have been \
-             entered with the wrong sign, and that counted as it stood.",
+             entered with the wrong sign, and {}.",
             on_day(names.last_held(account, in_hand)),
+            words.stood,
         )
     }
 }
 
-fn closed_owing_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+fn closed_owing_sentence(
+    account: AccountId,
+    balance: Money,
+    names: &Names<'_>,
+    words: &CautionWords,
+) -> String {
     let owing = |point: &AccountPoint| point.balance.minor_units < 0;
     let name = names.account_first(account);
     let amount = magnitude(balance);
     if names.holds_now(account, owing) {
-        format!("{name} is closed but still owes {amount}, which keeps counting.")
+        format!("{name} is closed but still owes {amount}, {}.", words.keeps)
     } else {
         let when = names
             .last_held(account, owing)
             .map_or_else(String::new, |date| format!(", on {}", day(date)));
-        format!("{name} is closed and owed {amount} when last counted{when}.")
+        format!("{name} is closed and owed {amount} {}{when}.", words.last)
     }
 }
 
@@ -255,12 +357,16 @@ pub(super) fn liquidity_name(class: LiquidityClass) -> &'static str {
 mod tests {
     use std::collections::BTreeSet;
 
+    use coffer_domain::accounts::BelongsTo;
     use coffer_domain::ids::AccountId;
     use coffer_domain::money::{Currency, Money};
     use coffer_domain::net_worth::{NetWorthBlocker, NetWorthCaution, RateMissingReason};
     use jiff::civil::{Date, date};
 
-    use super::{Names, blocker_sentence, caution_sentence};
+    use super::{
+        Names, blocker_sentence, bucket_blocker_sentence, bucket_caution_sentence, bucket_heading,
+        caution_sentence,
+    };
     use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
 
     const ON: Date = date(2026, 11, 2);
@@ -345,6 +451,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn each_blocker_has_words_for_a_bucket() {
+        let kinds = schema_kinds::<NetWorthBlocker>();
+        for blocker in blockers() {
+            for has_sums in [true, false] {
+                assert_worded(bucket_blocker_sentence(blocker, has_sums), &kinds);
+            }
+        }
+        assert!(
+            !bucket_blocker_sentence(NetWorthBlocker::NoCountedAccounts, true)
+                .contains("net worth")
+        );
+    }
+
+    /// Whatever a bucket's caution says, it never says the money counts.
+    #[test]
+    fn no_caution_says_a_bucket_counts() {
+        let kinds = schema_kinds::<NetWorthCaution>();
+        let names = Names::of_accounts(&[], None);
+        for caution in &cautions() {
+            for has_a_total in [true, false] {
+                let sentence = bucket_caution_sentence(caution, &names, has_a_total);
+                assert_worded(&sentence, &kinds);
+                assert!(!sentence.replace("account", "").contains("count"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_bucket_is_headed_by_whose_it_is() {
+        for (belongs_to, label, heading) in [
+            (BelongsTo::SomeoneElse, Some("Child A"), "Held for Child A"),
+            (BelongsTo::SomeoneElse, None, "Held for someone else"),
+            (BelongsTo::GivenAway, None, "Given away"),
+            (
+                BelongsTo::GivenAway,
+                Some("Family fund"),
+                "Given away: Family fund",
+            ),
+            (BelongsTo::Household, None, "The household's"),
+            (BelongsTo::Household, Some("Child A"), "The household's"),
+        ] {
+            assert_eq!(bucket_heading(belongs_to, label), heading);
+        }
+    }
+
     /// Reasons inside one kind say different things, so one can't be left as another's.
     #[test]
     fn each_sample_says_something_different() {
@@ -384,5 +536,20 @@ mod tests {
             &Names::of_accounts(&[], None),
         );
         assert!(sentence.starts_with("USD can't be converted on 2 November 2026:"));
+    }
+
+    /// Nothing counted for a single day is said of that day, of the household and of a bucket.
+    #[test]
+    fn nothing_counted_for_a_single_day_reads_as_one() {
+        let caution = NetWorthCaution::NothingCountedAfterLastPoint { from: ON, to: ON };
+        let names = Names::of_accounts(&[], None);
+
+        assert!(
+            caution_sentence(&caution, &names).starts_with("Nothing counts on 2 November 2026,")
+        );
+        assert!(
+            bucket_caution_sentence(&caution, &names, true)
+                .starts_with("This bucket has no open account on 2 November 2026,")
+        );
     }
 }

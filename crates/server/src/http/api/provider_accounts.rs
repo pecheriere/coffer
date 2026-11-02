@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use coffer_domain::accounts::{AccountKind, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, ProviderAccountId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -14,6 +14,7 @@ use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
+use crate::ledger::accounts::assert_no_debug;
 use crate::sync::connections::{LinkedAccountView, NewLinkedAccountInput, ProviderAccountView};
 
 /// The provider accounts the token may see.
@@ -49,22 +50,32 @@ pub struct BindRequest {
 }
 
 /// An account to create for a provider account.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewLinkedAccountRequest {
     /// 1 to 100 characters, without control characters; by default the
     /// provider account's name.
     pub name: Option<String>,
-    /// By default the kind the provider suggests; required when it suggests
-    /// none.
+    /// By default `kind_hint`, the kind the provider reports; required when it reports none.
+    /// `suggested_kind` is never the default: to use it, ask a member first, then send it here.
     pub kind: Option<AccountKind>,
     /// A chosen liquidity class; by default the kind's.
     pub liquidity: Option<LiquidityClass>,
-    /// Count the account in net worth (default `true`).
+    /// Count the account in net worth (default true, and always false for an account that isn't the household's)
     pub include_in_net_worth: Option<bool>,
-    /// Count the account in the forecast (default `true`).
+    /// Count the account in the forecast (default true, and always false for an account that isn't the household's)
     pub include_in_forecast: Option<bool>,
+    /// Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,
+    /// `given_away` for `charitable`, otherwise `household`). A value given here stays over a
+    /// later change of kind.
+    pub belongs_to: Option<BelongsTo>,
+    /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
+    /// something visible and no control, format or separator characters. `""` (or only plain spaces) is
+    /// the same as absent.
+    pub beneficiary: Option<String>,
 }
+
+assert_no_debug!(NewLinkedAccountRequest);
 
 /// The provider accounts the token may see.
 #[utoipa::path(
@@ -142,7 +153,9 @@ pub(super) async fn bind(
     description = "Creates an account in the provider account's currency, exactly as \
                    `createAccount` does, and binds the provider account to it, in one step. \
                    The records synced while it was unbound become the account's transactions \
-                   and the balances reported meanwhile its history. \
+                   and the balances reported meanwhile its history. With no `kind` it takes the \
+                   provider's `kind_hint`, and without one is refused with a 422: \
+                   `suggested_kind` is a guess from the name and is never applied. \
                    Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),
@@ -167,8 +180,10 @@ pub(super) async fn create_account(
         name: body.name,
         kind: body.kind,
         liquidity: body.liquidity,
-        include_in_net_worth: body.include_in_net_worth.unwrap_or(true),
-        include_in_forecast: body.include_in_forecast.unwrap_or(true),
+        include_in_net_worth: body.include_in_net_worth,
+        include_in_forecast: body.include_in_forecast,
+        belongs_to: body.belongs_to,
+        beneficiary: body.beneficiary,
     };
     let linked = state
         .sync

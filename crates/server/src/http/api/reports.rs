@@ -88,7 +88,8 @@ pub(super) async fn plan_vs_actual(
                    says why. A `by_liquidity` line is `null` the same way. `by_currency` is the \
                    native sum per currency, with no rate involved, so nothing is omitted; only an \
                    account with no value that day can't be in it.\n\n\
-                   In `accounts`, each account says whether it counts, its `first_on` (a jump that \
+                   In `accounts`, each account that is the household's says whether it counts, its \
+                   `first_on` (a jump that \
                    day is an account arriving, not money) and its `closed_on` (a closed account \
                    stops counting that day unless it still owes). Its `points` say the `balance` in \
                    its own currency, `balance_on`, the date of the snapshot that balance comes \
@@ -109,13 +110,28 @@ pub(super) async fn plan_vs_actual(
                    `nothing_counted_after_last_point`, so the last point isn't the value now; \
                    `liability_balance_positive`, perhaps a wrong sign, added as it stands; and \
                    `closed_account_owing`, a debt still counting.\n\n\
+                   `buckets` holds the money that isn't the household's, in no number above: **nothing \
+                   adds a bucket to `total`, or one bucket to another**, and nothing about one \
+                   touches the household's `status`, `points`, `accounts`, `blockers` or `cautions`. \
+                   There is one per `belongs_to` and exact `beneficiary`, so two spellings of a name \
+                   are two buckets: `someone_else` before `given_away`, and within one no label \
+                   (`beneficiary` is `null`) first, then labels by their bytes. Each is the same \
+                   calculation over its own accounts, listed only there, all of them `counted` in \
+                   that bucket, with its own `status`, `points`, `accounts`, `blockers` and \
+                   `cautions`. There, `no_counted_accounts` means nothing in it has a value in this \
+                   range. It answers from balances as they stand and whose money an account is now: \
+                   moving an account moves its whole history. While `rebuilding`, `buckets` is \
+                   empty.\n\n\
                    Needs `read`. **A token with account grants gets the sum of the accounts it can \
                    see at `balances`, and nothing marks it as partial**, since that would reveal \
                    that there are others. An agent holding such a token must not report the sum as \
-                   the whole household's. Nothing in the answer depends on an account the token \
+                   the whole household's. A bucket is made from those same accounts and sums them, \
+                   unmarked: holding one of a child's two accounts, it sees a bucket of one. Nothing \
+                   in the answer depends on an account the token \
                    can't see, except that rates are stored once for the household: a currency the \
-                   token sees has its rates as soon as anyone's use fetched them. Amounts are \
-                   integer minor units. It writes nothing.",
+                   token sees has its rates as soon as anyone's use fetched them. A sum too large to \
+                   represent, in the household's money or a bucket's the token sees, refuses the \
+                   whole report with 422. Amounts are integer minor units. It writes nothing.",
     security(("bearer" = [])),
     params(NetWorthQuery),
     responses(

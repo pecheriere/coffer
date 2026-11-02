@@ -10,6 +10,7 @@
 )]
 
 mod access;
+mod bucket_channels;
 mod endpoints;
 mod fx_channels;
 mod hidden_accounts;
@@ -120,8 +121,10 @@ impl World {
                     kind: AccountKind::Checking,
                     currency: Currency::parse("USD").unwrap(),
                     liquidity: None,
-                    include_in_net_worth: true,
-                    include_in_forecast: true,
+                    include_in_net_worth: Some(true),
+                    include_in_forecast: Some(true),
+                    belongs_to: None,
+                    beneficiary: None,
                     opening_balance: None,
                 },
                 None,

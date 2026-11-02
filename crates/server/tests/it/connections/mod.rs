@@ -9,10 +9,12 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod authorize_create;
 mod binding;
 mod credentials;
 mod kept_balances;
 mod removal;
+mod suggestion;
 mod sync_limits;
 
 use axum::body::Body;
@@ -116,8 +118,10 @@ impl World {
                     kind: AccountKind::Checking,
                     currency: Currency::parse(currency).unwrap(),
                     liquidity: None,
-                    include_in_net_worth: true,
-                    include_in_forecast: true,
+                    include_in_net_worth: Some(true),
+                    include_in_forecast: Some(true),
+                    belongs_to: None,
+                    beneficiary: None,
                     opening_balance: None,
                 },
                 None,

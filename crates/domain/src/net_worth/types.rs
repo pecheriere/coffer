@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::daily::DailyValue;
 use super::periods::NetWorthInterval;
-use crate::accounts::{BalanceSource, LiquidityClass};
+use crate::accounts::{BalanceSource, BelongsTo, LiquidityClass};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::transactions::string_enum;
@@ -76,7 +76,7 @@ pub struct NetWorthInput {
 
 /// One visible account, as it stands now: these apply at read, so changing one
 /// needs no rebuild.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ReportAccount {
     pub id: AccountId,
     pub name: String,
@@ -85,6 +85,24 @@ pub struct ReportAccount {
     pub include_in_net_worth: bool,
     /// The household's day it was closed.
     pub closed_on: Option<Date>,
+    /// Whose money it is: anything but `household` puts it in a bucket.
+    pub belongs_to: BelongsTo,
+    /// Who or what it is held for, which names its bucket.
+    pub beneficiary: Option<String>,
+}
+
+/// Leaves out `beneficiary`, which may be a child's name, and the account's `name`.
+impl std::fmt::Debug for ReportAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReportAccount")
+            .field("id", &self.id)
+            .field("currency", &self.currency)
+            .field("liquidity", &self.liquidity)
+            .field("include_in_net_worth", &self.include_in_net_worth)
+            .field("closed_on", &self.closed_on)
+            .field("belongs_to", &self.belongs_to)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a currency's rates may be missing. `reason` is `None` when it has rates,
@@ -131,12 +149,52 @@ pub struct NetWorthReport {
     pub status: NetWorthStatus,
     /// One per period holding a counted balance or a missing value, oldest first.
     pub points: Vec<NetWorthPoint>,
-    /// Every visible account, with whether it counts.
+    /// Every visible account that is the household's, with whether it counts.
     pub accounts: Vec<AccountSeries>,
     /// Why there is no number; not empty exactly when `status` is `unavailable`.
     pub blockers: Vec<NetWorthBlocker>,
     /// What keeps the numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
+    /// Money that isn't the household's, in no number above and added to nothing:
+    /// `someone_else` before `given_away`, and within one no label first, then labels by
+    /// their bytes.
+    pub buckets: Vec<NetWorthBucket>,
+}
+
+/// One `belongs_to` and exact `beneficiary` among the visible accounts that aren't the
+/// household's: the same calculation as the household's, over its own accounts alone. No
+/// total adds it to net worth or to another bucket.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct NetWorthBucket {
+    /// Whose money it is: never `household`.
+    pub belongs_to: BelongsTo,
+    /// `null` when no name was given. Two spellings of a name are two buckets.
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub beneficiary: Option<String>,
+    /// How far to trust this bucket's numbers: its own, whatever the household's is.
+    pub status: NetWorthStatus,
+    /// One per period holding a balance of this bucket or a missing value, oldest first.
+    pub points: Vec<NetWorthPoint>,
+    /// Every visible account in this bucket, and in no other list.
+    pub accounts: Vec<AccountSeries>,
+    /// Why this bucket has no number; not empty exactly when `status` is `unavailable`.
+    pub blockers: Vec<NetWorthBlocker>,
+    /// What keeps this bucket's numbers but stops them being firm.
+    pub cautions: Vec<NetWorthCaution>,
+}
+
+/// Leaves out `beneficiary`, which may be a child's name, and its `accounts`.
+impl std::fmt::Debug for NetWorthBucket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetWorthBucket")
+            .field("belongs_to", &self.belongs_to)
+            .field("status", &self.status)
+            .field("points", &self.points)
+            .field("blockers", &self.blockers)
+            .field("cautions", &self.cautions)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How far to trust the numbers.
@@ -194,8 +252,9 @@ pub struct AccountSeries {
     pub name: String,
     pub liquidity: LiquidityClass,
     pub currency: Currency,
-    /// Whether it is included in net worth at all. A point says whether that day
-    /// counted.
+    /// Whether it is included in the sums this list sits beside at all, the household's or
+    /// its bucket's and never both: true in a bucket is not a place in net worth. A point
+    /// says whether that day counted.
     pub counted: bool,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub not_counted: Option<NotCountedReason>,
@@ -246,7 +305,8 @@ pub struct AccountPoint {
 /// Why there is no number to trust. `display_currency_not_set`: an admin has to choose
 /// one, and points still hold their sums per currency. `rebuilding`: the daily values are
 /// being rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in
-/// this range, which is not a net worth of zero.
+/// this range, which is not a net worth of zero; on a bucket, nothing in it has a value in this
+/// range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]

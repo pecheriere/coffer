@@ -317,6 +317,41 @@ async fn a_path_outside_the_table_logs_other_and_withholds_the_message() {
     );
 }
 
+/// `/connections` has a box that may hold a child's name, and a rejection names no script, so
+/// nothing shows the text came from coffer's own code.
+#[tokio::test]
+async fn a_rejection_from_the_connections_page_withholds_its_text() {
+    let (_server, mut browser) = browser().await;
+    let mut body = script_report("Child Marked Zq");
+    body["kind"] = json!("unhandled_rejection");
+    body["page"] = json!("/connections");
+    let log = script_events(&mut browser, &body).await;
+    assert!(log.contains("page=\"/connections\""), "{log}");
+    assert!(log.contains("client_message=\"[withheld]\""), "{log}");
+    assert!(!log.contains("Marked"), "{log}");
+}
+
+#[tokio::test]
+async fn a_rejection_from_another_listed_page_keeps_its_text() {
+    let (_server, mut browser) = browser().await;
+    let mut body = script_report("rejection-kept");
+    body["kind"] = json!("unhandled_rejection");
+    body["page"] = json!("/account");
+    let log = script_events(&mut browser, &body).await;
+    assert!(log.contains("client_message=\"rejection-kept\""), "{log}");
+}
+
+#[tokio::test]
+async fn an_error_of_coffer_s_own_from_the_connections_page_keeps_its_text() {
+    let (_server, mut browser) = browser().await;
+    let mut body = script_report("own-error-kept");
+    body["kind"] = json!("error");
+    body["script"] = json!(JS_COFFER_JS.url);
+    body["page"] = json!("/connections");
+    let log = script_events(&mut browser, &body).await;
+    assert!(log.contains("client_message=\"own-error-kept\""), "{log}");
+}
+
 /// The forecast page shows amounts. It is not in the table, so a message from it
 /// stays out of the log.
 #[tokio::test]

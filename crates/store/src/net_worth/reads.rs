@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 
+use coffer_domain::accounts::BelongsTo;
 use coffer_domain::fx::FxCoverage;
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
@@ -28,8 +29,8 @@ pub struct NetWorthData {
     pub stale_after_days: u16,
     /// The accounts in scope, closed ones too, oldest first.
     pub accounts: Vec<AccountRecord>,
-    /// The rows of the included accounts on each period's last day, by account and
-    /// day, up to the last day filled.
+    /// The rows on each period's last day, by account and day, up to the last day filled,
+    /// of the accounts a report sums: those included, and every one in a bucket.
     pub rows: Vec<DailyValue>,
     /// The first day each account in scope has a value, of those that have one by
     /// the last day filled. It comes from the snapshots, the source of truth, so
@@ -209,7 +210,9 @@ impl Store {
             Some(through) => {
                 let included: Vec<AccountId> = accounts
                     .iter()
-                    .filter(|one| one.include_in_net_worth)
+                    .filter(|one| {
+                        one.include_in_net_worth || one.belongs_to != BelongsTo::Household
+                    })
                     .map(|one| one.id)
                     .collect();
                 let every: Vec<AccountId> = accounts.iter().map(|one| one.id).collect();

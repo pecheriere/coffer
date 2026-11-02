@@ -7,7 +7,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use coffer_domain::accounts::{AccountKind, AccountName, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
@@ -76,6 +76,9 @@ pub(crate) async fn world() -> World {
             include_in_net_worth: true,
             include_in_forecast: true,
             created_at: at(0),
+            belongs_to: BelongsTo::Household,
+            belongs_to_overridden: false,
+            beneficiary: None,
         })
         .await
         .unwrap();

@@ -75,8 +75,10 @@ async fn every_signed_in_page_counts_the_accounts_to_set_up() {
                 name: None,
                 kind: Some(AccountKind::CreditCard),
                 liquidity: None,
-                include_in_net_worth: true,
-                include_in_forecast: true,
+                include_in_net_worth: Some(true),
+                include_in_forecast: Some(true),
+                belongs_to: None,
+                beneficiary: None,
             },
         )
         .await
@@ -156,16 +158,9 @@ async fn the_first_sync_walks_through_the_accounts_it_found() {
     assert!(page.body.contains("Until each is bound"));
     assert!(
         page.body
-            .contains("Checking and savings count as cash for planning."),
+            .contains("Checking and savings count as cash in the forecast."),
         "the kind's effect is explained"
     );
-    let select = page.between("name=\"kind\"", "</select>");
-    assert!(
-        select.contains("<option value=\"\" selected disabled>Choose a kind</option>"),
-        "without a hint the kind is a choice to make, not a default"
-    );
-    assert!(!select.contains("<option value=\"checking\" selected"));
-
     world
         .admin
         .post_form(
