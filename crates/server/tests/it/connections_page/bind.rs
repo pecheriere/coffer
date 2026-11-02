@@ -461,11 +461,19 @@ async fn csrf_is_required_to_bind() {
         (bind_path(checking.id), vec![("account", joint.as_str())]),
     ] {
         let missing = world.admin.post_form(&path, &fields).await;
-        assert_eq!(missing.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            missing.status,
+            StatusCode::FORBIDDEN,
+            "a form without its CSRF token is refused"
+        );
         let mut wrong = fields.clone();
         wrong.push(("csrf", "AAAA"));
         let refused = world.admin.post_form(&path, &wrong).await;
-        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            refused.status,
+            StatusCode::FORBIDDEN,
+            "a form with a wrong CSRF token is refused"
+        );
     }
 
     assert_eq!(world.provider_account("Checking").await.account, None);
