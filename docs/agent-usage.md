@@ -86,7 +86,8 @@ token's access.
   (in `GET /api/v1/provider-accounts` and in connections) only with `all`
   at `transactions`; bound ones follow their account. A connection's
   `last_error` could name any account it serves, so without `all` at
-  `transactions` it is `null`; its `status` still shows the problem. Using
+  `transactions` it is `null`, and so is `held_cursor` (below); its `status`
+  still shows the problem. Using
   an existing category on a split needs only `write` on the transaction's
   account.
 
@@ -295,8 +296,24 @@ for a sync.
 - `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
   `status` (`active`, `error`, `reauth_required` or `removed`),
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
-  `next_sync_at` and the provider accounts the token may see. Credentials
-  are never returned.
+  `next_sync_at`, `held_cursor` and the provider accounts the token may see.
+  Credentials are never returned.
+- `held_cursor` appears on the connection list only (the responses to
+  creating or reconnecting a connection always have `null`). It is `null`, or
+  says a Plaid sync cursor is held: `text` (fixed), `provider_accounts` (the
+  ids of the provider accounts whose records keep failing to store),
+  `records` (how many records the last fetch could not store for them),
+  `release_pending` (a member asked; a sync moves the cursor as soon as it
+  can, which may not be the next one) and `release_withdrawn` (a sync took the
+  request back because what is wrong with an account, or how many records it
+  has, changed; nothing was passed, and a member has to ask again). It appears after three syncs in a row
+  left the cursor in place because of one account, and never for a removed
+  connection. While it is held, each sync fetches those records again, and the account's own
+  `error` says why. Telling the owner is the useful step: letting the cursor
+  move on gives up the records that still fail to store for good (coffer only
+  counts them as skipped and audits the count), so it is a button on the
+  Connections page that needs a passkey session of the connection's owner or
+  an admin. No API call and no agent token, whatever its scope, can do it.
 - Plaid connections appear in `GET /api/v1/connections` like any other
   (`provider` is `plaid`), when the server is configured for Plaid. Connecting
   one is a browser step: the member logs in to the bank through Plaid Link

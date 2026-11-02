@@ -1,8 +1,8 @@
 use secrecy::{ExposeSecret as _, SecretString};
 
 use super::{
-    AccessTokenFields, AccountsAnswer, MAX_ACCOUNTS, PlaidClient, PlaidError, PlaidRequest,
-    PlaidTransaction, code_or_unknown, read,
+    AccessTokenFields, AccountsAnswer, MAX_ACCOUNTS, PlaidAccount, PlaidClient, PlaidError,
+    PlaidRequest, PlaidTransaction, RawSyncPage, SyncPage, code_or_unknown, read,
 };
 use crate::config::{PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, EgressError, HostAllowList};
@@ -131,6 +131,52 @@ fn ids_are_limited_in_characters() {
         Some(longest),
         "a reference at the limit is kept"
     );
+}
+
+/// One rule for the ids of accounts: 1 to the limit, without control
+/// characters, wherever an account id is read.
+#[test]
+fn account_ids_follow_one_validity_rule() {
+    let transaction = |account: &str| {
+        PlaidTransaction::parse(&format!(
+            r#"{{"transaction_id":"t","account_id":"{account}","amount":1,
+                "date":"2027-01-10","name":"n","pending":false}}"#
+        ))
+    };
+    let removed = |account: &str| {
+        let page = format!(
+            r#"{{"added":[],"modified":[],"removed":[{{"transaction_id":"t","account_id":"{account}"}}],
+                "next_cursor":"c","has_more":false}}"#
+        );
+        read::<RawSyncPage<'_>>(page.as_bytes())
+            .map(|raw| SyncPage::from_raw(raw, 0))
+            .unwrap()
+    };
+    let account = |id: &str| {
+        PlaidAccount::parse(&format!(
+            r#"{{"account_id":"{id}","name":"n","type":"depository",
+                "balances":{{"current":1}}}}"#
+        ))
+    };
+    assert!(transaction("a").is_ok() && account("a").is_ok());
+    assert_eq!(removed("a").removed.len(), 1);
+    for bad in ["", "a\\nb", "a\\u0007b", "a\\u001bb"] {
+        assert!(
+            matches!(transaction(bad), Err(PlaidError::Invalid(_))),
+            "a record of an unusable account id is unreadable"
+        );
+        assert!(
+            matches!(account(bad), Err(PlaidError::Invalid(_))),
+            "so is an account"
+        );
+        let page = removed(bad);
+        assert!(page.removed.is_empty(), "so is a removal");
+        assert_eq!(page.unusable.len(), 1);
+        assert_eq!(
+            page.unusable[0].account_id, None,
+            "and what is left of it names no account"
+        );
+    }
 }
 
 #[tokio::test]

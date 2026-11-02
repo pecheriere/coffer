@@ -166,6 +166,11 @@
 
 ## Accepted residual risks
 
+- **A released account applies one record per write transaction.** After a
+  member releases a held cursor, the sync takes the write lock once per record
+  of that account's delta, up to the 100,000 records a fetch may hold. Others
+  can write between records, but a large delta can keep a sync busy for a long
+  time. Only an owner or admin can start it, and only for a held cursor.
 - **Usernames are not secret.** Anyone on the network can learn whether a
   username exists by calling login begin. Sign-in itself reveals nothing
   further and fails identically for unknown users and bad assertions.
@@ -265,8 +270,44 @@
   lost, and every sync fetches those records again until they apply. A balance
   Plaid sends in a form coffer cannot read (an exponent such as `1e3`) marks
   that account unreadable and holds the cursor the same way. The cost is
-  repeated work and a connection that reports an error until the cause is
-  gone; showing and clearing a hold is issue #20.
+  repeated work, and a hold that lasts. After three syncs in a row, the
+  connection says so, with a fixed text and the provider accounts that cause
+  it (never a provider text), in the API (`held_cursor`) and on the
+  Connections page; as with `last_error`, only an actor who sees every account
+  gets it. The way out is a button on the page: the connection's owner or an
+  admin, signed in with a passkey, lets the next sync move the cursor past the
+  records that still fail. The form carries the provider accounts and the
+  record count the page showed, and a release is refused if the accounts
+  holding the cursor or their count are no longer exactly those. The sync then
+  applies those accounts' records one by one and gives up only the ones that
+  fail twice; the others are stored. An account that is itself refused (for
+  instance one that cannot be read) is different: if the refusal is the one
+  recorded when the member released, none of its records can be tried, so all
+  of them are given up untried, and the page says so before the member
+  releases. A failure that says nothing about the record (a busy, locked or
+  damaged database, a failing or full disk, no connection in time) gives up
+  nothing: the hold and the release stay for a later sync. A refusal other than
+  the recorded one, or a fetch with more records for the account than the
+  member agreed to, takes the release back (audited as
+  `connection.release_withdrawn`, with a fixed reason): the account stays held,
+  the page says so, and the member has to look again and release again. A
+  record given up is lost for good, only counted as skipped, so the page says
+  so plainly, with how many records the last fetch could not store. The records
+  are given up, counted and audited (`connection.cursor_passed`, under the sync
+  actor, with their count) only in the transaction that really moves the
+  cursor; if another account still blocks it, the release waits, and a
+  completed fetch without an account ends that account's hold and release. A
+  waiting request never covers more records than the member agreed to. It is
+  checked by count: a fetch of the same size or smaller may hold a record the
+  member did not see, when others in the delta were netted away. The request
+  needs the anti-forgery token, write access to every account and leaves an
+  audit entry with the record count and each account's recorded error,
+  naming the provider accounts. An agent token cannot do it, whatever its
+  scope: an agent able to
+  discard records could hide a transaction from the household. A provider's
+  account id that is empty, holds a control character or is over-long is
+  refused when a Plaid answer is read, as a record of no account, so it is
+  counted as skipped and cannot hold the cursor for good.
 - **Some copies of provider secrets are not wiped.** While a SimpleFin
   setup token is claimed and while a sync fetches, the claim URL, the access
   URL and its user name pass through `url::Url` and `String` buffers (the

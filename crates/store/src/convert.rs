@@ -25,6 +25,10 @@ pub(crate) fn text_opt(row: &SqliteRow, column: &str) -> Result<Option<String>, 
     row.try_get(column).map_err(StoreError::from_sqlx)
 }
 
+pub(crate) fn int(row: &SqliteRow, column: &str) -> Result<i64, StoreError> {
+    row.try_get(column).map_err(StoreError::from_sqlx)
+}
+
 pub(crate) fn blob(row: &SqliteRow, column: &str) -> Result<Vec<u8>, StoreError> {
     row.try_get(column).map_err(StoreError::from_sqlx)
 }

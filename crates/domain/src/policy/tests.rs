@@ -406,6 +406,48 @@ fn member_cannot_remove_others_connection_but_admin_can() {
 }
 
 #[test]
+fn only_a_session_releases_a_held_cursor() {
+    let member = session(Role::Member);
+    let other = MemberId::new();
+    let own = Action::ReleaseHeldCursor {
+        owner: member.member,
+    };
+    let others = Action::ReleaseHeldCursor { owner: other };
+    assert_eq!(authorize(&member, own), Ok(()));
+    assert_eq!(
+        authorize(&member, others),
+        Err(Denied {
+            action: others,
+            reason: DenyReason::InsufficientScope {
+                needed: Scope::Admin
+            },
+        })
+    );
+    assert_eq!(authorize(&session(Role::Admin), others), Ok(()));
+    for token in [
+        agent(Role::Admin, Scope::Admin),
+        agent(Role::Member, Scope::Write),
+    ] {
+        for action in [
+            own,
+            others,
+            Action::ReleaseHeldCursor {
+                owner: token.member,
+            },
+        ] {
+            assert_eq!(
+                authorize(&token, action),
+                Err(Denied {
+                    action,
+                    reason: DenyReason::SessionRequired,
+                }),
+                "a token never releases a cursor"
+            );
+        }
+    }
+}
+
+#[test]
 fn read_scope_cannot_manage_connections() {
     for action in [Action::ManageConnections, Action::WriteHousehold] {
         for actor in [

@@ -5,19 +5,13 @@ use coffer_store::{AccountRecord, ProviderAccountRecord, StoreTx};
 use jiff::civil::Date;
 
 use crate::sync::SyncError;
-use crate::sync::apply::{MAX_PROVIDER_ID_CHARS, NormalizedTransaction};
+use crate::sync::apply::NormalizedTransaction;
 use crate::sync::provider::{ProviderAccountData, ProviderTransaction, sanitize_provider_message};
 
 const ACCOUNT_ERROR: &str = "the provider reported an error for this account";
 const UNSUPPORTED_CURRENCY: &str =
     "the provider reported a currency that is not a supported ISO 4217 code";
 const CURRENCY_DIFFERS: &str = "the provider reported a currency other than the bound account's";
-
-/// Whether `id` can identify a provider account: 1 to 255 characters
-/// without control characters.
-pub(super) fn valid_provider_account_id(id: &str) -> bool {
-    (1..=MAX_PROVIDER_ID_CHARS).contains(&id.chars().count()) && !id.chars().any(char::is_control)
-}
 
 /// Why an account's data cannot be applied.
 pub(super) struct AccountRefusal {

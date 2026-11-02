@@ -357,6 +357,13 @@ pub enum Action {
     ForgetConnection {
         owner: MemberId,
     },
+    /// Let the sync cursor of the connection `owner` added move past records
+    /// that keep failing to store. Those records are passed for good, so
+    /// this needs a member signed in with a passkey: an agent token can read
+    /// that a cursor is held but never give up the records.
+    ReleaseHeldCursor {
+        owner: MemberId,
+    },
 }
 
 /// Why an action was denied.
@@ -415,14 +422,17 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<(), Denied> {
         Action::ForgetConnection { owner } if owner == actor.member => {
             Requirement::SessionWithScope(Scope::Write)
         }
+        Action::ReleaseHeldCursor { owner } if owner == actor.member => {
+            Requirement::SessionWithScope(Scope::Write)
+        }
         Action::AccessAccount { .. } => Requirement::Never(DenyReason::AccountHidden),
         Action::ManageOwnCredentials => Requirement::Session,
         Action::ManageMembers | Action::ManageInvites | Action::ManageHousehold => {
             Requirement::Scope(Scope::Admin)
         }
-        Action::ForgetConnection { .. } | Action::IssueEnrollmentLink => {
-            Requirement::SessionWithScope(Scope::Admin)
-        }
+        Action::ForgetConnection { .. }
+        | Action::ReleaseHeldCursor { .. }
+        | Action::IssueEnrollmentLink => Requirement::SessionWithScope(Scope::Admin),
     };
     let session = matches!(actor.via, Via::Session);
     let reason = match requirement {

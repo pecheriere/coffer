@@ -238,6 +238,46 @@ async fn unsupported_currency_does_not_hold_the_cursor() {
     );
 }
 
+/// The cursor moves past the records of a currency coffer cannot hold, so the
+/// run counts them.
+#[tokio::test]
+async fn records_of_an_unsupported_currency_count_as_skipped() {
+    let world = world().await;
+    world.script.page(page(
+        &[record("coin", "acct-crypto", "1")],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("1 skipped"));
+}
+
+/// A refused account with only unreadable records holds nothing back, so the
+/// cursor moves past them and the run counts them.
+#[tokio::test]
+async fn unreadable_records_of_a_refused_source_count_as_skipped() {
+    let world = world().await;
+    world.script.page(page(
+        &[record("quoted", "acct-new", "\"12\"")],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("1 skipped"));
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("cursor-1")
+    );
+}
+
 /// Records of an account Plaid did not list become that account's error, and
 /// are fetched again rather than lost.
 #[tokio::test]
