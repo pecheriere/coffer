@@ -17,6 +17,7 @@ use super::types::{
 };
 use crate::accounts::LiquidityClass;
 use crate::fx::{RATE_STALE_AFTER_DAYS, is_euro};
+use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 
 /// The order a point lists its liquidity lines in.
@@ -38,10 +39,19 @@ struct Line<'a> {
     counted: bool,
 }
 
-/// A period holding at least one counted row.
+/// An included account with no row on a point's day, though it had values by
+/// then: a hole in the daily values, which must not read as money leaving.
+struct Absent<'a> {
+    /// Its position in `input.accounts`.
+    index: usize,
+    holder: &'a ReportAccount,
+}
+
+/// A period holding at least one counted row or a hole.
 struct Day<'a> {
     period: PeriodEnd,
     lines: Vec<Line<'a>>,
+    absent: Vec<Absent<'a>>,
 }
 
 /// Computes the report for `input`, whose points are the periods of
@@ -83,7 +93,7 @@ pub fn net_worth_report(input: &NetWorthInput) -> Result<NetWorthReport, NetWort
         .collect::<Result<Vec<_>, _>>()?;
     let accounts = series(input, &days);
     let blockers = blockers(input, &periods, &days);
-    let cautions = cautions(input, through, &days);
+    let cautions = cautions(input, through, &periods, &days);
     Ok(report(input, points, accounts, blockers, cautions))
 }
 
@@ -119,8 +129,8 @@ fn report(
     }
 }
 
-/// The rows of included accounts on each period's last day, leaving out a
-/// period none of them counts in.
+/// The rows of included accounts on each period's last day and the holes among
+/// them, leaving out a period holding neither a counted row nor a hole.
 fn gather<'a>(input: &'a NetWorthInput, periods: &[PeriodEnd]) -> Vec<Day<'a>> {
     let included: BTreeMap<_, _> = input
         .accounts
@@ -148,14 +158,24 @@ fn gather<'a>(input: &'a NetWorthInput, periods: &[PeriodEnd]) -> Vec<Day<'a>> {
             counted: counts_on_its_day(holder, row),
         });
     }
+    let first_on: BTreeMap<_, _> = input.first_on.iter().copied().collect();
     periods
         .iter()
         .filter_map(|period| {
             let mut lines = by_day.remove(&period.on)?;
             lines.sort_by_key(|line| line.index);
-            lines.iter().any(|line| line.counted).then_some(Day {
+            let mut absent: Vec<Absent<'a>> = included
+                .iter()
+                .filter(|(id, _)| first_on.get(*id).is_some_and(|first| *first <= period.on))
+                .filter(|(_, (index, _))| !lines.iter().any(|line| line.index == *index))
+                .map(|(_, &(index, holder))| Absent { index, holder })
+                .collect();
+            absent.sort_by_key(|hole| hole.index);
+            let holds_something = !absent.is_empty() || lines.iter().any(|line| line.counted);
+            holds_something.then_some(Day {
                 period: *period,
                 lines,
+                absent,
             })
         })
         .collect()
@@ -192,27 +212,44 @@ fn point(day: &Day<'_>, display: Option<Currency>) -> Result<NetWorthPoint, NetW
         let mut in_class = counted()
             .filter(|line| line.holder.liquidity == liquidity)
             .peekable();
-        if in_class.peek().is_some() {
+        let holed = day
+            .absent
+            .iter()
+            .any(|hole| hole.holder.liquidity == liquidity);
+        if holed {
+            by_liquidity.push(LiquidityLine {
+                liquidity,
+                amount: None,
+            });
+        } else if in_class.peek().is_some() {
             by_liquidity.push(LiquidityLine {
                 liquidity,
                 amount: sum_of(in_class, display)?,
             });
         }
     }
+    let total = if day.absent.is_empty() {
+        sum_of(counted(), display)?
+    } else {
+        None
+    };
+    let mut no_amount: Vec<_> = counted()
+        .filter(|line| display.is_some() && line.amount.is_none())
+        .map(|line| (line.index, line.holder.id))
+        .chain(day.absent.iter().map(|hole| (hole.index, hole.holder.id)))
+        .collect();
+    no_amount.sort_by_key(|&(index, _)| index);
     Ok(NetWorthPoint {
         on: day.period.on,
         period_start: day.period.start,
         partial: day.period.partial,
-        total: sum_of(counted(), display)?,
+        total,
         by_liquidity,
         by_currency: natives
             .into_iter()
             .map(|(currency, sum)| money(sum, currency))
             .collect::<Result<_, _>>()?,
-        unconverted: counted()
-            .filter(|line| display.is_some() && line.amount.is_none())
-            .map(|line| line.holder.id)
-            .collect(),
+        unconverted: no_amount.into_iter().map(|(_, id)| id).collect(),
     })
 }
 
@@ -262,6 +299,7 @@ fn series(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<AccountSeries> {
                 .iter()
                 .find(|(id, _)| *id == holder.id)
                 .map(|&(_, on)| on),
+            closed_on: holder.closed_on,
             points: if input.account_points {
                 account_points(index, days)
             } else {
@@ -309,14 +347,57 @@ fn blockers(
     blockers
 }
 
-fn cautions(input: &NetWorthInput, through: Date, days: &[Day<'_>]) -> Vec<NetWorthCaution> {
+fn cautions(
+    input: &NetWorthInput,
+    through: Date,
+    periods: &[PeriodEnd],
+    days: &[Day<'_>],
+) -> Vec<NetWorthCaution> {
     let mut cautions = Vec::new();
-    if input.to <= input.today && input.to > through {
+    if input.to.min(input.today) > through {
         cautions.push(NetWorthCaution::ToDateNotYetFilled { through });
     }
+    cautions.extend(nothing_counted_after(periods, days));
     cautions.extend(rate_cautions(input, days));
+    cautions.extend(hole_cautions(days));
     cautions.extend(line_cautions(input, days));
     cautions
+}
+
+/// When the last point stops short of the range's last period: a reader would
+/// otherwise take it as the value now. No point at all is a blocker instead.
+fn nothing_counted_after(periods: &[PeriodEnd], days: &[Day<'_>]) -> Option<NetWorthCaution> {
+    let last_point = days.last()?.period.on;
+    let next = periods.iter().find(|period| period.on > last_point)?;
+    Some(NetWorthCaution::NothingCountedAfterLastPoint {
+        from: next.start,
+        to: periods.last()?.on,
+    })
+}
+
+/// One caution per account with a hole, from its first to its last, in input
+/// order.
+fn hole_cautions(days: &[Day<'_>]) -> Vec<NetWorthCaution> {
+    let mut holes = BTreeMap::new();
+    for day in days {
+        let on = day.period.on;
+        for hole in &day.absent {
+            holes
+                .entry(hole.index)
+                .and_modify(|seen: &mut (AccountId, Date, Date)| seen.2 = on)
+                .or_insert((hole.holder.id, on, on));
+        }
+    }
+    holes
+        .into_values()
+        .map(
+            |(account, first_on, last_on)| NetWorthCaution::DailyValueMissing {
+                account,
+                first_on,
+                last_on,
+            },
+        )
+        .collect()
 }
 
 /// Rate cautions, one per currency, sorted by currency.
@@ -404,7 +485,6 @@ fn missing_legs(
         .filter(|leg| !is_euro(*leg))
         .filter_map(|leg| Some((leg, reason_for(leg)?)))
         .collect();
-    legs.dedup();
     if legs.is_empty() {
         legs.push((foreign_leg(held, display), RateMissingReason::NoneThatEarly));
     }

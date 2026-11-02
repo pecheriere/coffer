@@ -970,7 +970,7 @@ corrected rate rebuilds the accounts it converts, from that date. A changed disp
 currency rebuilds everything. Each happens in the same transaction as the change. The
 daily job fills days forward up to today. Where a row can't exist yet the read says so
 instead of serving an old number: `through` names the last day filled, later dates aren't
-answered, and `rebuild_needed` (set by the migration creating the table) answers no number
+answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table) answers no number
 at all until the rebuild has run. `coffer rebuild-net-worth` rebuilds the whole table, and
 a test holds that incremental updates match it.
 
@@ -993,7 +993,10 @@ which currency and why (not fetched yet, not published, fetch failing, provider 
 that early). Sums per currency are always present, so nothing is omitted. A rate more than 7
 days older than its day raises a `rate_stale` caution: a discontinued currency would otherwise
 be converted at its last rate for ever (the ECB's rouble ends on 2022-03-01). A conversion
-past `i64` is treated the same way, as `too_large`.
+past `i64` is treated the same way, as `too_large`. So is a hole: an included account with no
+row on a day after its first has no amount, so that period's `total` and its class are null
+and `unconverted` names it, with the caution `daily_value_missing`, since a sum without it
+would read as money leaving. Its balance can't be in that day's sum per currency.
 
 **N6. The default provider is the ECB's data API.** `RateProvider` is the interface, and
 providers answer in units of a currency per one euro. `COFFER_FX_PROVIDER` is `ecb` (the
@@ -1019,7 +1022,11 @@ currency and each member's display currency.
 **N9. A closed account counts up to the day it closed.** Its rows go on being filled, and
 closing is applied at read. From its closing day on it counts only if its balance is
 negative, since a debt doesn't close with the card (R16), with the caution
-`closed_account_owing`. Reopening an account restores those days.
+`closed_account_owing`. Reopening an account restores those days. Each account in a report
+says its `closed_on`, so a drop is explained even without its points. When nothing counts in
+a range's later periods, the last point stops short of the range, and the caution
+`nothing_counted_after_last_point` says from when: it makes the report `provisional`, since a
+reader would take the last point as the value now.
 
 **N10. Rates and rows aren't audited.** They are public reference data and derived values,
 and an entry per row would bury the log. What changes them is: a snapshot's write and the

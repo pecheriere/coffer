@@ -67,7 +67,8 @@ pub struct NetWorthInput {
     pub accounts: Vec<ReportAccount>,
     /// Daily values. Rows of any other account or day are ignored.
     pub rows: Vec<DailyValue>,
-    /// The first day each account has a value, whatever the range.
+    /// The first day each account has a value, whatever the range. From then on an
+    /// included account with no row on a point's day is a hole, reported as one.
     pub first_on: Vec<(AccountId, Date)>,
     /// Why rates may be missing, for the currencies of `accounts` and `display`.
     pub coverage: Vec<CurrencyState>,
@@ -124,7 +125,7 @@ pub struct NetWorthReport {
     #[cfg_attr(feature = "openapi", schema(required))]
     pub through: Option<Date>,
     pub status: NetWorthStatus,
-    /// One per period holding a counted balance, oldest first.
+    /// One per period holding a counted balance or a missing value, oldest first.
     pub points: Vec<NetWorthPoint>,
     /// Every visible account, with whether it counts.
     pub accounts: Vec<AccountSeries>,
@@ -159,9 +160,12 @@ pub struct NetWorthPoint {
     pub total: Option<Money>,
     /// One line per liquidity class holding a counted account.
     pub by_liquidity: Vec<LiquidityLine>,
-    /// Native sums of the counted balances, sorted by currency. Always present.
+    /// Native sums of the counted balances, sorted by currency. Always present,
+    /// and leaving out only an account in `unconverted` with no value that day.
     pub by_currency: Vec<Money>,
-    /// Counted accounts with no amount, though there is a display currency.
+    /// Accounts this point has no amount for: counted with no conversion though
+    /// there is a display currency, or holding no value on this day though they
+    /// did earlier.
     pub unconverted: Vec<AccountId>,
 }
 
@@ -192,6 +196,10 @@ pub struct AccountSeries {
     /// not money.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub first_on: Option<Date>,
+    /// The household's day it closed: from then it counts only while it owes, so
+    /// a drop on that day is an account closing, not money.
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub closed_on: Option<Date>,
     /// Its value at each point, if it had one by then.
     pub points: Vec<AccountPoint>,
 }
@@ -269,8 +277,22 @@ pub enum NetWorthCaution {
         on: Date,
         age_days: u32,
     },
-    /// The last filled day is before `to`: later dates are not answered yet.
+    /// The last filled day is before the end of the range, or today if that is
+    /// earlier: later dates are not answered yet.
     ToDateNotYetFilled { through: Date },
+    /// Between these points an account already holding values has none, so what
+    /// holds it is `null`, it is in `unconverted`, and its balance is in no
+    /// `by_currency`. A hole in the daily values, not money leaving.
+    DailyValueMissing {
+        account: AccountId,
+        first_on: Date,
+        last_on: Date,
+    },
+    /// From `from` up to `to` the range's periods hold nothing counted, so the
+    /// last point is older than the range's end and is not the value now: every
+    /// account counted by then has closed, and a closed account's `closed_on`
+    /// says when.
+    NothingCountedAfterLastPoint { from: Date, to: Date },
     /// A liability shows money in hand, perhaps entered with the wrong sign. It
     /// was added as it stands. `balance` is from the last point where it did.
     LiabilityBalancePositive { account: AccountId, balance: Money },

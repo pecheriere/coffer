@@ -453,6 +453,24 @@ fn a_debt_on_the_closing_day_itself_is_said() {
     );
 }
 
+/// The rows' order is the store's: the answer's is the accounts'.
+#[test]
+fn stale_balances_are_listed_in_the_accounts_order() {
+    let old = date(2026, 9, 1);
+    let held = [cash(1, "USD", &[(old, 5)]), cash(2, "USD", &[(old, 6)])];
+    let mut asked = input(&held, Some("USD"), &RateBook::default());
+    asked.rows.reverse();
+    let stale_on = |n| NetWorthCaution::BalanceStale {
+        account: id(n),
+        on: old,
+        age_days: 61,
+    };
+    assert_eq!(
+        net_worth_report(&asked).unwrap().cautions,
+        [stale_on(1), stale_on(2)]
+    );
+}
+
 #[test]
 fn a_balance_is_stale_only_past_its_setting() {
     let held = [cash(1, "USD", &[(date(2026, 10, 25), 5)])];

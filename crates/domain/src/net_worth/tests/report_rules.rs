@@ -307,6 +307,23 @@ fn to_at_or_before_through_is_not_said() {
     assert_eq!(net_worth_report(&asked).unwrap().cautions, []);
 }
 
+/// Just after midnight before the fill, a range running on past today still
+/// isn't answered for today.
+#[test]
+fn a_future_to_with_today_not_filled_is_said() {
+    let through = date(2026, 11, 1);
+    let held = [cash(1, "USD", &[(OCT_26, 100)])];
+    let mut asked = input(&held, Some("USD"), &no_rates());
+    asked.to = date(2026, 11, 30);
+    asked.through = Some(through);
+    let report = net_worth_report(&asked).unwrap();
+    assert_eq!(report.points.last().unwrap().on, through);
+    assert_eq!(
+        report.cautions,
+        [NetWorthCaution::ToDateNotYetFilled { through }]
+    );
+}
+
 #[test]
 fn to_after_today_is_not_said_and_stops_at_today() {
     let held = [cash(1, "USD", &[(OCT_26, 100)])];

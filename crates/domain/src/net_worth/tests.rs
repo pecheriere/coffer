@@ -18,6 +18,7 @@ mod golden;
 mod periods;
 mod properties;
 mod report_cautions;
+mod report_gaps;
 mod report_rules;
 
 const TODAY: Date = date(2026, 11, 2);
