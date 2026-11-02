@@ -47,9 +47,11 @@ pub const MAX_PROVIDER_ID_CHARS: usize = 255;
 /// The longest raw amount, in characters.
 pub const MAX_AMOUNT_RAW_CHARS: usize = 64;
 
-/// Whether `id` can identify a provider record: 1 to
-/// [`MAX_PROVIDER_ID_CHARS`] characters without control characters.
-fn valid_provider_id(id: &str) -> bool {
+/// Whether `id` can identify a provider record or account: 1 to
+/// [`MAX_PROVIDER_ID_CHARS`] characters without control characters. The one
+/// rule for every id a provider sends, so none that fails it can reach
+/// storage and fail there for good.
+pub(crate) fn valid_provider_id(id: &str) -> bool {
     (1..=MAX_PROVIDER_ID_CHARS).contains(&id.chars().count()) && !id.chars().any(char::is_control)
 }
 

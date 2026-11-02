@@ -196,6 +196,59 @@ async fn failed_report_creates_an_account_but_changes_no_known_field() {
 }
 
 #[tokio::test]
+async fn cursor_holds_are_counted_released_and_ended() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let mut tx = store.begin().await.unwrap();
+    let connection = tx
+        .insert_connection(NewConnection {
+            provider: "testbank",
+            label: ConnectionLabel::parse("Bank").unwrap(),
+            owner,
+            credentials: vec![1],
+            created_at: at(0),
+        })
+        .await
+        .unwrap();
+    let holding = tx
+        .upsert_provider_account(upsert(connection.id, "Holding", None, 1))
+        .await
+        .unwrap();
+    let mut other = upsert(connection.id, "Brief", None, 1);
+    other.provider_account_id = "acct-2".into();
+    let brief = tx.upsert_provider_account(other).await.unwrap();
+    assert_eq!((holding.held_syncs, holding.hold_released), (0, false));
+    for _ in 0..3 {
+        tx.count_cursor_hold(holding.id).await.unwrap();
+    }
+    tx.count_cursor_hold(brief.id).await.unwrap();
+
+    let released = tx.release_cursor_holds(connection.id, 3).await.unwrap();
+
+    assert_eq!(released, [holding.id], "only the accounts that held long");
+    let holding = tx.get_provider_account(holding.id).await.unwrap();
+    assert_eq!((holding.held_syncs, holding.hold_released), (3, true));
+    let brief = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!((brief.held_syncs, brief.hold_released), (1, false));
+
+    tx.clear_cursor_hold(holding.id).await.unwrap();
+    let cleared = tx.get_provider_account(holding.id).await.unwrap();
+    assert_eq!((cleared.held_syncs, cleared.hold_released), (0, false));
+
+    tx.count_cursor_hold(brief.id).await.unwrap();
+    tx.set_provider_account_applied(brief.id, at(2))
+        .await
+        .unwrap();
+    let applied = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!((applied.held_syncs, applied.hold_released), (0, false));
+    assert!(matches!(
+        tx.count_cursor_hold(coffer_domain::ids::ProviderAccountId::new())
+            .await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+#[tokio::test]
 async fn provider_account_refresh_keeps_binding_and_balance() {
     let (_dir, store) = open().await;
     let owner = member(&store).await;

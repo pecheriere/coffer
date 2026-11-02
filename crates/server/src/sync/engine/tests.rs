@@ -31,7 +31,10 @@ fn removal_mid_run_outcomes() {
     );
     assert_eq!(outcome(&totals, false, false).0, SyncRunStatus::Succeeded);
     assert_eq!(outcome(&totals, false, true).0, SyncRunStatus::Partial);
-    totals.add(&AccountOutcome::Failed { refetch: false });
+    totals.add(&AccountOutcome::Failed {
+        refetch: false,
+        passed: 0,
+    });
     assert!(
         totals
             .detail(false)

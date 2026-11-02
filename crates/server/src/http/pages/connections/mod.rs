@@ -2,7 +2,8 @@
 //! errors, and the provider accounts it reports by name and binding. No
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
-//! request a sync, remove a connection and bind a provider account to an
+//! request a sync, remove a connection, let a held sync cursor move past
+//! the records that keep failing and bind a provider account to an
 //! account (see [`bind`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
@@ -32,7 +33,9 @@ use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::{Problem, set_retry_after};
-use crate::sync::connections::{ConnectionState, ConnectionView, ProviderAccountView};
+use crate::sync::connections::{
+    ConnectionState, ConnectionView, HeldCursorView, ProviderAccountView,
+};
 use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 use crate::sync::{SyncError, retry_seconds};
 
@@ -49,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/connections/{id}/sync", post(sync))
         .route("/connections/{id}/remove", post(remove))
+        .route("/connections/{id}/release-cursor", post(release_cursor))
         .route(
             "/connections/provider-accounts/{id}/create-account",
             post(bind::create_account),
@@ -131,7 +135,8 @@ async fn render(
         }
         @for connection in &connections {
             @let may_remove = authorize(&actor, Action::RemoveConnection { owner: connection.owner }).is_ok();
-            (connection_card(connection, may_remove, &shared))
+            @let may_release = authorize(&actor, Action::ReleaseHeldCursor { owner: connection.owner }).is_ok();
+            (connection_card(connection, Permissions { may_remove, may_release }, &shared))
         }
         @if can_manage {
             section.card {
@@ -190,7 +195,23 @@ struct Shared<'a> {
     plaid_offered: bool,
 }
 
-fn connection_card(connection: &ConnectionView, may_remove: bool, shared: &Shared<'_>) -> Markup {
+/// What the viewer may do with one connection beyond what everyone with
+/// `can_manage` may.
+#[derive(Clone, Copy)]
+struct Permissions {
+    may_remove: bool,
+    may_release: bool,
+}
+
+fn connection_card(
+    connection: &ConnectionView,
+    permissions: Permissions,
+    shared: &Shared<'_>,
+) -> Markup {
+    let Permissions {
+        may_remove,
+        may_release,
+    } = permissions;
     let Shared {
         timezone,
         csrf,
@@ -244,6 +265,9 @@ fn connection_card(connection: &ConnectionView, may_remove: bool, shared: &Share
                     }
                 }
             }
+            @if let Some(held) = &connection.held_cursor {
+                (held_notice(connection, held, may_release, csrf))
+            }
             @if may_remove && plaid && plaid_offered && connection.status == ConnectionState::ReauthRequired {
                 h3 { "Reconnect" }
                 p { "Plaid needs a new login to this institution; its accounts stay bound." }
@@ -279,6 +303,41 @@ fn connection_card(connection: &ConnectionView, may_remove: bool, shared: &Share
                     @for (index, account) in accounts.iter().enumerate() {
                         (account_item(connection, account, shared, waiting && index == 0))
                     }
+                }
+            }
+        }
+    }
+}
+
+/// The notice of a held sync cursor: why, what letting it move on loses and,
+/// for who may, the form that does.
+fn held_notice(
+    connection: &ConnectionView,
+    held: &HeldCursorView,
+    may_release: bool,
+    csrf: &str,
+) -> Markup {
+    html! {
+        div.once.held-cursor {
+            h3 { "Sync cursor held" }
+            p { (held.text) }
+            ul {
+                @for account in connection.accounts.iter().filter(|account| held.provider_accounts.contains(&account.id)) {
+                    li { (account.name) }
+                }
+            }
+            @if held.release_pending {
+                p { "Release requested: the next sync moves the cursor on." }
+            } @else if may_release {
+                p {
+                    "Letting the cursor move on means those records are passed for good. "
+                    "coffer does not fetch them again; they are only counted as skipped "
+                    "in the next sync. Whatever they carry (new transactions, changes, "
+                    "removals) is lost, unless you enter it by hand."
+                }
+                form method="post" action={ "/connections/" (connection.id) "/release-cursor" } {
+                    (csrf_field(csrf))
+                    button.btn type="submit" { "Pass these records for good" }
                 }
             }
         }
@@ -574,6 +633,20 @@ async fn remove(
     let id = connection_id(&id)?;
     match state.sync.remove_connection(&actor, id).await {
         Ok(()) => Ok(back()),
+        Err(err) => refused(&state, &session, err, FormKind::Action).await,
+    }
+}
+
+async fn release_cursor(
+    State(state): State<AppState>,
+    session: PageSession,
+    Path(id): Path<String>,
+    PageForm(form): PageForm<CsrfForm>,
+) -> Result<Response, PageError> {
+    let actor = session.verify(&state, &form.csrf)?;
+    let id = connection_id(&id)?;
+    match state.sync.release_held_cursor(&actor, id).await {
+        Ok(_) => Ok(back()),
         Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }
 }

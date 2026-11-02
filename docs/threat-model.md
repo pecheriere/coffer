@@ -249,8 +249,20 @@
   lost, and every sync fetches those records again until they apply. A balance
   Plaid sends in a form coffer cannot read (an exponent such as `1e3`) marks
   that account unreadable and holds the cursor the same way. The cost is
-  repeated work and a connection that reports an error until the cause is
-  gone; showing and clearing a hold is issue #20.
+  repeated work, and a hold that lasts. After three syncs in a row, the
+  connection says so, with a fixed text and the provider accounts that cause
+  it (never a provider text), in the API (`held_cursor`) and on the
+  Connections page; as with `last_error`, only an actor who sees every account
+  gets it. The way out is a button on the page: the connection's owner or an
+  admin, signed in with a passkey, lets the next sync move the cursor past
+  those records. That throws them away for good, only counted as skipped, so
+  the page says so plainly, and the action needs the anti-forgery token, write
+  access to every account and leaves an audit entry naming the provider
+  accounts. An agent token cannot do it, whatever its scope: an agent able to
+  discard records could hide a transaction from the household. A provider's
+  account id that is empty, holds a control character or is over-long is
+  refused when a Plaid answer is read, as a record of no account, so it is
+  counted as skipped and cannot hold the cursor for good.
 - **Some copies of provider secrets are not wiped.** While a SimpleFin
   setup token is claimed and while a sync fetches, the claim URL, the access
   URL and its user name pass through `url::Url` and `String` buffers (the

@@ -4910,6 +4910,7 @@
           "last_attempt_at",
           "last_success_at",
           "next_sync_at",
+          "held_cursor",
           "accounts"
         ],
         "properties": {
@@ -4919,6 +4920,17 @@
               "$ref": "#/components/schemas/ProviderAccountView"
             },
             "description": "Its provider accounts the actor may see."
+          },
+          "held_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeldCursorView",
+                "description": "Set while the sync cursor is held; `null` otherwise, and for an actor\nwho does not see every account (it names provider accounts, and the\nlast error could too)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/ConnectionId"
@@ -4989,6 +5001,32 @@
           }
         },
         "additionalProperties": false
+      },
+      "HeldCursorView": {
+        "type": "object",
+        "description": "A sync cursor that stays in place because records of some provider\naccounts keep failing to store.",
+        "required": [
+          "text",
+          "provider_accounts",
+          "release_pending"
+        ],
+        "properties": {
+          "provider_accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAccountId"
+            },
+            "description": "The provider accounts whose records hold the cursor."
+          },
+          "release_pending": {
+            "type": "boolean",
+            "description": "Whether a member already asked for the cursor to move past those\nrecords: the next sync does."
+          },
+          "text": {
+            "type": "string",
+            "description": "Fixed text."
+          }
+        }
       },
       "LinkedAccountView": {
         "type": "object",

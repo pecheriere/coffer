@@ -12,9 +12,11 @@ use crate::sync::provider::{MAX_PROVIDER_MESSAGE_CHARS, ProviderError, sanitize_
 pub(super) enum AccountOutcome {
     Applied(ApplyReport),
     /// Nothing of it was applied. `refetch` says the fetch held records of
-    /// it that a later fetch could still store.
+    /// it that a later fetch could still store; `passed` counts the records
+    /// the cursor moves past for good because a member asked for that.
     Failed {
         refetch: bool,
+        passed: u32,
     },
     /// The connection was removed before the account could be applied:
     /// nothing of it was written.
@@ -65,9 +67,10 @@ impl Totals {
                 total.held += report.held;
                 total.skipped += report.skipped;
             }
-            AccountOutcome::Failed { refetch } => {
+            AccountOutcome::Failed { refetch, passed } => {
                 self.failed_accounts += 1;
                 self.refetch |= refetch;
+                self.report.skipped = self.report.skipped.saturating_add(*passed);
             }
             AccountOutcome::ConnectionRemoved => {}
         }

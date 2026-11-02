@@ -2,17 +2,17 @@
 
 use coffer_domain::ids::ConnectionId;
 use coffer_store::{
-    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, ProviderAccountUpsert, RawBalance,
-    StoreError, SyncRunRecord,
+    ConnectionRecord, ConnectionStatus, ConnectionStatusChange, ProviderAccountRecord,
+    ProviderAccountUpsert, RawBalance, StoreError, StoreTx, SyncRunRecord,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
 
-use super::convert::{Converted, check_account, convert, valid_provider_account_id};
+use super::convert::{Converted, check_account, convert};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
 use super::{SyncService, same_credentials, still_current, write_balance};
 use crate::sync::SyncError;
-use crate::sync::apply::{AccountBatch, apply_account_batch};
+use crate::sync::apply::{AccountBatch, apply_account_batch, valid_provider_id};
 use crate::sync::provider::{
     FetchMode, FetchResult, ProviderAccountData, sanitize_provider_message,
 };
@@ -21,6 +21,64 @@ const BALANCE_UNREPRESENTABLE: &str =
     "the provider reported a balance too large to store, so it was left out";
 const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
+
+/// What an account's fetched data means for the cursor.
+#[derive(Clone, Copy)]
+struct Records {
+    /// Whether records of it could still be stored by a later fetch, and the
+    /// cursor must not pass them. Never for a provider without a cursor.
+    holds: bool,
+    /// How many records the cursor passes if it moves on without applying
+    /// them.
+    count: u32,
+}
+
+impl Records {
+    fn of(data: &ProviderAccountData, cursor: bool) -> Self {
+        if !cursor {
+            return Self {
+                holds: false,
+                count: 0,
+            };
+        }
+        let stored = data.transactions.len() + data.removed.len();
+        Self {
+            holds: stored > 0,
+            count: u32::try_from(stored + data.unusable.len()).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// The outcome of an account that was not applied. A cursor is held by it
+/// when `fixable` records of it wait for a later fetch; counted, so that a
+/// hold lasting for good shows. Unless a member asked for the cursor to move
+/// on: then its records are passed for good and only counted.
+async fn settle_failure(
+    tx: &mut StoreTx,
+    account: &ProviderAccountRecord,
+    records: Records,
+    fixable: bool,
+) -> Result<AccountOutcome, StoreError> {
+    if !(records.holds && fixable) {
+        tx.clear_cursor_hold(account.id).await?;
+        return Ok(AccountOutcome::Failed {
+            refetch: false,
+            passed: 0,
+        });
+    }
+    if account.hold_released {
+        tx.clear_cursor_hold(account.id).await?;
+        return Ok(AccountOutcome::Failed {
+            refetch: false,
+            passed: records.count,
+        });
+    }
+    tx.count_cursor_hold(account.id).await?;
+    Ok(AccountOutcome::Failed {
+        refetch: true,
+        passed: 0,
+    })
+}
 
 impl SyncService {
     pub(super) async fn apply(
@@ -33,8 +91,9 @@ impl SyncService {
         started_at: Timestamp,
     ) -> Result<SyncRunRecord, SyncError> {
         let mut totals = Totals::default();
+        let cursor = matches!(mode, FetchMode::Cursor);
         for data in result.accounts {
-            let outcome = self.apply_account(connection.id, data, today).await;
+            let outcome = self.apply_account(connection.id, data, today, cursor).await;
             totals.add(&outcome);
             if totals.connection_removed {
                 // Removed while the run was fetching or applying: nothing
@@ -105,17 +164,20 @@ impl SyncService {
         connection: ConnectionId,
         data: ProviderAccountData,
         today: Date,
+        cursor: bool,
     ) -> AccountOutcome {
-        let holds_records = !data.transactions.is_empty() || !data.removed.is_empty();
-        if !valid_provider_account_id(&data.provider_account_id) {
-            // Nothing can be recorded on an account without a usable id:
-            // the run counts it among the accounts with errors.
+        let records = Records::of(&data, cursor);
+        if !valid_provider_id(&data.provider_account_id) {
+            // Nothing can be recorded on an account without a usable id, and
+            // no later fetch could store its records: the run counts it among
+            // the accounts with errors and its records among the skipped.
             tracing::warn!(
                 connection = %connection,
                 "provider account with an invalid id skipped"
             );
             return AccountOutcome::Failed {
-                refetch: holds_records,
+                refetch: false,
+                passed: records.count,
             };
         }
         let now = self.clock.now();
@@ -133,19 +195,26 @@ impl SyncService {
             balance: None,
             seen_at: now,
         };
-        match self.try_apply_account(upsert.clone(), data, today).await {
+        match self
+            .try_apply_account(upsert.clone(), data, today, records)
+            .await
+        {
             Ok(outcome) => outcome,
             Err(err) => {
                 tracing::warn!(connection = %connection, error = ?err, "provider account not applied");
-                if let Err(err) = self.record_account_failure(upsert).await {
-                    tracing::error!(
-                        connection = %connection,
-                        error = ?err,
-                        "could not record a provider account's failure"
-                    );
-                }
-                AccountOutcome::Failed {
-                    refetch: holds_records,
+                match self.record_account_failure(upsert, records).await {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        tracing::error!(
+                            connection = %connection,
+                            error = ?err,
+                            "could not record a provider account's failure"
+                        );
+                        AccountOutcome::Failed {
+                            refetch: records.holds,
+                            passed: 0,
+                        }
+                    }
                 }
             }
         }
@@ -156,10 +225,10 @@ impl SyncService {
         mut upsert: ProviderAccountUpsert,
         data: ProviderAccountData,
         today: Date,
+        records: Records,
     ) -> Result<AccountOutcome, SyncError> {
         let now = upsert.seen_at;
         let connection = upsert.connection;
-        let holds_records = !data.transactions.is_empty() || !data.removed.is_empty();
         // The exact text, whatever becomes of the value.
         upsert.balance = data.balance.as_ref().map(|(on, amount)| RawBalance {
             on: *on,
@@ -185,10 +254,9 @@ impl SyncService {
             Err(refusal) => {
                 tx.set_provider_account_error(record.id, Some(refusal.text))
                     .await?;
+                let outcome = settle_failure(&mut tx, &record, records, !refusal.lasting).await?;
                 tx.commit().await?;
-                return Ok(AccountOutcome::Failed {
-                    refetch: holds_records && !refusal.lasting,
-                });
+                return Ok(outcome);
             }
         };
         let Converted {
@@ -238,14 +306,17 @@ impl SyncService {
     async fn record_account_failure(
         &self,
         upsert: ProviderAccountUpsert,
-    ) -> Result<(), StoreError> {
+        records: Records,
+    ) -> Result<AccountOutcome, StoreError> {
         let mut tx = self.store.begin().await?;
         if tx.get_connection(upsert.connection).await?.status == ConnectionStatus::Removed {
-            return Ok(());
+            return Ok(AccountOutcome::ConnectionRemoved);
         }
         let record = tx.upsert_failed_provider_account(upsert).await?;
         tx.set_provider_account_error(record.id, Some(ACCOUNT_NOT_STORED.to_owned()))
             .await?;
-        tx.commit().await
+        let outcome = settle_failure(&mut tx, &record, records, true).await?;
+        tx.commit().await?;
+        Ok(outcome)
     }
 }
