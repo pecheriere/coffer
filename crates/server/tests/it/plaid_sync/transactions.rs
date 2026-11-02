@@ -171,6 +171,7 @@ async fn posted_successor_attaches_via_pending_transaction_id() {
                 splits: Some(vec![SplitInput {
                     category: food,
                     minor_units: -450,
+                    goal: None,
                 }]),
                 ..TransactionPatch::default()
             },

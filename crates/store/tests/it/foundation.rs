@@ -4,6 +4,8 @@
 )]
 use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::ids::{AgentTokenId, MemberId};
+use coffer_domain::money::{Currency, Money};
+use coffer_domain::plan::{ForecastSettings, SafetyFloor};
 use coffer_store::{AuditFilter, PageRequest, Store, StoreError};
 use jiff::Timestamp;
 use tempfile::TempDir;
@@ -240,4 +242,131 @@ async fn backup_produces_openable_copy() {
         store.backup_to(&backup).await,
         Err(StoreError::Conflict(_))
     ));
+}
+
+fn usd(minor_units: i64) -> SafetyFloor {
+    SafetyFloor::Fixed {
+        amount: Money {
+            minor_units,
+            currency: Currency::parse("USD").unwrap(),
+        },
+    }
+}
+
+async fn save(store: &Store, settings: &ForecastSettings) {
+    let mut tx = store.begin().await.unwrap();
+    tx.set_forecast_settings(settings).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn settings_roundtrip_each_floor_kind() {
+    let (_dir, store) = open().await;
+    assert_eq!(
+        store.forecast_settings().await.unwrap(),
+        ForecastSettings::default(),
+        "no row reads as the defaults"
+    );
+
+    let fixed_zero = ForecastSettings {
+        floor: Some(usd(0)),
+        include_income: true,
+        default_horizon_months: 12,
+        stale_after_days: 30,
+    };
+    save(&store, &fixed_zero).await;
+    assert_eq!(
+        store.forecast_settings().await.unwrap(),
+        fixed_zero,
+        "a fixed floor of 0 is stored as 0, not unset"
+    );
+
+    let months = ForecastSettings {
+        floor: Some(SafetyFloor::MonthsOfOutflows { months: 6 }),
+        ..fixed_zero
+    };
+    save(&store, &months).await;
+    assert_eq!(
+        store.forecast_settings().await.unwrap(),
+        months,
+        "a months floor replaces a fixed one"
+    );
+
+    let mut tx = store.begin().await.unwrap();
+    assert_eq!(
+        tx.forecast_settings().await.unwrap(),
+        months,
+        "a transaction reads the same"
+    );
+    tx.set_forecast_settings(&ForecastSettings::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        tx.forecast_settings().await.unwrap(),
+        ForecastSettings::default(),
+        "a transaction sees its own write, floor cleared"
+    );
+    drop(tx);
+    assert_eq!(
+        store.forecast_settings().await.unwrap(),
+        months,
+        "a dropped transaction stores nothing"
+    );
+}
+
+/// A floor's kind, minor units, currency and months, as columns.
+type FloorColumns = (
+    Option<&'static str>,
+    Option<i64>,
+    Option<&'static str>,
+    Option<i64>,
+);
+
+#[tokio::test]
+async fn check_constraints_refuse_a_half_floor() {
+    let (dir, store) = open().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("coffer.db").display()
+    ))
+    .await
+    .unwrap();
+    let insert = "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
+                  floor_months, include_income, default_horizon_months, stale_after_days) \
+                  VALUES (1, ?, ?, ?, ?, 0, 3, 7)";
+    let cases: [FloorColumns; 9] = [
+        (Some("fixed"), None, None, None),
+        (Some("fixed"), Some(1), None, None),
+        (Some("fixed"), None, Some("USD"), None),
+        (Some("fixed"), Some(1), Some("USD"), Some(3)),
+        (Some("months_of_outflows"), None, None, None),
+        (Some("months_of_outflows"), Some(1), None, Some(3)),
+        (None, Some(1), Some("USD"), None),
+        (None, None, None, Some(3)),
+        (Some("percent"), None, None, Some(3)),
+    ];
+    for (kind, minor, currency, months) in cases {
+        let result = sqlx::query(insert)
+            .bind(kind)
+            .bind(minor)
+            .bind(currency)
+            .bind(months)
+            .execute(&pool)
+            .await;
+        assert!(result.is_err(), "a half or mixed floor is refused");
+    }
+    let whole = sqlx::query(insert)
+        .bind(Some("fixed"))
+        .bind(Some(0_i64))
+        .bind(Some("USD"))
+        .bind(None::<i64>)
+        .execute(&pool)
+        .await;
+    assert!(whole.is_ok(), "a whole fixed floor is accepted");
+    pool.close().await;
+    assert_eq!(
+        store.forecast_settings().await.unwrap().floor,
+        Some(usd(0)),
+        "the stored row reads back"
+    );
 }

@@ -889,3 +889,133 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn plan_item_visible_needs_transactions() {
+    let named = account(1);
+    let unnamed = account(2);
+    let actor = agent(Role::Member, Scope::Write);
+    let named_at =
+        |level| account_access_with_grants(&actor, &[grant(GrantTarget::Account(named), level)]);
+    let all_at = |level| account_access_with_grants(&actor, &[grant(GrantTarget::All, level)]);
+
+    for level in [AccountLevel::Transactions, AccountLevel::Write] {
+        for access in [
+            AccountAccess::Uniform(level),
+            named_at(level),
+            all_at(level),
+        ] {
+            assert!(
+                plan_item_visible(&access, None),
+                "transactions anywhere shows an item without a hint"
+            );
+        }
+    }
+    for access in [
+        AccountAccess::Uniform(AccountLevel::Balances),
+        named_at(AccountLevel::Balances),
+        all_at(AccountLevel::Balances),
+    ] {
+        assert!(
+            !plan_item_visible(&access, None),
+            "balances on everything held shows no item, even without a hint"
+        );
+    }
+
+    assert!(
+        !plan_item_visible(&named_at(AccountLevel::Balances), Some(named)),
+        "a named grant at balances does not show the item"
+    );
+    assert!(
+        plan_item_visible(&named_at(AccountLevel::Transactions), Some(named)),
+        "a named grant at transactions shows the item"
+    );
+    assert!(
+        plan_item_visible(&named_at(AccountLevel::Write), Some(named)),
+        "a named grant at write shows the item"
+    );
+    assert!(
+        !plan_item_visible(&named_at(AccountLevel::Write), Some(unnamed)),
+        "a hint at a hidden account is treated as missing"
+    );
+
+    assert!(
+        !plan_item_visible(&all_at(AccountLevel::Balances), Some(unnamed)),
+        "an all grant at balances does not show the item"
+    );
+    assert!(
+        plan_item_visible(&all_at(AccountLevel::Transactions), Some(unnamed)),
+        "an all grant at transactions shows the item"
+    );
+
+    assert!(
+        !plan_item_visible(&AccountAccess::Uniform(AccountLevel::Balances), Some(named)),
+        "uniform balances does not show the item"
+    );
+    assert!(
+        plan_item_visible(
+            &AccountAccess::Uniform(AccountLevel::Transactions),
+            Some(named)
+        ),
+        "uniform transactions shows the item"
+    );
+
+    let mixed = account_access_with_grants(
+        &actor,
+        &[
+            grant(GrantTarget::All, AccountLevel::Balances),
+            grant(GrantTarget::Account(named), AccountLevel::Transactions),
+        ],
+    );
+    assert!(
+        plan_item_visible(&mixed, Some(named)),
+        "the best grant naming the account decides"
+    );
+    assert!(
+        !plan_item_visible(&mixed, Some(unnamed)),
+        "the all grant alone stays at balances"
+    );
+    assert!(
+        plan_item_visible(&mixed, None),
+        "all at balances with a named account at transactions shows an unhinted item"
+    );
+}
+
+#[test]
+fn some_account_at_is_capped_by_the_ceiling() {
+    let read = agent(Role::Member, Scope::Read);
+    let write_grant = account_access_with_grants(
+        &read,
+        &[grant(GrantTarget::Account(account(1)), AccountLevel::Write)],
+    );
+    assert!(
+        write_grant.some_account_at(AccountLevel::Transactions),
+        "capped to transactions, still transactions"
+    );
+    assert!(
+        !write_grant.some_account_at(AccountLevel::Write),
+        "a read scope never reaches write"
+    );
+    let stored_above_ceiling = AccountAccess::Granted {
+        ceiling: AccountLevel::Balances,
+        all: Some(AccountLevel::Write),
+        accounts: std::iter::once((account(1), AccountLevel::Write)).collect(),
+    };
+    assert!(
+        !stored_above_ceiling.some_account_at(AccountLevel::Transactions),
+        "the ceiling caps every grant"
+    );
+    assert!(
+        stored_above_ceiling.some_account_at(AccountLevel::Balances),
+        "up to the ceiling is held"
+    );
+    let none_named = AccountAccess::Granted {
+        ceiling: AccountLevel::Write,
+        all: None,
+        accounts: std::collections::BTreeMap::new(),
+    };
+    assert!(
+        !none_named.some_account_at(AccountLevel::Balances),
+        "nothing granted reaches nothing"
+    );
+}

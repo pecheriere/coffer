@@ -18,8 +18,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
-  with a content security policy of their own); `ledger` (accounts and balances, categories,
-  transactions and their splits, merging, un-merging and dismissing possible
+  with a content security policy of their own); `ledger` (accounts and balances, categories, the
+  household forecast settings, transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider

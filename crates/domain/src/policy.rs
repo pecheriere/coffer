@@ -22,10 +22,20 @@
 //! | Trigger a sync                           | `Write`                       |
 //! | Add, reconnect or remove a connection    | `Write`                       |
 //! | Create or change a category or group     | `Write`                       |
+//! | Read a forecast or a what-if             | `Transactions`                |
+//! | Read plan versus actual                  | `Transactions`                |
+//! | Create, change or delete a planned item  | `Write`                       |
 //!
 //! Using an existing category on a split is a write to the transaction's
 //! account, decided by [`authorize_account`]. A connection's last error is
 //! shown only to an actor who sees every account at `Transactions`.
+//!
+//! A planned item whose hint names an account the actor cannot see at
+//! `Transactions` is treated as missing: left out of lists and answered like
+//! an item that does not exist ([`plan_item_visible`], spec §8.9 R3). A
+//! planned item without a hint is household data, which needs `Transactions`
+//! on at least one account, named or through an `all` grant. An actor holding
+//! only `Balances` sees no planned items: an empty list, not a refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -119,6 +129,21 @@ impl AccountAccess {
                     .filter_map(|account| Some((*account, self.level_for(*account)?)))
                     .collect(),
             },
+        }
+    }
+
+    /// Whether at least one account, named or through an `all` grant, is
+    /// granted at least `at_least`. Capped by the ceiling like the rest.
+    #[must_use]
+    pub fn some_account_at(&self, at_least: AccountLevel) -> bool {
+        match self {
+            Self::Uniform(level) => *level >= at_least,
+            Self::Granted { accounts, .. } => {
+                self.sees_every_account(at_least)
+                    || accounts
+                        .keys()
+                        .any(|account| self.level_for(*account) >= Some(at_least))
+            }
         }
     }
 
@@ -498,6 +523,22 @@ pub fn authorize_every_account(
             action: Action::AccessAccount { needed },
             reason: DenyReason::EveryAccount { needed },
         })
+    }
+}
+
+/// Whether an actor holding `access` may know a planned item hinting at
+/// `hint` exists. An item's name, amount, cadence and notes are more than
+/// `Balances` shows, so they need `Transactions`: on the hinted account, or
+/// without a hint on at least one account, named or through an `all` grant.
+/// Below that the item is treated as missing, because a refusal would confirm
+/// it exists: a list comes back empty, not refused.
+#[must_use]
+pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> bool {
+    match hint {
+        Some(account) => access
+            .level_for(account)
+            .is_some_and(|level| level >= AccountLevel::Transactions),
+        None => access.some_account_at(AccountLevel::Transactions),
     }
 }
 

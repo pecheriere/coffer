@@ -6,7 +6,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::label_type;
-use crate::ids::CategoryId;
+use crate::ids::{CategoryId, PlannedItemId};
 
 /// The most splits one transaction may have.
 pub const MAX_SPLITS: usize = 50;
@@ -89,6 +89,7 @@ macro_rules! string_enum {
         }
     };
 }
+pub(crate) use string_enum;
 
 string_enum!(
     /// Whether a member (or an agent) has looked at a transaction.
@@ -157,6 +158,12 @@ pub struct SplitInput {
     /// This part in the transaction currency's minor units, with the
     /// transaction's sign convention; never zero.
     pub minor_units: i64,
+    /// The goal this part counts towards, which must exist and be in the
+    /// transaction's currency; a completed or inactive goal may be named. One
+    /// the token can't see answers as missing, unless the transaction is
+    /// already linked to it. Left out, the part counts towards none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<PlannedItemId>,
 }
 
 /// Checks that `splits` fit a transaction of `amount_minor`: none at all
@@ -335,6 +342,7 @@ mod tests {
         SplitInput {
             category: CategoryId::new(),
             minor_units,
+            goal: None,
         }
     }
 

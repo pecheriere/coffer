@@ -189,8 +189,9 @@ A transaction has a signed `amount` (`{"minor_units": -1234, "currency":
 "USD"}`; negative is money out of the account), a `posted_on` day, the
 `description` its source gave, and the fields members and agents set:
 `payee`, `notes`, `review` (`unreviewed` or `reviewed`), `assignee` (a
-member id or `null`) and `splits` (`[{id, category, amount}]`, empty when
-uncategorized). `reviewed_by` and `categorized_by` say who reviewed and who
+member id or `null`) and `splits` (`[{id, category, amount, goal}]`, empty when
+uncategorized; `goal` is the id of the goal the split counts towards, or
+`null`). `reviewed_by` and `categorized_by` say who reviewed and who
 last changed the splits (`{member, agent, system, at}`); `origin` is
 `manual` or `imported`.
 
@@ -258,8 +259,11 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   `payee` (`null` restores the source's), `notes` (`null` or `""` clears),
   `review`, `assignee` (an active member, or `null`) and `splits` (`[]`
   uncategorizes; otherwise 1 to 50 non-zero splits on categories that are
-  not archived, summing exactly to the amount). A patch that changes nothing
-  records nothing.
+  not archived, summing exactly to the amount, each with an optional `goal`
+  in the transaction's currency; a split sent without one loses its link). A
+  goal the token can't see answers like one that does not exist, unless the
+  transaction is already linked to it. A patch that changes nothing records
+  nothing.
 - `DELETE /api/v1/transactions/{transaction_id}` (`write`) deletes a manual
   transaction (204); an imported one is a 409 `conflict`.
 - `POST /api/v1/transactions/batch` (`write`) applies

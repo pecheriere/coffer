@@ -1,5 +1,5 @@
-//! The ledger: accounts and their balances, categories, transactions and
-//! the resolution of possible duplicates.
+//! The ledger: accounts and their balances, categories, transactions, the
+//! resolution of possible duplicates, and planned items.
 //! Every operation authorizes through the policy, with account access from
 //! the [`AccessResolver`], and writes its audit entry in the same
 //! transaction as its change.
@@ -7,6 +7,8 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod plan_items;
+pub mod settings;
 pub mod transactions;
 
 use std::sync::Arc;
@@ -96,6 +98,11 @@ impl Ledger {
     /// [`LedgerError::Denied`] without [`Action::WriteHousehold`] or write
     /// access to every account; a failure to resolve access.
     pub async fn authorize_category_write(&self, actor: &Actor) -> Result<(), LedgerError> {
+        self.authorize_shared_write(actor).await
+    }
+
+    /// Whether `actor` may change data every account shares.
+    async fn authorize_shared_write(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::WriteHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Write)
             .await

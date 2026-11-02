@@ -14,7 +14,7 @@ testkit = []
 openapi = ["dep:utoipa"]
 
 [dependencies]
-jiff.workspace = true
+jiff = { workspace = true, features = ["serde"] }
 serde.workspace = true
 thiserror.workspace = true
 utoipa = { workspace = true, optional = true }

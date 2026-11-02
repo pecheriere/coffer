@@ -7,9 +7,11 @@ mod audit;
 mod categories;
 pub(crate) mod connections;
 pub mod extract;
+mod household;
 mod me;
 mod members;
 pub mod openapi;
+mod plan_items;
 mod provider_accounts;
 mod router;
 mod transactions;
@@ -36,6 +38,7 @@ pub(super) fn router() -> Router<AppState> {
 fn routes() -> ApiRouter {
     ApiRouter::new()
         .op(routes!(me::me))
+        .op(routes!(household::get, household::update))
         .op(routes!(members::list))
         .op(routes!(audit::list))
         .op(routes!(accounts::list, accounts::create))
@@ -55,6 +58,12 @@ fn routes() -> ApiRouter {
             transactions::get,
             transactions::update,
             transactions::delete
+        ))
+        .op(routes!(plan_items::list, plan_items::create))
+        .op(routes!(
+            plan_items::get,
+            plan_items::update,
+            plan_items::delete
         ))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))

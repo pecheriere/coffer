@@ -23,9 +23,11 @@ pub(super) const BEARER: &str = "bearer";
 pub(super) mod tags {
     pub const IDENTITY: &str = "identity";
     pub const MEMBERS: &str = "members";
+    pub const HOUSEHOLD: &str = "household";
     pub const ACCOUNTS: &str = "accounts";
     pub const CATEGORIES: &str = "categories";
     pub const TRANSACTIONS: &str = "transactions";
+    pub const PLAN: &str = "plan";
     pub const CONNECTIONS: &str = "connections";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
@@ -107,6 +109,11 @@ pub(super) fn base() -> OpenApi {
             tag(tags::IDENTITY, "Who the token belongs to."),
             tag(tags::MEMBERS, "The household's members."),
             tag(
+                tags::HOUSEHOLD,
+                "The household-wide forecast settings: safety floor, income, horizon and \
+                 stale-balance threshold.",
+            ),
+            tag(
                 tags::ACCOUNTS,
                 "Accounts and their daily balances. Amounts are integer minor units of the \
                  account's currency.",
@@ -120,6 +127,11 @@ pub(super) fn base() -> OpenApi {
                 tags::TRANSACTIONS,
                 "Transactions, their splits into categories, and their review: listing, \
                  search, single changes and atomic batches.",
+            ),
+            tag(
+                tags::PLAN,
+                "The household's spending plan: recurring items, one-offs and goals. Amounts \
+                 are positive magnitudes with a direction.",
             ),
             tag(
                 tags::CONNECTIONS,

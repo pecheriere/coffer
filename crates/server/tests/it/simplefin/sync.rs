@@ -81,6 +81,7 @@ async fn sync_from_fixtures_then_posted_keeps_state() {
                 splits: Some(vec![SplitInput {
                     category: coffee,
                     minor_units: -1825,
+                    goal: None,
                 }]),
                 ..TransactionPatch::default()
             },
