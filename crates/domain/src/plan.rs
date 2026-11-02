@@ -118,7 +118,8 @@ string_enum!(
 
 string_enum!(
     /// How a recurring outflow relates to what was spent in its category so
-    /// far this month: a bill counts in full, a budget is reduced by it.
+    /// far this month: a bill counts in full, a budget counts all of this
+    /// month's occurrences, those already past too, less that spending.
     PlanSpending, PlanError::UnknownSpending,
     {
         Bill => "bill",

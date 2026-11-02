@@ -2,17 +2,21 @@
 //! stored outflows are touched: a hypothetical item neither reduces, consumes nor
 //! owes, and a goal has spending of its own.
 //!
-//! A recurring bill or a one-off counts in full until its date passes. Past it,
-//! spending in its category pays them in date order, and whatever it does not cover
-//! is still needed: a gap, reported, since the money may have gone under another
-//! category. Spending goes to them before any budget, since the data cannot tell
-//! which it was for, so money spent on a budget can hide an unpaid bill.
+//! A recurring bill or a one-off counts in full until its date passes, so one dated
+//! `as_of` counts in full even if it was paid that day. Past it, spending in its category
+//! pays them in date order, and whatever it does not cover is still needed: a gap,
+//! reported, since the money may have gone under another category. Spending goes to them
+//! before any budget, since the data cannot tell which it was for, so money spent on a
+//! budget can hide an unpaid bill.
 //!
-//! A budget is reduced. Each category and currency has one pool: the month's
-//! spending less every planned outflow dated earlier this month, bills first, since
-//! that spending was already planned for, floored at 0. The pool then pays for this
-//! month's remaining budget occurrences in date order, so one purchase never reduces
-//! two items, and a paid bill never eats a budget.
+//! A budget is reduced, and it counts its whole calendar month: all its occurrences in
+//! `as_of`'s month, before `as_of` too, go into its line and the first bucket, so what it
+//! has not spent is still needed. Later months count only inside the window. Each
+//! category and currency has one pool: the month's spending less the recurring bills and
+//! one-offs dated this month up to and including `as_of`, since that spending was already
+//! planned for, floored at 0. The pool then pays for the month's budget occurrences in
+//! date order, so one purchase never reduces two items, and a paid bill never eats a
+//! budget.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +41,7 @@ struct Occurrence {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ItemAdjustment {
-    /// What comes off a budget in the window.
+    /// What comes off a budget's occurrences this month.
     pub(super) reduced_by: i128,
     /// What a recurring bill or one-off dated earlier this month still needs.
     pub(super) unpaid: i128,
@@ -62,6 +66,23 @@ fn pool_key(item: &ItemInput) -> Option<PoolKey> {
     let outflow = item.direction == PlanDirection::Outflow;
     let category = item.category.filter(|_| stored && outflow)?;
     Some((category, item.amount.currency))
+}
+
+/// A stored budget, which counts its whole month. Only a recurring outflow is one, so a
+/// one-off marked as a budget stays what it is.
+fn is_stored_budget(item: &ItemInput) -> bool {
+    pool_key(item).is_some()
+        && item.spending == Some(PlanSpending::Budget)
+        && matches!(item.schedule, PlanSchedule::Recurring { .. })
+}
+
+/// The first day `item`'s occurrences count from.
+pub(super) fn counts_from(item: &ItemInput, as_of: Date) -> Date {
+    if is_stored_budget(item) {
+        as_of.first_of_month()
+    } else {
+        as_of
+    }
 }
 
 fn occurrences(
@@ -92,24 +113,26 @@ pub(super) fn reduce(
         *spent.entry((row.category, row.currency)).or_default() += i128::from(row.spent_minor);
     }
 
-    let mut planned_earlier: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    let through_as_of = input.as_of.tomorrow().unwrap_or(Date::MAX);
+    let mut planned_so_far: BTreeMap<PoolKey, i128> = BTreeMap::new();
     let mut earlier_payments = Vec::new();
-    let mut remaining_budgets = Vec::new();
+    let mut month_budgets = Vec::new();
     for (index, item) in input.items.iter().enumerate() {
         let Some(key) = pool_key(item) else {
             continue;
         };
         let amount = i128::from(item.amount.minor_units);
-        let earlier = item.schedule.occurrences(month_start, input.as_of);
-        *planned_earlier.entry(key).or_default() += amount * i128::from(count(&earlier)?);
-        let budget = item.spending == Some(PlanSpending::Budget)
-            && matches!(item.schedule, PlanSchedule::Recurring { .. });
-        if budget {
-            let dates = item.schedule.occurrences(input.as_of, reducible_until);
-            remaining_budgets.extend(occurrences(dates, index, key, amount));
+        if is_stored_budget(item) {
+            let dates = item.schedule.occurrences(month_start, reducible_until);
+            month_budgets.extend(occurrences(dates, index, key, amount));
         } else {
-            // A goal has no occurrences, so this is recurring bills and one-offs.
-            earlier_payments.extend(occurrences(earlier, index, key, amount));
+            // A goal has no occurrences, so this is recurring bills and one-offs. Today's
+            // spending may be one dated `as_of`, so it takes its share of the pool, but it
+            // has not passed, so it owes no gap.
+            let so_far = item.schedule.occurrences(month_start, through_as_of);
+            *planned_so_far.entry(key).or_default() += amount * i128::from(count(&so_far)?);
+            let passed = so_far.into_iter().filter(|&on| on < input.as_of).collect();
+            earlier_payments.extend(occurrences(passed, index, key, amount));
         }
     }
 
@@ -121,15 +144,15 @@ pub(super) fn reduce(
 
     let mut spending_sensitive_currencies: BTreeSet<Currency> =
         not_seen.keys().map(|&(_, currency)| currency).collect();
-    spending_sensitive_currencies.extend(remaining_budgets.iter().map(|one| one.key.1));
+    spending_sensitive_currencies.extend(month_budgets.iter().map(|one| one.key.1));
 
     let mut pools = spent;
-    for (key, planned) in planned_earlier {
+    for (key, planned) in planned_so_far {
         if let Some(pool) = pools.get_mut(&key) {
             *pool -= planned;
         }
     }
-    reduce_budgets(remaining_budgets, pools, &mut by_item);
+    reduce_budgets(month_budgets, pools, &mut by_item);
 
     Ok(Reduction {
         by_item,

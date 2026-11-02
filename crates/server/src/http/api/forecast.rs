@@ -22,8 +22,8 @@ use crate::ledger::forecast::{ForecastOptions, WhatIfRequest};
 pub struct ForecastQuery {
     /// The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to
     /// 2200: by default the household's today. A balance is the latest on or before
-    /// it. Any other day than today raises the caution `as_of_not_today`, since bills
-    /// between today and that day fall outside the window.
+    /// it. Any other day than today raises the caution `as_of_not_today`, since what
+    /// falls due before that day's month is left out.
     #[serde(default, deserialize_with = "strict_date::deserialize_option")]
     pub as_of: Option<Date>,
     /// How many months the window covers, by default the household's setting.
@@ -56,6 +56,9 @@ pub struct ForecastQuery {
                    integer minor units.\n\n\
                    Every number traces to its lines: `accounts` says which balances counted, \
                    `items` what each planned item added, `months` the same by calendar month. \
+                   A stored budget counts its whole month: its occurrences earlier in `as_of`'s \
+                   month are on its line and in the first month, less the spending bills and \
+                   one-offs dated up to `as_of` leave in its category. \
                    This month's spending counts only where a balance already shows it: posted, \
                    not pending, on or before its account's balance date, and not removed or \
                    revised by its provider, though a refund flagged so still counts. Money out \

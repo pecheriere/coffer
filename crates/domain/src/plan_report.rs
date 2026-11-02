@@ -174,8 +174,8 @@ pub struct RolloverRow {
     /// The occurrences of the category's budgets in those months.
     pub budgeted: Money,
     /// What those months spent on them, while a budget was running: each month's `actual`
-    /// once the bills and one-offs dated before today have taken their share. A month of
-    /// refunds lowers it.
+    /// once the bills and one-offs dated up to and including today have taken their share. A
+    /// month of refunds lowers it.
     pub spent: Money,
     /// `budgeted` minus `spent`: positive for what was left unspent, negative for
     /// overspent.
@@ -276,8 +276,9 @@ struct Planned {
     total: i128,
     /// The part of `total` from budgets.
     budget: i128,
-    /// The bills and one-offs dated before today, which spending pays first (R9).
-    due_before_today: i128,
+    /// The bills and one-offs dated up to and including today, which spending pays first
+    /// (R9).
+    due_by_today: i128,
 }
 
 /// What happened in one [`Key`], with `actual` positive for what the category's kind counts.
@@ -304,8 +305,8 @@ fn planned_by_month(input: &PlanReportInput, reported: &[CalendarMonth]) -> BTre
                 entry.total += amount;
                 if is_budget {
                     entry.budget += amount;
-                } else if on < input.today {
-                    entry.due_before_today += amount;
+                } else if on <= input.today {
+                    entry.due_by_today += amount;
                 }
             }
         }
@@ -451,7 +452,7 @@ fn rollover_rows(
             }
             let actual = actuals.get(&key).map_or(0, |happened| happened.actual);
             spent += if actual > 0 {
-                (actual - plan.due_before_today).max(0)
+                (actual - plan.due_by_today).max(0)
             } else {
                 actual
             };

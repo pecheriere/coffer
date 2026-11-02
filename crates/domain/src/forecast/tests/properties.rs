@@ -139,7 +139,10 @@ fn window_end(as_of: Date, months: u8) -> Result<Date, String> {
 
 fn input() -> impl Strategy<Value = ForecastInput> {
     let categories = vec![CategoryId::new(), CategoryId::new(), CategoryId::new()];
-    let spent = collection::vec((0..categories.len(), 0..MAX_AMOUNT, any::<bool>()), 0..4);
+    let spent = collection::vec(
+        (0..categories.len(), -1_000..MAX_AMOUNT, any::<bool>()),
+        0..4,
+    );
     (
         collection::vec(account(), 0..5),
         collection::vec(item(categories.clone()), 0..12),
@@ -218,12 +221,22 @@ fn in_currency(
 #[derive(Default)]
 struct PoolFigures {
     spent: i128,
-    /// Stored outflows dated earlier this month.
-    earlier: i128,
-    /// The part of `earlier` that is recurring bills and one-offs.
+    /// Recurring bills and one-offs dated earlier this month.
     earlier_bills: i128,
-    /// Budgets' occurrences from `as_of` to the month's end.
-    remaining_budgets: i128,
+    /// The same, with those dated `as_of`: what comes off the pool.
+    bills_so_far: i128,
+    /// Budgets' occurrences anywhere in the month.
+    month_budgets: i128,
+    /// Budgets' occurrences in the window after the month.
+    later_budgets: i128,
+}
+
+/// A stored budget, the only item whose window reaches back to the month's start.
+fn is_stored_budget(item: &ItemInput) -> bool {
+    matches!(item.source, LineSource::PlannedItem { .. })
+        && item.direction == PlanDirection::Outflow
+        && item.category.is_some()
+        && item.spending == Some(PlanSpending::Budget)
 }
 
 fn dated(item: &ItemInput, from: Date, to: Date) -> Result<i128, String> {
@@ -233,16 +246,18 @@ fn dated(item: &ItemInput, from: Date, to: Date) -> Result<i128, String> {
 }
 
 /// Checks reductions and unpaid bills against aggregates worked out apart from the
-/// walk: the pool (spending less earlier plans, floored at 0) is either all used or
-/// covers all that remains, and the gap is earlier bills less spending, floored at 0.
+/// walk: the pool (spending less bills and one-offs dated up to `as_of`, floored at 0) is
+/// either all used or covers the month's budgets, and the gap is those dated before `as_of`
+/// less spending, floored at 0. What budgets count is then what the month's leave plus the later months' whole.
 fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), String> {
     let month_start = input.as_of.first_of_month();
+    let window_ends = window_end(input.as_of, input.horizon_months)?;
     let month_end = input
         .as_of
         .last_of_month()
         .tomorrow()
         .map_err(|_| "no next month")?
-        .min(window_end(input.as_of, input.horizon_months)?);
+        .min(window_ends);
     let mut pools: BTreeMap<(CategoryId, Currency), PoolFigures> = BTreeMap::new();
     for spent in &input.category_spent {
         pools
@@ -257,13 +272,18 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             continue;
         };
         let figures = pools.entry((category, item.amount.currency)).or_default();
-        let earlier = dated(item, month_start, input.as_of)?;
-        figures.earlier += earlier;
         if item.spending == Some(PlanSpending::Budget) {
-            figures.remaining_budgets += dated(item, input.as_of, month_end)?;
+            figures.month_budgets += dated(item, month_start, month_end)?;
+            figures.later_budgets += dated(item, month_end, window_ends)?;
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs.
-            figures.earlier_bills += earlier;
+            figures.earlier_bills += dated(item, month_start, input.as_of)?;
+            figures.bills_so_far += dated(item, month_start, input.as_of)?
+                + dated(
+                    item,
+                    input.as_of,
+                    input.as_of.tomorrow().map_err(|_| "no tomorrow")?,
+                )?;
         }
     }
     for (&(category, code), figures) in &pools {
@@ -274,9 +294,29 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
                 .filter(move |line| line.category == Some(category) && line.gross.currency == code)
         };
         let reduced: i128 = lines().map(|line| wide(line.reduced_by)).sum();
-        let pool = (figures.spent - figures.earlier).max(0);
-        if reduced != pool.min(figures.remaining_budgets) {
+        let pool = (figures.spent - figures.bills_so_far).max(0);
+        let reduced_expected = pool.min(figures.month_budgets);
+        if reduced != reduced_expected {
             return Err("a pool was not spent exactly once".to_owned());
+        }
+        let budgets_counted: i128 = input
+            .items
+            .iter()
+            .filter(|item| {
+                is_stored_budget(item)
+                    && item.category == Some(category)
+                    && item.amount.currency == code
+            })
+            .flat_map(|item| {
+                forecast
+                    .items
+                    .iter()
+                    .filter(|line| line.source == item.source)
+            })
+            .map(|line| wide(line.counted))
+            .sum();
+        if budgets_counted != figures.month_budgets - reduced_expected + figures.later_budgets {
+            return Err("a budget's month was not held back".to_owned());
         }
         let unpaid: i128 = lines().map(|line| wide(line.unpaid)).sum();
         if unpaid != (figures.earlier_bills - figures.spent).max(0) {
@@ -295,6 +335,53 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             .sum();
         if warned != unpaid {
             return Err("a gap was not reported in full".to_owned());
+        }
+    }
+    check_budget_months(input, forecast, month_start, month_end)
+}
+
+/// The first bucket holds all of what a stored budget's month leaves, and each line's
+/// `gross` is its occurrences from the month's start for a stored budget, or from `as_of`
+/// for anything else.
+fn check_budget_months(
+    input: &ForecastInput,
+    forecast: &Forecast,
+    month_start: Date,
+    month_end: Date,
+) -> Result<(), String> {
+    let first = forecast.months.first().ok_or("no first month")?;
+    let window_ends = window_end(input.as_of, input.horizon_months)?;
+    for item in &input.items {
+        let dated_item = !matches!(item.schedule, PlanSchedule::Goal { .. });
+        let outflow = item.direction == PlanDirection::Outflow;
+        let line = forecast
+            .items
+            .iter()
+            .find(|line| line.source == item.source);
+        if !(dated_item && outflow && matches!(item.source, LineSource::PlannedItem { .. })) {
+            continue;
+        }
+        let from = if is_stored_budget(item) {
+            month_start
+        } else {
+            input.as_of
+        };
+        if line.map_or(0, |line| wide(line.gross)) != dated(item, from, window_ends)? {
+            return Err("a line's gross has the wrong occurrences".to_owned());
+        }
+        if is_stored_budget(item) {
+            let reduced = line.map_or(0, |line| wide(line.reduced_by));
+            let in_first: i128 = first
+                .lines
+                .iter()
+                .filter(|month| month.currency == item.amount.currency)
+                .flat_map(|month| &month.items)
+                .filter(|listed| listed.source == item.source)
+                .map(|listed| wide(listed.amount))
+                .sum();
+            if in_first != dated(item, month_start, month_end)? - reduced {
+                return Err("the first month does not hold a budget's month".to_owned());
+            }
         }
     }
     Ok(())

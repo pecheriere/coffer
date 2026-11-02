@@ -203,7 +203,8 @@ fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
                 "Projected cash is what's left at the end of the month, or of the forecast, after "
                 "planned outflows and any income counted. It doesn't set aside goals or the safety floor. "
                 "Goal accrual is what goals add to the need that month, and the first month holds "
-                "all they had built up before it."
+                "all they had built up before it. The first month also holds what a budget's "
+                "days earlier that month have left unspent, since it may still go."
             }
         }
     }
