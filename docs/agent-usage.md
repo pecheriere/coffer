@@ -89,7 +89,10 @@ token's access.
   action needs balances access to every account". A patch of other settings doesn't.
 - `GET /api/v1/reports/net-worth` needs only `read`, and sums the accounts the token
   sees at `balances`. **Nothing marks that sum as partial**, so don't report it as the
-  whole household's. `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
+  whole household's. Each of its `buckets` is made the same way, from what the token
+  sees at `balances`: a token holding one of a child's two accounts gets a bucket of
+  one, unmarked, and a bucket none of whose accounts it sees isn't there.
+  `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
   at `balances`: which rates are stored depends on the currencies in use.
 - The forecast, a what-if and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
@@ -186,27 +189,49 @@ money owed or going out.
   `beneficiary`, `include_in_net_worth`, `include_in_forecast` (both default `true`,
   and always `false` for an account that isn't the household's) and `opening_balance`
   (`{"on": "YYYY-MM-DD", "minor_units": n}`). Answers 201.
-- `belongs_to` says whose money an account is: `household`, `someone_else` (the
-  default for `education` and `custodial`) or `given_away` (the default for
-  `charitable`); every other kind defaults to `household`. It says how coffer treats
-  the money and is not a legal statement. An account that isn't `household` counts in
-  neither net worth nor the forecast, and asking for either flag `true` on one answers
-  422: to count a 529 as the household's, set `belongs_to` to `household`, which is
-  audited. `beneficiary` is an optional label on an account that isn't `household`, 1
-  to 64 characters with something visible and no control, format or separator
-  characters, and 422 on one that is. It is exact after trimming, may be a child's
-  name, and goes in the audit log as an account's name does. On a create `""` is the
-  same as leaving it out. `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
+- `belongs_to` says whose money an account is, apart from what kind of account it is:
+
+  | Value | Means | By default for |
+  |---|---|---|
+  | `household` | The household's own money. | every other kind |
+  | `someone_else` | Held for someone, or for a purpose beyond the household's own. | `education` (a 529 and similar), `custodial` (UTMA, UGMA) |
+  | `given_away` | No longer the household's, whatever has happened to it since: money in a donor-advised fund, even before it is granted. | `charitable` |
+
+  It says how coffer treats the money and is **not a legal statement**: who legally owns
+  a 529 or a custodial account, and how a tax form treats it, is outside it, so don't
+  answer those from it. The kind can't say it alone. A brokerage account held for a
+  child is a `brokerage` that is `someone_else`, a 529 a parent means to spend on
+  themselves is an `education` account that is `household`, and a brokerage account
+  merely earmarked for giving is a `brokerage` that is `household`.
+- **Never set `belongs_to` from an account's name alone, or a `kind` that moves it:
+  ask a member.** It decides whether the money is in net worth.
+- An account that isn't `household` counts in neither net worth nor the forecast, and
+  shows in its own [bucket](agent-net-worth.md#buckets-money-that-isnt-the-households)
+  beside net worth. Both flags are always `false` on it, and asking for either `true`
+  answers 422. A member says otherwise only through `belongs_to`: to count a 529 as the
+  household's, set `belongs_to` to `household`, which is audited. It then counts in net
+  worth; a forecast still reads it as `not_cash` while its class is `invested`. A
+  `household` account keeps both flags as before, for money that is the household's
+  and that it would rather not count.
+- `beneficiary` is an optional label on an account that isn't `household`, such as a
+  child or a family fund, and a 422 on one that is. It isn't a member and has no record
+  of its own: 1 to 64 characters with something visible and no control, format or
+  separator characters other than the plain space. It is exact after trimming, so two
+  spellings make two buckets, may be a child's name, and goes in the audit log as an
+  account's name does. A provider's text never fills it. On a create `""` is the same
+  as leaving it out. `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
   takes these fields and follows the same rule, after the provider's hint has decided
   the kind.
 - `GET` and `PATCH /api/v1/accounts/{account_id}` read and change an
   account. An account answers its `belongs_to` and `beneficiary` at `balances`, and
   they change with `write` on it. The currency never changes (sending it is a 400
   `invalid`); a new `kind` re-defaults the liquidity class unless one was chosen, and
-  `belongs_to` unless that was chosen, which `belongs_to_overridden` says: moving away from `household` turns both flags
-  off, and moving back turns on any the request doesn't name and removes the
-  beneficiary. `beneficiary: ""` (or only plain spaces) removes it, since leaving it out keeps it;
-  `closed: true` closes the account.
+  `belongs_to` unless that was chosen, which `belongs_to_overridden` says. So patching
+  a counted account's `kind` to `education` alone takes it out of net worth, along with
+  its whole history. Moving away from `household` turns both flags off, and moving back
+  turns on any the request doesn't name and removes the beneficiary. `beneficiary: ""`
+  (or only plain spaces) removes it, since leaving it out keeps it; `closed: true`
+  closes the account.
 - `GET /api/v1/accounts/{account_id}/balances` pages the daily balances,
   newest first (`from` inclusive, `to` exclusive, `after`, `limit`).
 - `PUT /api/v1/accounts/{account_id}/balances/{on}` (`write`) records
@@ -347,6 +372,58 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
 - `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
   source record back into a transaction of its own.
 
+### Money to and from accounts that aren't the household's
+
+Nothing can check these rules until coffer has transfer links, so they are yours to
+follow. A contribution means money from one of the household's accounts to one whose
+`belongs_to` isn't `household`.
+
+- **A contribution to a 529, a custodial account or a donor-advised fund is an
+  `expense`, never a `transfer`.** A `transfer` category means money moved within the
+  household, which this isn't. In an `expense` category it reads as `actual` in plan
+  versus actual and pays a planned bill, and the surplus holds it once, as the unpaid
+  bill or as the lower balance; net worth falls as the bucket rises, which is what happened. In a `transfer` category
+  it is in no `actual` and pays no bill: the forecast's cash still falls while the bill
+  keeps counting, with `bill_not_seen`, so the surplus reads too low.
+- **A monthly contribution is a planned bill hinted at the account paying it**, not the
+  one receiving it. Hinted at the receiving account, it still counts, with the caution
+  `item_hint_not_counted`, whose `effect` is `still_needed`. A `transfer` category on a
+  planned item is refused (422).
+- **Money coming back**, such as a 529 paying a tuition bill into checking, is a refund
+  in the `expense` category it paid for, or `income`, on the household's side.
+- **Transactions inside such an account** sync and match as usual and can be
+  categorized, but stay out of `actual`, so a grant from a donor-advised fund doesn't
+  count a second time after the contribution. Categorized money there is reported per
+  month and currency in `not_the_households`, except in a `transfer` category or linked
+  to a goal. It reduces no budget, and uncategorized outflows there are left out of every list.
+- **A bill paid from such an account** left no counted cash, so it doesn't pay the bill:
+  [settle it](agent-forecast.md#settling-a-month) for that month, or `bill_not_seen` stays
+  and the gap keeps counting.
+- **A goal.** A split there linked to a goal stays on the goal's line and lowers what it
+  needs, since tuition paid from a 529 needs less from counted cash. Link the payment or
+  the contribution, never both: see `goal_linked_both_sides` in
+  [agent-forecast.md](agent-forecast.md#status-blockers-and-cautions).
+
+For example, 500.00 a month from checking to a college fund. The bill, in an `expense`
+category, hinted at checking:
+
+```json
+{
+  "name": "College fund contribution",
+  "category": "<college-category>",
+  "amount": {"minor_units": 50000, "currency": "USD"},
+  "direction": "outflow",
+  "account_hint": "<checking-account>",
+  "schedule": {"type": "recurring", "every": 1, "unit": "months", "anchor_on": "2026-01-05"}
+}
+```
+
+And each month's charge on checking, patched into that category, which pays the bill:
+
+```json
+{"splits": [{"category": "<college-category>", "minor_units": -50000}]}
+```
+
 ### Plan, forecast and report
 
 The household's main question is how much cash it needs over the next N months
@@ -400,6 +477,9 @@ to do about each. In short:
 - **A token with grants gets the sum of the accounts it sees, and nothing says
   so.** Check `access.all` in `GET /api/v1/me`: when it is `null`, don't report the
   sum as the household's net worth.
+- `buckets` is the money that isn't the household's, each with its own `status` and
+  `cautions`. **Never add a bucket to `total`, or one to another, and never call a sum
+  of them net worth.**
 - A forecast doesn't convert between currencies; see
   [agent-forecast.md](agent-forecast.md).
 
@@ -482,7 +562,12 @@ account stays bound. coffer syncs every connection on a schedule
   `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
   (creates a linked account and binds it) attach what a provider reports to
   the household's accounts. A provider account's `kind_hint` is what the
-  provider reports, and a create with no `kind` falls back on it.
+  provider reports, and a create with no `kind` falls back on it. That decides
+  whose money it is too: Plaid's subtypes `529` and `education savings account`
+  hint `education`, and `utma` and `ugma` hint `custodial`, so such a create puts
+  the account in a bucket, out of net worth, unless it names `belongs_to`. A bind to
+  an existing account leaves that account's kind and `belongs_to` as they are, and
+  the balances kept for it go where the account does.
   `suggested_kind` is a guess from the provider's name, there only while the
   account is unbound with no `kind_hint`, and it is never applied: with neither
   a `kind` nor a `kind_hint` the create is a 422. The kind decides what counts

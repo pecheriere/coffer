@@ -388,7 +388,14 @@ units, per currency, and currencies are never netted.
   Invested, illiquid and long-term liability accounts never count. A closed card
   that still owes counts against the cash, with a caution. Every account is
   listed in `accounts` with `counted` and, when not, `not_counted`
-  (`not_household`, `excluded_by_flag`, `closed` or `not_cash`).
+  (`not_household`, `excluded_by_flag`, `closed` or `not_cash`). `not_household` means
+  its `belongs_to` isn't `household`, such as a 529, a custodial account or a
+  donor-advised fund, and it is the reason whatever else holds: a held account in class
+  `cash` stays out too. Do nothing about it, unless it really is the household's money.
+  Then ask a member, never going by the name alone, and set `belongs_to` to `household`
+  (`PATCH /accounts/{id}`). `include_in_forecast: true` on it is a 422. Once moved, the
+  rules above apply to it like any account: a 529 in class `invested` then reads
+  `not_cash`.
 - `planned_outflows` is every occurrence of an outflow in the window, reduced as
   described in [What this month's spending does](#what-this-months-spending-does).
 - `goals` is what the goals hold back at `end_exclusive`.
@@ -554,8 +561,8 @@ first entry):
 | `kind` | Means | Do |
 |---|---|---|
 | `floor_not_set` | No safety floor. | Ask the owner what to hold back, then `PATCH /household/settings` (needs `admin`). To explore without setting one, a what-if may carry its own `floor`; say that it is not the household's. |
-| `no_counted_accounts` | No open `cash` or card account is in the forecast. | Look at `accounts[].not_counted`. Create or bind the household's accounts, or set `include_in_forecast` on the right ones (`PATCH /accounts/{id}`). |
-| `balance_missing` (`account`, `name`) | A counted account has no balance on or before `as_of`, so it could hold anything. | Record one (`PUT /accounts/{id}/balances/{on}`), wait for or request a sync of a linked account, or take the account out of the forecast. |
+| `no_counted_accounts` | No open `cash` or card account is in the forecast. | Look at `accounts[].not_counted`. Create or bind the household's accounts, or set `include_in_forecast` on the right ones (`PATCH /accounts/{id}`). A flag doesn't fix this on an account with `not_household`: `true` is a 422, because that money isn't the household's cash. |
+| `balance_missing` (`account`, `name`) | A counted account has no balance on or before `as_of`, so it could hold anything. | Record one (`PUT /accounts/{id}/balances/{on}`), wait for or request a sync of a linked account, or take the account out of the forecast. An account with `not_household` never raises this, and no flag makes a held account's balance count: if this one isn't the household's money, a member says so with `belongs_to`. |
 | `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. A fixed floor belongs to its own currency, so another currency's row has a floor of 0; a months floor is worked out per currency from that currency's recurring outflows. |
 
 **Cautions** keep the number but make it `provisional`. Each has a `kind`
@@ -564,7 +571,7 @@ and the fields shown:
 | `kind` | Means | Do |
 |---|---|---|
 | `balance_stale` (`account`, `on`, `age_days`) | A counted balance is older than `stale_after_days`, its age measured to the earlier of `as_of` and today. | Sync, or ask the owner for a current balance. The cash may have changed. |
-| `unbound_provider_account` (`provider_account`, `connection`, `name`, `institution`, `currency_raw`, `currency_supported`) | A provider account's money is in no account, so it is not counted. | Bind it (`POST /provider-accounts/{id}/bind`, or `create-account`), or tell the owner. It cannot be dismissed yet, which is why it does not block. |
+| `unbound_provider_account` (`provider_account`, `connection`, `name`, `institution`, `currency_raw`, `currency_supported`) | A provider account's money is in no account, so it is not counted. | Bind it (`POST /provider-accounts/{id}/bind`, or `create-account`), or tell the owner. It cannot be dismissed yet, which is why it does not block. It may be a 529, a custodial account or a donor-advised fund: ask a member what it is, since its name alone doesn't decide. Bound as one, it lifts this caution and the number doesn't change, as it is `not_household`. |
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection is not syncing. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
 | `as_of_not_today` (`today`) | The window does not start today. What falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |

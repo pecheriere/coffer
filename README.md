@@ -37,7 +37,10 @@ What exists and what comes next:
   only when the household holds more than one currency), with a read-only net worth
   page and chart; balances kept for provider accounts that aren't bound yet; server
   panics and browser errors reported in the log; and sturdier syncing.
-- **Next:** accounts held for other people, rules, transfer links, a forecast across currencies, entering a rate by
+- **Unreleased:** accounts that aren't the household's (529, custodial, donor-advised),
+  reported in buckets beside net worth and left out of the forecast, and a suggested
+  kind when binding a provider account.
+- **Next:** rules, transfer links, a forecast across currencies, entering a rate by
   hand, and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 

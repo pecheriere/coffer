@@ -2,7 +2,9 @@
 
 ## Assets
 
-- Household financial data (accounts, balances, transactions, plan).
+- Household financial data (accounts, balances, transactions, plan), and the
+  beneficiary label on an account that isn't the household's, which may be a child's
+  name.
 - Credentials: passkey public keys, session cookies, agent tokens, provider
   credentials (a SimpleFin access URL, a Plaid access token), the server key.
 - The audit log, whose value is that it is trustworthy.
@@ -201,7 +203,8 @@
     query that gathers it is filtered by the token's accounts, so a hidden
     account's currency, rate state, balance age, dates, first day and closing do not
     appear, in `by_currency`, a caution or a point's date, and a token seeing no
-    counted account reads exactly like an empty household. Rates are stored once
+    counted account reads exactly like an empty household, apart from any bucket it
+    sees. Rates are stored once
     for the household and depend on the currencies in use, so the FX endpoints
     (`/api/v1/fx/coverage`, `/api/v1/fx/rates`) span every account and need `all`
     at `balances`, refused the same whether or not an account is hidden. So does a
@@ -211,6 +214,12 @@
     display currency starts unset and is never guessed, since a guess from the
     oldest account would reveal that account's currency. What is left is a
     residual risk below.
+  - **A bucket follows the same rule** (spec §8.11 B7). It is made from the accounts
+    the token sees at `balances` and sums those, unmarked: a token holding one of a
+    child's two accounts gets a bucket of one, and a hidden account's label, currency
+    and existence show nowhere, so a token seeing none of a bucket's accounts reads
+    exactly as if it didn't exist. An account's `belongs_to` and `beneficiary` read with
+    it at `balances` and change with `write` on it.
   - The plan is shared by every account, as categories are. Creating, changing,
     deleting or settling a planned item needs `all` at `write`, decided before the
     item is looked up. Reading one needs
@@ -308,12 +317,23 @@
   another site nothing. The back button after signing out depends on that `no-store`:
   signing out ends the session on the server but can't reach into the browser, so it is
   `no-store` that makes the browser ask again and be sent to sign in rather than redraw
-  the figures from a stored copy. `/admin/household` gains one form, for the
+  the figures from a stored copy. `/net-worth` also shows the buckets a member can see.
+  The count stays at two: `/connections` holds no such figures, but its bind forms now
+  hold a beneficiary label, so it stays in that table with its rejections withheld, as
+  the accepted risks below describe. `/admin/household` gains one form, for the
   display currency: admins only (checked before the form is read), the
   anti-forgery token and the `Origin` rule like every page form, and the same
   service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries
   record the member and the agent token involved.
+- **A beneficiary may be a child's name.** It is a free-text label on an account
+  that isn't the household's, never filled from a provider's text. It is never logged
+  (its `Debug` is redacted, and a refusal doesn't echo it) and is shown only with its
+  account, to whoever sees that account at `balances`. It goes in the audit log as an
+  account's name does. What stays after it is removed is an accepted risk below.
+- **A provider's name suggests a kind and is used no further for that.** The guess is
+  computed when read, for a member to confirm, and is never stored, logged or audited,
+  and never applied by itself.
 
 ## Accepted residual risks
 
@@ -510,7 +530,33 @@
   name an account the token cannot see, so it needs `all` at `transactions`;
   without it the token sees only that the status says something is wrong. It also
   reads the forecast settings other than the floor, and the planned items without
-  an account hint if it holds `transactions` on any account (below).
+  an account hint if it holds `transactions` on any account (below). A connection is
+  listed to it even if it serves only hidden accounts, with an empty account list and
+  its label, which is free text: a member could name one after a child. Whether to
+  filter them or withhold the label is tracked as issue #92.
+- **A removed beneficiary stays in two places.** The audit log is append-only, so the
+  label stays there with its account after it is removed, as an old account name does;
+  a token reading it needs `all` at `transactions`. `idempotency_keys.response_json` also keeps
+  the answer to a create holding it, for that credential's retry, until the key is
+  purged: keys older than 24 hours go at the next request carrying an `Idempotency-Key`,
+  so in a quiet household it can stay longer. Both are in a backup, like everything else
+  in the database.
+- **A restricted `write` token can move its account out of or into net worth.** With
+  `write` on one account a token can change that account's `belongs_to` or `kind`, and
+  so the household's number that every other reader sees, and its whole history, as it
+  already could with `include_in_net_worth`. It is audited with the values before and
+  after, and a member can reverse it. It reaches no other account.
+- **A provider's account type is trusted as a hint.** Plaid's subtypes `529`,
+  `education savings account`, `utma` and `ugma` become a `kind_hint`, so an agent's
+  `create-account` with no `kind` can put such an account in a bucket, out of net worth,
+  with no member choosing that. It takes `all` at `write`, is audited, and is reversible
+  by patching `belongs_to` to `household`. A provider's name alone never does this.
+- **A bucket's sum too large for the number type refuses the whole report.** A sum that
+  doesn't fit in 64 bits answers 422 with fixed text rather than a wrapped number, so a
+  mistyped balance on a bucket's accounts takes the household's figures away from any
+  reader who sees those accounts, as one in the household's own would, and a token with
+  `write` on them could do it on purpose, audited. A token that doesn't see them is
+  answered as before, so the refusal tells it nothing.
 - **An unhinted planned item's name is household data.** A name such as
   "Payment on the savings card" names an account to every token that sees the item,
   and an item with no `account_hint` is visible to any token holding `transactions`

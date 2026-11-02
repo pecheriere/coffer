@@ -16,9 +16,13 @@ for a token with an `all` grant at `balances` if the household's figure is
 wanted. In the household of the example below, a token that holds only the checking
 account at `balances` gets a `firm` report with `total` 500000 USD and no
 cautions, where the household's is 581720: nothing in it differs from a household
-of one account. A token that sees no counted account gets the same answer as a
-household with none (`no_counted_accounts`), which is not a net worth of zero
-either.
+of one account. A token that sees no counted account reads, outside `buckets`, the
+same as a household with none (`no_counted_accounts`), which is not a net worth of
+zero either. The same goes for a bucket: it sums the accounts the token holds at
+`balances`, unmarked, so a token holding only the college fund below gets a `firm`
+bucket for `Child A` of 2000000 USD, where a token seeing both of that bucket's
+accounts gets 2111720, and `no_counted_accounts` at the top. An account a token doesn't see, or a whole bucket,
+is mentioned nowhere.
 
 ## First run
 
@@ -38,7 +42,9 @@ grants) for step 3. `$BASE` is the server's address; ids in answers are UUIDs.
    The account's `kind` sets its liquidity class (see
    [Accounts](agent-usage.md#accounts)); a credit card is a
    `short_term_liability`. Net worth counts every account unless it is
-   created with `"include_in_net_worth": false`.
+   created with `"include_in_net_worth": false`, or isn't the household's: an
+   `education`, `custodial` or `charitable` account isn't, by default, and goes in
+   a [bucket](#buckets-money-that-isnt-the-households) instead.
 2. A balance on each, dated the day it was true:
    `PUT $BASE/api/v1/accounts/<savings>/balances/2026-10-29` with
    `{"minor_units": 100000}`. A balance carries forward until a newer one. An
@@ -80,7 +86,10 @@ grants) for step 3. `$BASE` is the server's address; ids in answers are UUIDs.
 | `account_points` | `true` by default: each account's own value at each point. `false` leaves them out. |
 
 A `from` after `to` or after today is 422, and so is a range of more than 1,000
-periods, whatever is stored. A date that is not exactly `YYYY-MM-DD` is 400.
+periods, whatever is stored. A date that is not exactly `YYYY-MM-DD` is 400. A sum
+too large for 64 bits, the household's or any bucket's, is 422 for the whole report,
+with the detail "the report's totals are too large to represent", for any token
+that sees those accounts. It usually means a mistyped balance: tell the owner.
 
 A **point** is the value on the last day of its period, or on the last day
 available when it says `partial: true` (the month under way, or a range that
@@ -89,9 +98,12 @@ period inside the range. A period where nothing counts has no point, so points
 can skip.
 
 Here is a firm report of a household with a checking account and a credit card in
-USD and a savings account in EUR, displayed in USD (the second point's
-`by_liquidity` and `by_currency`, and the first two accounts, are left out; their
-points have the same shape as the savings account's):
+USD and a savings account in EUR, displayed in USD. Beside it are a college fund in
+USD and a UTMA in EUR, both held for `Child A`, and a donor-advised fund called
+Giving, none of which is in any of the household's numbers. (The second point's
+`by_liquidity` and `by_currency` are left out, as are the first two accounts, whose
+points have the same shape as the savings account's, and each account's second
+point.)
 
 ```json
 {
@@ -152,7 +164,142 @@ points have the same shape as the savings account's):
     }
   ],
   "blockers": [],
-  "cautions": []
+  "cautions": [],
+  "buckets": [
+    {
+      "belongs_to": "someone_else",
+      "beneficiary": "Child A",
+      "status": "firm",
+      "points": [
+        {
+          "on": "2026-10-31",
+          "period_start": "2026-10-01",
+          "partial": false,
+          "total": {"minor_units": 2111720, "currency": "USD"},
+          "by_liquidity": [
+            {"liquidity": "invested", "amount": {"minor_units": 2111720, "currency": "USD"}}
+          ],
+          "by_currency": [
+            {"minor_units": 100000, "currency": "EUR"},
+            {"minor_units": 2000000, "currency": "USD"}
+          ],
+          "unconverted": []
+        },
+        {
+          "on": "2026-11-02",
+          "period_start": "2026-11-01",
+          "partial": true,
+          "total": {"minor_units": 2111720, "currency": "USD"},
+          "by_liquidity": ["..."],
+          "by_currency": ["..."],
+          "unconverted": []
+        }
+      ],
+      "accounts": [
+        {
+          "account": "<college-fund>",
+          "name": "College fund",
+          "liquidity": "invested",
+          "currency": "USD",
+          "counted": true,
+          "not_counted": null,
+          "first_on": "2026-10-26",
+          "closed_on": null,
+          "points": [
+            {
+              "on": "2026-10-31",
+              "balance": {"minor_units": 2000000, "currency": "USD"},
+              "balance_on": "2026-10-26",
+              "balance_source": "manual",
+              "counted": true,
+              "amount": {"minor_units": 2000000, "currency": "USD"},
+              "rate_on": null,
+              "conversion": "same"
+            }
+          ]
+        },
+        {
+          "account": "<utma>",
+          "name": "UTMA",
+          "liquidity": "invested",
+          "currency": "EUR",
+          "counted": true,
+          "not_counted": null,
+          "first_on": "2026-10-26",
+          "closed_on": null,
+          "points": [
+            {
+              "on": "2026-10-31",
+              "balance": {"minor_units": 100000, "currency": "EUR"},
+              "balance_on": "2026-10-26",
+              "balance_source": "manual",
+              "counted": true,
+              "amount": {"minor_units": 111720, "currency": "USD"},
+              "rate_on": "2026-10-30",
+              "conversion": "converted"
+            }
+          ]
+        }
+      ],
+      "blockers": [],
+      "cautions": []
+    },
+    {
+      "belongs_to": "given_away",
+      "beneficiary": null,
+      "status": "firm",
+      "points": [
+        {
+          "on": "2026-10-31",
+          "period_start": "2026-10-01",
+          "partial": false,
+          "total": {"minor_units": 500000, "currency": "USD"},
+          "by_liquidity": [
+            {"liquidity": "invested", "amount": {"minor_units": 500000, "currency": "USD"}}
+          ],
+          "by_currency": [
+            {"minor_units": 500000, "currency": "USD"}
+          ],
+          "unconverted": []
+        },
+        {
+          "on": "2026-11-02",
+          "period_start": "2026-11-01",
+          "partial": true,
+          "total": {"minor_units": 500000, "currency": "USD"},
+          "by_liquidity": ["..."],
+          "by_currency": ["..."],
+          "unconverted": []
+        }
+      ],
+      "accounts": [
+        {
+          "account": "<giving>",
+          "name": "Giving",
+          "liquidity": "invested",
+          "currency": "USD",
+          "counted": true,
+          "not_counted": null,
+          "first_on": "2026-10-28",
+          "closed_on": null,
+          "points": [
+            {
+              "on": "2026-10-31",
+              "balance": {"minor_units": 500000, "currency": "USD"},
+              "balance_on": "2026-10-28",
+              "balance_source": "manual",
+              "counted": true,
+              "amount": {"minor_units": 500000, "currency": "USD"},
+              "rate_on": null,
+              "conversion": "same"
+            }
+          ]
+        }
+      ],
+      "blockers": [],
+      "cautions": []
+    }
+  ]
 }
 ```
 
@@ -194,10 +341,67 @@ How to read it:
   keeps its `amount` but says `counted: false`, and the total leaves it out.
   Reopening an account restores its days.
   Say so when you explain a change between points.
-- An account with `include_in_net_worth: false` is listed with `counted: false`
-  and `not_counted: "excluded_by_flag"`, and has no points.
-- Closing, names, liquidity classes and `include_in_net_worth` are applied when
-  you read, so changing one of them changes the whole history at once.
+- An account can leave net worth in two ways, which mean different things. **By a
+  flag:** an account with `include_in_net_worth: false` is the household's money that
+  it would rather not count. It stays in `accounts`, with `counted: false` and
+  `not_counted: "excluded_by_flag"`, and has no points. **By whose money it is:** an
+  account whose `belongs_to` isn't `household` isn't the household's at all. It is
+  listed only in its bucket (below), with its points, and is not in `accounts`.
+- Closing, names, liquidity classes, `include_in_net_worth`, `belongs_to` and
+  `beneficiary` are applied when you read, so changing one of them changes the whole
+  history at once. An account moved out of the household leaves every past point too,
+  with no date for when it happened, so a difference between two reports asked before
+  and after such a change is not money moving.
+
+### Buckets: money that isn't the household's
+
+`buckets` holds the accounts whose `belongs_to` isn't `household` (see
+[Accounts](agent-usage.md#accounts)): a 529, a custodial account, a donor-advised
+fund. Money in one is held for someone else, or has been given away, as far as coffer
+treats it. **Never add a bucket to `total`, or one bucket to another, and never call a
+sum of them net worth.** coffer gives no such sum, on purpose: report each bucket on
+its own and say whose it is.
+
+- `accounts` is the household's alone, and so is every number beside it: `status`,
+  `points`, `blockers` and `cautions` read exactly as they would with no bucket. A
+  bucket's account is listed only in its bucket.
+- There is one bucket per `belongs_to` and exact `beneficiary`, so `Child A` and
+  `child a` are two buckets, and `beneficiary` is `null` when there is no label. They
+  come with `someone_else` before `given_away`, and within one no label first, then
+  labels by their bytes. `belongs_to` says how coffer treats the money, not who
+  legally owns it.
+- Each bucket is the same calculation as the household's over its own accounts, with
+  its own `status`, `points`, `accounts`, `blockers` and `cautions`, closing and
+  rounding included. **Its `status` and `cautions` are its own**: a missing rate on a
+  child's account makes that bucket `provisional` and leaves the household's `firm`,
+  and the reverse. So report a bucket's cautions with the bucket's number.
+- `counted: true` on a bucket's account means it is in that bucket's sums. It is
+  never a place in net worth.
+- `buckets` is `[]` when the token sees no such account, or while the report is
+  `rebuilding`, so an empty list does not say none exists. A household with only
+  buckets has `accounts: []` and the blocker `no_counted_accounts`, and its buckets
+  still answer.
+- To count such an account as the household's, a member sets its `belongs_to` to
+  `household`: asking for `include_in_net_worth: true` on it is a 422. Never do this
+  from an account's name alone.
+
+### Blockers and cautions in a bucket
+
+A bucket's lists use the same kinds as the tables below, and each is about that
+bucket's own accounts and numbers alone.
+
+- `display_currency_not_set` is on every bucket as on the household, and a bucket's
+  points still hold `by_currency`. `rebuilding` is never on a bucket, since there are none
+  while it lasts.
+- `no_counted_accounts` on a bucket means nothing in it has a value in this range.
+  It does not mean the money is gone: look at its accounts' `first_on` and `closed_on`.
+- `closed_account_owing` means the debt keeps counting in that bucket's sums, not in
+  net worth. Setting `include_in_net_worth` to `false` changes nothing, since it
+  already is: if it was paid off, record its balance as 0.
+- `rate_missing`, `rate_stale`, `amount_too_large`, `balance_stale`,
+  `to_date_not_yet_filled`, `daily_value_missing`, `nothing_counted_after_last_point`
+  and `liability_balance_positive` mean what the table says, and call for the same
+  step, with "counted" meaning in the bucket's sums.
 
 ### Status, blockers and cautions
 
@@ -220,10 +424,10 @@ a null total as a drop.
 |---|---|---|
 | `display_currency_not_set` | No display currency is chosen. Points still hold `by_currency`, and `total` is `null`. | Ask the owner which currency to show, then `PATCH /household/settings` with `display_currency` (see below). Meanwhile report each of `by_currency` on its own. |
 | `rebuilding` | The daily values are being rebuilt (after an upgrade or a restore), and there are no points. | Wait a moment and ask again. If it lasts minutes, tell the owner: the server's log says whether the rebuild failed, and `coffer rebuild-net-worth` on the host recomputes it. |
-| `no_counted_accounts` | Nothing you can see counts in the range: no account, all excluded, or the whole range is before the first balance or after every account closed. | Look at `accounts[].counted`, `first_on` and `closed_on`. Add accounts and balances, or move the range. Never read it as a net worth of 0. |
+| `no_counted_accounts` | Nothing you can see of the household's counts in the range: no account, all excluded, or the whole range is before the first balance or after every account closed. | Look at `accounts[].counted`, `first_on` and `closed_on`. An empty `accounts` means nothing you can see is the household's, and `buckets` may still hold money; report those on their own, never as net worth. Otherwise add accounts and balances, or move the range. Never read it as a net worth of 0. |
 
-Here is a report with no display currency (`accounts` and the second point are
-left out; each class's `amount` is `null` as well):
+Here is a report with no display currency (`accounts`, `buckets` and the second
+point are left out; each class's `amount` is `null` as well):
 
 ```json
 {
@@ -284,7 +488,7 @@ After a change of display currency, `rate_missing` with `not_fetched_yet` is
 normal for a minute: the new currency's rates have yet to be fetched.
 
 Here is one with a yen account, last updated on 2026-10-20, whose fetch is failing
-(`accounts` and the second point are left out):
+(`accounts`, `buckets` and the second point are left out):
 
 ```json
 {
@@ -315,7 +519,7 @@ Here is one with a yen account, last updated on 2026-10-20, whose fetch is faili
 
 | Operation | Needs |
 |---|---|
-| `GET /api/v1/reports/net-worth` | `read`. A token with grants gets the sum of what it holds at `balances`, unmarked (above). |
+| `GET /api/v1/reports/net-worth` | `read`. A token with grants gets the sum of what it holds at `balances`, unmarked, in each bucket as at the top (above). |
 | `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` | `read`, and with grants `all` at `balances`: which rates are stored depends on the currencies in use. A 403 whose detail is "this action needs balances access to every account", whether or not any account is hidden. |
 | `GET /api/v1/household/settings` | `read`. `display_currency` reads the same for every token. |
 | `PATCH /api/v1/household/settings` naming `display_currency` | `admin`, and with grants `all` at `balances`, whatever the patch names, since which codes convert at once depends on the currencies in use. The same 403. |
@@ -444,6 +648,9 @@ read-only, over the ranges 3 months (by day), 1 year (by week), 5 years and all
 (by month), chosen with links (`/net-worth?range=3m|1y|5y|all`). It shows the
 same cautions in words and says why a line may jump or drop without any money
 moving: an account arriving at its `first_on`, or closing at its `closed_on`.
+Each bucket has its own section under "Not part of your net worth", with its status,
+reasons, accounts and periods. No bucket has a chart, and nothing adds one to
+another or to the household's.
 It needs a session, not a token, and the figures on it are as sensitive as the
 API's.
 
