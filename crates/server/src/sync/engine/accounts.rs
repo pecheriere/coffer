@@ -2,6 +2,7 @@
 
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::ids::{ConnectionId, ProviderAccountId};
+use coffer_domain::money::{Currency, DecimalAmount};
 use coffer_store::{
     ConnectionRecord, ConnectionStatus, ConnectionStatusChange, ProviderAccountRecord,
     ProviderAccountUpsert, RawBalance, StoreError, StoreTx, SyncRunRecord,
@@ -13,7 +14,7 @@ use jiff::civil::Date;
 
 use super::convert::{Converted, check_account, convert};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
-use super::{SyncService, same_credentials, still_current, write_balance};
+use super::{SyncService, record_balance, same_credentials, still_current};
 use crate::sync::SyncError;
 use crate::sync::apply::{
     AccountBatch, ApplyReport, Coverage, apply_account_batch, sync_actor, valid_provider_id,
@@ -146,6 +147,22 @@ async fn record_pass(
     )
     .await?;
     Ok(())
+}
+
+/// The reported balance in minor units of `currency`, and what to note on the
+/// provider account. A balance is a valuation: rounded to fit, and if it still
+/// cannot be stored the account's records apply without it.
+fn readable_balance(
+    balance: Option<(Date, DecimalAmount)>,
+    currency: Currency,
+) -> (Option<(Date, i64)>, Option<String>) {
+    match balance {
+        Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
+            Ok(minor) => (Some((on, minor)), None),
+            Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
+        },
+        None => (None, None),
+    }
 }
 
 impl SyncService {
@@ -422,15 +439,7 @@ impl SyncService {
             transactions,
             unusable,
         } = convert(data.transactions, data.unusable, currency, today);
-        // A balance is a valuation: rounded to fit, and if it still cannot be
-        // stored the account's records apply without it.
-        let (balance, note) = match data.balance {
-            Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
-                Ok(minor) => (Some((on, minor)), None),
-                Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
-            },
-            None => (None, None),
-        };
+        let (balance, note) = readable_balance(data.balance, currency);
         if record.error != note {
             tx.set_provider_account_error(record.id, note).await?;
         }
@@ -443,13 +452,14 @@ impl SyncService {
                 removed: data.removed,
                 skipped: u32::try_from(unusable.len()).unwrap_or(u32::MAX),
                 balance,
+                currency,
                 today,
                 now,
             };
             return self.apply_one_by_one(job).await;
         }
         let provider_account = record.id;
-        let bound = account.clone();
+        let bound = account.as_ref().map(|account| account.id);
         let report = apply_account_batch(
             &mut tx,
             now,
@@ -464,8 +474,17 @@ impl SyncService {
             },
         )
         .await?;
-        if let (Some(account), Some((on, balance_minor))) = (bound, balance) {
-            write_balance(&mut tx, now, account.id, on.min(today), balance_minor).await?;
+        if let Some((on, balance_minor)) = balance {
+            record_balance(
+                &mut tx,
+                now,
+                provider_account,
+                bound,
+                on.min(today),
+                balance_minor,
+                currency,
+            )
+            .await?;
         }
         tx.set_provider_account_applied(provider_account, now)
             .await?;

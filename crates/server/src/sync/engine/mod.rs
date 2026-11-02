@@ -17,11 +17,13 @@ use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
+use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId, SyncRunId};
+use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, Store, StoreError, StoreTx, SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, Store, StoreError, StoreTx,
+    SyncRunRecord,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -301,6 +303,33 @@ pub(super) async fn ensure_not_removed(
         return Err(SyncError::Conflict(CONNECTION_REMOVED));
     }
     Ok(record)
+}
+
+/// Records the balance a provider reported for `provider_account`: the day's
+/// snapshot of the account it is bound to or, while unbound, kept for the bind
+/// to bring in. Keeping isn't audited: the audit log would then hold the
+/// balances of an account nobody has bound, and the bind's entry counts them.
+pub(super) async fn record_balance(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    provider_account: ProviderAccountId,
+    account: Option<AccountId>,
+    on: Date,
+    balance_minor: i64,
+    currency: Currency,
+) -> Result<(), SyncError> {
+    if let Some(account) = account {
+        return write_balance(tx, now, account, on, balance_minor).await;
+    }
+    tx.keep_balance(KeptBalance {
+        provider_account,
+        on,
+        balance_minor,
+        currency,
+        recorded_at: now,
+    })
+    .await?;
+    Ok(())
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes

@@ -11,6 +11,7 @@
 
 mod binding;
 mod credentials;
+mod kept_balances;
 mod removal;
 mod sync_limits;
 

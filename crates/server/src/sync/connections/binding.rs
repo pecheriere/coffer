@@ -1,6 +1,5 @@
 //! Binding provider accounts to coffer accounts, or creating the account to bind.
 
-use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, ProviderAccountId};
@@ -61,7 +60,8 @@ impl SyncService {
     }
 
     /// Binds the provider account to `account` and turns the records held
-    /// while it was unbound into transactions, in one transaction.
+    /// and the balances kept while it was unbound into transactions and
+    /// snapshots, in one transaction.
     ///
     /// # Errors
     ///
@@ -181,8 +181,9 @@ impl SyncService {
 }
 
 /// Binds `provider_account` to `account` inside `tx`, applies its held
-/// records and gives the account the balance last reported, which it returns;
-/// the caller has authorized the actor.
+/// records, brings in its kept balances and gives the account the balance last
+/// reported, none of them over a snapshot already there. Returns the account's
+/// latest balance after that; the caller has authorized the actor.
 async fn bind_in(
     tx: &mut StoreTx,
     now: Timestamp,
@@ -220,25 +221,25 @@ async fn bind_in(
         return Err(SyncError::CurrencyMismatch);
     }
     let bound = tx.bind_provider_account(provider_account, account).await?;
-    // The balance last reported, so net worth has the account before the
-    // next sync. One that does not convert was noted on the provider account.
-    let balance = match &bound.last_balance {
-        Some(reported) => DecimalAmount::parse(&reported.amount_raw)
+    let brought_in = tx
+        .bring_in_kept_balances(provider_account, account, currency)
+        .await?;
+    // The balance last reported, so net worth has the account before the next
+    // sync, even if it was last synced before balances were kept. One that
+    // does not convert was noted on the provider account.
+    let reported = bound.last_balance.as_ref().and_then(|reported| {
+        DecimalAmount::parse(&reported.amount_raw)
             .and_then(|amount| amount.to_minor_units_rounded(currency))
             .ok()
-            .map(|balance_minor| BalanceSnapshot {
-                account,
-                // Never a future day, which would hide later balances.
-                on: reported.on.min(today),
-                balance_minor,
-                source: BalanceSource::Sync,
-                recorded_at: now,
-            }),
-        None => None,
-    };
-    if let Some(snapshot) = &balance {
-        write_balance(tx, now, account, snapshot.on, snapshot.balance_minor).await?;
+            // Never a future day, which would hide later balances.
+            .map(|balance_minor| (reported.on.min(today), balance_minor))
+    });
+    if let Some((on, balance_minor)) = reported
+        && tx.balance_on(account, on).await?.is_none()
+    {
+        write_balance(tx, now, account, on, balance_minor).await?;
     }
+    let balance = tx.latest_balance(account).await?;
     let report = apply_held(tx, now, bound.clone(), target).await?;
     audit(
         tx,
@@ -248,14 +249,16 @@ async fn bind_in(
         ("provider_account", provider_account.to_string()),
         AuditChanges::new()
             .set("account", account.to_string())
-            .set("connection", current.connection.to_string()),
+            .set("connection", current.connection.to_string())
+            .set("balances_brought_in", i64::from(brought_in)),
     )
     .await?;
     tracing::debug!(
         provider_account = %provider_account,
         created = report.created,
         attached = report.attached,
-        "held records applied"
+        brought_in,
+        "held records and kept balances applied"
     );
     Ok((ProviderAccountView::from(bound), balance))
 }

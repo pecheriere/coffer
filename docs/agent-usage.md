@@ -353,9 +353,16 @@ number: `surplus` is `null` and `blockers` say why). **Never report a
 A connection links coffer to a data provider (SimpleFin or Plaid). It reports
 provider accounts; once a provider account is bound to a coffer account,
 syncs bring that account's transactions and balances. Binding applies the
-records already held and the balance last reported. coffer syncs every
-connection on a schedule (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask
-for a sync.
+records already held, and the balances reported while it was unbound become
+the account's history, one per day with `source` `sync`, each day's last one,
+never over a balance the account already has for that day. They appear nowhere
+before the bind, so an unbound account adds nothing to a forecast. A balance
+that doesn't convert, or was reported in a currency other than the account's,
+is not brought in. The audit entry `provider_account.bind` says how many were
+(`balances_brought_in`). Removing or forgetting a connection deletes what was
+kept for its unbound accounts. There is no way to unbind: a bound provider
+account stays bound. coffer syncs every connection on a schedule
+(`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.
 
 - `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
   `status` (`active`, `error`, `reauth_required` or `removed`),

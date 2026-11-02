@@ -14,6 +14,7 @@ mod forecast;
 mod household;
 mod idempotency;
 mod invites;
+mod kept_balances;
 mod members;
 mod passkeys;
 mod planned_items;
@@ -49,6 +50,7 @@ pub use forecast::{
 };
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
+pub use kept_balances::KeptBalance;
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};

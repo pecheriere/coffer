@@ -110,6 +110,7 @@ async fn a_store_failure_is_no_removal_in_a_one_by_one_apply() {
                 removed: Vec::new(),
                 skipped: 0,
                 balance: None,
+                currency: coffer_domain::money::Currency::parse("USD").unwrap(),
                 today: date(2027, 1, 11),
                 now,
             })

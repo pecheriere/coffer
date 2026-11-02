@@ -362,3 +362,36 @@ async fn a_pass_stops_saying_the_records_are_fetched_again() {
     let passed = world.provider_account(LINE).await.error.unwrap();
     assert!(passed.contains("given up"));
 }
+
+/// A released account is applied record by record, and if it is unbound its
+/// balance is kept all the same.
+#[tokio::test]
+async fn a_released_unbound_feed_keeps_its_balance() {
+    let world = world().await;
+    world.server.inject_source_insert_failure().await;
+    world.script.always(
+        SYNC,
+        StatusCode::OK,
+        page(
+            &[record(INJECTED_FAILURE_RECORD_ID, LINE, "9")],
+            &[],
+            &[],
+            "cursor-1",
+            false,
+        ),
+    );
+    world.holds_then_releases().await;
+
+    world.sync().await;
+
+    let kept = world
+        .server
+        .store
+        .kept_balances_for_tests(world.connection)
+        .await
+        .unwrap();
+    assert!(
+        kept.iter().any(|(_, minor)| *minor == 11_050),
+        "the fixture's 110.50 is kept"
+    );
+}

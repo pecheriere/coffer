@@ -5,7 +5,7 @@ use coffer_domain::ids::AccountId;
 use jiff::Timestamp;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{QueryBuilder, Row, Sqlite};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteExecutor};
 
 use crate::convert::{parsed, time};
 use crate::{Page, PageRequest, Store, StoreError, StoreTx};
@@ -40,7 +40,62 @@ pub(crate) fn snapshot_from_row(row: &SqliteRow) -> Result<BalanceSnapshot, Stor
     })
 }
 
+async fn fetch_latest<'e>(
+    executor: impl SqliteExecutor<'e>,
+    account: AccountId,
+) -> Result<Option<BalanceSnapshot>, StoreError> {
+    sqlx::query(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM balance_snapshots WHERE account_id = ? ORDER BY on_date DESC LIMIT 1"
+    ))
+    .bind(account.to_string())
+    .fetch_optional(executor)
+    .await
+    .map_err(StoreError::from_sqlx)?
+    .as_ref()
+    .map(snapshot_from_row)
+    .transpose()
+}
+
 impl StoreTx {
+    /// The account's snapshot of the day `on`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a row that no longer parses.
+    pub async fn balance_on(
+        &mut self,
+        account: AccountId,
+        on: Date,
+    ) -> Result<Option<BalanceSnapshot>, StoreError> {
+        sqlx::query(concat!(
+            "SELECT ",
+            columns!(),
+            " FROM balance_snapshots WHERE account_id = ? AND on_date = ?"
+        ))
+        .bind(account.to_string())
+        .bind(on.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .as_ref()
+        .map(snapshot_from_row)
+        .transpose()
+    }
+
+    /// An account's most recent snapshot, if any, inside the transaction.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a row that no longer parses.
+    pub async fn latest_balance(
+        &mut self,
+        account: AccountId,
+    ) -> Result<Option<BalanceSnapshot>, StoreError> {
+        fetch_latest(&mut *self.tx, account).await
+    }
+
     /// Record `snapshot`, replacing any snapshot of the same account and day,
     /// and return the one it replaced.
     ///
@@ -51,21 +106,9 @@ impl StoreTx {
         &mut self,
         snapshot: BalanceSnapshot,
     ) -> Result<Option<BalanceSnapshot>, StoreError> {
+        let previous = self.balance_on(snapshot.account, snapshot.on).await?;
         let account = snapshot.account.to_string();
         let on = snapshot.on.to_string();
-        let previous = sqlx::query(concat!(
-            "SELECT ",
-            columns!(),
-            " FROM balance_snapshots WHERE account_id = ? AND on_date = ?"
-        ))
-        .bind(&account)
-        .bind(&on)
-        .fetch_optional(&mut *self.tx)
-        .await
-        .map_err(StoreError::from_sqlx)?
-        .as_ref()
-        .map(snapshot_from_row)
-        .transpose()?;
         sqlx::query(
             "INSERT INTO balance_snapshots \
              (account_id, on_date, balance_minor, source, recorded_at) VALUES (?, ?, ?, ?, ?) \
@@ -157,17 +200,6 @@ impl Store {
         &self,
         account: AccountId,
     ) -> Result<Option<BalanceSnapshot>, StoreError> {
-        sqlx::query(concat!(
-            "SELECT ",
-            columns!(),
-            " FROM balance_snapshots WHERE account_id = ? ORDER BY on_date DESC LIMIT 1"
-        ))
-        .bind(account.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(StoreError::from_sqlx)?
-        .as_ref()
-        .map(snapshot_from_row)
-        .transpose()
+        fetch_latest(&self.pool, account).await
     }
 }

@@ -102,8 +102,9 @@ pub(super) async fn list(
     operation_id = "bindProviderAccount",
     tag = tags::CONNECTIONS,
     description = "Binds an unbound provider account to an open account in the same currency. \
-                   The records synced while it was unbound become the account's transactions, \
-                   and later syncs bring the rest. Needs `write` on the account; a token with \
+                   The records synced while it was unbound become the account's transactions \
+                   and the balances reported meanwhile its history, without replacing a balance \
+                   it has for that day, and later syncs bring the rest. Needs `write` on the account; a token with \
                    account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),
@@ -140,7 +141,8 @@ pub(super) async fn bind(
     tag = tags::CONNECTIONS,
     description = "Creates an account in the provider account's currency, exactly as \
                    `createAccount` does, and binds the provider account to it, in one step. \
-                   The records synced while it was unbound become the account's transactions. \
+                   The records synced while it was unbound become the account's transactions \
+                   and the balances reported meanwhile its history. \
                    Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),

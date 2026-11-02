@@ -186,6 +186,12 @@
     changing a category or group), and is refused with a 403
     that names no account otherwise.
   - Connections list only the provider accounts the token may see.
+  - Balances reported for an unbound provider account are kept apart from the
+    accounts' snapshots (`kept_balances`), and no route, page, report or audit
+    entry reads them. Only the bind does, which needs `all` at `write`; it
+    turns them into the account's snapshots, in its transaction, and deletes
+    them. A removed or forgotten connection's go in the same transaction as
+    the removal. They do stay in a backup, like everything else in the database.
   - Idempotency keys belong to the credential that sent them, so a token
     never receives a stored response another token (or the member's
     session) earned, and a create is authorized before its key is
@@ -292,6 +298,13 @@
   holds for every URL, redirects are never followed) and it never receives
   more than the connection's own credentials. Members review imported
   transactions, and removing the connection stops further imports.
+- **A provider chooses the day of a balance it reports for an unbound account.**
+  coffer keeps one row per provider account per day, about 135 bytes, so an
+  honest provider costs about 50 KB per unbound account per year, kept until the
+  account is bound or its connection removed, with no retention job. A provider
+  that reports a different past day each time adds at most one row per account
+  per sync, and whatever it reports becomes history at the bind, as it would for
+  a bound account. It can't change a snapshot the account already has.
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24
