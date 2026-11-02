@@ -932,9 +932,13 @@ style, and a link in the navigation.
 cash at a month's end, before an inflow arrives, is below the floor: a later bonus
 cannot pay an earlier bill.
 
-**R16. A planned item hinted at an uncounted account still counts,** with a
-caution. Overstating the need is the safe direction; dropping it silently is not.
-For the same reason a closed short-term liability still owing counts against cash,
+**R16. A planned outflow hinted at an uncounted account still counts,** with a
+caution. Overstating the need is the safe direction; dropping it silently is not. A
+planned inflow hinted at one stays out of the number, with the same caution (`effect`
+`left_out`; an outflow's is `still_needed`): the money may never reach counted cash, and a
+forecast must not overstate the surplus. A surplus that reads low for it says so. An
+inflow with no hint, or hinted at a counted account, counts.
+Likewise a closed short-term liability still owing counts against cash,
 with a caution, though on its own it is no counted account.
 
 **R17. Item model.** `category` is required on stored items and optional on
@@ -1147,8 +1151,8 @@ filter accounts at read and vesting adds accounts or balances, so neither change
 
 Decisions made while planning issue #38 and #39 (plan 5). Where they differ from an earlier
 section, they govern. In particular B10 narrows R6's "actuals cover every account", B1 adds to
-§6.1's kinds, B6 replaces what N15 left open, and B8 narrows R16 for an inflow hinted at such an
-account. Names in examples are generic.
+§6.1's kinds, B6 replaces what N15 left open, and B8 adds that a held account is one more
+uncounted account for R16. Names in examples are generic.
 
 **B1. Three more kinds.** `education` (a 529 and similar), `custodial` (UTMA, UGMA) and
 `charitable` (a donor-advised fund). Charitable giving is its own kind, as the owner decided on
@@ -1224,7 +1228,8 @@ accounts sees a bucket of one, and a hidden account's label, currency and existe
 only, whatever the class: that is why nothing here adds a third flag. A planned outflow hinted at
 such an account still counts, with R16's caution; hint a contribution at the account paying it. A
 planned inflow hinted at one stays out of the number, with the same caution, since it isn't the
-household's income, and with `include_income` off it raises nothing.
+household's income, as it does for any uncounted account (R16); with `include_income` off it
+raises nothing.
 
 **B9. Money going in is spending.** A contribution from a counted account to one that isn't the
 household's is a real outflow, so it belongs in an `expense` category. It then reads as `actual` in

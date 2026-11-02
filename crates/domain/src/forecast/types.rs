@@ -254,7 +254,7 @@ pub struct CurrencyTotals {
     /// Planned inflows counted: 0 unless `include_income`.
     pub planned_inflows: Money,
     /// Planned inflows left out because `include_income` is off. Income expected in an account
-    /// that isn't the household's isn't among them, since turning it on wouldn't add it.
+    /// that doesn't count isn't among them, since turning it on wouldn't add it.
     pub excluded_inflows: Money,
     /// `planned_outflows + goals + floor - planned_inflows`.
     pub cash_needed: Money,
@@ -271,10 +271,8 @@ pub struct CurrencyTotals {
 pub enum HintEffect {
     /// An outflow still counts as needed, since overstating the need is the safe direction.
     StillNeeded,
-    /// An inflow still counts as income, which may overstate what is free.
-    StillIncome,
-    /// An inflow into an account that isn't the household's isn't the household's income, so
-    /// it stays out of the number. That is already right: removing the hint would add it.
+    /// An inflow into an account that doesn't count may never reach counted cash, so it stays
+    /// out of the number. That is already right: removing the hint would add it.
     LeftOut,
 }
 
