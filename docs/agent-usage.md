@@ -229,7 +229,12 @@ money owed or going out.
   `belongs_to` unless that was chosen, which `belongs_to_overridden` says. So patching
   a counted account's `kind` to `education` alone takes it out of net worth, along with
   its whole history. Moving away from `household` turns both flags off, and moving back
-  turns on any the request doesn't name and removes the beneficiary. `beneficiary: ""`
+  turns on any the request doesn't name and removes the beneficiary. **Moving back is not
+  an undo:** an account the household had switched out, such as with
+  `include_in_forecast: false`, counts again unless the same patch names that flag, so the
+  surplus or net worth can rise with no money moving. The label is gone, and
+  `belongs_to_overridden` stays `true` for good, so a later `kind` no longer moves it.
+  Check the audit log for what it was before, and tell the member. `beneficiary: ""`
   (or only plain spaces) removes it, since leaving it out keeps it; `closed: true`
   closes the account.
 - `GET /api/v1/accounts/{account_id}/balances` pages the daily balances,

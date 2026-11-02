@@ -418,6 +418,59 @@ async fn the_row_refused_is_open() {
     assert!(refused.body.contains(&drawn(" open", folded)));
 }
 
+/// Whatever refuses a create, the row comes back open: the first waiting row, which starts open,
+/// and a later one, which starts folded.
+#[tokio::test]
+async fn every_refusal_leaves_its_row_open() {
+    let (mut world, first) = reported("Plan one", None).await;
+    let later = world
+        .report(first.connection, "Plan two", "USD", None)
+        .await;
+    let opening = |id: ProviderAccountId| {
+        format!(
+            "<summary>Bind to an account</summary><form method=\"post\" action=\"{}\"",
+            create_path(id)
+        )
+    };
+    let is_open = |body: &str, id: ProviderAccountId| {
+        body.contains(&format!(
+            "<details class=\"item-detail\" open>{}",
+            opening(id)
+        ))
+    };
+    let page = world.admin.get("/connections").await;
+    assert_eq!(
+        [first.id, later.id].map(|id| is_open(&page.body, id)),
+        [true, false],
+        "the order the page draws them in"
+    );
+    let csrf = page.csrf();
+    let too_long = "x".repeat(65);
+    let refusals: [&[(&str, &str)]; 5] = [
+        &[("kind", "nope")],
+        &[("kind", "education"), ("belongs_to", "nope")],
+        &[],
+        &[("kind", "checking"), ("beneficiary", "Child A")],
+        &[("kind", "education"), ("beneficiary", &too_long)],
+    ];
+
+    for id in [first.id, later.id] {
+        for fields in refusals {
+            let mut form = vec![("csrf", csrf.as_str()), ("name", "Plan")];
+            form.extend_from_slice(fields);
+
+            let refused = world.admin.post_form(&create_path(id), &form).await;
+
+            assert_eq!(
+                refused.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{fields:?}"
+            );
+            assert!(is_open(&refused.body, id), "{fields:?}");
+        }
+    }
+}
+
 /// A provider's own hint isn't a guess the member could have rejected by name: a refusal keeps it.
 #[tokio::test]
 async fn a_refusal_keeps_a_provider_hint() {

@@ -545,12 +545,18 @@
   `write` on one account a token can change that account's `belongs_to` or `kind`, and
   so the household's number that every other reader sees, and its whole history, as it
   already could with `include_in_net_worth`. It is audited with the values before and
-  after, and a member can reverse it. It reaches no other account.
+  after, and it reaches no other account. **Moving an account back is not an undo.** It
+  returns with both flags on unless the patch names them, so one the household had
+  switched out counts again, and the surplus or net worth can rise with no money moving;
+  its beneficiary label is gone; and `belongs_to_overridden` stays `true`, so a later
+  change of kind no longer moves it. A member can set a flag and the label again from
+  the audit log, but no request returns `belongs_to_overridden` to `false`.
 - **A provider's account type is trusted as a hint.** Plaid's subtypes `529`,
   `education savings account`, `utma` and `ugma` become a `kind_hint`, so an agent's
   `create-account` with no `kind` can put such an account in a bucket, out of net worth,
-  with no member choosing that. It takes `all` at `write`, is audited, and is reversible
-  by patching `belongs_to` to `household`. A provider's name alone never does this.
+  with no member choosing that. It takes `all` at `write` and is audited. Patching
+  `belongs_to` to `household` brings the account in, with the effects just above: it is
+  not an undo. A provider's name alone never does this.
 - **A bucket's sum too large for the number type refuses the whole report.** A sum that
   doesn't fit in 64 bits answers 422 with fixed text rather than a wrapped number, so a
   mistyped balance on a bucket's accounts takes the household's figures away from any

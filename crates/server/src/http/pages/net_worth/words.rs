@@ -266,10 +266,9 @@ fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &CautionW
             stretch(*first_on, *last_on),
         ),
         NetWorthCaution::NothingCountedAfterLastPoint { from, to } => format!(
-            "{} from {} to {}, since {}. {} from before that, not the value now.",
+            "{} {}, since {}. {} from before that, not the value now.",
             words.nothing_open,
-            day(*from),
-            day(*to),
+            stretch(*from, *to),
             words.all_closed,
             words.from_before,
         ),
@@ -540,5 +539,20 @@ mod tests {
             &Names::of_accounts(&[], None),
         );
         assert!(sentence.starts_with("USD can't be converted on 2 November 2026:"));
+    }
+
+    /// Nothing counted for a single day is said of that day, of the household and of a bucket.
+    #[test]
+    fn nothing_counted_for_a_single_day_reads_as_one() {
+        let caution = NetWorthCaution::NothingCountedAfterLastPoint { from: ON, to: ON };
+        let names = Names::of_accounts(&[], None);
+
+        assert!(
+            caution_sentence(&caution, &names).starts_with("Nothing counts on 2 November 2026,")
+        );
+        assert!(
+            bucket_caution_sentence(&caution, &names, true)
+                .starts_with("This bucket has no open account on 2 November 2026,")
+        );
     }
 }

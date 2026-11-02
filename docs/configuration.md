@@ -315,4 +315,6 @@ the live data directory. The server key (`secret.key`) is not part of the
 backup; without it, restored agent tokens and sessions no longer validate and
 must be recreated, and provider credentials (sealed under a key derived from
 it) cannot be opened, so every provider connection must be reconnected, while
-passkeys keep working.
+passkeys keep working. An older version refuses to start on a database a newer one has
+migrated (v0.3.0 on one migrated by a later version, for example), so rolling back needs a
+backup taken before the upgrade.
