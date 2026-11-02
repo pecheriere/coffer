@@ -266,16 +266,20 @@ impl World {
         (record.id, s(source.id))
     }
 
-    /// Flags `transaction` as a possible duplicate of `candidate`.
+    /// Flags `transaction` as a possible duplicate of `candidate`. The store
+    /// refuses a pair across accounts, and these tests seed some on purpose,
+    /// so the pair goes in through the store's test-only unchecked insert.
     async fn flag_duplicate(&self, transaction: TransactionId, candidate: TransactionId) {
         let mut tx = self.server.store.begin().await.unwrap();
         tx.set_flag(transaction, TransactionFlag::PossibleDuplicate, true)
             .await
             .unwrap();
-        tx.add_duplicate_candidates(transaction, &[candidate])
+        tx.commit().await.unwrap();
+        self.server
+            .store
+            .add_duplicate_candidate_unchecked_for_tests(transaction, candidate)
             .await
             .unwrap();
-        tx.commit().await.unwrap();
     }
 
     async fn audit_count(&self) -> usize {

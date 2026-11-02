@@ -246,8 +246,9 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
     world.fail_connection(connection, &last_error).await;
 
     // An imported transaction on each account, the last account's listed as
-    // a duplicate of it. Nothing in the server makes such a cross-account
-    // pair; this seed tests the filter that would keep one from showing.
+    // a duplicate of it. The store refuses such a cross-account pair, so
+    // this is seeded past that check, to test the filter that would keep
+    // one from showing.
     let last = accounts.len() - 1;
     let mut imported = Vec::new();
     for (n, account) in accounts.iter().enumerate() {
