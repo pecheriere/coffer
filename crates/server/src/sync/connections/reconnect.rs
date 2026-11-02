@@ -233,8 +233,9 @@ impl SyncService {
     /// stays valid: the connection is `active` again with its error cleared,
     /// and a `manual` run is queued when its limits allow one, which also
     /// shows whether the login really is back. A run already in flight still
-    /// applies its data and saves its cursor, but no longer changes the
-    /// connection's status; the schedule then syncs it once it is due.
+    /// applies its data and saves its cursor, unless the provider reported
+    /// errors it can no longer record, but no longer changes the connection's
+    /// status; the schedule then syncs it once it is due.
     ///
     /// # Errors
     ///

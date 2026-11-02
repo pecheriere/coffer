@@ -62,8 +62,10 @@ impl SyncService {
         let mut tx = self.store.begin().await?;
         let stored = tx.get_connection(connection.id).await?;
         let removed = totals.connection_removed || stored.status == ConnectionStatus::Removed;
-        let (status, detail) = outcome(&totals, removed, connection_errors.is_some());
-        if !removed && still_current(&stored, connection) {
+        let reported_errors = connection_errors.is_some();
+        let (status, detail) = outcome(&totals, removed, reported_errors);
+        let current = still_current(&stored, connection);
+        if !removed && current {
             tx.update_connection_status(
                 connection.id,
                 ConnectionStatusChange {
@@ -77,9 +79,12 @@ impl SyncService {
             .await?;
         }
         // A cursor belongs to the credentials it was given for, so it outlives
-        // a reauthorization: the records it covers were applied above.
+        // a reauthorization: the records it covers were applied above. Unless
+        // the provider reported errors, which a stale run cannot record: the
+        // cursor then stays, for the next run to fetch and report them itself.
         if !removed
             && same_credentials(&stored, connection)
+            && (current || !reported_errors)
             && let (FetchMode::Cursor, Some(cursor), false) = (mode, result.cursor, totals.refetch)
         {
             tx.set_provider_state(connection.id, Some(cursor)).await?;

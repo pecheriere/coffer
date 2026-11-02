@@ -8,6 +8,7 @@ use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_server::sync::scheduler;
 use coffer_store::{ConnectionStatus, PageRequest, SyncRunRecord};
 use jiff::SignedDuration;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -131,6 +132,63 @@ async fn run_in_flight_at_confirmation_keeps_its_data_and_cursor() {
     assert_eq!(connection.status, ConnectionStatus::Active);
     assert_eq!(connection.last_attempt_at, before.last_attempt_at);
     assert_eq!(connection.last_success_at, before.last_success_at);
+}
+
+/// A stale run may not report on the connection, so moving the cursor past
+/// records it could not assign would lose the only word about them. It holds
+/// the cursor, and the next run fetches them again and reports them itself.
+#[tokio::test]
+async fn run_in_flight_at_confirmation_holds_the_cursor_over_records_it_cannot_report() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    world.login_lapsed().await;
+    let unassignable = || {
+        page(
+            &[
+                record("fetched", "acct-checking", "1"),
+                json!({ "transaction_id": "no-account" }),
+            ],
+            &[],
+            &[],
+            "past-them",
+            false,
+        )
+    };
+    world.script.page(unassignable());
+
+    let run = world.run_across_confirmation().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert_eq!(world.transactions(checking).await.len(), 1);
+    let connection = world.connection().await;
+    assert_eq!(
+        connection.provider_state, None,
+        "the cursor stays before those records"
+    );
+    assert_eq!(connection.status, ConnectionStatus::Active);
+    assert_eq!(connection.last_error, None, "a stale run reports nothing");
+
+    world.script.page(unassignable());
+    world.sync().await;
+
+    assert_eq!(
+        world.script.cursors().last(),
+        Some(&None),
+        "the next run asks for them again"
+    );
+    assert_eq!(
+        world.transactions(checking).await.len(),
+        1,
+        "without duplicating what was applied"
+    );
+    let connection = world.connection().await;
+    assert_eq!(connection.provider_state.as_deref(), Some("past-them"));
+    assert!(
+        connection
+            .last_error
+            .is_some_and(|error| error.contains("assign to an account")),
+        "and reports them on the connection"
+    );
 }
 
 #[tokio::test]
