@@ -43,6 +43,8 @@ mod requests;
 mod setup;
 
 const SERIALIZATION_FAILED: &str = "response serialization failed";
+const OLD_BALANCE_NOTE: &str = "The bank sent a balance older than what coffer already has, so \
+     it was ignored. The balance kept is still the latest one.";
 const CONNECTION_CHANGED: &str =
     "the connection was reconnected or removed meanwhile; retry the request";
 
@@ -102,10 +104,14 @@ pub struct ProviderAccountView {
     /// The last balance the provider reported.
     #[schema(required)]
     pub balance: Option<RawBalanceView>,
-    /// What was wrong with this account's last report, sanitized: the provider's
-    /// error, or coffer's fixed note of a balance it left out.
+    /// The provider's last error for this account, sanitized.
     #[schema(required)]
     pub error: Option<String>,
+    /// A fixed note that the last balance reported was older than what coffer has
+    /// and was ignored, or `null`. Not an error: the account's balance is still its
+    /// latest one, and transactions still come in. A newer balance clears it.
+    #[schema(required)]
+    pub old_balance_note: Option<String>,
     pub last_seen_at: Timestamp,
 }
 
@@ -131,6 +137,9 @@ impl From<ProviderAccountRecord> for ProviderAccountView {
                 amount_raw: balance.amount_raw,
             }),
             error: record.error,
+            old_balance_note: record
+                .old_balance_refused
+                .then(|| OLD_BALANCE_NOTE.to_owned()),
             last_seen_at: record.last_seen_at,
         }
     }

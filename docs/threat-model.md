@@ -381,17 +381,25 @@
   of its answer, at most 1,000 entries: 16,000 rows or about 2 MB a day through
   SimpleFin's 16 syncs, 48,000 rows or about 6.5 MB through Plaid's 48. Whatever
   it reports within those days becomes history at the bind, as it would for a
-  bound account, but it can't change a snapshot the account already has. The
-  limit applies to every balance a provider reports, bound or not, and to the
-  bind's use of the last report. So on a bound account a provider can write or
-  replace a snapshot only within those 32 days, through today (a later date is
-  dated today). A snapshot older than that, a member's included, is out of its
-  reach. Within them a sync still replaces a day's snapshot, a member's included.
-  A refused balance writes nothing else and the account's records still apply; the
-  provider account shows a fixed note, in `error` and on the Connections page, until
-  a sync reports a balance in range. An account that honestly reports only older
-  dates therefore stops updating, and says so. A member's own balance, by `PUT`, has
-  no such limit (its cost is issue 83).
+  bound account, but it can't change a snapshot the account already has. An old
+  report on a bound account can't reach behind what the account has. Within those
+  32 days, through today (a later date is dated today), a date is believed, and a
+  sync replaces that day's snapshot, a member's included. Before them: an account
+  with no snapshot takes the amount on the day 31 days back, later than reported, so
+  a date in 1970 adds no history; a day after the latest snapshot is written; the
+  amount the account already holds is a quiet no-op, since an honest bank may keep
+  giving the day a balance last changed; and anything else is refused. So a provider
+  can't change or add a snapshot at or before the latest one. What it can do on an
+  account with an old latest snapshot is add later ones up to 31 days back: at most
+  one a day between the two, each audited, and the daily values carried across those
+  days change with them, as they would for a member's. Unbound accounts keep the
+  limit above unchanged, since "later than the latest" there would let a provider
+  walk a history up from 1970 for the bind to bring in. The bind judges the last
+  report by the bound account's rule. A refused report writes nothing and the
+  account's records still apply. The provider account shows a fixed note,
+  `old_balance_note`, apart from `error`, since coffer refused the date and the bank
+  reported no error. It moves no forecast. A newer balance clears it, from a sync or
+  by hand. A member's own balance, by `PUT`, has no limit (its cost is issue 83).
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24

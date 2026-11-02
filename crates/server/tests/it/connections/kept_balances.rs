@@ -394,19 +394,6 @@ async fn a_balance_past_the_age_limit_is_not_kept() {
     assert_eq!(world.kept(world.connection).await, []);
 }
 
-/// The bind's own write of the last report follows the same limit, or a date
-/// 1,000 years back would still become history.
-#[tokio::test]
-async fn the_bind_does_not_bring_a_last_report_past_the_age_limit() {
-    let world = world().await;
-    world.report(365_000, "10.00", "USD").await;
-    let target = world.account("Checking", "USD").await;
-
-    world.bind_feed(target).await;
-
-    assert_eq!(world.history(target).await, []);
-}
-
 /// Nothing dedupes ids within an answer: each entry is applied, one row per day.
 #[tokio::test]
 async fn an_id_repeated_in_one_answer_keeps_one_row_per_day() {

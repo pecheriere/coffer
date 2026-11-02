@@ -9966,6 +9966,7 @@
           "account",
           "balance",
           "error",
+          "old_balance_note",
           "last_seen_at"
         ],
         "properties": {
@@ -10003,7 +10004,7 @@
               "string",
               "null"
             ],
-            "description": "What was wrong with this account's last report, sanitized: the provider's\nerror, or coffer's fixed note of a balance it left out."
+            "description": "The provider's last error for this account, sanitized."
           },
           "id": {
             "$ref": "#/components/schemas/ProviderAccountId"
@@ -10031,6 +10032,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "old_balance_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A fixed note that the last balance reported was older than what coffer has\nand was ignored, or `null`. Not an error: the account's balance is still its\nlatest one, and transactions still come in. A newer balance clears it."
           },
           "suggested_kind": {
             "oneOf": [

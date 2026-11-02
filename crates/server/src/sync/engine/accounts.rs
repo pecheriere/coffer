@@ -14,10 +14,7 @@ use jiff::civil::Date;
 
 use super::convert::{Converted, check_account, convert};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
-use super::{
-    ReportedBalance, SyncService, balance_too_old_note, record_balance, reported_day_believed,
-    same_credentials, still_current,
-};
+use super::{ReportedBalance, SyncService, record_balance, same_credentials, still_current};
 use crate::sync::SyncError;
 use crate::sync::apply::{
     AccountBatch, ApplyReport, Coverage, apply_account_batch, sync_actor, valid_provider_id,
@@ -154,32 +151,24 @@ async fn record_pass(
 
 /// The reported balance in minor units of `currency`, and what to note on the
 /// provider account. A balance is a valuation: rounded to fit, and if it still
-/// cannot be stored, or is dated too long ago to believe, the account's records
-/// apply without it. Every balance of a sync passes here before it is recorded,
-/// whichever way the account's records are then applied.
+/// cannot be stored the account's records apply without it.
 fn readable_balance(
-    provider_account: ProviderAccountId,
     balance: Option<(Date, DecimalAmount)>,
     currency: Currency,
-    today: Date,
 ) -> (Option<ReportedBalance>, Option<String>) {
-    let Some((on, amount)) = balance else {
-        return (None, None);
-    };
-    if !reported_day_believed(on, today) {
-        tracing::warn!(provider_account = %provider_account, "a balance too old to believe was left out");
-        return (None, Some(balance_too_old_note()));
-    }
-    match amount.to_minor_units_rounded(currency) {
-        Ok(balance_minor) => (
-            Some(ReportedBalance {
-                on,
-                balance_minor,
-                currency,
-            }),
-            None,
-        ),
-        Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
+    match balance {
+        Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
+            Ok(balance_minor) => (
+                Some(ReportedBalance {
+                    on,
+                    balance_minor,
+                    currency,
+                }),
+                None,
+            ),
+            Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
+        },
+        None => (None, None),
     }
 }
 
@@ -457,7 +446,7 @@ impl SyncService {
             transactions,
             unusable,
         } = convert(data.transactions, data.unusable, currency, today);
-        let (balance, note) = readable_balance(record.id, data.balance, currency, today);
+        let (balance, note) = readable_balance(data.balance, currency);
         if record.error != note {
             tx.set_provider_account_error(record.id, note).await?;
         }

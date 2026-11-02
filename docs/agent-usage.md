@@ -498,10 +498,11 @@ the account's history, one per day with `source` `sync`, each day's last one,
 never over a balance the account already has for that day. They appear nowhere
 before the bind, so an unbound account adds nothing to a forecast. A balance
 that doesn't convert, was reported in a currency other than the account's, or
-is dated more than 31 days before the day it was reported is not brought in. So
+is dated more than 31 days before the day it was reported is not kept. So
 that a bind never reads an amount in the wrong currency, a provider account's
-last balance is cleared when its currency changes without a new balance, and
-the bind ignores a last balance more than 31 days old. The audit entry
+last balance is cleared when its currency changes without a new balance. The bind
+judges the last balance by the rule below, so an account whose only report is old
+still gets a balance, dated 31 days back. The audit entry
 `provider_account.bind` says what happened: `balances_brought_in`, the days
 `balances_first_day` and `balances_last_day`, `balances_other_currency` for those
 dropped, and `balances_already_there` for those skipped. It holds no amount.
@@ -510,14 +511,15 @@ kept for its unbound accounts. There is no way to unbind: a bound provider
 account stays bound. coffer syncs every connection on a schedule
 (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.
 
-A balance a provider reports is refused if it is dated more than 31 days before the
-household's today, bound or unbound; one dated later than today is dated today. A
-refused balance writes nothing, the account's transactions still come in, and the
-provider account's `error` says "the provider reported a balance dated more than 31
-days ago, so it was left out" until a sync reports one in range. Its `balance` still
-shows what was last reported. An account whose only balance was refused can be bound,
-and has no balance until then. A balance you set with `PUT` is no report: it may be
-dated any day.
+A balance's date may honestly be old: it can be the day the balance last changed.
+A date within 31 days of the household's today is believed, and one later than today
+is dated today. For an older one on a bound account: with no balance yet, the amount
+is taken and dated 31 days back; a day after the latest balance is written; the
+amount the account already holds changes nothing. Anything else is refused, the
+account's transactions still come in, and the provider account's `old_balance_note`
+says so until a newer balance arrives, from a sync or set with `PUT`. It isn't an
+`error`, and it raises nothing in the forecast, where `balance_stale` is the only
+sign of an old balance. A balance you set with `PUT` may be dated any day.
 
 - `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
   `status` (`active`, `error`, `reauth_required` or `removed`),

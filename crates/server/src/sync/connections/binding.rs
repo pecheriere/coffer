@@ -18,7 +18,7 @@ use crate::ledger::accounts::{
 };
 use crate::sync::SyncError;
 use crate::sync::apply::apply_held;
-use crate::sync::engine::{SyncService, ensure_not_removed, reported_day_believed, write_balance};
+use crate::sync::engine::{Judged, SyncService, ensure_not_removed, judge_reported, write_balance};
 
 const ALREADY_BOUND: &str = "the provider account is already bound";
 const ACCOUNT_CLOSED: &str = "the account is closed";
@@ -253,26 +253,33 @@ async fn bind_in(
     if currency != target.currency {
         return Err(SyncError::CurrencyMismatch);
     }
-    let bound = tx.bind_provider_account(provider_account, account).await?;
+    let mut bound = tx.bind_provider_account(provider_account, account).await?;
     let brought_in = tx
         .bring_in_kept_balances(provider_account, account, currency)
         .await?;
     // The balance last reported, so net worth has the account before the next
-    // sync, even if it was last synced before balances were kept. One that
-    // does not convert or is too old was noted on the provider account when it
-    // was reported.
+    // sync, even if it was last synced before balances were kept. One that does
+    // not convert was noted on the provider account. Its day is judged like a
+    // sync's, and it is never written over a snapshot already there.
     let reported = bound.last_balance.as_ref().and_then(|reported| {
         DecimalAmount::parse(&reported.amount_raw)
             .and_then(|amount| amount.to_minor_units_rounded(currency))
             .ok()
-            // Never a future day, which would hide later balances.
-            .map(|balance_minor| (reported.on.min(today), balance_minor))
+            .map(|balance_minor| (reported.on, balance_minor))
     });
-    if let Some((on, balance_minor)) = reported
-        && reported_day_believed(on, today)
-        && tx.balance_on(account, on).await?.is_none()
-    {
-        write_balance(tx, now, account, on, balance_minor).await?;
+    if let Some((on, balance_minor)) = reported {
+        match judge_reported(tx, account, on, balance_minor, today).await? {
+            Judged::Write(on) => {
+                if tx.balance_on(account, on).await?.is_none() {
+                    write_balance(tx, now, account, on, balance_minor).await?;
+                }
+            }
+            Judged::Known => {}
+            Judged::Refused => {
+                tx.set_old_balance_refused(provider_account, true).await?;
+                bound.old_balance_refused = true;
+            }
+        }
     }
     let balance = tx.latest_balance(account).await?;
     let report = apply_held(tx, now, bound.clone(), target).await?;

@@ -17,16 +17,15 @@ use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId, SyncRunId};
-use coffer_domain::money::Currency;
+use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
-    StoreTx, SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, QueuedRun, Store, StoreError, StoreTx,
+    SyncRunRecord,
 };
+use jiff::Timestamp;
 use jiff::civil::Date;
-use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -43,7 +42,11 @@ mod accounts;
 mod convert;
 mod fetch;
 mod released;
+mod reported_balance;
 mod results;
+
+pub(super) use reported_balance::{Judged, judge_reported};
+use reported_balance::{ReportedBalance, record_balance};
 
 const RUN_FINISHED: &str = "the sync run has already finished";
 pub(super) const CONNECTION_REMOVED: &str = "the connection is removed";
@@ -318,62 +321,6 @@ pub(super) async fn ensure_not_removed(
         return Err(SyncError::Conflict(CONNECTION_REMOVED));
     }
     Ok(record)
-}
-
-/// How many days back a balance a provider reports may be dated, for a bound or
-/// an unbound account: a bank's date can honestly lag, but nothing older is
-/// believed. A member's own balance is no report and has no such limit.
-const REPORTED_BALANCE_MAX_AGE_DAYS: i64 = 31;
-
-/// Whether a balance a provider dated `on` is recent enough to believe, with
-/// `today` the household's day.
-pub(super) fn reported_day_believed(on: Date, today: Date) -> bool {
-    on >= today.saturating_sub(Span::new().days(REPORTED_BALANCE_MAX_AGE_DAYS))
-}
-
-/// What a provider account says of a balance [`reported_day_believed`] refuses.
-fn balance_too_old_note() -> String {
-    format!(
-        "the provider reported a balance dated more than {REPORTED_BALANCE_MAX_AGE_DAYS} days \
-         ago, so it was left out"
-    )
-}
-
-/// A balance a provider reported, converted to minor units of its currency.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ReportedBalance {
-    pub(super) on: Date,
-    pub(super) balance_minor: i64,
-    pub(super) currency: Currency,
-}
-
-/// Records a balance a provider reported for `provider_account`, already found
-/// recent enough: the day's snapshot of the account it is bound to or, while
-/// unbound, kept for the bind to bring in. Never on a future day, which would
-/// hide later balances.
-/// Keeping isn't audited: the audit log would then hold the balances of an
-/// account nobody has bound, and the bind's entry counts them.
-pub(super) async fn record_balance(
-    tx: &mut StoreTx,
-    now: Timestamp,
-    provider_account: ProviderAccountId,
-    account: Option<AccountId>,
-    balance: ReportedBalance,
-    today: Date,
-) -> Result<(), SyncError> {
-    let on = balance.on.min(today);
-    if let Some(account) = account {
-        return write_balance(tx, now, account, on, balance.balance_minor).await;
-    }
-    tx.keep_balance(KeptBalance {
-        provider_account,
-        on,
-        balance_minor: balance.balance_minor,
-        currency: balance.currency,
-        recorded_at: now,
-    })
-    .await?;
-    Ok(())
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
