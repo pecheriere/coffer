@@ -141,7 +141,7 @@ async fn bind_applies_held_records() {
 #[tokio::test]
 async fn bind_brings_the_reported_balance() {
     let world = world().await;
-    let on = date(2026, 10, 30);
+    let on = date(2027, 1, 10);
     let mut with_balance = reported("acct-1", "USD", None, Vec::new());
     with_balance.balance = Some((on, DecimalAmount::parse("23631.9805").unwrap()));
     let without_balance = reported("acct-2", "USD", Some(AccountKind::Savings), Vec::new());
@@ -174,7 +174,7 @@ async fn bind_brings_the_reported_balance() {
         account["latest_balance"]["balance"]["minor_units"],
         json!(2_363_198)
     );
-    assert_eq!(account["latest_balance"]["on"], json!("2026-10-30"));
+    assert_eq!(account["latest_balance"]["on"], json!("2027-01-10"));
     assert_eq!(account["latest_balance"]["source"], json!("sync"));
 
     let other = world.provider_account("acct-2").await;

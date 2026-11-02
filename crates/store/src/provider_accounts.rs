@@ -94,7 +94,8 @@ pub struct ProviderAccountUpsert {
     pub institution: Option<String>,
     pub currency_raw: String,
     pub kind_hint: Option<AccountKind>,
-    /// Replaces the last balance when set; `None` keeps it.
+    /// Replaces the last balance when set; `None` keeps it, unless the
+    /// currency changes, which clears it.
     pub balance: Option<RawBalance>,
     pub seen_at: Timestamp,
 }
@@ -165,7 +166,8 @@ impl StoreTx {
     }
 
     /// Create or refresh a provider account, keyed by its connection and
-    /// provider id.
+    /// provider id. An upsert without a balance keeps the last one, unless it
+    /// changes the currency: that text means nothing in the new currency.
     ///
     /// # Errors
     ///
@@ -177,8 +179,14 @@ impl StoreTx {
         const SQL: &str = insert_provider_account!(
             "name = excluded.name, institution = excluded.institution, \
              currency_raw = excluded.currency_raw, kind_hint = excluded.kind_hint, \
-             last_balance_raw = COALESCE(excluded.last_balance_raw, last_balance_raw), \
-             last_balance_on = COALESCE(excluded.last_balance_on, last_balance_on), \
+             last_balance_raw = CASE \
+                 WHEN excluded.last_balance_raw IS NOT NULL THEN excluded.last_balance_raw \
+                 WHEN excluded.currency_raw != currency_raw THEN NULL \
+                 ELSE last_balance_raw END, \
+             last_balance_on = CASE \
+                 WHEN excluded.last_balance_raw IS NOT NULL THEN excluded.last_balance_on \
+                 WHEN excluded.currency_raw != currency_raw THEN NULL \
+                 ELSE last_balance_on END, \
              last_seen_at = excluded.last_seen_at"
         );
         self.write_provider_account(SQL, upsert).await

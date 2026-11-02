@@ -10,7 +10,7 @@ use jiff::civil::Date;
 
 use super::accounts::ACCOUNT_NOT_STORED;
 use super::results::AccountOutcome;
-use super::{SyncService, write_balance};
+use super::{ReportedBalance, SyncService, record_balance};
 use crate::sync::SyncError;
 use crate::sync::apply::{
     AccountBatch, ApplyReport, Coverage, NormalizedTransaction, apply_account_batch_beside,
@@ -28,7 +28,7 @@ pub(super) struct OneByOne {
     pub(super) removed: Vec<String>,
     /// Records already left out as unusable.
     pub(super) skipped: u32,
-    pub(super) balance: Option<(Date, i64)>,
+    pub(super) balance: Option<ReportedBalance>,
     pub(super) today: Date,
     pub(super) now: Timestamp,
 }
@@ -108,13 +108,14 @@ impl SyncService {
             return Ok(AccountOutcome::ConnectionRemoved);
         }
         let (_, account) = current_binding(&mut tx, job.provider_account).await?;
-        if let (Some(account), Some((on, balance_minor))) = (&account, job.balance) {
-            write_balance(
+        if let Some(balance) = job.balance {
+            record_balance(
                 &mut tx,
                 job.now,
-                account.id,
-                on.min(job.today),
-                balance_minor,
+                job.provider_account,
+                account.map(|account| account.id),
+                balance,
+                job.today,
             )
             .await?;
         }

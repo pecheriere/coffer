@@ -258,7 +258,8 @@ coffer uses:
   agent can ask the user whether to create a new Account (defaults from
   kind) or bind to an existing one. Source records for unbound accounts are
   kept and run through matching when the account is bound.
-- **Balances:** each sync writes today's BalanceSnapshot for linked accounts.
+- **Balances:** each sync writes today's BalanceSnapshot for linked accounts,
+  and keeps the balance of an unbound one, one per day, for the bind to bring in.
 - **Errors:** SimpleFin per-account errors and connection failures are stored
   on the Connection and exposed via API; sync never partially commits one
   account's data.
