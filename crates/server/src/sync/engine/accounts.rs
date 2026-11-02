@@ -26,6 +26,8 @@ const BALANCE_UNREPRESENTABLE: &str =
     "the provider reported a balance too large to store, so it was left out";
 pub(super) const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
+const RELEASE_WITHDRAWN_REASON: &str =
+    "the account's refusal differs from the one recorded when the member released";
 const RECORDS_GIVEN_UP: &str =
     "records of this account that could not be stored were given up, as a member asked";
 
@@ -78,6 +80,31 @@ async fn settle_failure(
         refetch: true,
         passed: 0,
     })
+}
+
+/// Takes back a member's release of `account`, whose refusal is no longer the
+/// one the member saw: the account stays held, and the member has to look
+/// again. The audit entry carries a fixed reason and no provider text.
+async fn withdraw_release(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    account: &ProviderAccountRecord,
+) -> Result<(), StoreError> {
+    tx.withdraw_cursor_release(account.id).await?;
+    tx.append_audit(
+        now,
+        &AuditEntry {
+            actor: sync_actor(),
+            action: "connection.release_withdrawn".to_owned(),
+            entity_type: "connection".to_owned(),
+            entity_id: account.connection.to_string(),
+            changes: AuditChanges::new()
+                .set("provider_accounts", account.id.to_string())
+                .set("reason", RELEASE_WITHDRAWN_REASON),
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Gives up, for good, the records of the released accounts `passed`, in the
@@ -336,14 +363,19 @@ impl SyncService {
                     .await?;
                 if release && known && !refusal.lasting {
                     // What the member released is still what is wrong, and
-                    // none of its records can be stored. Any other refusal
-                    // may be gone by the next fetch, so it holds the cursor.
+                    // none of its records can be stored.
                     tx.commit().await?;
                     return Ok(AccountOutcome::Released {
                         account: record.id,
                         report: ApplyReport::default(),
                         failing: records.count,
                     });
+                }
+                // Any other refusal is not what the member agreed to give
+                // the records up for, however long it lasts. Read from this
+                // transaction, so a release made during the run counts.
+                if record.hold_released && !known && records.holds && !refusal.lasting {
+                    withdraw_release(&mut tx, now, &record).await?;
                 }
                 let outcome = settle_failure(&mut tx, &record, records, !refusal.lasting).await?;
                 tx.commit().await?;

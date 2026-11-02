@@ -16,7 +16,7 @@ macro_rules! columns {
     () => {
         "id, connection_id, provider_account_id, name, institution, currency_raw, kind_hint, \
          account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at, \
-         last_applied_at, held_syncs, hold_released, held_records"
+         last_applied_at, held_syncs, hold_released, release_withdrawn, held_records"
     };
 }
 
@@ -73,6 +73,9 @@ pub struct ProviderAccountRecord {
     /// Whether a member asked for the cursor to move past this account's
     /// failing records, which stands until a sync moves it.
     pub hold_released: bool,
+    /// Whether such a request was withdrawn because what is wrong with the
+    /// account changed after the member asked.
+    pub release_withdrawn: bool,
     /// How many records the last sync that held the cursor fetched for this
     /// account and could not store.
     pub held_records: u32,
@@ -119,6 +122,7 @@ fn provider_account_from_row(row: &SqliteRow) -> Result<ProviderAccountRecord, S
         held_syncs: u32::try_from(int(row, "held_syncs")?)
             .map_err(|_| corrupt("a negative hold count"))?,
         hold_released: int(row, "hold_released")? != 0,
+        release_withdrawn: int(row, "release_withdrawn")? != 0,
         held_records: u32::try_from(int(row, "held_records")?)
             .map_err(|_| corrupt("a negative record count"))?,
     })
@@ -249,7 +253,7 @@ impl StoreTx {
     ) -> Result<(), StoreError> {
         let result = sqlx::query(
             "UPDATE provider_accounts SET last_applied_at = ?, held_syncs = 0, \
-             hold_released = 0, held_records = 0 WHERE id = ?",
+             hold_released = 0, release_withdrawn = 0, held_records = 0 WHERE id = ?",
         )
         .bind(at.as_millisecond())
         .bind(id.to_string())
@@ -291,8 +295,8 @@ impl StoreTx {
     /// `NotFound` if the provider account does not exist.
     pub async fn clear_cursor_hold(&mut self, id: ProviderAccountId) -> Result<(), StoreError> {
         let result = sqlx::query(
-            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, held_records = 0 \
-             WHERE id = ?",
+            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, release_withdrawn = 0, \
+             held_records = 0 WHERE id = ?",
         )
         .bind(id.to_string())
         .execute(&mut *self.tx)
@@ -315,8 +319,8 @@ impl StoreTx {
         present: &[String],
     ) -> Result<(), StoreError> {
         let mut query = QueryBuilder::<Sqlite>::new(
-            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, held_records = 0 \
-             WHERE connection_id = ",
+            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, release_withdrawn = 0, \
+             held_records = 0 WHERE connection_id = ",
         );
         query.push_bind(connection.to_string());
         query.push(" AND (held_syncs != 0 OR hold_released != 0)");
@@ -372,14 +376,37 @@ impl StoreTx {
         ids: &[ProviderAccountId],
     ) -> Result<(), StoreError> {
         for id in ids {
-            let result = sqlx::query("UPDATE provider_accounts SET hold_released = 1 WHERE id = ?")
-                .bind(id.to_string())
-                .execute(&mut *self.tx)
-                .await
-                .map_err(StoreError::from_sqlx)?;
+            let result = sqlx::query(
+                "UPDATE provider_accounts SET hold_released = 1, release_withdrawn = 0 \
+                 WHERE id = ?",
+            )
+            .bind(id.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
             expect_one(result.rows_affected())?;
         }
         Ok(())
+    }
+
+    /// Take back a member's request to pass the failing records of the
+    /// provider account `id`, which stays held, and say so on it.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn withdraw_cursor_release(
+        &mut self,
+        id: ProviderAccountId,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE provider_accounts SET hold_released = 0, release_withdrawn = 1 WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
     }
 
     /// The provider account of `connection` bound to `account`, if any.

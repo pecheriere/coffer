@@ -7,7 +7,7 @@ use coffer_domain::transactions::SplitInput;
 use coffer_server::ledger::transactions::TransactionPatch;
 use coffer_server::sync::connections::HELD_AFTER_SYNCS;
 use coffer_server::testkit::{
-    INJECTED_BIND_RECORD_ID, INJECTED_FAILURE_RECORD_ID, INJECTED_TRANSIENT_RECORD_ID,
+    INJECTED_BIND_RECORD_ID, INJECTED_FAILURE_RECORD_ID, INJECTED_FAULT_RECORD_ID,
 };
 use serde_json::json;
 
@@ -31,16 +31,16 @@ impl World {
 /// A busy database says nothing about the record: nothing is given up, and
 /// the release applies once the database answers again.
 #[tokio::test]
-async fn a_transient_store_failure_gives_up_no_record() {
+async fn a_database_fault_gives_up_no_record() {
     let world = world().await;
     let checking = world.bound(LINE).await;
-    world.server.inject_transient_source_insert_failure().await;
+    world.server.inject_source_insert_fault().await;
     world.script.always(
         SYNC,
         StatusCode::OK,
         page(
             &[
-                record(INJECTED_TRANSIENT_RECORD_ID, LINE, "1"),
+                record(INJECTED_FAULT_RECORD_ID, LINE, "1"),
                 record("later", LINE, "2"),
             ],
             &[],
@@ -56,7 +56,7 @@ async fn a_transient_store_failure_gives_up_no_record() {
     assert!(run.detail.unwrap().contains("0 skipped"));
     assert!(world.release_still_stands().await);
 
-    world.server.clear_transient_source_insert_failure().await;
+    world.server.clear_source_insert_fault().await;
     world.sync().await;
 
     assert_eq!(world.transactions(checking).await.len(), 2);
@@ -127,10 +127,10 @@ async fn a_posted_record_joins_the_pending_one_its_delta_removes() {
     assert_eq!(after[0].sources[0].provider_txn_id, "posted");
 }
 
-/// A refusal that was not what held the cursor may not last: it gives up
-/// nothing, and the records are tried once it is gone.
+/// A refusal that differs from what the member saw takes the release back,
+/// however long it lasts: nothing is given up until the member asks again.
 #[tokio::test]
-async fn a_refusal_new_to_the_release_run_gives_up_no_record() {
+async fn a_new_refusal_withdraws_the_release_and_gives_up_no_record() {
     let world = world().await;
     let checking = world.bound(LINE).await;
     world.server.inject_source_insert_failure().await;
@@ -149,16 +149,31 @@ async fn a_refusal_new_to_the_release_run_gives_up_no_record() {
         ),
     );
     world.holds_then_releases().await;
+    let id = world.provider_account(LINE).await.id;
     world
         .script
         .always(GET_ACCOUNTS, StatusCode::OK, accounts_answer(&[]));
 
-    let run = world.sync().await;
+    for _ in 0..2 {
+        let run = world.sync().await;
+        assert!(run.detail.unwrap().contains("0 skipped"));
+        assert_eq!(world.connection().await.provider_state, None);
+    }
 
-    assert!(run.detail.unwrap().contains("0 skipped"));
-    assert!(world.release_still_stands().await);
+    assert_eq!(world.audits("connection.cursor_passed").await.len(), 0);
+    let held = world.held_cursor().await.unwrap();
+    assert!(!held.release_pending);
+    assert!(held.release_withdrawn);
+    let withdrawn = world.audits("connection.release_withdrawn").await;
+    assert_eq!(withdrawn.len(), 1, "taken back once, and audited");
+    let changes = serde_json::to_string(&withdrawn[0].changes).unwrap();
+    assert!(changes.contains(&id.to_string()));
+    assert!(changes.contains("differs"), "the entry says why");
+    assert!(!changes.contains("did not list"), "no provider text");
 
     world.script.always(GET_ACCOUNTS, StatusCode::OK, ACCOUNTS);
+    world.release().await.unwrap();
+    assert!(!world.held_cursor().await.unwrap().release_withdrawn);
     let run = world.sync().await;
 
     assert!(run.detail.unwrap().contains("1 skipped"));

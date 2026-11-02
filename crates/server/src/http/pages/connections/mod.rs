@@ -360,6 +360,13 @@ fn held_notice(
                     li { (account.name) }
                 }
             }
+            @if held.release_withdrawn {
+                p {
+                    "Your earlier release was withdrawn: what is wrong with these accounts "
+                    "changed after it was asked for, so nothing was passed. Look at them again. "
+                    "The cursor stays held unless the release is asked for again."
+                }
+            }
             @if held.release_pending {
                 p {
                     "Release requested: a sync moves the cursor on as soon as no other account "

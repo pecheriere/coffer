@@ -67,11 +67,11 @@ pub enum SyncError {
 }
 
 impl SyncError {
-    /// Whether the database could not do the work just now: the failure says
-    /// nothing about the data, and the same work may succeed later.
+    /// Whether the database itself could not do the work: the failure says
+    /// nothing about the data, and the same work may succeed once it is well.
     #[must_use]
-    pub(crate) fn is_transient(&self) -> bool {
-        matches!(self, Self::Store(err) if err.is_transient())
+    pub(crate) fn is_database_fault(&self) -> bool {
+        matches!(self, Self::Store(err) if err.is_database_fault())
     }
 }
 

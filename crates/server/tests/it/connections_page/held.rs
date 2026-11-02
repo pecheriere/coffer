@@ -209,6 +209,25 @@ async fn releasing_is_audited_and_waits_for_the_next_sync() {
     );
 }
 
+/// A release taken back by a sync leaves the member the decision again, and
+/// the page says why it is asked twice.
+#[tokio::test]
+async fn a_withdrawn_release_says_so_and_can_be_asked_again() {
+    let mut world = world().await;
+    let connection = world.seeded(world.alice).await;
+    let held = world.held(connection, "Savings", HELD_AFTER_SYNCS).await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.release_cursor_holds(&[held.id]).await.unwrap();
+    tx.withdraw_cursor_release(held.id).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let page = world.admin.get("/connections").await;
+
+    assert!(page.body.contains("Your earlier release was withdrawn"));
+    assert!(!page.body.contains("Release requested"));
+    assert!(page.body.contains(&release_path(connection)));
+}
+
 #[tokio::test]
 async fn releasing_a_cursor_that_is_not_held_says_so() {
     let mut world = world().await;

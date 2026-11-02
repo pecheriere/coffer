@@ -40,6 +40,10 @@ pub struct HeldCursorView {
     /// records: a sync does, as soon as no other account blocks it and the
     /// database and the provider's answer allow trying them.
     pub release_pending: bool,
+    /// Whether such a request was withdrawn because what is wrong with one
+    /// of the accounts changed after the member asked. Nothing was passed,
+    /// and the cursor moves on only if a member looks again and asks again.
+    pub release_withdrawn: bool,
 }
 
 /// Whether a sync cursor is held for good by `accounts`, all of one
@@ -58,6 +62,7 @@ pub(super) fn held_cursor(accounts: &[ProviderAccountRecord]) -> Option<HeldCurs
         text: CURSOR_HELD_TEXT,
         records: holding.iter().map(|account| account.held_records).sum(),
         release_pending: holding.iter().all(|account| account.hold_released),
+        release_withdrawn: holding.iter().any(|account| account.release_withdrawn),
         provider_accounts: holding.iter().map(|account| account.id).collect(),
     })
 }
@@ -69,10 +74,10 @@ impl SyncService {
     /// changes. The next sync then applies those accounts' records one by
     /// one and gives up only the ones that still fail, for good; they are
     /// counted as skipped and the pass is audited with its count. That
-    /// happens only if the sync moves the cursor, so a failure elsewhere, a
-    /// database that cannot do the work just now or a refusal of the account
-    /// other than the one recorded keeps the release for a later one. The
-    /// records are lost to coffer, so
+    /// happens only if the sync moves the cursor, so a failure elsewhere or
+    /// a database fault keeps the release for a later one. A refusal of the
+    /// account other than the one recorded withdraws it, for a member to look
+    /// again. The records are lost to coffer, so
     /// this needs a passkey session (never an agent token) of the
     /// connection's owner or an admin, with write access to every account
     /// like removing the connection. The request is audited, without any

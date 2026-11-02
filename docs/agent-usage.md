@@ -302,12 +302,13 @@ for a sync.
   creating or reconnecting a connection always have `null`). It is `null`, or
   says a Plaid sync cursor is held: `text` (fixed), `provider_accounts` (the
   ids of the provider accounts whose records keep failing to store),
-  `records` (how many records the last fetch could not store for them) and
+  `records` (how many records the last fetch could not store for them),
   `release_pending` (a member asked; a sync moves the cursor as soon as it
-  can, which may not be the next one). It appears after three syncs in a row
+  can, which may not be the next one) and `release_withdrawn` (a sync took the
+  request back because what is wrong with an account changed; nothing was
+  passed, and a member has to ask again). It appears after three syncs in a row
   left the cursor in place because of one account, and never for a removed
-  connection. While it
-  is held, each sync fetches those records again, and the account's own
+  connection. While it is held, each sync fetches those records again, and the account's own
   `error` says why. Telling the owner is the useful step: letting the cursor
   move on gives up the records that still fail to store for good (coffer only
   counts them as skipped and audits the count), so it is a button on the

@@ -65,9 +65,8 @@ impl SyncService {
     ///
     /// # Errors
     ///
-    /// Any failure that is not the record's own, such as a database that
-    /// cannot do the work just now: nothing more is tried, so no record is
-    /// given up for it.
+    /// Any failure that is not the record's own, such as a busy or damaged
+    /// database: nothing more is tried, so no record is given up for it.
     pub(super) async fn apply_one_by_one(
         &self,
         job: OneByOne,
@@ -192,7 +191,7 @@ impl SyncService {
                 tx.commit().await?;
                 Ok(Attempt::Applied(report))
             }
-            Err(err) if err.is_transient() => Err(err),
+            Err(err) if err.is_database_fault() => Err(err),
             Err(err) => Ok(Attempt::Failed(err)),
         }
     }

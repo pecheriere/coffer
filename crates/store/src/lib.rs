@@ -181,11 +181,11 @@ macro_rules! injected_failure_record_id {
     };
 }
 
-// The literal behind `INJECTED_TRANSIENT_RECORD_ID`, for SQL text.
+// The literal behind `INJECTED_FAULT_RECORD_ID`, for SQL text.
 #[cfg(any(test, feature = "testkit"))]
-macro_rules! injected_transient_record_id {
+macro_rules! injected_fault_record_id {
     () => {
-        "injected-transient-failure"
+        "injected-database-fault"
     };
 }
 
@@ -197,10 +197,10 @@ macro_rules! injected_bind_record_id {
     };
 }
 
-/// The provider record id whose insertion fails with a transient error once
-/// [`Store::inject_transient_source_insert_failure_for_tests`] ran.
+/// The provider record id whose insertion fails with a database fault once
+/// [`Store::inject_source_insert_fault_for_tests`] ran.
 #[cfg(any(test, feature = "testkit"))]
-pub const INJECTED_TRANSIENT_RECORD_ID: &str = injected_transient_record_id!();
+pub const INJECTED_FAULT_RECORD_ID: &str = injected_fault_record_id!();
 
 /// The provider record id whose insertion binds its provider account once
 /// [`Store::inject_bind_on_source_insert_for_tests`] ran.
@@ -267,19 +267,19 @@ impl Store {
     }
 
     /// Make every later insertion of a source record with the provider id
-    /// [`INJECTED_TRANSIENT_RECORD_ID`] fail as a busy database would, until
-    /// [`Self::clear_transient_source_insert_failure_for_tests`].
+    /// [`INJECTED_FAULT_RECORD_ID`] fail as a database fault would, until
+    /// [`Self::clear_source_insert_fault_for_tests`].
     ///
     /// # Errors
     ///
     /// Fails if no connection is available or the trigger cannot be
     /// created.
-    pub async fn inject_transient_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+    pub async fn inject_source_insert_fault_for_tests(&self) -> Result<(), StoreError> {
         sqlx::query(concat!(
-            "CREATE TRIGGER IF NOT EXISTS injected_transient_source_insert_failure \
+            "CREATE TRIGGER IF NOT EXISTS injected_source_insert_fault \
              BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
-            injected_transient_record_id!(),
-            "' BEGIN SELECT RAISE(ABORT, 'injected transient failure'); END"
+            injected_fault_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected database fault'); END"
         ))
         .execute(&self.pool)
         .await
@@ -287,13 +287,13 @@ impl Store {
         Ok(())
     }
 
-    /// Ends [`Self::inject_transient_source_insert_failure_for_tests`].
+    /// Ends [`Self::inject_source_insert_fault_for_tests`].
     ///
     /// # Errors
     ///
     /// Fails if no connection is available or the trigger cannot be dropped.
-    pub async fn clear_transient_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
-        sqlx::query("DROP TRIGGER IF EXISTS injected_transient_source_insert_failure")
+    pub async fn clear_source_insert_fault_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query("DROP TRIGGER IF EXISTS injected_source_insert_fault")
             .execute(&self.pool)
             .await
             .map_err(StoreError::from_sqlx)?;

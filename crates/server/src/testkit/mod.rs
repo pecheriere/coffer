@@ -24,7 +24,7 @@ use coffer_domain::ids::{ConnectionId, MemberId};
 use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
 pub use coffer_store::{
     INJECTED_BIND_RECORD_ID, INJECTED_FAILURE_LABEL, INJECTED_FAILURE_RECORD_ID,
-    INJECTED_TRANSIENT_RECORD_ID,
+    INJECTED_FAULT_RECORD_ID,
 };
 use coffer_store::{NewConnection, Store};
 use jiff::civil::Date;
@@ -260,27 +260,27 @@ impl TestServer {
     }
 
     /// Makes every later insertion of a source record with the provider id
-    /// [`INJECTED_TRANSIENT_RECORD_ID`] fail as a busy database would, until
-    /// [`Self::clear_transient_source_insert_failure`].
+    /// [`INJECTED_FAULT_RECORD_ID`] fail as a database fault would, until
+    /// [`Self::clear_source_insert_fault`].
     ///
     /// # Panics
     ///
     /// If the failure cannot be installed.
-    pub async fn inject_transient_source_insert_failure(&self) {
+    pub async fn inject_source_insert_fault(&self) {
         self.store
-            .inject_transient_source_insert_failure_for_tests()
+            .inject_source_insert_fault_for_tests()
             .await
             .expect("install the injected failure");
     }
 
-    /// Ends [`Self::inject_transient_source_insert_failure`].
+    /// Ends [`Self::inject_source_insert_fault`].
     ///
     /// # Panics
     ///
     /// If the failure cannot be removed.
-    pub async fn clear_transient_source_insert_failure(&self) {
+    pub async fn clear_source_insert_fault(&self) {
         self.store
-            .clear_transient_source_insert_failure_for_tests()
+            .clear_source_insert_fault_for_tests()
             .await
             .expect("remove the injected failure");
     }

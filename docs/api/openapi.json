@@ -5009,7 +5009,8 @@
           "text",
           "provider_accounts",
           "records",
-          "release_pending"
+          "release_pending",
+          "release_withdrawn"
         ],
         "properties": {
           "provider_accounts": {
@@ -5028,6 +5029,10 @@
           "release_pending": {
             "type": "boolean",
             "description": "Whether a member already asked for the cursor to move past those\nrecords: a sync does, as soon as no other account blocks it and the\ndatabase and the provider's answer allow trying them."
+          },
+          "release_withdrawn": {
+            "type": "boolean",
+            "description": "Whether such a request was withdrawn because what is wrong with one\nof the accounts changed after the member asked. Nothing was passed,\nand the cursor moves on only if a member looks again and asks again."
           },
           "text": {
             "type": "string",

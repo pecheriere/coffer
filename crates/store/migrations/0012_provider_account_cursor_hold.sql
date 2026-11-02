@@ -5,5 +5,8 @@ ALTER TABLE provider_accounts ADD COLUMN held_syncs INTEGER NOT NULL DEFAULT 0;
 -- Whether a member asked for the cursor to move past this account's failing
 -- records: a sync then applies them one by one, and those that still fail are
 -- passed for good once it moves the cursor. Until a sync does, the request
--- stands.
+-- stands, unless what is wrong with the account changes.
 ALTER TABLE provider_accounts ADD COLUMN hold_released INTEGER NOT NULL DEFAULT 0;
+-- Whether such a request was withdrawn because what is wrong with the account
+-- changed after the member asked: the member has to look again.
+ALTER TABLE provider_accounts ADD COLUMN release_withdrawn INTEGER NOT NULL DEFAULT 0;
