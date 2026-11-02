@@ -55,6 +55,7 @@ cargo run -p coffer-server -- serve                     # run the server (see do
 cargo run -p coffer-server -- bootstrap-link            # first-admin setup link
 cargo run -p coffer-server -- recover-admin <username>  # re-enroll link for a locked-out admin
 cargo run -p coffer-server -- backup <dest>             # consistent database copy, mode 0600
+cargo run -p coffer-server -- rebuild-net-worth         # recompute the daily net worth table
 cargo run -p coffer-server -- healthcheck               # probe GET /healthz on COFFER_LISTEN
 cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the OpenAPI snapshot
 

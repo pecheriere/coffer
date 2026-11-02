@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use coffer_domain::identity::Username;
-use coffer_domain::time::SystemClock;
+use coffer_domain::time::{Clock as _, SystemClock};
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -22,6 +22,7 @@ use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
+use crate::fx::{self, FxService, rate_provider};
 use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
 use crate::ledger::Ledger;
@@ -87,6 +88,9 @@ enum ConfiguredCommand {
         /// Where to write the copy; it must not exist yet.
         dest: PathBuf,
     },
+    /// Rebuild the daily net worth table from balances, rates and the display
+    /// currency. Safe while the server runs: other writes wait for it.
+    RebuildNetWorth,
 }
 
 /// Why a command failed, and with which exit code.
@@ -247,18 +251,20 @@ async fn execute(
             }
         }
         ConfiguredCommand::Backup { dest } => {
-            if config.data_dir.try_exists()? {
-                check_private_dir(&config.data_dir)?;
-            }
-            // Never create or migrate a database just to back it up.
-            if !config.database_path().try_exists()? {
-                return Err(CliError::Failed(
-                    "no database found in the data directory".to_owned(),
-                ));
-            }
-            let store = Store::open(&config.database_path()).await?;
+            let store = open_existing_store(&config).await?;
             backup(&store, &dest).await?;
             writeln!(out, "backup written to {}", dest.display())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        ConfiguredCommand::RebuildNetWorth => {
+            let store = open_existing_store(&config).await?;
+            let today = SystemClock.now().to_zoned(config.timezone).date();
+            // One transaction, under the write lock like any writer's: other
+            // writes wait for it, and it holds what they committed before it.
+            let mut tx = store.begin().await?;
+            let rows = tx.rebuild_net_worth(today).await?;
+            tx.commit().await?;
+            writeln!(out, "net worth rebuilt: {rows} rows, through {today}")?;
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -273,6 +279,20 @@ async fn open_store(config: &Config) -> Result<Store, CliError> {
     std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
     dir.create(&config.data_dir)?;
     check_private_dir(&config.data_dir)?;
+    Ok(Store::open(&config.database_path()).await?)
+}
+
+/// Opens the database of a command that has no use for an empty one: it never
+/// creates a database or a data directory, and no database found is a failure.
+async fn open_existing_store(config: &Config) -> Result<Store, CliError> {
+    if config.data_dir.try_exists()? {
+        check_private_dir(&config.data_dir)?;
+    }
+    if !config.database_path().try_exists()? {
+        return Err(CliError::Failed(
+            "no database found in the data directory".to_owned(),
+        ));
+    }
     Ok(Store::open(&config.database_path()).await?)
 }
 
@@ -350,6 +370,12 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         Arc::clone(&access),
         config.clone(),
     ));
+    let fx = Arc::new(FxService::new(
+        store.clone(),
+        clock.clone(),
+        config.timezone.clone(),
+        rate_provider(&config, &egress)?,
+    ));
     Ok(AppState {
         sessions,
         agent_tokens,
@@ -358,6 +384,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         ledger,
         access,
         sync,
+        fx,
         idempotency,
         store,
         config,
@@ -448,9 +475,9 @@ async fn serve(config: Config) -> Result<(), CliError> {
     serve_with(state, listener, shutdown_signal()).await
 }
 
-/// Serves `state` on `listener`, with the sync scheduler running, until
-/// `shutdown` resolves; then drains in-flight requests, stops the
-/// scheduler and returns.
+/// Serves `state` on `listener`, with the sync scheduler and the exchange rate
+/// jobs running, until `shutdown` resolves; then drains in-flight requests,
+/// stops them and returns.
 ///
 /// Logs the setup link when no admin exists. That is the only place a setup
 /// link is logged: with no channel to the operator, and the link
@@ -469,15 +496,17 @@ pub async fn serve_with(
     }
     let listen = listener.local_addr()?;
     tracing::info!(%listen, public_url = %state.config.public_url, "coffer is serving");
-    let (stop, mut stopped) = watch::channel(false);
-    let scheduler = scheduler::spawn(state.clone(), async move {
-        // An error means the server is gone, which stops the scheduler too.
+    let (stop, stopped) = watch::channel(false);
+    let stop_with_the_server = |mut stopped: watch::Receiver<bool>| async move {
+        // An error means the server is gone, which stops the task too.
         let _ = stopped.wait_for(|stop| *stop).await;
-    });
+    };
+    let scheduler = scheduler::spawn(state.clone(), stop_with_the_server(stopped.clone()));
+    let rates = fx::spawn(Arc::clone(&state.fx), stop_with_the_server(stopped));
     let served = axum::serve(listener, http::router(state))
         .with_graceful_shutdown(async move {
             shutdown.await;
-            // The scheduler stops once `stop` is dropped in any case.
+            // The background tasks stop once `stop` is dropped in any case.
             let _ = stop.send(true);
         })
         .await;
@@ -486,6 +515,12 @@ pub async fn serve_with(
         tracing::error!(
             panicked = err.is_panic(),
             "the sync scheduler ended abnormally"
+        );
+    }
+    if let Err(err) = rates.await {
+        tracing::error!(
+            panicked = err.is_panic(),
+            "the exchange rate jobs ended abnormally"
         );
     }
     served?;

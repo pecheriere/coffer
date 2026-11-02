@@ -38,6 +38,7 @@ use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::{Config, PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, HostAllowList};
+use crate::fx::FxService;
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
 use crate::secrets::ServerKey;
@@ -338,6 +339,12 @@ impl TestServer {
             ledger: Arc::clone(&self.ledger),
             access: Arc::clone(&self.access),
             sync: Arc::clone(&self.sync),
+            fx: Arc::new(FxService::new(
+                self.store.clone(),
+                self.clock.clone(),
+                self.config.timezone.clone(),
+                None,
+            )),
             idempotency: Arc::new(RequestHasher::new(&self.key)),
             store: self.store.clone(),
             config: self.config.clone(),

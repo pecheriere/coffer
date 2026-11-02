@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use coffer_domain::accounts::BalanceSource;
-use coffer_domain::fx::RateLeg;
+use coffer_domain::fx::{FxSource, RateLeg};
 use coffer_domain::net_worth::ConversionState;
 use jiff::civil::date;
 
@@ -527,6 +527,130 @@ fn every_snapshot_writer_is_known() {
     for changing in ["update balance_snapshots", "delete from balance_snapshots"] {
         assert_eq!(counts_of(changing), []);
     }
+}
+
+/// Rates written anywhere else would leave the table's conversions stale, as a
+/// new snapshot writer would its balances. Each file's count is exact.
+#[test]
+fn every_rate_writer_is_known() {
+    let known = |name: &str, count| (name.to_owned(), count);
+    assert_eq!(
+        counts_of("into fx_rates"),
+        [
+            known("fx.rs", 1),
+            // Fixtures of the unit tests beside the code.
+            known("fx/tests.rs", 2),
+            known("net_worth/tests.rs", 1),
+        ],
+        "a writer of rates must refresh the daily rows"
+    );
+    assert_eq!(
+        counts_of("delete from fx_rates"),
+        [known("fx.rs", 1)],
+        "a remover of rates must refresh the daily rows"
+    );
+    assert_eq!(counts_of("update fx_rates"), []);
+}
+
+/// A rate going is a change like a rate arriving: the days that carried it now
+/// use the one before, in the same transaction.
+#[tokio::test]
+async fn a_removed_rate_rewrites_the_days_it_reached() {
+    let (_dir, store) = open().await;
+    let usd = holding(&store, "USD").await;
+    let eur = holding(&store, "EUR").await;
+    snap(&store, usd, oct(1), 1000).await;
+    snap(&store, eur, oct(1), 1000).await;
+    fx(
+        &store,
+        "USD",
+        &[(oct(1), "2"), (oct(5), "4"), (oct(9), "2")],
+    )
+    .await;
+    show_in(&store, "EUR").await;
+    rebuild(&store, oct(10)).await;
+    assert_eq!(row_on(&store, usd, oct(6)).await.display_minor, Some(250));
+    mark(&store, usd).await;
+    mark(&store, eur).await;
+
+    let mut tx = store.begin().await.unwrap();
+    let changed = tx
+        .replace_fx_rates(
+            cur("USD"),
+            FxSource::Ecb,
+            oct(1),
+            &observations(&[(oct(1), "2"), (oct(9), "2")]),
+            at(),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(changed, Some(oct(5)));
+    assert_eq!(written_days(&store, usd).await, days(5, 10));
+    assert_eq!(row_on(&store, usd, oct(6)).await.display_minor, Some(500));
+    assert_eq!(written_days(&store, eur).await, []);
+}
+
+/// The display currency's own rate moves every other currency's accounts.
+#[tokio::test]
+async fn a_removed_rate_of_the_display_currency_rewrites_the_others() {
+    let (_dir, store) = open().await;
+    let eur = holding(&store, "EUR").await;
+    snap(&store, eur, oct(1), 1000).await;
+    fx(
+        &store,
+        "USD",
+        &[(oct(1), "2"), (oct(5), "4"), (oct(9), "2")],
+    )
+    .await;
+    show_in(&store, "USD").await;
+    rebuild(&store, oct(10)).await;
+    assert_eq!(row_on(&store, eur, oct(6)).await.display_minor, Some(4000));
+
+    let mut tx = store.begin().await.unwrap();
+    tx.replace_fx_rates(
+        cur("USD"),
+        FxSource::Ecb,
+        oct(1),
+        &observations(&[(oct(1), "2"), (oct(9), "2")]),
+        at(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(row_on(&store, eur, oct(6)).await.display_minor, Some(2000));
+}
+
+#[tokio::test]
+async fn a_removed_rate_rolled_back_leaves_the_rows() {
+    let (_dir, store) = open().await;
+    let usd = holding(&store, "USD").await;
+    snap(&store, usd, oct(1), 1000).await;
+    fx(
+        &store,
+        "USD",
+        &[(oct(1), "2"), (oct(5), "4"), (oct(9), "2")],
+    )
+    .await;
+    show_in(&store, "EUR").await;
+    rebuild(&store, oct(10)).await;
+    let before = dump(&store).await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.replace_fx_rates(
+        cur("USD"),
+        FxSource::Ecb,
+        oct(1),
+        &observations(&[(oct(1), "2"), (oct(9), "2")]),
+        at(),
+    )
+    .await
+    .unwrap();
+    drop(tx);
+
+    assert_eq!(dump(&store).await, before);
 }
 
 #[tokio::test]

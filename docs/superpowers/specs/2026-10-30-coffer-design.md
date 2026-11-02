@@ -1060,6 +1060,13 @@ currency. First use of a currency fetches its whole history. After that the job 
 A failure is logged with fixed text, recorded as a fixed code and retried. It never touches
 sync, which has its own worker.
 
+Such an answer replaces the days it speaks for, from the start of the window to its own last
+row: a stored rate absent there is removed and the rows from that day rewritten, in one
+transaction, so a false rate on a weekend or holiday doesn't last. Rates after its last row
+stay, since an answer cut at the end of a line looks like a shorter one, and the next answer
+to pass them settles them. An empty answer or a failure removes nothing. An empty answer can't
+be true of a window holding a rate that was published, so it is logged and rates are kept.
+
 **N8. The display currency is a household setting,** set by an admin through
 `PATCH /api/v1/household/settings` or `/admin/household`, audited, and replaceable but never
 unset. It starts unset and is never guessed, since a guess from the oldest account would

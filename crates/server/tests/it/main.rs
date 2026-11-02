@@ -17,6 +17,7 @@ mod egress;
 mod egress_relay;
 mod forecast;
 mod fx_ecb;
+mod fx_job;
 mod grants;
 mod healthcheck;
 mod household_settings;

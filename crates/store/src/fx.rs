@@ -2,6 +2,8 @@
 //! canonical text of an `FxRate`, so two texts are equal exactly when the
 //! rates are, and the euro has no row.
 
+use std::collections::BTreeSet;
+
 use coffer_domain::fx::{
     FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory,
     RateObservation,
@@ -20,6 +22,14 @@ const MAX_RATES_PER_READ: i64 = 1_000;
 
 /// Rows per `INSERT`: five binds each stay far below `SQLite`'s limit.
 const UPSERT_CHUNK: usize = 500;
+
+/// The earlier of two days, either of which may be missing.
+fn earlier(one: Option<Date>, other: Option<Date>) -> Option<Date> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (one, other) => one.or(other),
+    }
+}
 
 fn observation_from_row(row: &SqliteRow) -> Result<RateObservation, StoreError> {
     Ok(RateObservation {
@@ -173,6 +183,88 @@ impl StoreTx {
         rates: &[RateObservation],
         now: Timestamp,
     ) -> Result<Option<Date>, StoreError> {
+        let written = self.write_rates(currency, source, rates, now).await?;
+        self.settle_rates(currency, written, now).await?;
+        Ok(written)
+    }
+
+    /// As [`StoreTx::upsert_fx_rates`], for an answer about the days from `from`
+    /// on: also removes the stored rates of the days the answer speaks for and
+    /// doesn't hold, such as a false rate on a day with none.
+    ///
+    /// An answer speaks for the days from `from` to its own last row. Rates after
+    /// that stay, since an answer cut off at the end of a line looks just like a
+    /// shorter one; the next answer to pass them settles them. So an empty answer
+    /// removes nothing: it can't be the whole truth about a window holding a rate
+    /// the source published, and it must not cost every rate there. Since a
+    /// non-empty answer leaves its own rows behind, this can't empty a currency.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including the schema refusing the euro.
+    pub async fn replace_fx_rates(
+        &mut self,
+        currency: Currency,
+        source: FxSource,
+        from: Date,
+        rates: &[RateObservation],
+        now: Timestamp,
+    ) -> Result<Option<Date>, StoreError> {
+        let removed = self.remove_absent_rates(currency, from, rates).await?;
+        let written = self.write_rates(currency, source, rates, now).await?;
+        let earliest = earlier(removed, written);
+        self.settle_rates(currency, earliest, now).await?;
+        Ok(earliest)
+    }
+
+    /// Removes `currency`'s rates from `from` to the last of `rates` on days
+    /// `rates` doesn't hold. Answers the earliest it removed.
+    async fn remove_absent_rates(
+        &mut self,
+        currency: Currency,
+        from: Date,
+        rates: &[RateObservation],
+    ) -> Result<Option<Date>, StoreError> {
+        let Some(last) = rates.iter().map(|rate| rate.on).max() else {
+            return Ok(None);
+        };
+        let answered: BTreeSet<Date> = rates.iter().map(|rate| rate.on).collect();
+        let stored = sqlx::query(
+            "SELECT on_date FROM fx_rates WHERE quote = ? AND on_date BETWEEN ? AND ? \
+             ORDER BY on_date",
+        )
+        .bind(currency.as_str())
+        .bind(from.to_string())
+        .bind(last.to_string())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        let mut earliest = None;
+        for row in &stored {
+            let day: Date = parsed(row, "on_date")?;
+            if answered.contains(&day) {
+                continue;
+            }
+            sqlx::query("DELETE FROM fx_rates WHERE quote = ? AND on_date = ?")
+                .bind(currency.as_str())
+                .bind(day.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+            earliest = earliest.or(Some(day));
+        }
+        Ok(earliest)
+    }
+
+    /// Writes those of `rates` that are new or differ from what is stored.
+    /// Answers the earliest day that changed.
+    async fn write_rates(
+        &mut self,
+        currency: Currency,
+        source: FxSource,
+        rates: &[RateObservation],
+        now: Timestamp,
+    ) -> Result<Option<Date>, StoreError> {
         let mut earliest: Option<Date> = None;
         for chunk in rates.chunks(UPSERT_CHUNK) {
             let mut query = QueryBuilder::<Sqlite>::new(
@@ -197,9 +289,20 @@ impl StoreTx {
                 .map_err(StoreError::from_sqlx)?
             {
                 let day: Date = parsed(&row, "on_date")?;
-                earliest = Some(earliest.map_or(day, |known| known.min(day)));
+                earliest = earlier(earliest, Some(day));
             }
         }
+        Ok(earliest)
+    }
+
+    /// After a change to `currency`'s rates: brings its coverage up to what is
+    /// stored and rewrites the daily rows from `changed` on.
+    async fn settle_rates(
+        &mut self,
+        currency: Currency,
+        changed: Option<Date>,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO fx_coverage (currency, status, first_on, last_on, last_attempt_at, \
              last_success_at, last_error) \
@@ -216,10 +319,10 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
-        if let Some(earliest) = earliest {
-            self.refresh_after_rate(currency, earliest).await?;
+        if let Some(changed) = changed {
+            self.refresh_after_rate(currency, changed).await?;
         }
-        Ok(earliest)
+        Ok(())
     }
 
     /// Record that fetching `currency`'s rates did not give rates. What is
