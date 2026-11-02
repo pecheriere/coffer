@@ -36,7 +36,7 @@ pub struct ForecastData {
     pub goal_spent: Vec<(PlannedItemId, i64)>,
     pub category_spent: Vec<CategorySpentRow>,
     pub loose_ends: Vec<LooseEndsRow>,
-    /// Outflows on counted accounts after their balances' dates, up to `as_of`.
+    /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
     /// Every provider account, ordered by id.
     pub provider_accounts: Vec<ProviderAccountRecord>,
@@ -62,12 +62,14 @@ pub struct LooseEndsRow {
     pub possible_duplicates: u32,
 }
 
-/// What counted accounts spent in one currency after their balances' dates.
+/// What counted accounts spent in one currency that their balances may not show yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewerSpendingRow {
     pub currency: Currency,
-    /// Positive for money out.
+    /// Posted outflows after the balances' dates, positive for money out.
     pub total_minor: i64,
+    /// Pending outflows up to `as_of`, positive for money out.
+    pub pending_minor: i64,
 }
 
 /// How a connection stands: nothing of its credentials or provider state.
@@ -105,14 +107,16 @@ macro_rules! shown_this_month {
 }
 
 /// A charge the provider removed, or revised away from its splits, doesn't say what
-/// was spent in a category, so it pays no bill and reduces no budget.
+/// was spent in a category, so it pays no bill and reduces no budget. An inflow on such a
+/// transaction keeps counting: leaving a refund out would raise the spending, the opposite
+/// of holding more.
 const CATEGORY_SPENT: &str = concat!(
     "SELECT s.category_id AS category, t.currency AS currency, \
      MAX(0, -SUM(s.minor_units)) AS spent_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id, ",
     shown_this_month!(),
     " AND s.transaction_id = t.id AND s.goal_id IS NULL AND c.kind = 'expense' \
-     AND t.flag_source_removed = 0 AND t.flag_split_mismatch = 0 \
+     AND (s.minor_units > 0 OR (t.flag_source_removed = 0 AND t.flag_split_mismatch = 0)) \
      GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
 );
 
@@ -137,7 +141,8 @@ const LOOSE_ENDS: &str = concat!(
 
 /// Spending linked to each goal: `expense` splits only, since money moved to savings
 /// for a goal is still cash. A charge the provider removed or revised away from its
-/// splits, or that may be another charge again, doesn't lower the need.
+/// splits, or that may be another charge again, doesn't lower the need. An inflow on such
+/// a transaction keeps counting, since leaving a refund out would lower it.
 ///
 /// The balance date limits an account switched in and of a spendable class, open or a
 /// closed card: spending newer than the balance isn't in it yet, an account with no
@@ -150,25 +155,32 @@ const GOAL_SPENT: &str = concat!(
      JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
     latest_balance!(),
     " WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
-       AND t.flag_source_removed = 0 AND t.flag_split_mismatch = 0 \
-       AND t.flag_possible_duplicate = 0 AND t.posted_on <= ?1 AND ( \
+       AND (s.minor_units > 0 OR (t.flag_source_removed = 0 AND t.flag_split_mismatch = 0 \
+                                  AND t.flag_possible_duplicate = 0)) \
+       AND t.posted_on <= ?1 AND ( \
        NOT (a.include_in_forecast = 1 AND a.liquidity IN ('cash', 'short_term_liability') \
             AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
        OR t.posted_on <= COALESCE(b.on_date, '') \
      ) GROUP BY s.goal_id ORDER BY s.goal_id"
 );
 
-/// Posted outflows on accounts the forecast counts, as it counts them, after the date
-/// of the balance it takes for them, up to `as_of`.
+/// Outflows up to `as_of` that a balance may not show, on an account switched in and of a
+/// spendable class: posted after the date of the balance the forecast takes, or pending
+/// on any date, which is either one or the other. An open account has to have a balance,
+/// since without one the forecast is blocked already. A closed card doesn't, since closing
+/// it settles no debt its balance doesn't show. Closed cash isn't in the cash.
 const NEWER_SPENDING: &str = concat!(
-    "SELECT t.currency AS currency, -SUM(t.amount_minor) AS total_minor \
-     FROM transactions t JOIN accounts a ON a.id = t.account_id JOIN ",
+    "SELECT t.currency AS currency, \
+     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.pending = 0), 0) AS total_minor, \
+     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.pending = 1), 0) AS pending_minor \
+     FROM transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
     latest_balance!(),
-    " WHERE t.pending = 0 AND t.amount_minor < 0 AND t.posted_on > b.on_date \
-       AND t.posted_on <= ?1 AND a.include_in_forecast = 1 \
+    " WHERE t.amount_minor < 0 AND t.posted_on <= ?1 \
+       AND (t.pending = 1 OR t.posted_on > COALESCE(b.on_date, '')) \
+       AND a.include_in_forecast = 1 \
        AND a.liquidity IN ('cash', 'short_term_liability') \
-       AND (a.closed_at IS NULL \
-            OR (a.liquidity = 'short_term_liability' AND b.balance_minor < 0)) \
+       AND ((a.closed_at IS NULL AND b.on_date IS NOT NULL) \
+            OR (a.closed_at IS NOT NULL AND a.liquidity = 'short_term_liability')) \
      GROUP BY t.currency ORDER BY t.currency"
 );
 
@@ -197,6 +209,7 @@ fn newer_spending_from_row(row: &SqliteRow) -> Result<NewerSpendingRow, StoreErr
     Ok(NewerSpendingRow {
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         total_minor: int(row, "total_minor")?,
+        pending_minor: int(row, "pending_minor")?,
     })
 }
 

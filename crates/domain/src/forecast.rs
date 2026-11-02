@@ -625,11 +625,15 @@ fn cautions(
         input
             .newer_spending
             .iter()
-            .filter(|newer| newer.total_minor > 0)
+            .filter(|newer| newer.total_minor > 0 || newer.pending_minor > 0)
             .map(|newer| Caution::SpendingNewerThanBalance {
                 currency: newer.currency,
                 total: Money {
                     minor_units: newer.total_minor,
+                    currency: newer.currency,
+                },
+                pending: Money {
+                    minor_units: newer.pending_minor,
                     currency: newer.currency,
                 },
             }),

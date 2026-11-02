@@ -211,12 +211,18 @@ impl World {
         tx.commit().await.unwrap();
     }
 
-    /// `AS_OF`'s spending newer than balances, as (currency, total).
-    async fn newer_spending(&self) -> Vec<(String, i64)> {
+    /// `AS_OF`'s spending newer than balances, as (currency, total, pending).
+    async fn newer_spending(&self) -> Vec<(String, i64, i64)> {
         let data = self.store.forecast_data(AS_OF).await.unwrap();
         data.newer_spending
             .iter()
-            .map(|row| (row.currency.as_str().to_owned(), row.total_minor))
+            .map(|row| {
+                (
+                    row.currency.as_str().to_owned(),
+                    row.total_minor,
+                    row.pending_minor,
+                )
+            })
             .collect()
     }
 

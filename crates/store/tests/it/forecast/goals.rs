@@ -92,9 +92,9 @@ async fn goal_spent_on_a_counted_account_without_a_balance_counts_nothing() {
     assert_eq!(world.goal_spent(goal).await, 0);
 }
 
-/// A closed card still owing counts against cash (R16), so a purchase newer than its
-/// balance isn't shown by it. One that no longer owes doesn't count, and a closed
-/// account never touched counted cash.
+/// A closed card switched in may hold a debt no balance shows yet, so on all of them a
+/// purchase newer than the balance doesn't lower the need: owing, settled, in credit or
+/// with no balance at all. One on or before the balance's date is shown, and does.
 #[tokio::test]
 async fn goal_spent_on_a_closed_card_follows_whether_it_counts() {
     let world = world().await;
@@ -209,6 +209,25 @@ async fn goal_spent_leaves_out_removed_revised_and_possibly_duplicated_charges()
     world.flag(Flag::PossibleDuplicate, -4_000).await;
 
     assert_eq!(world.goal_spent(goal).await, 1);
+}
+
+/// A flag takes a charge out, which errs toward holding more. Taking a refund out would
+/// lower the need, so a flagged inflow keeps counting: 1,000 - 100 - 20 - 3.
+#[tokio::test]
+async fn goal_spent_keeps_flagged_refunds() {
+    let world = world().await;
+    let goal = world.goal().await;
+    let on = date(2026, 11, 2);
+    world.balance(world.account, AS_OF, 0).await;
+    world.spend_on_goal(world.account, on, goal, -1_000).await;
+    for refund in [100, 20, 3] {
+        world.spend_on_goal(world.account, on, goal, refund).await;
+    }
+    world.flag(Flag::SourceRemoved, 100).await;
+    world.flag(Flag::SplitMismatch, 20).await;
+    world.flag(Flag::PossibleDuplicate, 3).await;
+
+    assert_eq!(world.goal_spent(goal).await, 877);
 }
 
 /// Moved money and pay aren't goal spending, whatever the category's kind used to be.

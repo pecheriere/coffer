@@ -316,6 +316,7 @@ fn input(
             .map(|row| NewerSpending {
                 currency: row.currency,
                 total_minor: row.total_minor,
+                pending_minor: row.pending_minor,
             })
             .collect(),
         unbound,

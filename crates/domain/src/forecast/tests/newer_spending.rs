@@ -1,4 +1,4 @@
-//! Known spending newer than a balance warns and leaves the number alone (R10a).
+//! Known spending a balance may not show warns and leaves the number alone (R10).
 
 use super::{currency, household, monthly, run, usd};
 use crate::forecast::{Caution, ForecastStatus, NewerSpending};
@@ -8,6 +8,7 @@ fn newer(code: &str, total_minor: i64) -> NewerSpending {
     NewerSpending {
         currency: currency(code),
         total_minor,
+        pending_minor: 0,
     }
 }
 
@@ -26,8 +27,52 @@ fn newer_spending_is_a_caution_and_keeps_the_number() {
         [Caution::SpendingNewerThanBalance {
             currency: currency("USD"),
             total: usd(1_700_000),
+            pending: usd(0),
         }],
         "it names the currency and the total"
+    );
+}
+
+/// A pending charge the balance may not show is the same kind of unseen cash.
+#[test]
+fn pending_alone_is_a_caution_and_keeps_the_number() {
+    let mut input = household();
+    let without = run(&input).surplus;
+    input.newer_spending = vec![NewerSpending {
+        pending_minor: 900,
+        ..newer("USD", 0)
+    }];
+
+    let forecast = run(&input);
+
+    assert_eq!(forecast.status, ForecastStatus::Provisional, "not firm");
+    assert_eq!(forecast.surplus, without, "the number does not move");
+    assert_eq!(
+        forecast.cautions,
+        [Caution::SpendingNewerThanBalance {
+            currency: currency("USD"),
+            total: usd(0),
+            pending: usd(900),
+        }],
+        "it names what is pending, apart from the total"
+    );
+}
+
+#[test]
+fn posted_and_pending_are_reported_apart() {
+    let mut input = household();
+    input.newer_spending = vec![NewerSpending {
+        pending_minor: 900,
+        ..newer("USD", 20)
+    }];
+    assert_eq!(
+        run(&input).cautions,
+        [Caution::SpendingNewerThanBalance {
+            currency: currency("USD"),
+            total: usd(20),
+            pending: usd(900),
+        }],
+        "one caution with both, never added together"
     );
 }
 

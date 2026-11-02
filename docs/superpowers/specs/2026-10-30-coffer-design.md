@@ -792,21 +792,30 @@ it never touched counted cash. Pending charges do not lower the need, and money 
 account did not come out of counted cash. A known limit: a balance has a date and no
 time, so a transaction later on the balance's own date counts as shown.
 
-Posted outflows on counted accounts after the account's balance date, up to `as_of`,
-raise the caution `spending_newer_than_balance` with their total per currency, which
-makes the status `provisional`. The number does not change, since a provider's balance
-date may lag what its balance reflects and guessing could count the money twice or not
-at all. If the balance really is older, the cash available is overstated by up to that
-total. A bill past its date is still unpaid until spending on or before the balance
-date pays it (R9).
+Money out that a balance may not show raises the caution
+`spending_newer_than_balance`, per currency, which makes the status `provisional`:
+`total` is posted outflows after the account's balance date, up to `as_of`, and
+`pending` is pending outflows dated up to `as_of`, whatever the balance date. A
+transaction is one or the other, and pending alone raises it. It covers open accounts
+with a balance, an open one without being blocked already, and any closed short-term
+liability switched in, with or without a balance, since closing a card settles no debt
+its balance does not show. The number does not change, since a provider's balance date
+may lag what its balance reflects and guessing could count the money twice or not at
+all: the forecast assumes each balance already reflects this money. Where one does not,
+as with pending charges on many depository balances, the cash available is overstated
+by up to these amounts. A bill past its date is still unpaid until spending on or before
+the balance date pays it (R9).
 
-**R10a. Charges that say nothing about what was spent.** A transaction flagged
-`source_removed` or `split_mismatch` counts neither as a category's spending nor as a
-goal's, and one flagged `possible_duplicate` does not count as a goal's. The provider
-took the charge back or changed it, so its splits no longer say what happened, and
-leaving it out errs toward holding more: a bill it paid is unpaid again, with a
-caution. A possible duplicate in a category keeps counting there, with the caution
-`possible_duplicates`.
+**R10a. Charges that say nothing about what was spent.** An outflow on a transaction
+flagged `source_removed` or `split_mismatch` counts neither as a category's spending nor
+as a goal's, and one flagged `possible_duplicate` does not count as a goal's. The provider
+took the charge back or changed it, so its splits no longer say what happened, and leaving
+it out errs toward holding more: a bill it paid is unpaid again, with a caution. An inflow
+on such a transaction keeps counting, split by split, because leaving a refund out would
+raise net spending, the opposite direction: a reversal the provider revised still reverses
+the charge, and a refund the provider removed still counts, since whether it was real is
+unknown and counting it holds more. A possible duplicate in a category keeps counting
+there, with the caution `possible_duplicates`.
 
 **R11. No base or display currency yet.** §6.8's "in the requester's display
 currency" waits for FX. A fixed floor carries its own currency.

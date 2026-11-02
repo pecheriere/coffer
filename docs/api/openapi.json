@@ -2300,7 +2300,7 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider. Outflows newer than a balance raise the caution `spending_newer_than_balance` and leave the number as it is: if that balance really is older, the cash available is overstated by up to that total. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
@@ -6393,10 +6393,11 @@
           },
           {
             "type": "object",
-            "description": "Counted accounts spent this much after their balances' dates, up to `as_of`.\nThe number stays as it is, since a provider's balance date may lag what its\nbalance reflects, and guessing could count the money twice or not at all. If the\nbalance really is older, the cash available is overstated by up to this.",
+            "description": "Money out of counted accounts that their balances may not show yet: `total` posted\nafter a balance's date, and separately `pending`, not yet posted, whatever that\ndate. A transaction is one or the other. The number stays as it is, since a\nprovider's balance date may lag what its balance reflects, and guessing could\ncount the money twice or not at all. Where a balance doesn't show it, the cash\navailable is overstated by up to these.",
             "required": [
               "currency",
               "total",
+              "pending",
               "kind"
             ],
             "properties": {
@@ -6408,6 +6409,9 @@
                 "enum": [
                   "spending_newer_than_balance"
                 ]
+              },
+              "pending": {
+                "$ref": "#/components/schemas/Money"
               },
               "total": {
                 "$ref": "#/components/schemas/Money"

@@ -38,7 +38,7 @@ pub struct ForecastInput {
     pub category_spent: Vec<CategorySpent>,
     /// Spending in `as_of`'s month that is not settled yet.
     pub loose_ends: Vec<LooseEnds>,
-    /// Outflows on counted accounts posted after their balance's date, up to `as_of`.
+    /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
     /// Provider accounts bound to no account.
     pub unbound: Vec<UnboundAccount>,
@@ -135,13 +135,15 @@ pub struct LooseEnds {
     pub possible_duplicates: u32,
 }
 
-/// What counted accounts spent in one currency after their balances' dates, which
-/// those balances may not show yet.
+/// What counted accounts spent in one currency that their balances may not show yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewerSpending {
     pub currency: Currency,
-    /// Positive for money out.
+    /// Posted outflows after the balances' dates, positive for money out.
     pub total_minor: i64,
+    /// Pending outflows up to `as_of`, whatever the balances' dates, positive for
+    /// money out.
+    pub pending_minor: i64,
 }
 
 /// A provider account bound to no account, whose money the forecast cannot see.
@@ -446,11 +448,17 @@ pub enum Caution {
     /// Possible duplicates this month might be inflating a category's spending, which
     /// could shrink a reduction or hide an unpaid bill or one-off.
     PossibleDuplicates { count: u32 },
-    /// Counted accounts spent this much after their balances' dates, up to `as_of`.
-    /// The number stays as it is, since a provider's balance date may lag what its
-    /// balance reflects, and guessing could count the money twice or not at all. If the
-    /// balance really is older, the cash available is overstated by up to this.
-    SpendingNewerThanBalance { currency: Currency, total: Money },
+    /// Money out of counted accounts that their balances may not show yet: `total` posted
+    /// after a balance's date, and separately `pending`, not yet posted, whatever that
+    /// date. A transaction is one or the other. The number stays as it is, since a
+    /// provider's balance date may lag what its balance reflects, and guessing could
+    /// count the money twice or not at all. Where a balance doesn't show it, the cash
+    /// available is overstated by up to these.
+    SpendingNewerThanBalance {
+        currency: Currency,
+        total: Money,
+        pending: Money,
+    },
     /// The first month whose closing cash is below the floor: income arriving
     /// later cannot pay for it.
     CashDipsBelowFloor {

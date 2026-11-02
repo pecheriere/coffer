@@ -301,6 +301,63 @@ async fn category_spent_leaves_out_removed_and_revised_charges() {
     assert_eq!(world.category_spent().await, [1]);
 }
 
+/// A flag takes a charge out, which errs toward holding more. Taking a refund out would
+/// raise the spending, so a flagged inflow keeps counting: 1,000 - 100 - 20.
+#[tokio::test]
+async fn category_spent_keeps_flagged_refunds() {
+    let world = world().await;
+    let on = date(2026, 11, 2);
+    world.balance(world.account, AS_OF, 0).await;
+    world.spend(world.account, on, -1_000).await;
+    world.spend(world.account, on, 100).await;
+    world.spend(world.account, on, 20).await;
+    world.flag(Flag::SourceRemoved, 100).await;
+    world.flag(Flag::SplitMismatch, 20).await;
+
+    assert_eq!(world.category_spent().await, [880]);
+}
+
+/// The flag is the transaction's and the rule is per split: of one with mixed splits, the
+/// outflow goes and the inflow stays.
+#[tokio::test]
+async fn category_spent_applies_a_flag_split_by_split() {
+    let world = world().await;
+    let other = world.category_of(CategoryKind::Expense).await;
+    world.balance(world.account, AS_OF, 0).await;
+    world.spend(world.account, date(2026, 11, 2), -1_000).await;
+    world
+        .split_transaction(
+            world.account,
+            date(2026, 11, 3),
+            "USD",
+            &[
+                SplitInput {
+                    category: world.category,
+                    minor_units: 200,
+                    goal: None,
+                },
+                SplitInput {
+                    category: other,
+                    minor_units: -500,
+                    goal: None,
+                },
+            ],
+        )
+        .await;
+    world.flag(Flag::SplitMismatch, -300).await;
+
+    let data = world.store.forecast_data(AS_OF).await.unwrap();
+
+    let spent_in = |category: CategoryId| {
+        data.category_spent
+            .iter()
+            .find(|row| row.category == category)
+            .map(|row| row.spent_minor)
+    };
+    assert_eq!(spent_in(world.category), Some(800), "the refund counts");
+    assert_eq!(spent_in(other), None, "the charge doesn't");
+}
+
 #[tokio::test]
 async fn spending_on_a_short_term_liability_counts() {
     let world = world().await;
@@ -388,6 +445,31 @@ async fn category_spent_groups_by_currency() {
     assert_eq!(rows, [("EUR", 20), ("USD", 1)], "never netted");
 }
 
+/// Pending outflows count on any date up to `as_of`, before the balance's date too, and
+/// only in `pending`: a transaction is one or the other.
+#[tokio::test]
+async fn newer_spending_totals_pending_outflows_apart() {
+    let world = world().await;
+    let account = world.account;
+    world.balance(account, date(2026, 11, 10), 0).await;
+    for (on, minor) in [
+        (date(2026, 11, 2), -1),
+        (date(2026, 11, 10), -20),
+        (date(2026, 11, 12), -300),
+        (AS_OF, -4_000),
+        (date(2026, 11, 16), -50_000),
+        (date(2026, 11, 12), 600_000),
+    ] {
+        world.transaction(account, on, minor, None, true).await;
+    }
+
+    assert_eq!(
+        world.newer_spending().await,
+        [("USD".to_owned(), 0, 4_321)],
+        "nothing posted, every pending outflow by as_of"
+    );
+}
+
 /// Outflows only, posted after the balance's date and by `as_of`, categorized or not.
 #[tokio::test]
 async fn newer_spending_totals_posted_outflows_after_the_balance() {
@@ -411,12 +493,16 @@ async fn newer_spending_totals_posted_outflows_after_the_balance() {
         .transaction(account, date(2026, 11, 12), 600_000, None, false)
         .await;
 
-    assert_eq!(world.newer_spending().await, [("USD".to_owned(), 320)]);
+    assert_eq!(
+        world.newer_spending().await,
+        [("USD".to_owned(), 320, 50_000)]
+    );
 }
 
-/// Only what a counted account spent: from one out of the forecast, of another class,
-/// or closed and no longer owing, it isn't in the cash, and with no balance at all the
-/// forecast is blocked already.
+/// Only what could be in the cash. From an account out of the forecast, of another class
+/// or closed cash, it isn't. A closed card switched in may hold a debt its balance doesn't
+/// show, with or without a balance. An open account with no balance blocks the forecast
+/// already.
 #[tokio::test]
 async fn newer_spending_is_only_on_counted_accounts() {
     let world = world().await;
@@ -440,11 +526,26 @@ async fn newer_spending_is_only_on_counted_accounts() {
     };
     let owing = world.forecast_account(card("Owing")).await;
     let settled = world.forecast_account(card("Settled")).await;
-    for (account, balance) in [(excluded, 0), (invested, 0), (owing, -100), (settled, 0)] {
+    let unbalanced = world.forecast_account(card("Unbalanced")).await;
+    let switched_out = world
+        .forecast_account(NewAccount {
+            include_in_forecast: false,
+            ..card("Switched out")
+        })
+        .await;
+    let closed_cash = world.forecast_account(cash_account("Closed cash")).await;
+    for (account, balance) in [
+        (excluded, 0),
+        (invested, 0),
+        (owing, -100),
+        (settled, 0),
+        (switched_out, -100),
+        (closed_cash, 0),
+    ] {
         world.balance(account, balance_on, balance).await;
     }
     let mut tx = world.store.begin().await.unwrap();
-    for account in [owing, settled] {
+    for account in [owing, settled, unbalanced, switched_out, closed_cash] {
         tx.update_account(
             account,
             AccountChanges {
@@ -462,17 +563,26 @@ async fn newer_spending_is_only_on_counted_accounts() {
     world.transaction(invested, on, -300, None, false).await;
     world.transaction(settled, on, -4_000, None, false).await;
     world.transaction(owing, on, -50_000, None, false).await;
+    world
+        .transaction(unbalanced, on, -600_000, None, false)
+        .await;
+    world
+        .transaction(switched_out, on, -7_000_000, None, false)
+        .await;
+    world
+        .transaction(closed_cash, on, -80_000_000, None, false)
+        .await;
 
     assert_eq!(
         world.newer_spending().await,
-        [("USD".to_owned(), 50_000)],
-        "the closed card still owing counts against cash; no balance, no comparison"
+        [("USD".to_owned(), 654_000, 0)],
+        "closed cards switched in warn, whatever their balance; no open account without one"
     );
 
     world.balance(world.account, balance_on, 0).await;
     assert_eq!(
         world.newer_spending().await,
-        [("USD".to_owned(), 50_001)],
+        [("USD".to_owned(), 654_001, 0)],
         "with a balance, the open one counts as well"
     );
 }
@@ -503,7 +613,7 @@ async fn newer_spending_groups_by_currency() {
 
     assert_eq!(
         world.newer_spending().await,
-        [("EUR".to_owned(), 20), ("USD".to_owned(), 1)],
+        [("EUR".to_owned(), 20, 0), ("USD".to_owned(), 1, 0)],
         "never netted"
     );
 }

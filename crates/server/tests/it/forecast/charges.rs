@@ -7,6 +7,7 @@ use coffer_domain::money::DecimalAmount;
 use coffer_server::sync::provider::{ProviderAccountData, ProviderTransaction};
 use serde_json::{Value, json};
 
+use super::answer::insert_pending;
 use super::unknowns::{Fed, fed, reported};
 use super::{
     BALANCE_ON, TRANSACTIONS, caution, goal_schedule, kinds, line, monthly, outflow, usd, with,
@@ -369,6 +370,217 @@ async fn a_goal_purchase_on_a_closed_card_without_a_balance_changes_nothing() {
     let forecast = world.forecast().await;
 
     assert_eq!(forecast["surplus"], usd(4_000_000));
+}
+
+/// A rent paid by a charge of 200,000, reversed by +2000.00 split housing +150,000 and
+/// fun +50,000. Housing has spent 50,000, so 150,000 of November's rent is unpaid, on top
+/// of December's: 5,000,000 - 350,000.
+async fn rent_reversed(fed: &Fed) -> CategoryId {
+    fed.linked_checking().await;
+    fed.rent_paid().await;
+    let fun = fed.world.expense("Fun").await;
+    let housing: CategoryId = serde_json::from_value(
+        line(&fed.world.forecast_at("?horizon_months=1").await, "Rent")["category"].clone(),
+    )
+    .unwrap();
+    fed.report(vec![charge("back", "2026-11-02", "2000.00")], Vec::new())
+        .await;
+    let back = fed.only_transaction().await;
+    fed.categorize(
+        &back,
+        &json!([
+            {"category": housing, "minor_units": 150_000},
+            {"category": fun, "minor_units": 50_000},
+        ]),
+    )
+    .await;
+    let before = fed.world.forecast_at("?horizon_months=1").await;
+    assert_eq!(
+        before["surplus"],
+        usd(4_650_000),
+        "before the provider acts"
+    );
+    housing
+}
+
+/// Revising a reversal must not bring the spending back.
+#[tokio::test]
+async fn a_revised_refund_keeps_counting() {
+    let fed = fed().await;
+    rent_reversed(&fed).await;
+
+    fed.report(vec![charge("back", "2026-11-02", "1900.00")], Vec::new())
+        .await;
+
+    let forecast = fed.world.forecast_at("?horizon_months=1").await;
+    assert_eq!(forecast["surplus"], usd(4_650_000));
+    assert_eq!(forecast["status"], "provisional");
+    assert_eq!(caution(&forecast, "bill_not_seen")["amount"], usd(150_000));
+}
+
+/// Whether a refund the provider took back was real is unknown. Counting it holds more,
+/// and dropping it would call the bill paid on the strength of a charge that was reversed.
+#[tokio::test]
+async fn a_removed_refund_keeps_counting() {
+    let fed = fed().await;
+    rent_reversed(&fed).await;
+
+    fed.report(Vec::new(), vec!["back".into()]).await;
+
+    let forecast = fed.world.forecast_at("?horizon_months=1").await;
+    assert_eq!(forecast["surplus"], usd(4_650_000));
+    assert_eq!(forecast["status"], "provisional");
+}
+
+/// A purchase of 400,000 on Roof, refunded +300,000 on Roof and +100,000 elsewhere. The
+/// goal has spent 100,000, before and after the refund is revised.
+#[tokio::test]
+async fn a_revised_refund_keeps_a_goal_s_need() {
+    let fed = fed().await;
+    fed.linked_checking().await;
+    let (home, other) = (
+        fed.world.expense("Home").await,
+        fed.world.expense("Other").await,
+    );
+    let roof = fed
+        .world
+        .item(&outflow(
+            "Roof",
+            1_000_000,
+            home,
+            &goal_schedule("2026-01-01", "2027-01-01"),
+        ))
+        .await;
+    fed.report(vec![charge("buy", "2026-11-02", "-4000.00")], Vec::new())
+        .await;
+    let buy = fed.only_transaction().await;
+    fed.categorize(
+        &buy,
+        &json!([{"category": home, "minor_units": -400_000, "goal": roof}]),
+    )
+    .await;
+    fed.report(vec![charge("back", "2026-11-03", "4000.00")], Vec::new())
+        .await;
+    let back = fed.only_transaction().await;
+    fed.categorize(
+        &back,
+        &json!([
+            {"category": home, "minor_units": 300_000, "goal": roof},
+            {"category": other, "minor_units": 100_000},
+        ]),
+    )
+    .await;
+
+    fed.report(vec![charge("back", "2026-11-03", "3900.00")], Vec::new())
+        .await;
+
+    let forecast = fed.world.forecast().await;
+    assert_eq!(line(&forecast, "Roof")["counted"], usd(900_000));
+    assert_eq!(forecast["surplus"], usd(4_100_000));
+}
+
+/// A purchase of 400,000 on Roof, and a refund of it that may be another refund again: it
+/// still counts, so the goal has spent nothing.
+#[tokio::test]
+async fn a_refund_flagged_as_a_possible_duplicate_keeps_counting() {
+    let world = world().await;
+    let checking = world.funded("Checking", 5_000_000).await;
+    world.floor(0).await;
+    let home = world.expense("Home").await;
+    let roof = world
+        .item(&outflow(
+            "Roof",
+            1_000_000,
+            home,
+            &goal_schedule("2026-01-01", "2027-01-01"),
+        ))
+        .await;
+    world
+        .spend_linked(checking, "2026-11-02", 400_000, home, &roof)
+        .await;
+    let refund = world
+        .spend_linked(checking, "2026-11-03", -400_000, home, &roof)
+        .await;
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE transactions SET flag_possible_duplicate = 1 WHERE id = ?",
+            refund.as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["surplus"], usd(4_000_000));
+}
+
+/// Closing a card doesn't settle a debt its balance doesn't show. Open it warns (and is
+/// stale); closed, the warning stays.
+#[tokio::test]
+async fn closing_a_card_keeps_the_warning() {
+    let world = world().await;
+    world.funded("Checking", 1_000_000).await;
+    world.floor(0).await;
+    let card = world
+        .account_with("Card", "credit_card", "USD", json!({}))
+        .await;
+    world.balance(card, "2026-11-01", 0).await;
+    world.manual(card, "2026-11-05", -300_000).await;
+    let open = world.forecast().await;
+    assert_eq!(
+        caution(&open, "spending_newer_than_balance")["total"],
+        usd(300_000)
+    );
+
+    world.close(card).await;
+
+    let closed = world.forecast().await;
+    assert_eq!(closed["status"], "provisional");
+    assert_eq!(
+        caution(&closed, "spending_newer_than_balance")["total"],
+        usd(300_000)
+    );
+}
+
+#[tokio::test]
+async fn a_closed_card_without_a_balance_warns() {
+    let world = world().await;
+    world.funded("Checking", 1_000_000).await;
+    world.floor(0).await;
+    let card = world
+        .account_with("Card", "credit_card", "USD", json!({}))
+        .await;
+    world.manual(card, "2026-11-05", -300_000).await;
+    world.close(card).await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["status"], "provisional");
+    assert_eq!(
+        caution(&forecast, "spending_newer_than_balance")["total"],
+        usd(300_000)
+    );
+}
+
+/// A pending charge, dated before the balance too: the balance may not show it. The
+/// number stays, and it says so.
+#[tokio::test]
+async fn a_pending_charge_alone_is_a_caution() {
+    let world = world().await;
+    let checking = world.funded("Checking", 5_000_000).await;
+    world.floor(0).await;
+    let food = world.expense("Food").await;
+    insert_pending(&world, checking, food, 1_000).await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["surplus"], usd(5_000_000), "the number stays");
+    assert_eq!(forecast["status"], "provisional");
+    let newer = caution(&forecast, "spending_newer_than_balance");
+    assert_eq!(newer["total"], usd(0));
+    assert_eq!(newer["pending"], usd(1_000));
 }
 
 /// A what-if's item limit is in the document as well as the code.

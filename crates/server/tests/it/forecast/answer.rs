@@ -436,7 +436,12 @@ async fn actuals_ignore_pending_excluded_accounts_and_goal_links() {
 }
 
 /// A pending charge, which only a provider can report: the API creates none.
-async fn insert_pending(world: &World, account: AccountId, category: CategoryId, minor: i64) {
+pub(super) async fn insert_pending(
+    world: &World,
+    account: AccountId,
+    category: CategoryId,
+    minor: i64,
+) {
     let now = noon(AS_OF);
     let mut tx = world.server.store.begin().await.unwrap();
     let record = tx
