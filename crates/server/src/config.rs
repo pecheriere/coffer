@@ -82,6 +82,18 @@ pub struct Config {
     pub simplefin_hosts: HostAllowList,
     /// Plaid's credentials and environment, when Plaid is configured.
     pub plaid: Option<PlaidConfig>,
+    /// Where exchange rates come from, from `COFFER_FX_PROVIDER` (`ecb`, the
+    /// default, or `none`).
+    pub fx_provider: FxProviderKind,
+}
+
+/// Where exchange rates come from, from `COFFER_FX_PROVIDER`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FxProviderKind {
+    /// The European Central Bank's data API, the default.
+    Ecb,
+    /// No source: coffer asks nobody, and reports say rates are missing.
+    Off,
 }
 
 /// Plaid's API environment, from `COFFER_PLAID_ENV`.
@@ -146,6 +158,7 @@ impl fmt::Debug for Config {
             .field("sync_interval", &self.sync_interval)
             .field("simplefin_hosts", &self.simplefin_hosts)
             .field("plaid", &self.plaid)
+            .field("fx_provider", &self.fx_provider)
             .finish()
     }
 }
@@ -249,6 +262,7 @@ impl Config {
             sync_interval: SignedDuration::from_hours(sync_hours),
             simplefin_hosts: parse_simplefin_hosts(&vars)?,
             plaid: parse_plaid(&vars)?,
+            fx_provider: parse_fx_provider(&vars)?,
         })
     }
 
@@ -382,6 +396,21 @@ fn parse_simplefin_hosts(
             reason: "expected comma-separated DNS host names",
         }
     })
+}
+
+/// Reads `COFFER_FX_PROVIDER`; unset means the ECB.
+fn parse_fx_provider(
+    vars: &impl Fn(&str) -> Option<String>,
+) -> Result<FxProviderKind, ConfigError> {
+    const VAR: &str = "COFFER_FX_PROVIDER";
+    match vars(VAR).as_deref() {
+        None | Some("ecb") => Ok(FxProviderKind::Ecb),
+        Some("none") => Ok(FxProviderKind::Off),
+        Some(_) => Err(ConfigError::Invalid {
+            var: VAR,
+            reason: "expected ecb or none",
+        }),
+    }
 }
 
 /// Reads Plaid's variables: `COFFER_PLAID_CLIENT_ID` and

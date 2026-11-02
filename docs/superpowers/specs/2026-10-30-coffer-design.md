@@ -1047,7 +1047,11 @@ providers answer in units of a currency per one euro. `COFFER_FX_PROVIDER` is `e
 default) or `none`. `ecb` asks `https://data-api.ecb.europa.eu/service/data/EXR/D.<CCY>.EUR.SP00.A?format=csvdata&detail=dataonly`,
 per currency, with `startPeriod` once it holds rates. That is the only host, through
 `egress::Egress`. It needs no key and no new crate: the answer is an unquoted CSV of a fixed
-shape, read strictly. The ECB can see which currencies a household asks for, an accepted risk.
+shape, read strictly, and one bad row refuses all of it. A row with an empty value is a day
+with no rate, which the ECB's series hold on some holidays up to 2012 and which would otherwise
+refuse most currencies' first fetch; it yields nothing and passes every other check. Every line
+must end, since a row cut off by the connection closing could read as a false rate. No date
+may be before 1990-01-01 or the `startPeriod` asked for, or after tomorrow. The ECB can see which currencies a household asks for, an accepted risk.
 
 **N7. A household with one currency contacts nobody.** A currency is needed when it is an
 account's or the display currency, EUR aside, and only when those come to more than one
