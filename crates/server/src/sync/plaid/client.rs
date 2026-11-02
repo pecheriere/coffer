@@ -45,6 +45,12 @@ const SYNC_PAGE_SIZE: u32 = 500;
 /// The most accounts one answer may list: an Item holds a handful, and each
 /// entry of a list of `{}` costs far more memory than its 3 bytes.
 const MAX_ACCOUNTS: usize = 1_000;
+/// The most records one page may hold, `added`, `modified` and `removed`
+/// together: Plaid answers up to [`SYNC_PAGE_SIZE`], so this is twice what a
+/// well-behaved page holds. Each entry of a list of `{}` costs far more
+/// memory than its 2 bytes, so the count is checked before any record is
+/// converted.
+const MAX_PAGE_RECORDS: usize = 1_000;
 /// The longest `error_type` or `error_code` kept.
 const MAX_CODE_LEN: usize = 64;
 
@@ -60,6 +66,7 @@ const ANSWER_UNREADABLE: &str = "Plaid sent an answer coffer could not read";
 const RECORD_UNREADABLE: &str = "Plaid sent a record coffer could not read";
 const AMOUNT_UNREADABLE: &str = "Plaid sent an amount that is not an exact decimal";
 const TOO_MANY_ACCOUNTS: &str = "Plaid listed more accounts than one sync accepts";
+const TOO_MANY_RECORDS: &str = "Plaid sent more records in one page than a sync accepts";
 const REQUEST_UNUSABLE: &str = "the Plaid request could not be built";
 
 /// A failed Plaid request. No variant holds a credential, a token or a text
@@ -327,11 +334,11 @@ struct RawBalances<'a> {
 /// the others.
 #[derive(Deserialize)]
 struct RawSyncPage<'a> {
-    #[serde(borrow)]
+    #[serde(borrow, deserialize_with = "limited_records")]
     added: Vec<&'a RawValue>,
-    #[serde(borrow)]
+    #[serde(borrow, deserialize_with = "limited_records")]
     modified: Vec<&'a RawValue>,
-    #[serde(borrow)]
+    #[serde(borrow, deserialize_with = "limited_records")]
     removed: Vec<&'a RawValue>,
     next_cursor: String,
     has_more: bool,
@@ -519,6 +526,9 @@ impl PlaidClient {
         };
         let body = self.post("transactions/sync", fields).await?;
         let raw: RawSyncPage<'_> = read(&body)?;
+        if raw.added.len() + raw.modified.len() + raw.removed.len() > MAX_PAGE_RECORDS {
+            return Err(PlaidError::Invalid(TOO_MANY_RECORDS));
+        }
         Ok(SyncPage::from_raw(raw, body.len()))
     }
 
@@ -726,18 +736,31 @@ fn text(raw: Option<&RawValue>) -> Option<String> {
 /// The entries of an account list, up to one past [`MAX_ACCOUNTS`]: enough to
 /// tell it is too long without holding an entry for all of it.
 fn limited_accounts<'de, D: Deserializer<'de>>(answer: D) -> Result<Vec<&'de RawValue>, D::Error> {
-    struct Limited;
+    bounded(answer, MAX_ACCOUNTS)
+}
+
+/// The entries of one list of a page, up to one past [`MAX_PAGE_RECORDS`]. A
+/// page whose three lists together pass the limit is refused whole, so the
+/// most held is three times the limit plus three.
+fn limited_records<'de, D: Deserializer<'de>>(list: D) -> Result<Vec<&'de RawValue>, D::Error> {
+    bounded(list, MAX_PAGE_RECORDS)
+}
+
+/// The entries of `list`, up to one past `max`; the rest are read past without
+/// being held, and must still be valid JSON.
+fn bounded<'de, D: Deserializer<'de>>(list: D, max: usize) -> Result<Vec<&'de RawValue>, D::Error> {
+    struct Limited(usize);
 
     impl<'de> Visitor<'de> for Limited {
         type Value = Vec<&'de RawValue>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a list of accounts")
+            f.write_str("a list of records")
         }
 
         fn visit_seq<A: SeqAccess<'de>>(self, mut list: A) -> Result<Self::Value, A::Error> {
             let mut kept = Vec::new();
-            while kept.len() <= MAX_ACCOUNTS {
+            while kept.len() <= self.0 {
                 match list.next_element()? {
                     Some(entry) => kept.push(entry),
                     None => return Ok(kept),
@@ -748,7 +771,7 @@ fn limited_accounts<'de, D: Deserializer<'de>>(answer: D) -> Result<Vec<&'de Raw
         }
     }
 
-    answer.deserialize_seq(Limited)
+    list.deserialize_seq(Limited(max))
 }
 
 /// Whether `id` is longer than coffer can store. Descriptions and merchants
