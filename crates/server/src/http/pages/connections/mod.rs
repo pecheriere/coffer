@@ -2,9 +2,12 @@
 //! errors, and the provider accounts it reports by name and binding. No
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
-//! request a sync and remove a connection; each needs the session's
+//! request a sync, remove a connection and bind a provider account to an
+//! account (see [`bind`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
+
+mod bind;
 
 use std::collections::HashMap;
 
@@ -46,6 +49,14 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/connections/{id}/sync", post(sync))
         .route("/connections/{id}/remove", post(remove))
+        .route(
+            "/connections/provider-accounts/{id}/create-account",
+            post(bind::create_account),
+        )
+        .route(
+            "/connections/provider-accounts/{id}/bind",
+            post(bind::link_account),
+        )
 }
 
 /// A message about a form that did not go through, shown above the list
@@ -80,25 +91,34 @@ async fn render(
     notice: Option<Notice>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let look = session.look(state).await;
     let connections = state
         .sync
         .list_connections(&actor)
         .await
         .map_err(page_error)?;
-    let account_names: HashMap<AccountId, String> = state
+    let accounts = state
         .ledger
         .list_accounts(&actor, true)
         .await
-        .map_err(|err| PageError(err.into()))?
+        .map_err(|err| PageError(err.into()))?;
+    let binding = bind::Binding::load(state, &actor, &accounts).await?;
+    let account_names: HashMap<AccountId, String> = accounts
         .into_iter()
         .map(|account| (account.id, account.name))
         .collect();
     let can_manage = authorize(&actor, Action::ManageConnections).is_ok();
     let csrf = &viewer.csrf;
-    let timezone = &state.config.timezone;
     let plaid_offered = state.config.plaid.is_some();
+    let shared = Shared {
+        account_names: &account_names,
+        binding: &binding,
+        timezone: &state.config.timezone,
+        csrf,
+        can_manage,
+        plaid_offered,
+    };
     let content = html! {
         h1 { "Connections" }
         @if let Some(notice) = &notice {
@@ -111,7 +131,7 @@ async fn render(
         }
         @for connection in &connections {
             @let may_remove = authorize(&actor, Action::RemoveConnection { owner: connection.owner }).is_ok();
-            (connection_card(connection, &account_names, timezone, csrf, can_manage, may_remove, plaid_offered))
+            (connection_card(connection, may_remove, &shared))
         }
         @if can_manage {
             section.card {
@@ -160,18 +180,35 @@ async fn render(
     Ok(response)
 }
 
-fn connection_card(
-    connection: &ConnectionView,
-    account_names: &HashMap<AccountId, String>,
-    timezone: &TimeZone,
-    csrf: &str,
+/// What every connection card shares.
+struct Shared<'a> {
+    account_names: &'a HashMap<AccountId, String>,
+    binding: &'a bind::Binding,
+    timezone: &'a TimeZone,
+    csrf: &'a str,
     can_manage: bool,
-    may_remove: bool,
     plaid_offered: bool,
-) -> Markup {
+}
+
+fn connection_card(connection: &ConnectionView, may_remove: bool, shared: &Shared<'_>) -> Markup {
+    let Shared {
+        timezone,
+        csrf,
+        can_manage,
+        plaid_offered,
+        ..
+    } = *shared;
     let plaid = connection.provider == ProviderKind::Plaid.as_str();
     let live = connection.status != ConnectionState::Removed;
     let id = connection.id;
+    // The accounts that wait for a binding come first.
+    let mut accounts: Vec<&ProviderAccountView> = connection.accounts.iter().collect();
+    accounts.sort_by_key(|account| account.account.is_some());
+    let waiting = live
+        && shared.binding.can_bind()
+        && accounts
+            .first()
+            .is_some_and(|first| first.account.is_none());
     html! {
         section.card {
             h2 { (connection.label) }
@@ -225,13 +262,22 @@ fn connection_card(
                     button.btn.btn-primary type="submit" { "Reconnect" }
                 }
             }
-            h3 { "Accounts" }
-            @if connection.accounts.is_empty() {
+            @if waiting {
+                h3 { "Set up your accounts" }
+                p {
+                    "coffer found these bank accounts. Until each is bound to an account, "
+                    "its transactions are held. Name each one and choose its kind, or link "
+                    "it to an account you already have."
+                }
+            } @else {
+                h3 { "Accounts" }
+            }
+            @if accounts.is_empty() {
                 p.fine { "No accounts reported yet." }
             } @else {
                 ul.items {
-                    @for account in &connection.accounts {
-                        (account_item(account, account_names))
+                    @for (index, account) in accounts.iter().enumerate() {
+                        (account_item(connection, account, shared, waiting && index == 0))
                     }
                 }
             }
@@ -240,8 +286,10 @@ fn connection_card(
 }
 
 fn account_item(
+    connection: &ConnectionView,
     account: &ProviderAccountView,
-    account_names: &HashMap<AccountId, String>,
+    shared: &Shared<'_>,
+    open: bool,
 ) -> Markup {
     html! {
         li.item {
@@ -261,11 +309,12 @@ fn account_item(
                 Some(bound) => {
                     span.chip {
                         "Bound to "
-                        (account_names.get(&bound).map_or("an account", String::as_str))
+                        (shared.account_names.get(&bound).map_or("an account", String::as_str))
                     }
                 }
                 None => span.chip.chip-quiet { "Not bound" },
             }
+            (shared.binding.forms(connection, account, shared.csrf, open))
         }
     }
 }
@@ -357,7 +406,7 @@ fn notice_for(err: &SyncError, form: FormKind) -> Option<Notice> {
             ),
             retry_after: Some(retry_seconds(*retry_after)),
         },
-        SyncError::InProgress | SyncError::Conflict(_) => {
+        SyncError::InProgress | SyncError::Conflict(_) | SyncError::CurrencyMismatch => {
             Notice::new(StatusCode::CONFLICT, capitalized(&err.to_string()))
         }
         SyncError::Invalid(_) => Notice::new(

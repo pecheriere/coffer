@@ -17,6 +17,8 @@ pub struct Viewer {
     /// May open the household page.
     pub can_manage_household: bool,
     pub csrf: String,
+    /// Provider accounts waiting to be bound that this member could set up.
+    pub setup_needed: u32,
 }
 
 /// A main-navigation destination.
@@ -99,7 +101,31 @@ pub fn page_with_scripts(
                 @if let Some(viewer) = frame.viewer {
                     (topbar(look, viewer, frame.current))
                 }
-                main id="main" class=(main_class) { (content) }
+                main id="main" class=(main_class) {
+                    @if let Some(viewer) = frame.viewer {
+                        @if frame.current != Some(Nav::Connections) {
+                            (setup_notice(viewer.setup_needed))
+                        }
+                    }
+                    (content)
+                }
+            }
+        }
+    }
+}
+
+/// A reminder, on every signed-in page, of the bank accounts that wait for
+/// an account to feed; nothing when there are none.
+fn setup_notice(count: u32) -> Markup {
+    html! {
+        @if count > 0 {
+            p.notice role="status" {
+                @if count == 1 {
+                    "1 new bank account needs setting up. "
+                } @else {
+                    (count) " new bank accounts need setting up. "
+                }
+                a href="/connections" { "Set them up" }
             }
         }
     }

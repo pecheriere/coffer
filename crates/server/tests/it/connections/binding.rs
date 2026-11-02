@@ -721,3 +721,45 @@ async fn invalid_names_are_refused_before_taking_the_write_lock() {
     assert!(refused_at_once);
     drop(writer);
 }
+
+/// The count behind the "accounts to set up" notice follows the rules of
+/// creating an account for them: a read-only actor is told none.
+#[tokio::test]
+async fn accounts_to_set_up_are_counted_only_for_who_could_set_them_up() {
+    let world = world().await;
+    world
+        .sync_once(vec![
+            reported("acct-1", "USD", None, Vec::new()),
+            reported("acct-2", "USD", None, Vec::new()),
+        ])
+        .await;
+    let reader = Actor {
+        member: world.alice.member,
+        role: Role::Admin,
+        via: Via::Agent {
+            token: AgentTokenId::new(),
+            scope: Scope::Read,
+        },
+    };
+
+    let count = |actor: Actor| {
+        let sync = std::sync::Arc::clone(&world.server.sync);
+        async move {
+            sync.count_provider_accounts_to_set_up(&actor)
+                .await
+                .unwrap()
+        }
+    };
+
+    assert_eq!(count(world.alice).await, 2);
+    assert_eq!(count(reader).await, 0);
+    let held = world.provider_account("acct-1").await;
+    let checking = world.account("Checking", "USD").await;
+    world
+        .server
+        .sync
+        .bind(&world.alice, held.id, checking)
+        .await
+        .unwrap();
+    assert_eq!(count(world.alice).await, 1);
+}
