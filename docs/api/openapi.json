@@ -5032,7 +5032,7 @@
           },
           "release_withdrawn": {
             "type": "boolean",
-            "description": "Whether such a request was withdrawn because what is wrong with one\nof the accounts changed after the member asked. Nothing was passed,\nand the cursor moves on only if a member looks again and asks again."
+            "description": "Whether such a request was withdrawn because what is wrong with one\nof the accounts, or how many records it has, changed after the member\nasked. Nothing was passed,\nand the cursor moves on only if a member looks again and asks again."
           },
           "text": {
             "type": "string",

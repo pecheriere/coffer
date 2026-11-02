@@ -305,8 +305,8 @@ for a sync.
   `records` (how many records the last fetch could not store for them),
   `release_pending` (a member asked; a sync moves the cursor as soon as it
   can, which may not be the next one) and `release_withdrawn` (a sync took the
-  request back because what is wrong with an account changed; nothing was
-  passed, and a member has to ask again). It appears after three syncs in a row
+  request back because what is wrong with an account, or how many records it
+  has, changed; nothing was passed, and a member has to ask again). It appears after three syncs in a row
   left the cursor in place because of one account, and never for a removed
   connection. While it is held, each sync fetches those records again, and the account's own
   `error` says why. Telling the owner is the useful step: letting the cursor

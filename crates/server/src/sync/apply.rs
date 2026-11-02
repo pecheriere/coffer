@@ -113,9 +113,6 @@ pub struct AccountBatch {
     pub transactions: Vec<NormalizedTransaction>,
     /// Provider ids of records the provider says are gone.
     pub removed: Vec<String>,
-    /// Sources gone from the same fetch that another batch deletes: to
-    /// matching they already are, and this batch leaves them in place.
-    pub vanishing: HashSet<SourceRecordId>,
     pub coverage: Coverage,
     /// Records left out before this step because they could not be used,
     /// by provider id when known: counted as skipped, and a known one
@@ -230,6 +227,9 @@ struct Apply<'a> {
     provider_account: ProviderAccountId,
     /// Sources that vanished from this fetch; removed after matching.
     vanished: HashSet<SourceRecordId>,
+    /// Sources gone from the same fetch that another batch deletes: to
+    /// matching they already are, and this one leaves them in place.
+    vanishing: &'a HashSet<SourceRecordId>,
     report: ApplyReport,
 }
 
@@ -247,6 +247,19 @@ pub async fn apply_account_batch(
     now: Timestamp,
     connection: ConnectionId,
     batch: AccountBatch,
+) -> Result<ApplyReport, SyncError> {
+    apply_account_batch_beside(tx, now, connection, batch, &HashSet::new()).await
+}
+
+/// [`apply_account_batch`] for one batch of a fetch applied in several:
+/// `vanishing` are the sources another of them deletes, which matching takes
+/// as gone and this batch leaves in place.
+pub(super) async fn apply_account_batch_beside(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    connection: ConnectionId,
+    batch: AccountBatch,
+    vanishing: &HashSet<SourceRecordId>,
 ) -> Result<ApplyReport, SyncError> {
     let provider_account = &batch.provider_account;
     if provider_account.connection != connection {
@@ -282,6 +295,7 @@ pub async fn apply_account_batch(
         connection,
         provider_account: provider_account.id,
         vanished: HashSet::new(),
+        vanishing,
         report: ApplyReport {
             skipped,
             ..ApplyReport::default()
@@ -311,7 +325,7 @@ pub async fn apply_account_batch(
             }
         }
     }
-    apply.vanished = vanished.keys().copied().chain(batch.vanishing).collect();
+    apply.vanished = vanished.keys().copied().collect();
 
     // 2. Match every incoming record.
     for record in records {
@@ -345,12 +359,14 @@ pub async fn apply_held(
         return Err(SyncError::Invalid(BINDING_MISMATCH));
     }
     let held = tx.held_sources(provider_account.id).await?;
+    let vanishing = HashSet::new();
     let mut apply = Apply {
         tx,
         now,
         connection: provider_account.connection,
         provider_account: provider_account.id,
         vanished: HashSet::new(),
+        vanishing: &vanishing,
         report: ApplyReport::default(),
     };
     for source in held {
@@ -390,6 +406,11 @@ fn sync_attribution(at: Timestamp) -> Attribution {
 }
 
 impl Apply<'_> {
+    /// Whether matching takes the source as gone from this fetch.
+    fn is_vanished(&self, source: &SourceRecordId) -> bool {
+        self.vanished.contains(source) || self.vanishing.contains(source)
+    }
+
     /// Those of `sources` that can own imported fields: not about to vanish,
     /// and of a connection that is not removed and so can still report.
     async fn live_sources<'s>(
@@ -408,9 +429,7 @@ impl Apply<'_> {
         }
         Ok(sources
             .iter()
-            .filter(|source| {
-                !self.vanished.contains(&source.id) && !removed.contains(&source.connection)
-            })
+            .filter(|source| !self.is_vanished(&source.id) && !removed.contains(&source.connection))
             .collect())
     }
 
@@ -430,7 +449,7 @@ impl Apply<'_> {
             self.now,
             &sync_actor(),
             transaction,
-            &self.vanished,
+            &[&self.vanished, self.vanishing],
         )
         .await?)
     }
@@ -589,7 +608,7 @@ impl Apply<'_> {
                         let mut live = row
                             .sources
                             .iter()
-                            .filter(|source| !self.vanished.contains(&source.id))
+                            .filter(|source| !self.is_vanished(&source.id))
                             .peekable();
                         candidate.live_source_from_same_connection
                             && live.peek().is_some()
@@ -608,7 +627,7 @@ impl Apply<'_> {
     }
 
     fn candidate(&self, row: &CandidateRow) -> Candidate {
-        let live = |source: &&SourceRecord| !self.vanished.contains(&source.id);
+        let live = |source: &&SourceRecord| !self.is_vanished(&source.id);
         Candidate {
             transaction: row.transaction,
             posted_on: row.posted_on,
@@ -623,7 +642,7 @@ impl Apply<'_> {
                 && row
                     .sources
                     .iter()
-                    .all(|source| source.fields.pending && self.vanished.contains(&source.id)),
+                    .all(|source| source.fields.pending && self.is_vanished(&source.id)),
         }
     }
 

@@ -180,6 +180,100 @@ async fn a_new_refusal_withdraws_the_release_and_gives_up_no_record() {
     assert_eq!(world.transactions(checking).await.len(), 1);
 }
 
+/// Records that arrive while a release waits were not what the member agreed
+/// to: the member looks again, and nothing is given up before that.
+#[tokio::test]
+async fn more_records_than_agreed_withdraw_the_release() {
+    let world = world().await;
+    let checking = world.bound(LINE).await;
+    world.server.inject_source_insert_failure().await;
+    let bad = record(INJECTED_FAILURE_RECORD_ID, LINE, "9");
+    let fine = |id: &str| record(id, LINE, "1");
+    world.script.always(
+        SYNC,
+        StatusCode::OK,
+        page(
+            &[fine("a"), fine("b"), bad.clone()],
+            &[],
+            &[],
+            "cursor-1",
+            false,
+        ),
+    );
+    world.holds_then_releases().await;
+    world.script.always(
+        SYNC,
+        StatusCode::OK,
+        page(
+            &[fine("a"), fine("b"), fine("c"), fine("d"), bad],
+            &[],
+            &[],
+            "cursor-2",
+            false,
+        ),
+    );
+
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("0 skipped"));
+    assert_eq!(world.connection().await.provider_state, None);
+    assert_eq!(world.transactions(checking).await.len(), 0);
+    assert_eq!(world.audits("connection.cursor_passed").await.len(), 0);
+    let held = world.held_cursor().await.unwrap();
+    assert!(!held.release_pending);
+    assert!(held.release_withdrawn);
+    assert_eq!(
+        held.records, 5,
+        "the page shows what the member now decides"
+    );
+    let withdrawn = world.audits("connection.release_withdrawn").await;
+    assert_eq!(withdrawn.len(), 1);
+    let changes = serde_json::to_string(&withdrawn[0].changes).unwrap();
+    assert!(changes.contains("more records"), "the entry says why");
+
+    world.release().await.unwrap();
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("1 skipped"));
+    assert_eq!(world.transactions(checking).await.len(), 4);
+}
+
+/// A delta no larger than what the member agreed to needs no second look.
+#[tokio::test]
+async fn no_more_records_than_agreed_proceed() {
+    let world = world().await;
+    let checking = world.bound(LINE).await;
+    world.server.inject_source_insert_failure().await;
+    let bad = record(INJECTED_FAILURE_RECORD_ID, LINE, "9");
+    world.script.always(
+        SYNC,
+        StatusCode::OK,
+        page(
+            &[record("a", LINE, "1"), record("b", LINE, "1"), bad.clone()],
+            &[],
+            &[],
+            "cursor-1",
+            false,
+        ),
+    );
+    world.holds_then_releases().await;
+    world.script.always(
+        SYNC,
+        StatusCode::OK,
+        page(&[record("a", LINE, "1"), bad], &[], &[], "cursor-2", false),
+    );
+
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("1 skipped"));
+    assert_eq!(world.transactions(checking).await.len(), 1);
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("cursor-2")
+    );
+    assert_eq!(world.audits("connection.release_withdrawn").await.len(), 0);
+}
+
 /// A binding made while the records apply one by one reaches the later ones:
 /// they become transactions, since no later bind or fetch would make them so.
 #[tokio::test]

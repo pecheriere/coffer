@@ -100,6 +100,14 @@ async fn a_held_cursor_names_its_accounts_and_says_what_a_release_loses() {
         "and how many the last fetch held"
     );
     assert!(
+        page.body.contains("passed for good untried"),
+        "and what happens to a refused account's records"
+    );
+    assert!(
+        page.body.contains(r#"name="records" value="4""#),
+        "the form carries the count the page showed"
+    );
+    assert!(
         page.body
             .contains(&format!("action=\"{}\"", release_path(connection)))
     );
@@ -115,20 +123,28 @@ async fn releasing_asks_for_the_token_and_changes_nothing_without_it() {
 
     let missing = world
         .admin
-        .post_form(&release_path(connection), &[("accounts", &shown)])
+        .post_form(
+            &release_path(connection),
+            &[("accounts", &shown), ("records", "4")],
+        )
         .await;
     let wrong = world
         .admin
         .post_form(
             &release_path(connection),
-            &[("csrf", "AAAA"), ("accounts", &shown)],
+            &[("csrf", "AAAA"), ("accounts", &shown), ("records", "4")],
         )
         .await;
     let forged = world
         .admin
         .post_form(
             &release_path(connection),
-            &[("csrf", &page.csrf()), ("accounts", &shown), ("all", "yes")],
+            &[
+                ("csrf", &page.csrf()),
+                ("accounts", &shown),
+                ("records", "4"),
+                ("all", "yes"),
+            ],
         )
         .await;
     let unreadable = world
@@ -165,7 +181,11 @@ async fn releasing_refuses_when_the_accounts_changed_since_the_page() {
         .admin
         .post_form(
             &release_path(connection),
-            &[("csrf", &page.csrf()), ("accounts", &first.id.to_string())],
+            &[
+                ("csrf", &page.csrf()),
+                ("accounts", &first.id.to_string()),
+                ("records", "4"),
+            ],
         )
         .await;
 
@@ -188,7 +208,11 @@ async fn releasing_is_audited_and_waits_for_the_next_sync() {
         .admin
         .post_form(
             &release_path(connection),
-            &[("csrf", &page.csrf()), ("accounts", &shown)],
+            &[
+                ("csrf", &page.csrf()),
+                ("accounts", &shown),
+                ("records", "4"),
+            ],
         )
         .await;
 
@@ -204,9 +228,39 @@ async fn releasing_is_audited_and_waits_for_the_next_sync() {
         "the page says when the cursor moves"
     );
     assert!(
+        after.body.contains("The last fetch held 4 records"),
+        "and how many the request covers"
+    );
+    assert!(
         !after.body.contains(&release_path(connection)),
         "nothing left to ask for"
     );
+}
+
+/// A form from an old tab showed another count: what it asked for is no longer
+/// what a release would cover.
+#[tokio::test]
+async fn a_form_with_an_older_count_is_refused() {
+    let mut world = world().await;
+    let connection = world.seeded(world.alice).await;
+    let held = world.held(connection, "Savings", HELD_AFTER_SYNCS).await;
+    let page = world.admin.get("/connections").await;
+
+    let refused = world
+        .admin
+        .post_form(
+            &release_path(connection),
+            &[
+                ("csrf", &page.csrf()),
+                ("accounts", &held.id.to_string()),
+                ("records", "3"),
+            ],
+        )
+        .await;
+
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert!(!world.provider_account("Savings").await.hold_released);
+    assert_eq!(world.release_audits().await, 0);
 }
 
 /// A release taken back by a sync leaves the member the decision again, and
@@ -236,7 +290,10 @@ async fn releasing_a_cursor_that_is_not_held_says_so() {
 
     let refused = world
         .admin
-        .post_form(&release_path(connection), &[("csrf", &page.csrf())])
+        .post_form(
+            &release_path(connection),
+            &[("csrf", &page.csrf()), ("records", "0")],
+        )
         .await;
 
     assert_eq!(refused.status, StatusCode::CONFLICT);
@@ -272,7 +329,11 @@ async fn a_member_who_did_not_add_the_connection_cannot_release_it() {
     let refused = bob
         .post_form(
             &release_path(connection),
-            &[("csrf", &page.csrf()), ("accounts", &shown)],
+            &[
+                ("csrf", &page.csrf()),
+                ("accounts", &shown),
+                ("records", "4"),
+            ],
         )
         .await;
 

@@ -7,6 +7,10 @@ ALTER TABLE provider_accounts ADD COLUMN held_syncs INTEGER NOT NULL DEFAULT 0;
 -- passed for good once it moves the cursor. Until a sync does, the request
 -- stands, unless what is wrong with the account changes.
 ALTER TABLE provider_accounts ADD COLUMN hold_released INTEGER NOT NULL DEFAULT 0;
--- Whether such a request was withdrawn because what is wrong with the account
--- changed after the member asked: the member has to look again.
+-- How many of its records the member agreed to when asking: a fetch with more
+-- takes the request back.
+ALTER TABLE provider_accounts ADD COLUMN released_records INTEGER NOT NULL DEFAULT 0;
+-- Whether such a request was withdrawn because what is wrong with the account,
+-- or how many records it has, changed after the member asked: the member has
+-- to look again.
 ALTER TABLE provider_accounts ADD COLUMN release_withdrawn INTEGER NOT NULL DEFAULT 0;

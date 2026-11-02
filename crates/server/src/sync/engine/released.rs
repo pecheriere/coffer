@@ -13,7 +13,7 @@ use super::results::AccountOutcome;
 use super::{SyncService, write_balance};
 use crate::sync::SyncError;
 use crate::sync::apply::{
-    AccountBatch, ApplyReport, Coverage, NormalizedTransaction, apply_account_batch,
+    AccountBatch, ApplyReport, Coverage, NormalizedTransaction, apply_account_batch_beside,
 };
 
 /// How often a record is tried before it counts as failing: a failure that
@@ -171,7 +171,7 @@ impl SyncService {
             return Ok(Attempt::ConnectionRemoved);
         }
         let (provider_account, account) = current_binding(&mut tx, job.provider_account).await?;
-        let applied = apply_account_batch(
+        let applied = apply_account_batch_beside(
             &mut tx,
             job.now,
             job.connection,
@@ -180,10 +180,10 @@ impl SyncService {
                 account,
                 transactions,
                 removed,
-                vanishing: vanishing.clone(),
                 coverage: Coverage::Delta,
                 unusable: Vec::new(),
             },
+            vanishing,
         )
         .await;
         match applied {

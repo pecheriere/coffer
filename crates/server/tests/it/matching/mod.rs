@@ -33,7 +33,6 @@ use coffer_store::{
     ProviderAccountUpsert, TransactionFilter, TransactionRecord,
 };
 use jiff::civil::date;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 struct World {
@@ -184,7 +183,6 @@ async fn apply(
             account: link.account.clone(),
             transactions,
             removed: removed.iter().map(|id| (*id).to_owned()).collect(),
-            vanishing: HashSet::new(),
             coverage,
             unusable: Vec::new(),
         },

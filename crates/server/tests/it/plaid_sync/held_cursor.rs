@@ -51,14 +51,14 @@ impl World {
 
     /// Releases what the member sees holding the cursor now.
     pub(super) async fn release(&self) -> Result<Vec<ProviderAccountId>, SyncError> {
-        let shown = self
+        let (shown, records) = self
             .held_cursor()
             .await
-            .map(|held| held.provider_accounts)
+            .map(|held| (held.provider_accounts, held.records))
             .unwrap_or_default();
         self.server
             .sync
-            .release_held_cursor(&self.alice, self.connection, &shown)
+            .release_held_cursor(&self.alice, self.connection, &shown, records)
             .await
     }
 
@@ -405,11 +405,16 @@ async fn only_a_member_who_may_manage_the_connection_releases_it() {
         (&token, "an agent token, whatever its scope"),
         (&outsider, "a member who did not add it and is no admin"),
     ] {
-        let shown = world.held_cursor().await.unwrap().provider_accounts;
+        let held = world.held_cursor().await.unwrap();
         let refused = world
             .server
             .sync
-            .release_held_cursor(actor, world.connection, &shown)
+            .release_held_cursor(
+                actor,
+                world.connection,
+                &held.provider_accounts,
+                held.records,
+            )
             .await;
         assert!(matches!(refused, Err(SyncError::Denied(_))), "{why}");
     }
@@ -594,7 +599,7 @@ async fn a_release_names_the_accounts_the_member_saw() {
         let refused = world
             .server
             .sync
-            .release_held_cursor(&world.alice, world.connection, &shown)
+            .release_held_cursor(&world.alice, world.connection, &shown, 1)
             .await;
         assert!(
             matches!(refused, Err(SyncError::Conflict(_))),
@@ -603,6 +608,48 @@ async fn a_release_names_the_accounts_the_member_saw() {
     }
     assert!(!world.provider_account(STRAY).await.hold_released);
     assert_eq!(world.release_audits().await.len(), 0);
+}
+
+/// A form from an old tab may show far fewer records than a release would
+/// now cover.
+#[tokio::test]
+async fn a_release_names_the_count_the_member_saw() {
+    let world = world().await;
+    world.stray_record_every_sync();
+    world.syncs(HELD_AFTER_SYNCS).await;
+    let held = world.held_cursor().await.unwrap();
+
+    let refused = world
+        .server
+        .sync
+        .release_held_cursor(
+            &world.alice,
+            world.connection,
+            &held.provider_accounts,
+            held.records + 1,
+        )
+        .await;
+
+    assert!(matches!(refused, Err(SyncError::Conflict(_))));
+    assert!(!world.provider_account(STRAY).await.hold_released);
+    assert_eq!(world.release_audits().await.len(), 0);
+}
+
+/// The request keeps what the member agreed to: how many records, and the
+/// refusal the page showed.
+#[tokio::test]
+async fn a_release_records_what_the_member_agreed_to() {
+    let world = world().await;
+    world.stray_record_every_sync();
+    world.syncs(HELD_AFTER_SYNCS).await;
+
+    world.release().await.unwrap();
+
+    assert_eq!(world.provider_account(STRAY).await.released_records, 1);
+    let audits = world.release_audits().await;
+    let changes = serde_json::to_string(&audits[0].changes).unwrap();
+    assert!(changes.contains("\"after\":1"), "the count");
+    assert!(changes.contains("did not list"), "the refusal");
 }
 
 #[tokio::test]

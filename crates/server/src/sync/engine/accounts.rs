@@ -6,7 +6,7 @@ use coffer_store::{
     ConnectionRecord, ConnectionStatus, ConnectionStatusChange, ProviderAccountRecord,
     ProviderAccountUpsert, RawBalance, StoreError, StoreTx, SyncRunRecord,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -28,6 +28,8 @@ pub(super) const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
 const RELEASE_WITHDRAWN_REASON: &str =
     "the account's refusal differs from the one recorded when the member released";
+const RELEASE_OUTGROWN_REASON: &str =
+    "the fetch holds more records for the account than the member agreed to";
 const RECORDS_GIVEN_UP: &str =
     "records of this account that could not be stored were given up, as a member asked";
 
@@ -82,13 +84,14 @@ async fn settle_failure(
     })
 }
 
-/// Takes back a member's release of `account`, whose refusal is no longer the
-/// one the member saw: the account stays held, and the member has to look
-/// again. The audit entry carries a fixed reason and no provider text.
+/// Takes back a member's release of `account`, which no longer covers what the
+/// member saw: the account stays held, and the member has to look again. The
+/// audit entry carries the fixed `reason` and no provider text.
 async fn withdraw_release(
     tx: &mut StoreTx,
     now: Timestamp,
     account: &ProviderAccountRecord,
+    reason: &'static str,
 ) -> Result<(), StoreError> {
     tx.withdraw_cursor_release(account.id).await?;
     tx.append_audit(
@@ -100,7 +103,7 @@ async fn withdraw_release(
             entity_id: account.connection.to_string(),
             changes: AuditChanges::new()
                 .set("provider_accounts", account.id.to_string())
-                .set("reason", RELEASE_WITHDRAWN_REASON),
+                .set("reason", reason),
         },
     )
     .await?;
@@ -162,16 +165,19 @@ impl SyncService {
             .iter()
             .map(|data| data.provider_account_id.clone())
             .collect();
-        let released: HashSet<String> = self
+        let released: HashMap<String, (ProviderAccountId, u32)> = self
             .store
             .list_provider_accounts(Some(connection.id))
             .await?
             .into_iter()
             .filter(|account| account.hold_released)
-            .map(|account| account.provider_account_id)
+            .map(|account| {
+                let agreed = (account.id, account.released_records);
+                (account.provider_account_id, agreed)
+            })
             .collect();
         for data in result.accounts {
-            let release = released.contains(&data.provider_account_id);
+            let release = released.get(&data.provider_account_id).copied();
             let outcome = self
                 .apply_account(connection.id, data, today, (cursor, release))
                 .await;
@@ -266,13 +272,14 @@ impl SyncService {
         connection: ConnectionId,
         data: ProviderAccountData,
         today: Date,
-        (cursor, released): (bool, bool),
+        (cursor, released): (bool, Option<(ProviderAccountId, u32)>),
     ) -> AccountOutcome {
         let records = Records::of(&data, cursor);
         // A member asked for the cursor to move past its failing records:
         // applied one by one, so only the ones that fail are given up.
         // Only for a delta, whose records stand alone.
-        let release = released && records.holds && matches!(data.coverage, Coverage::Delta);
+        let mut release =
+            released.is_some() && records.holds && matches!(data.coverage, Coverage::Delta);
         if !valid_provider_id(&data.provider_account_id) {
             // Nothing can be recorded on an account without a usable id, and
             // no later fetch could store its records: the run counts it among
@@ -287,6 +294,18 @@ impl SyncService {
             };
         }
         let now = self.clock.now();
+        if let Some((id, agreed)) = released
+            && release
+            && records.count > agreed
+        {
+            // Records arrived that the member did not agree to give up. In a
+            // transaction of its own, since the failure of an apply would
+            // roll it back; if it fails, the next sync takes this path again.
+            release = false;
+            if let Err(err) = self.withdraw_outgrown_release(connection, id, now).await {
+                tracing::warn!(connection = %connection, error = ?err, "a release was not withdrawn");
+            }
+        }
         let upsert = ProviderAccountUpsert {
             connection,
             provider_account_id: data.provider_account_id.clone(),
@@ -324,6 +343,23 @@ impl SyncService {
                 }
             }
         }
+    }
+
+    async fn withdraw_outgrown_release(
+        &self,
+        connection: ConnectionId,
+        id: ProviderAccountId,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.store.begin().await?;
+        if tx.get_connection(connection).await?.status == ConnectionStatus::Removed {
+            return Ok(());
+        }
+        let record = tx.get_provider_account(id).await?;
+        if record.hold_released {
+            withdraw_release(&mut tx, now, &record, RELEASE_OUTGROWN_REASON).await?;
+        }
+        tx.commit().await
     }
 
     async fn try_apply_account(
@@ -375,7 +411,7 @@ impl SyncService {
                 // the records up for, however long it lasts. Read from this
                 // transaction, so a release made during the run counts.
                 if record.hold_released && !known && records.holds && !refusal.lasting {
-                    withdraw_release(&mut tx, now, &record).await?;
+                    withdraw_release(&mut tx, now, &record, RELEASE_WITHDRAWN_REASON).await?;
                 }
                 let outcome = settle_failure(&mut tx, &record, records, !refusal.lasting).await?;
                 tx.commit().await?;
@@ -423,7 +459,6 @@ impl SyncService {
                 account,
                 transactions,
                 removed: data.removed,
-                vanishing: HashSet::new(),
                 coverage: data.coverage,
                 unusable,
             },

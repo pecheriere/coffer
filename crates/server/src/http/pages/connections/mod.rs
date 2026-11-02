@@ -42,7 +42,7 @@ use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 use crate::sync::{SyncError, retry_seconds};
 
 const LABEL_INVALID: &str = "The label must be 1 to 100 characters without control characters.";
-const ACCOUNTS_UNREADABLE: &str = "the provider accounts to release could not be read";
+const RELEASE_UNREADABLE: &str = "the release form could not be read";
 const TOKEN_MISSING: &str = "Paste the setup token from the SimpleFin Bridge.";
 
 pub fn routes() -> Router<AppState> {
@@ -362,21 +362,25 @@ fn held_notice(
             }
             @if held.release_withdrawn {
                 p {
-                    "Your earlier release was withdrawn: what is wrong with these accounts "
-                    "changed after it was asked for, so nothing was passed. Look at them again. "
+                    "Your earlier release was withdrawn: what is wrong with these accounts, or "
+                    "how many records they have, changed after it was asked for, so nothing was "
+                    "passed. Look at them again. "
                     "The cursor stays held unless the release is asked for again."
+                }
+            }
+            @if held.release_pending || may_release {
+                p {
+                    "The last fetch held " (held.records) " records of these accounts that could "
+                    "not be stored."
                 }
             }
             @if held.release_pending {
                 p {
                     "Release requested: a sync moves the cursor on as soon as no other account "
-                    "blocks it and the failing records can be tried."
+                    "blocks it and the failing records can be tried. If a fetch brings more "
+                    "records than this, the request is withdrawn and you are asked again."
                 }
             } @else if may_release {
-                p {
-                    "The last fetch held " (held.records) " records of these accounts that could "
-                    "not be stored."
-                }
                 p {
                     "If you let the cursor move on, the next sync tries each of them one by one. "
                     "Those that can be stored are stored. Those that still fail are passed for "
@@ -386,9 +390,15 @@ fn held_notice(
                     "If another account still blocks the cursor, nothing is passed yet and "
                     "your request waits."
                 }
+                p {
+                    "If an account's own error (shown beside it) is what holds the cursor, for "
+                    "instance one that cannot be read, nothing of it can be tried: while that "
+                    "error lasts, all its records are passed for good untried."
+                }
                 form method="post" action={ "/connections/" (connection.id) "/release-cursor" } {
                     (csrf_field(csrf))
                     input type="hidden" name="accounts" value=(accounts);
+                    input type="hidden" name="records" value=(held.records);
                     button.btn type="submit" { "Pass the failing records for good" }
                 }
             }
@@ -596,6 +606,8 @@ struct ReleaseForm {
     csrf: String,
     #[serde(default)]
     accounts: String,
+    #[serde(default)]
+    records: String,
 }
 
 #[derive(Deserialize)]
@@ -713,16 +725,20 @@ async fn release_cursor(
         .filter(|part| !part.is_empty())
         .map(str::parse)
         .collect();
-    let Ok(shown) = shown else {
+    let (Ok(shown), Ok(records)) = (shown, form.records.parse::<u32>()) else {
         return refused(
             &state,
             &session,
-            SyncError::Invalid(ACCOUNTS_UNREADABLE),
+            SyncError::Invalid(RELEASE_UNREADABLE),
             FormKind::Action,
         )
         .await;
     };
-    match state.sync.release_held_cursor(&actor, id, &shown).await {
+    match state
+        .sync
+        .release_held_cursor(&actor, id, &shown, records)
+        .await
+    {
         Ok(_) => Ok(back()),
         Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }

@@ -13,8 +13,7 @@ use crate::sync::SyncError;
 use crate::sync::engine::{SyncService, ensure_not_removed};
 
 const NOT_HELD: &str = "the connection's sync cursor is not held";
-const HOLD_CHANGED: &str =
-    "the provider accounts holding the sync cursor changed; check the page and try again";
+const HOLD_CHANGED: &str = "what holds the sync cursor changed; check the page and try again";
 
 /// How many syncs in a row must leave the cursor in place because of one
 /// provider account before the connection says it is held.
@@ -41,7 +40,8 @@ pub struct HeldCursorView {
     /// database and the provider's answer allow trying them.
     pub release_pending: bool,
     /// Whether such a request was withdrawn because what is wrong with one
-    /// of the accounts changed after the member asked. Nothing was passed,
+    /// of the accounts, or how many records it has, changed after the member
+    /// asked. Nothing was passed,
     /// and the cursor moves on only if a member looks again and asks again.
     pub release_withdrawn: bool,
 }
@@ -70,8 +70,10 @@ pub(super) fn held_cursor(accounts: &[ProviderAccountRecord]) -> Option<HeldCurs
 impl SyncService {
     /// Lets the connection's sync cursor move past the records that keep
     /// failing to store. `shown` are the provider accounts the member saw
-    /// holding it: if they are no longer exactly the ones that do, nothing
-    /// changes. The next sync then applies those accounts' records one by
+    /// holding it and `shown_records` how many records they held: if that is
+    /// no longer exactly what holds it, nothing changes. The count is what
+    /// the member agrees to: a fetch with more records for an account takes
+    /// its release back. The next sync then applies those accounts' records one by
     /// one and gives up only the ones that still fail, for good; they are
     /// counted as skipped and the pass is audited with its count. That
     /// happens only if the sync moves the cursor, so a failure elsewhere or
@@ -80,20 +82,22 @@ impl SyncService {
     /// again. The records are lost to coffer, so
     /// this needs a passkey session (never an agent token) of the
     /// connection's owner or an admin, with write access to every account
-    /// like removing the connection. The request is audited, without any
-    /// provider text.
+    /// like removing the connection. The request is audited with its count
+    /// and each account's recorded error, coffer's own fixed text for a Plaid
+    /// account, and names no provider record.
     ///
     /// # Errors
     ///
     /// [`SyncError::Denied`] unless the actor may; [`SyncError::NotFound`]
     /// for an unknown connection; [`SyncError::Conflict`] for a removed one,
-    /// one whose cursor is not held, or one whose holding accounts are not
-    /// `shown`; storage failures.
+    /// one whose cursor is not held, or one whose holding accounts or record
+    /// count are not what was shown; storage failures.
     pub async fn release_held_cursor(
         &self,
         actor: &Actor,
         id: ConnectionId,
         shown: &[ProviderAccountId],
+        shown_records: u32,
     ) -> Result<Vec<ProviderAccountId>, SyncError> {
         authorize(actor, Action::ManageConnections)?;
         self.authorize_every_account(actor, AccountLevel::Write)
@@ -118,6 +122,18 @@ impl SyncService {
         if shown != holding {
             return Err(SyncError::Conflict(HOLD_CHANGED));
         }
+        let mut records = 0_u32;
+        let mut refusals = Vec::new();
+        for held in &holding {
+            let account = tx.get_provider_account(*held).await?;
+            records = records.saturating_add(account.held_records);
+            if let Some(error) = account.error {
+                refusals.push(format!("{held}: {error}"));
+            }
+        }
+        if shown_records != records {
+            return Err(SyncError::Conflict(HOLD_CHANGED));
+        }
         tx.release_cursor_holds(&holding).await?;
         let accounts = holding
             .iter()
@@ -130,7 +146,10 @@ impl SyncService {
             actor,
             "connection.release_cursor",
             ("connection", id.to_string()),
-            AuditChanges::new().set("provider_accounts", accounts),
+            AuditChanges::new()
+                .set("provider_accounts", accounts)
+                .set("records", i64::from(records))
+                .set("refusals", refusals.join("; ")),
         )
         .await?;
         tx.commit().await?;
