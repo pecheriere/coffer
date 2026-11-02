@@ -6,6 +6,7 @@
 // - every balance today is a fixed amount, and rates never change (mock/ecb.mjs);
 // - every monthly item is anchored on today, so a window of N months holds exactly
 //   N occurrences of it, today's included, however long the month;
+// - the mock bridge's balance and purchases are dated from this day too;
 // - this calendar month holds exactly one day of spending, today's. Earlier spending
 //   falls a whole number of months and then some days back, so never in this month.
 

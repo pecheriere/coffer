@@ -70,6 +70,27 @@ is left unbound. The members are `alex`, an admin, and `sam`, each with a passke
 private key is in `staging/fixtures/passkeys.json`. Those keys are made up and public, so
 `coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost.
 
+### End-to-end tests
+
+```sh
+scripts/staging.sh test                       # all of them, with stack and templates if need be
+scripts/staging.sh test api/sync.spec.mjs     # arguments go to Playwright
+```
+
+They need Node 24 or later on the machine, and run from `staging/e2e/` in
+[Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
+install scripts. Each test gets its own server on a new copy of the template, and every
+API response is checked against `docs/api/openapi.json`, whichever test made it. They cover
+what the in-process tests in `crates/*/tests/it/` can't, the built image, the real
+configuration and the egress rules, and logic and edge cases stay there. A server that
+panics or logs a mock credential fails the test using it.
+
+The known answers are the same on any day, which is checked on today and on templates
+seeded as of the first of this month and the last of the previous one, asked about by date
+through the forecast's `as_of` and net worth's `to`.
+
+### Dates
+
 Everything is dated from the day of the seed, and rebuilt on a new day, or when the
 image, the migrations, the seed or the mocks change. `scripts/staging.sh template <day>`
 seeds as of an earlier day, and `start <port> <day>` serves a throwaway copy of it, on a

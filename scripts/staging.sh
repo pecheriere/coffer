@@ -7,9 +7,11 @@
 #   scripts/staging.sh down                remove everything the stack made
 #   scripts/staging.sh link [username]     a link to enroll your own passkey
 #   scripts/staging.sh token               the seeded admin's agent token
-#   scripts/staging.sh template [day]      make sure the template for a day exists
+#   scripts/staging.sh test [args]         the end-to-end tests, args going to Playwright
+#   scripts/staging.sh template [days]     make sure the templates for these days exist
 #   scripts/staging.sh start <port> [day]  a throwaway server on a copy of the template
 #   scripts/staging.sh stop <port>         throw it away
+#   scripts/staging.sh elsewhere [day]     what the image does with the seed away from localhost
 #
 # COFFER_STAGING_IMAGE names an image to use instead of building one.
 set -euo pipefail
@@ -124,7 +126,7 @@ wait_healthy() {
 # Seeds an empty server and keeps its stopped data directory as the read-only
 # template: a tar, whose copy into a new container keeps each file's owner and mode.
 build_template() {
-  local day=$1 stamp=$2 dir="$state/templates/$1" name=coffer-staging-seed
+  local day=$1 stamp=$2 dir="$state/templates/$1" name="coffer-staging-seed-$1"
   echo "staging: seeding the template for $day" >&2
   docker rm -f -v "$name" >/dev/null 2>&1 || true
   rm -rf "$dir"
@@ -156,13 +158,47 @@ ensure_template() {
   fi
 }
 
+# Seeds days at the same time: most of each is waiting for the rates job's next minute.
+ensure_templates() {
+  local pids=() pid status=0
+  for day in "$@"; do
+    ensure_template "$day" &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" || status=1
+  done
+  return "$status"
+}
+
+copy_template_to() {
+  local name=$1 day=$2
+  [ -f "$state/templates/$day/data.tar" ] || fail "no template for $day: run '$0 template $day'"
+  docker cp --archive - "$name:/data" <"$state/templates/$day/data.tar" >/dev/null
+}
+
+# Runs the image on a copy of the template with a public URL that isn't localhost, and
+# answers with its exit code.
+serve_elsewhere() {
+  local day=$1 name=coffer-staging-elsewhere code
+  docker rm -f -v "$name" >/dev/null 2>&1 || true
+  docker create --name "$name" --label coffer.staging=server --network "$network" \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    -e COFFER_PUBLIC_URL=https://coffer.example.com "$image" >/dev/null
+  copy_template_to "$name" "$day"
+  docker start "$name" >/dev/null
+  code=$(docker wait "$name")
+  docker logs "$name" 2>&1
+  docker rm -v "$name" >/dev/null
+  return "$code"
+}
+
 start_server() {
   local port=$1 day=${2:-$(today)} name
   name=$(container "$port")
-  [ -f "$state/templates/$day/data.tar" ] || fail "no template for $day: run '$0 template $day'"
   docker rm -f -v "$name" >/dev/null 2>&1 || true
   create_server "$name" "$port"
-  docker cp --archive - "$name:/data" <"$state/templates/$day/data.tar" >/dev/null
+  copy_template_to "$name" "$day"
   docker start "$name" >/dev/null
   wait_healthy "$name"
 }
@@ -199,8 +235,23 @@ case "${1:-}" in
     jq -r .adminToken "$state/templates/$(today)/fixture.json"
     ;;
   template)
+    shift
+    if [ "$#" -eq 0 ]; then set -- "$(today)"; fi
+    refuse_another_checkout
     ensure_mocks
-    ensure_template "${2:-$(today)}"
+    ensure_templates "$@"
+    ;;
+  test)
+    shift
+    refuse_another_checkout
+    build_image
+    ensure_mocks
+    npm ci --prefix "$root/staging/e2e"
+    cd "$root/staging/e2e"
+    npx playwright test "$@"
+    ;;
+  elsewhere)
+    serve_elsewhere "${2:-$(today)}"
     ;;
   start)
     start_server "${2:?a port from 18081 to 18099}" "${3:-}"

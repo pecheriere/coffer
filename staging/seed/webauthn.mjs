@@ -1,7 +1,7 @@
 // A software authenticator holding one fixture key: just enough WebAuthn to enroll
-// through the same ceremony a browser uses. Node's standard library has no CBOR, so
+// and sign in through the same ceremonies a browser uses. Node's standard library has no CBOR, so
 // the two small structures registration needs are written out by hand.
-import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
 
 const USER_PRESENT_AND_VERIFIED = 0x05;
 const ATTESTED_CREDENTIAL = 0x40;
@@ -34,15 +34,19 @@ function coseKey(privateKey) {
   ]);
 }
 
-// Answers `options`, the server's creation options, as navigator.credentials.create
-// and coffer.js would.
-export function register(options, member, origin) {
-  const { challenge, rp } = options.publicKey;
-  const privateKey = createPrivateKey({
+function privateKeyOf(member) {
+  return createPrivateKey({
     key: Buffer.from(member.privateKeyPkcs8, 'base64'),
     format: 'der',
     type: 'pkcs8',
   });
+}
+
+// Answers `options`, the server's creation options, as navigator.credentials.create
+// and coffer.js would.
+export function register(options, member, origin) {
+  const { challenge, rp } = options.publicKey;
+  const privateKey = privateKeyOf(member);
   const credentialId = Buffer.from(member.credentialId, 'base64url');
   const authData = Buffer.concat([
     sha256(rp.id),
@@ -70,6 +74,33 @@ export function register(options, member, origin) {
     response: {
       attestationObject: attestationObject.toString('base64url'),
       clientDataJSON: Buffer.from(JSON.stringify(clientData)).toString('base64url'),
+    },
+    extensions: {},
+  };
+}
+
+// Answers `options`, the server's request options, as navigator.credentials.get and
+// coffer.js would. The signature count stays 0: an authenticator may keep none.
+export function assertion(options, member, origin) {
+  const { challenge, rpId } = options.publicKey;
+  const authData = Buffer.concat([
+    sha256(rpId),
+    Buffer.from([USER_PRESENT_AND_VERIFIED]),
+    uint32(0),
+  ]);
+  const clientData = Buffer.from(
+    JSON.stringify({ type: 'webauthn.get', challenge, origin, crossOrigin: false }),
+  );
+  const signature = sign('sha256', Buffer.concat([authData, sha256(clientData)]), privateKeyOf(member));
+  return {
+    id: member.credentialId,
+    rawId: member.credentialId,
+    type: 'public-key',
+    response: {
+      authenticatorData: authData.toString('base64url'),
+      clientDataJSON: clientData.toString('base64url'),
+      signature: signature.toString('base64url'),
+      userHandle: null,
     },
     extensions: {},
   };
