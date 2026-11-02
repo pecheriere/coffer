@@ -134,7 +134,8 @@ worktree when its branch has merged.
   the `policy` module docs), with the `AccountAccess` that `AccessResolver`
   resolves (never built by hand). A `Denied` becomes a problem only through
   `impl From<Denied> for Problem`. Whether a planned item exists for an actor
-  is decided only by `plan_item_visible`, whose hidden answer is the missing one.
+  is decided only by `plan_item_visible`, whose hidden answer is the missing one, and
+  whether a connection does only by `connection_visible`.
 - **An account that isn't the household's is out of every count through its flags,
   held by a CHECK, and anything reading by class alone must also read `belongs_to`**
   (spec §8.11 B4, B8). Net worth reports it in buckets, and nothing adds a bucket to

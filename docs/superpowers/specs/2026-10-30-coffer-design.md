@@ -585,7 +585,12 @@ credential that sent them (the session or one agent token), so no token
 replays a response another credential earned. Lists of account-scoped
 data (accounts, transactions, bound provider accounts) are filtered to the
 accounts granted at the level they show, and no list, aggregate, audit entry
-or error reveals a hidden account.
+or error reveals a hidden account. A connection's label is a member's free text,
+which could name who an account is for, so a connection follows what it serves:
+a token sees it, at whatever level, only if it serves an account the token sees,
+or with an `all` grant, which is also the only way to see one serving no account
+yet. Otherwise it is left out of the list, and the routes naming a connection,
+which all need an `all` grant, refuse it as they refuse a missing one.
 
 ### 8.3 Provider credentials
 
