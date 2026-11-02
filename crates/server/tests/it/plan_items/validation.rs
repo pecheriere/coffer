@@ -445,6 +445,73 @@ async fn unknown_spending_is_400() {
 }
 
 #[tokio::test]
+async fn unknown_field_inside_amount_is_400() {
+    let world = world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    let bad = StatusCode::BAD_REQUEST;
+    let amount = json!({"minor_units": 1, "currency": "USD", "surprise": 1});
+    world
+        .refused(
+            &with(recurring(world.expense), "amount", amount.clone()),
+            bad,
+        )
+        .await;
+    world
+        .patch_refused(&id, &json!({"amount": amount}), bad)
+        .await;
+}
+
+#[tokio::test]
+async fn category_kind_cannot_change_under_a_planned_item() {
+    const REFUSAL: &str = "a category used by a planned item cannot change kind";
+    let world = world().await;
+    let (_, category) = world.category(CategoryKind::Expense).await;
+    let uri = format!("/api/v1/categories/{category}");
+    let change = json!({"kind": "income"});
+    let id = world.create(&recurring(category)).await;
+    let inactive = world
+        .create(&with(one_off(category), "active", json!(false)))
+        .await;
+
+    let attempt = async || {
+        world
+            .call(Method::PATCH, &uri, &world.admin, Some(&change))
+            .await
+    };
+    let (status, answer) = attempt().await;
+    assert_eq!(status, UNPROCESSABLE);
+    assert_eq!(answer["detail"], json!(REFUSAL));
+    assert_eq!(answer["type"], json!("urn:coffer:problem:invalid"));
+
+    // Everything else about the category can still change, the same kind too.
+    let same = json!({"name": "Renamed", "kind": "expense"});
+    let (status, _) = world
+        .call(Method::PATCH, &uri, &world.admin, Some(&same))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An inactive item still counts, and once none is left the kind is free.
+    let (status, _) = world
+        .call(Method::DELETE, &super::item_uri(&id), &world.admin, None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = attempt().await;
+    assert_eq!(status, UNPROCESSABLE);
+    let (status, _) = world
+        .call(
+            Method::DELETE,
+            &super::item_uri(&inactive),
+            &world.admin,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, answer) = attempt().await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["kind"], json!("income"));
+}
+
+#[tokio::test]
 async fn item_limit_is_409() {
     let world = world().await;
     let now = world.server.clock.now();

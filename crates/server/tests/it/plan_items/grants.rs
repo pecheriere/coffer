@@ -5,11 +5,11 @@
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::identity::Scope;
-use coffer_domain::ids::PlannedItemId;
+use coffer_domain::ids::{CategoryId, PlannedItemId};
 use coffer_domain::policy::AccountLevel::{Balances, Transactions, Write};
 use coffer_domain::policy::TokenGrant;
+use coffer_domain::transactions::CategoryKind;
 use coffer_server::secrets::SecretToken;
-use coffer_store::{IdempotencyOwner, Reservation};
 use serde_json::{Value, json};
 
 use super::{ITEMS, World, all, item_uri, on, recurring, with, world};
@@ -201,8 +201,7 @@ async fn uniform_tokens_see_every_item() {
     }
 }
 
-/// Every write `token` could try on item `id`, each with its own body so an
-/// unexpected reservation would show.
+/// Every write `token` could try on item `id`.
 async fn refused_writes(world: &World, token: &SecretToken, id: &str) -> [(StatusCode, String); 3] {
     let create = recurring(world.expense);
     let uri = item_uri(id);
@@ -235,7 +234,7 @@ async fn restricted_token_cannot_write() {
         vec![all(Balances)],
     ];
     for grants in cases {
-        let (token_id, token) = world.token(Scope::Write, grants).await;
+        let (_, token) = world.token(Scope::Write, grants).await;
         let audited = world.audit().await.len();
         let items = world
             .listed(&format!("{ITEMS}?include_inactive=true"), &world.admin)
@@ -264,25 +263,94 @@ async fn restricted_token_cannot_write() {
                 == items,
             "nothing changed"
         );
+    }
+}
 
-        // The key was never reserved: the store still hands it out as fresh.
-        let mut tx = world.server.store.begin().await.unwrap();
-        let reservation = tx
-            .reserve_idempotency(
-                IdempotencyOwner {
-                    member: world.alice.member,
-                    agent: Some(token_id),
-                },
-                "write-key",
-                [7; 32],
-                coffer_domain::time::Clock::now(world.server.clock.as_ref()),
-            )
+/// A token narrowed after its create gets a refusal, not the response it was
+/// once given: authorization runs before the key is looked at.
+#[tokio::test]
+async fn narrowed_token_gets_no_replay_of_its_create() {
+    let world = world().await;
+    let (hinted, other) = (world.account("Hinted").await, world.account("Other").await);
+    let (token_id, token) = world.token(Scope::Write, vec![all(Write)]).await;
+    let body = with(
+        with(recurring(world.expense), "account_hint", json!(hinted)),
+        "notes",
+        json!("Private note"),
+    );
+    let post = async || {
+        world
+            .send(Method::POST, ITEMS, &token, Some(&body), Some("the-key"))
             .await
-            .unwrap();
-        assert!(
-            matches!(reservation, Reservation::Fresh),
-            "a refused create reserves no idempotency key"
-        );
+    };
+    let first = post().await;
+    assert_eq!(first.0, StatusCode::CREATED);
+    assert!(post().await == first, "a replay while it may still write");
+    let created: Value = serde_json::from_str(&first.1).unwrap();
+
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.replace_token_grants(token_id, &[on(other, Write)])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let (status, retry) = post().await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "not the stored response");
+    let answer: Value = serde_json::from_str(&retry).unwrap();
+    assert_eq!(
+        answer["detail"],
+        json!("this action needs write access to every account")
+    );
+    for stored in [
+        created["id"].as_str().unwrap(),
+        "Water bill",
+        "Private note",
+        &hinted.to_string(),
+    ] {
+        assert!(!retry.contains(stored), "nothing of the stored body");
+    }
+}
+
+/// A category's kind can't change under a planned item, but only a token that
+/// may see every item ever gets that far.
+#[tokio::test]
+async fn refused_kind_change_tells_a_restricted_token_nothing() {
+    let world = world().await;
+    let account = world.account("Checking").await;
+    let used = world.category(CategoryKind::Expense).await.1;
+    let unused = world.category(CategoryKind::Expense).await.1;
+    world
+        .create(&with(recurring(used), "account_hint", json!(account)))
+        .await;
+    let patch = json!({"kind": "income"});
+    let category_uri = |category: CategoryId| format!("/api/v1/categories/{category}");
+
+    for (scope, grants) in [
+        (Scope::Write, vec![on(account, Write)]),
+        (Scope::Write, vec![all(Transactions)]),
+        (Scope::Read, Vec::new()),
+    ] {
+        let (_, token) = world.token(scope, grants).await;
+        let answer = world
+            .send(
+                Method::PATCH,
+                &category_uri(used),
+                &token,
+                Some(&patch),
+                None,
+            )
+            .await;
+        let without_items = world
+            .send(
+                Method::PATCH,
+                &category_uri(unused),
+                &token,
+                Some(&patch),
+                None,
+            )
+            .await;
+        assert_eq!(answer.0, StatusCode::FORBIDDEN);
+        assert!(answer == without_items, "the same refusal either way");
     }
 }
 

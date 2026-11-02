@@ -298,7 +298,6 @@ mod tests {
 
     const OUT: PlanDirection = PlanDirection::Outflow;
 
-    /// One case per `PlanError` that a value check raises.
     #[test]
     fn only_a_recurring_outflow_has_a_spending_kind() {
         let recurring = PlanSchedule::Recurring {
@@ -321,6 +320,7 @@ mod tests {
         assert!(!spending_applies(PlanDirection::Outflow, &goal));
     }
 
+    /// One case per `PlanError` that a value check raises.
     #[test]
     fn validate_refuses_each_case() {
         let fine = date(2027, 1, 1);

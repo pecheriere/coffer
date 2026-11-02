@@ -1170,7 +1170,7 @@
           "categories"
         ],
         "summary": "Changes a category.",
-        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Changes the fields given: name, kind, position, group (moving it) or archived. An archived category takes no new splits; its existing splits stay. Its kind can't change while a planned item uses it. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updateCategory",
         "parameters": [
           {
@@ -2958,7 +2958,7 @@
           "plan"
         ],
         "summary": "Changes a planned item.",
-        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. `spending` applies only to an item left a recurring outflow; changing `direction` drops it, or makes the item a `bill`, unless `spending` is sent too. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. `spending` is refused unless the item is left a recurring outflow. Changing `direction` to `inflow` drops its kind; changing it to `outflow` makes it a `bill` unless `spending` says otherwise. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updatePlanItem",
         "parameters": [
           {
@@ -5697,7 +5697,8 @@
             "format": "int64",
             "description": "The amount in the currency's minor units: `-1234` USD is -12.34 USD."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "NewAccountRequest": {
         "type": "object",

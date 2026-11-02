@@ -82,9 +82,9 @@ pub(super) async fn list(
                    needs an `expense` category and an inflow an `income` one; a goal must be an \
                    outflow. A recurring outflow is a `bill`, counted in full, unless `spending` \
                    makes it a `budget`, reduced by what was spent in its category so far this \
-                   month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, \
-                   so the expense counts twice: nothing de-duplicates them. Its type never \
-                   changes once it exists. Needs `write`; a token with account grants also needs \
+                   month; nothing else takes `spending`. A goal and a one-off describing the \
+                   same expense are both counted, so the expense counts twice: nothing \
+                   de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs \
                    `all` at `write`. With an `Idempotency-Key`, a retry of the same request \
                    within 24 hours returns the first response instead of creating again.",
     security(("bearer" = [])),
@@ -157,10 +157,11 @@ pub(super) async fn get(
     tag = tags::PLAN,
     description = "Changes the fields given and checks them against the item they would leave. \
                    `null` clears `account_hint` and `notes`. `schedule` replaces the whole \
-                   schedule, and its `type` must stay the item's own. `spending` applies only to \
-                   an item left a recurring outflow; changing `direction` drops it, or makes the \
-                   item a `bill`, unless `spending` is sent too. Needs `write`; a token \
-                   with account grants also needs `all` at `write`.",
+                   schedule, and its `type` must stay the item's own. `spending` is refused unless \
+                   the item is left a recurring outflow. Changing `direction` to `inflow` drops \
+                   its kind; changing it to `outflow` makes it a `bill` unless `spending` says \
+                   otherwise. Needs `write`; a token with account grants also needs `all` at \
+                   `write`.",
     security(("bearer" = [])),
     params(PlannedItemPath),
     request_body = PlannedItemPatch,

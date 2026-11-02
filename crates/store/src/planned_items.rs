@@ -372,6 +372,25 @@ impl StoreTx {
         fetch(&mut *self.tx, id).await
     }
 
+    /// Whether any planned item, inactive ones included, uses `category`, as
+    /// seen by this transaction.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn category_has_planned_items(
+        &mut self,
+        category: CategoryId,
+    ) -> Result<bool, StoreError> {
+        let (exists,): (bool,) =
+            sqlx::query_as("SELECT EXISTS (SELECT 1 FROM planned_items WHERE category_id = ?)")
+                .bind(category.to_string())
+                .fetch_one(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        Ok(exists)
+    }
+
     /// How many planned items exist, inactive ones included, as seen by this
     /// transaction.
     ///

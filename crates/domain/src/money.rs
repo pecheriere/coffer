@@ -282,6 +282,7 @@ impl utoipa::ToSchema for Currency {
 /// is money out of the account. Never a floating-point number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Money {
     /// The amount in the currency's minor units: `-1234` USD is -12.34 USD.
     pub minor_units: i64,

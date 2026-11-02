@@ -3,6 +3,7 @@
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue, FieldChange};
 use coffer_domain::identity::Scope;
+use coffer_domain::ids::PlannedItemId;
 use coffer_domain::transactions::CategoryKind;
 use coffer_server::ledger::plan_items::{PlannedItemInput, PlannedItemPatch};
 use coffer_store::AuditEvent;
@@ -450,6 +451,64 @@ async fn changing_direction_keeps_spending_in_step() {
         )
         .await;
     assert_eq!(after["spending"], json!("bill"));
+    let events = world.audit().await;
+    let restored = events
+        .iter()
+        .find(|event| {
+            event
+                .changes
+                .iter()
+                .any(|(field, change)| field == "direction" && change.after == text("outflow"))
+        })
+        .unwrap();
+    assert_eq!(change(restored, "spending").before, AuditValue::Null);
+    assert_eq!(change(restored, "spending").after, text("bill"));
+}
+
+#[tokio::test]
+async fn goal_completed_is_set_and_resets_unless_sent() {
+    let world = world().await;
+    let id = world.create(&goal(world.expense)).await;
+    let schedule = |completed: Value| {
+        let mut schedule = json!({"type": "goal", "start_on": "2027-01-01",
+                                  "due_on": "2027-07-01"});
+        if !completed.is_null() {
+            schedule["completed"] = completed;
+        }
+        json!({"schedule": schedule})
+    };
+
+    let after = world.patch(&id, &schedule(json!(true))).await;
+    assert_eq!(
+        after["schedule"]["completed"],
+        json!(true),
+        "marked complete"
+    );
+    let (_, read) = world
+        .call(Method::GET, &item_uri(&id), &world.admin, None)
+        .await;
+    assert_eq!(read["schedule"]["completed"], json!(true), "and stored");
+
+    // A patch replaces the whole schedule, as its description says.
+    let after = world.patch(&id, &schedule(Value::Null)).await;
+    assert_eq!(
+        after["schedule"]["completed"],
+        json!(false),
+        "reset unless sent"
+    );
+}
+
+#[tokio::test]
+async fn patch_of_a_missing_item_is_404() {
+    let world = world().await;
+    let uri = item_uri(PlannedItemId::new());
+    let patch = json!({"name": "Sewer bill"});
+    let (status, answer) = world
+        .call(Method::PATCH, &uri, &world.admin, Some(&patch))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(answer["type"], json!("urn:coffer:problem:not_found"));
+    assert!(world.audit().await.is_empty(), "nothing was written");
 }
 
 #[tokio::test]
