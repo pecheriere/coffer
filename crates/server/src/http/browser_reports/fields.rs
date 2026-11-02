@@ -39,8 +39,8 @@ const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 /// a message is logged only from coffer's own code (see
 /// [`ScriptReport::into_report`]) and that code has no path to that data: it
 /// never reads what a page shows into an error. **A page whose scripts handle
-/// amounts or names breaks that, so it stays out**, as the coming forecast page
-/// must if it does, and a report from it says only that something failed.
+/// amounts or names breaks that, so it stays out**, as the forecast page does,
+/// and a report from it says only that something failed.
 const PAGES: [&str; 10] = [
     "/login",
     "/setup/{token}",

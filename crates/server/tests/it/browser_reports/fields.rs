@@ -317,8 +317,8 @@ async fn a_path_outside_the_table_logs_other_and_withholds_the_message() {
     );
 }
 
-/// The forecast page will show amounts. Until someone adds it to the table
-/// with that in mind, a message from it stays out of the log.
+/// The forecast page shows amounts. It is not in the table, so a message from it
+/// stays out of the log.
 #[tokio::test]
 async fn a_message_from_the_forecast_page_is_withheld() {
     let (_server, mut browser) = browser().await;

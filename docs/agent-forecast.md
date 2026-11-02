@@ -47,7 +47,8 @@ yearly item anchored on February 29 falls on February 28 in other years.
 `end_on` (optional, inclusive) is the last day an occurrence may fall on.
 
 A recurring outflow has `spending`: `bill` (the default) counts in full;
-`budget` is reduced by what was spent in its category this month (see
+`budget` counts all of the current month's occurrences, those already past
+too, less what was spent in its category this month, floored at 0 (see
 [What this month's spending does](#what-this-months-spending-does)). No other
 item takes `spending`.
 
@@ -232,7 +233,8 @@ the token's grants) hold the forecast's defaults:
   `{"kind": "fixed", "amount": {...}}` (0 is allowed, and the amount carries
   its own currency) and `{"kind": "months_of_outflows", "months": 2}` (1 to 60),
   the recurring outflows, bills and budgets, that fall in that many months
-  from `as_of`, per currency and before any reduction. One-offs and goals are
+  from `as_of`, per currency and before any reduction. A budget's earlier days in
+  `as_of`'s month are not in it. One-offs and goals are
   not in it. If that comes to 0 in a currency the number stays, with the
   caution `months_floor_is_zero`.
 - `include_income` (default `false`) decides whether planned inflows reduce
@@ -428,7 +430,7 @@ and the fields shown:
 | `unbound_provider_account` (`provider_account`, `connection`, `name`, `institution`, `currency_raw`, `currency_supported`) | A provider account's money is in no account, so it is not counted. | Bind it (`POST /provider-accounts/{id}/bind`, or `create-account`), or tell the owner. It cannot be dismissed yet, which is why it does not block. |
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection is not syncing. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
-| `as_of_not_today` (`today`) | The window does not start today, so bills between today and `as_of` are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
+| `as_of_not_today` (`today`) | The window does not start today, so what falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month. | Say the date the number is for. Use `as_of` only to ask "from that day". |
 | `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. See the limits below. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
 | `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
@@ -484,18 +486,29 @@ category pays it. Each category and currency has one pool of spending:
    such a transaction keeps counting. A possible duplicate in a category keeps
    counting there, with the `possible_duplicates` caution.
 3. The pool first pays this month's bills and one-offs dated this month up to
-   and including `as_of`, in date order. Any unpaid part is a gap: it still counts, with the caution
-   `bill_not_seen`, and shows as `unpaid` on its item. What is left of the pool,
-   floored at 0, reduces a budget's occurrences in the current month in date order
-   (`reduced_by`), whatever day it is anchored on. So a paid bill never eats a budget, and one purchase never
-   reduces two budgets. A budget that underspends is never a gap.
-4. A hypothetical item neither reduces nor consumes, and a goal never owes.
+   and including `as_of`, in date order. Any unpaid part is a gap: it still counts,
+   with the caution `bill_not_seen`, and shows as `unpaid` on its item. What is
+   left of the pool, floored at 0, reduces the budgets' occurrences in the current
+   month in date order (`reduced_by`). A budget counts its whole month, whatever day
+   it is anchored on, so for a stored budget `first_on`, `occurrences` and `gross`
+   can include days before `as_of`, in `as_of`'s month only; later months count
+   only inside the window, and never before the budget's start or after its
+   `end_on`. What a budget still needs is its month's amount less the category's
+   spending once bills and one-offs took their share, floored at 0; that is never
+   a gap and raises no caution. So a paid bill never eats a budget, and one
+   purchase never reduces two budgets.
+4. A bill or one-off dated `as_of` counts in full even if it was paid that day and
+   the balance already shows it: it is held twice for that day, the safe
+   direction. A hypothetical item neither reduces nor consumes, a hypothetical
+   budget counts only inside the window (it doesn't look back), and a goal never
+   owes.
 
 The data cannot tell where money went, so three known limits can make the
 surplus too high, and the owner should check bills when the number matters:
 
 - Spending goes to bills and one-offs before any budget, so money spent on a
-  budget can hide an unpaid bill.
+  budget can hide an unpaid bill. From a bill's own date, money spent on a
+  budget in its category does not reduce the budget until the bill is covered.
 - The look-back is this month only: last month's unpaid bill or one-off is not
   counted, and a bill from last month that posts this month counts as paying
   this month's.
@@ -543,7 +556,8 @@ It reads: 38,200.00 of cash, of which 25,765.64 is above the 12,434.36 the
 household needs by 2027-02-15, **provisional**, because the internet bill
 dated the 10th has no matching spending in Utilities (`unpaid` 80.00 on its
 item line). The 7,720.00 of outflows is rent 5,400.00, groceries 1,550.00
-(three budgets of 600.00 less the 250.00 already spent), internet 320.00 (three
+(three budget months of 600.00 less the 250.00 already spent; its occurrences
+all fall after today, so the whole-month rule changes nothing here), internet 320.00 (three
 more occurrences and the unpaid one) and the dentist 450.00. The 1,714.36 for
 the holiday is 2,214.36 accrued by 2027-02-15 less the 500.00 spent against it.
 
@@ -731,7 +745,8 @@ per list.)
   uncategorized, where it shows in `uncategorized`, and it stays out of `actual`.
 - `rollovers` has a line per category and currency with a budget: what was
   `budgeted` over the reported months up to today's, what they `spent` while a
-  budget was running once bills and one-offs dated before today took their share,
+  budget was running once bills and one-offs dated up to and including today took
+  their share,
   and the `rollover` between them (positive unspent, negative overspent). It is
   a window over the months you asked for, not a running balance: moving or
   widening `from` changes it. Today's month counts all its budget occurrences,
