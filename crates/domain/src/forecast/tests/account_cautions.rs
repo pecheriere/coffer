@@ -220,12 +220,13 @@ fn feed_problem_on_an_uncounted_account_changes_nothing() {
     );
 }
 
-fn alert(connection: ConnectionId, serves: Vec<AccountId>) -> FeedAlert {
+fn alert(connection: ConnectionId, serves: Vec<AccountId>, has_accounts: bool) -> FeedAlert {
     FeedAlert {
         connection,
         label: "Main bank".to_owned(),
         status: FeedStatus::ReauthRequired,
         serves,
+        has_accounts,
     }
 }
 
@@ -238,11 +239,19 @@ fn held(name: &str) -> AccountInput {
 
 /// A forecast beside Checking, whose accounts are `accounts`, with one failing connection.
 fn with_failing(accounts: Vec<AccountInput>, serves: &[usize]) -> (Forecast, ConnectionId) {
+    failing(accounts, serves, true)
+}
+
+fn failing(
+    accounts: Vec<AccountInput>,
+    serves: &[usize],
+    has_accounts: bool,
+) -> (Forecast, ConnectionId) {
     let connection = ConnectionId::new();
     let serves = serves.iter().map(|&at| accounts[at].id).collect();
     let forecast = run(&ForecastInput {
         accounts,
-        feeds: vec![alert(connection, serves)],
+        feeds: vec![alert(connection, serves, has_accounts)],
         ..household()
     });
     (forecast, connection)
@@ -294,9 +303,18 @@ fn a_failing_connection_serving_only_an_excluded_account_changes_nothing() {
 /// of its money is in the forecast.
 #[test]
 fn a_failing_connection_with_no_provider_account_cautions() {
-    let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000))], &[]);
+    let (forecast, _) = failing(vec![cash("Checking", usd(1_000))], &[], false);
     assert_eq!(forecast.cautions.len(), 1);
     assert_provisional(&forecast);
+}
+
+/// Provider accounts that are known and none of them matters: not bound to anything, and
+/// nothing waiting to be bound.
+#[test]
+fn a_failing_connection_with_accounts_none_counted_or_unbound_changes_nothing() {
+    let (forecast, _) = failing(vec![cash("Checking", usd(1_000))], &[], true);
+    assert_eq!(forecast.cautions, []);
+    assert_eq!(forecast.status, ForecastStatus::Firm);
 }
 
 /// Spending linked to a goal lowers its need on any account, so a stalled feed there can
@@ -332,7 +350,7 @@ fn a_failing_connection_with_an_unbound_provider_account_cautions() {
             institution: None,
             currency_raw: "USD".to_owned(),
         }],
-        feeds: vec![alert(connection, Vec::new())],
+        feeds: vec![alert(connection, Vec::new(), true)],
         ..household()
     });
     assert!(

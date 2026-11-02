@@ -633,7 +633,7 @@ fn cautions(
             .feeds
             .iter()
             .filter(|feed| {
-                feed.serves.is_empty()
+                !feed.has_accounts
                     || feed.serves.iter().any(|id| read.contains(id))
                     || input
                         .unbound

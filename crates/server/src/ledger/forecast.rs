@@ -386,7 +386,9 @@ fn feed_alerts(
     provider_accounts: &[ProviderAccountRecord],
 ) -> Vec<FeedAlert> {
     let mut serves: BTreeMap<ConnectionId, Vec<AccountId>> = BTreeMap::new();
+    let mut with_accounts = BTreeSet::new();
     for record in provider_accounts {
+        with_accounts.insert(record.connection);
         if let Some(account) = record.account {
             serves.entry(record.connection).or_default().push(account);
         }
@@ -395,13 +397,18 @@ fn feed_alerts(
         .into_iter()
         .filter_map(|connection| {
             let serves = serves.remove(&connection.id).unwrap_or_default();
-            feed_alert(connection, serves)
+            let has_accounts = with_accounts.contains(&connection.id);
+            feed_alert(connection, serves, has_accounts)
         })
         .collect()
 }
 
 /// The alert of a connection that isn't syncing.
-fn feed_alert(connection: ConnectionHealth, serves: Vec<AccountId>) -> Option<FeedAlert> {
+fn feed_alert(
+    connection: ConnectionHealth,
+    serves: Vec<AccountId>,
+    has_accounts: bool,
+) -> Option<FeedAlert> {
     let status = match connection.status {
         ConnectionStatus::Error => FeedStatus::Error,
         ConnectionStatus::ReauthRequired => FeedStatus::ReauthRequired,
@@ -412,6 +419,7 @@ fn feed_alert(connection: ConnectionHealth, serves: Vec<AccountId>) -> Option<Fe
         label: connection.label,
         status,
         serves,
+        has_accounts,
     })
 }
 
