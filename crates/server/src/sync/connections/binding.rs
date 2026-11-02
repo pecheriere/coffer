@@ -18,7 +18,7 @@ use crate::ledger::accounts::{
 };
 use crate::sync::SyncError;
 use crate::sync::apply::apply_held;
-use crate::sync::engine::{SyncService, ensure_not_removed, oldest_kept_day, write_balance};
+use crate::sync::engine::{SyncService, ensure_not_removed, reported_day_believed, write_balance};
 
 const ALREADY_BOUND: &str = "the provider account is already bound";
 const ACCOUNT_CLOSED: &str = "the account is closed";
@@ -259,8 +259,8 @@ async fn bind_in(
         .await?;
     // The balance last reported, so net worth has the account before the next
     // sync, even if it was last synced before balances were kept. One that
-    // does not convert was noted on the provider account, and one too old is
-    // not believed, as when keeping.
+    // does not convert or is too old was noted on the provider account when it
+    // was reported.
     let reported = bound.last_balance.as_ref().and_then(|reported| {
         DecimalAmount::parse(&reported.amount_raw)
             .and_then(|amount| amount.to_minor_units_rounded(currency))
@@ -269,7 +269,7 @@ async fn bind_in(
             .map(|balance_minor| (reported.on.min(today), balance_minor))
     });
     if let Some((on, balance_minor)) = reported
-        && on >= oldest_kept_day(today)
+        && reported_day_believed(on, today)
         && tx.balance_on(account, on).await?.is_none()
     {
         write_balance(tx, now, account, on, balance_minor).await?;

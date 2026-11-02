@@ -102,7 +102,8 @@ pub struct ProviderAccountView {
     /// The last balance the provider reported.
     #[schema(required)]
     pub balance: Option<RawBalanceView>,
-    /// The provider's last error for this account, sanitized.
+    /// What was wrong with this account's last report, sanitized: the provider's
+    /// error, or coffer's fixed note of a balance it left out.
     #[schema(required)]
     pub error: Option<String>,
     pub last_seen_at: Timestamp,

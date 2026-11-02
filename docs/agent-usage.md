@@ -510,6 +510,15 @@ kept for its unbound accounts. There is no way to unbind: a bound provider
 account stays bound. coffer syncs every connection on a schedule
 (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.
 
+A balance a provider reports is refused if it is dated more than 31 days before the
+household's today, bound or unbound; one dated later than today is dated today. A
+refused balance writes nothing, the account's transactions still come in, and the
+provider account's `error` says "the provider reported a balance dated more than 31
+days ago, so it was left out" until a sync reports one in range. Its `balance` still
+shows what was last reported. An account whose only balance was refused can be bound,
+and has no balance until then. A balance you set with `PUT` is no report: it may be
+dated any day.
+
 - `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
   `status` (`active`, `error`, `reauth_required` or `removed`),
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,

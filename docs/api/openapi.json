@@ -10003,7 +10003,7 @@
               "string",
               "null"
             ],
-            "description": "The provider's last error for this account, sanitized."
+            "description": "What was wrong with this account's last report, sanitized: the provider's\nerror, or coffer's fixed note of a balance it left out."
           },
           "id": {
             "$ref": "#/components/schemas/ProviderAccountId"

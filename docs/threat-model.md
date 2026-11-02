@@ -369,7 +369,7 @@
   holds for every URL, redirects are never followed) and it never receives
   more than the connection's own credentials. Members review imported
   transactions, and removing the connection stops further imports.
-- **A provider chooses the day of a balance it reports for an unbound account.**
+- **A provider chooses the day of a balance it reports.**
   coffer keeps one row per provider account per day, about 135 bytes, so an
   honest provider costs about 50 KB per unbound account per year, kept until the
   account is bound or its connection removed, with no retention job. A day more
@@ -382,8 +382,16 @@
   SimpleFin's 16 syncs, 48,000 rows or about 6.5 MB through Plaid's 48. Whatever
   it reports within those days becomes history at the bind, as it would for a
   bound account, but it can't change a snapshot the account already has. The
-  limit applies to keeping and to the bind's use of the last report, not to a
-  bound account's balance, whose day is still the provider's to choose.
+  limit applies to every balance a provider reports, bound or not, and to the
+  bind's use of the last report. So on a bound account a provider can write or
+  replace a snapshot only within those 32 days, through today (a later date is
+  dated today). A snapshot older than that, a member's included, is out of its
+  reach. Within them a sync still replaces a day's snapshot, a member's included.
+  A refused balance writes nothing else and the account's records still apply; the
+  provider account shows a fixed note, in `error` and on the Connections page, until
+  a sync reports a balance in range. An account that honestly reports only older
+  dates therefore stops updating, and says so. A member's own balance, by `PUT`, has
+  no such limit (its cost is issue 83).
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24

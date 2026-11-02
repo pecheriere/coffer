@@ -685,6 +685,15 @@ reason (too large) is left out and noted on the provider account, while its
 records still apply and the cursor can move. Transaction amounts are never
 rounded: a record that does not convert exactly is unusable.
 
+A provider chooses the day of the balance it reports, so that day is bounded for a
+bound and an unbound account alike. A day more than 31 days before the household's
+today (§8.7) is refused, the same way as a balance too large: nothing is written,
+the provider account shows a fixed note, and its records still apply. A later day
+is dated today. The next balance in range clears the note. An account whose only
+balance was refused binds with no balance, and gets one from the first sync that
+reports one in range. A balance a member or a token sets by hand is no report, and
+none of this applies to it.
+
 ### 8.7 Household timezone
 
 Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,

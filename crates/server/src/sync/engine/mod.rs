@@ -320,13 +320,23 @@ pub(super) async fn ensure_not_removed(
     Ok(record)
 }
 
-/// How many days back a balance reported for an unbound account may be dated:
-/// a bank's date can honestly lag, but nothing older is believed.
-const KEPT_BALANCE_MAX_AGE_DAYS: i64 = 31;
+/// How many days back a balance a provider reports may be dated, for a bound or
+/// an unbound account: a bank's date can honestly lag, but nothing older is
+/// believed. A member's own balance is no report and has no such limit.
+const REPORTED_BALANCE_MAX_AGE_DAYS: i64 = 31;
 
-/// The oldest day a balance of an unbound account may be taken for.
-pub(super) fn oldest_kept_day(today: Date) -> Date {
-    today.saturating_sub(Span::new().days(KEPT_BALANCE_MAX_AGE_DAYS))
+/// Whether a balance a provider dated `on` is recent enough to believe, with
+/// `today` the household's day.
+pub(super) fn reported_day_believed(on: Date, today: Date) -> bool {
+    on >= today.saturating_sub(Span::new().days(REPORTED_BALANCE_MAX_AGE_DAYS))
+}
+
+/// What a provider account says of a balance [`reported_day_believed`] refuses.
+fn balance_too_old_note() -> String {
+    format!(
+        "the provider reported a balance dated more than {REPORTED_BALANCE_MAX_AGE_DAYS} days \
+         ago, so it was left out"
+    )
 }
 
 /// A balance a provider reported, converted to minor units of its currency.
@@ -337,10 +347,10 @@ pub(super) struct ReportedBalance {
     pub(super) currency: Currency,
 }
 
-/// Records the balance a provider reported for `provider_account`: the day's
-/// snapshot of the account it is bound to or, while unbound, kept for the bind
-/// to bring in, unless it is dated before [`oldest_kept_day`]. Never on a future
-/// day, which would hide later balances.
+/// Records a balance a provider reported for `provider_account`, already found
+/// recent enough: the day's snapshot of the account it is bound to or, while
+/// unbound, kept for the bind to bring in. Never on a future day, which would
+/// hide later balances.
 /// Keeping isn't audited: the audit log would then hold the balances of an
 /// account nobody has bound, and the bind's entry counts them.
 pub(super) async fn record_balance(
@@ -354,10 +364,6 @@ pub(super) async fn record_balance(
     let on = balance.on.min(today);
     if let Some(account) = account {
         return write_balance(tx, now, account, on, balance.balance_minor).await;
-    }
-    if on < oldest_kept_day(today) {
-        tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
-        return Ok(());
     }
     tx.keep_balance(KeptBalance {
         provider_account,

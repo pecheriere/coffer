@@ -18,6 +18,8 @@ use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
 use coffer_server::ledger::transactions::TransactionPatch;
 use coffer_store::{AuditFilter, ConnectionStatus, PageRequest};
 use jiff::civil::date;
+use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp};
 use serde_json::json;
 
 async fn category(world: &World) -> CategoryId {
@@ -121,6 +123,67 @@ async fn posted_date_uses_household_timezone() {
     let transactions = world.transactions(account).await;
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].posted_on, date(2026, 10, 30));
+}
+
+/// The age of a `balance-date` is counted in the household's days at both ends:
+/// the instant becomes a day there, and today is today there. Each instant has a
+/// different day in UTC, so counting either end in UTC moves the limit by a day.
+#[tokio::test]
+async fn balance_age_is_counted_in_the_household_time_zone() {
+    let places = [
+        // Still the 14th in Los Angeles, and 20:00 there is the next day in UTC.
+        ("America/Los_Angeles", "2027-02-15T03:00:00Z", 20),
+        // Already the 16th in Auckland, and 08:00 there is the day before in UTC.
+        ("Pacific/Auckland", "2027-02-15T12:00:00Z", 8),
+    ];
+    for (zone, now, hour) in places {
+        for (age, written) in [(31, true), (32, false)] {
+            let world = world_with_env(&[("COFFER_TIMEZONE", zone)]).await;
+            let now: Timestamp = now.parse().unwrap();
+            world.server.clock.set(now);
+            let connection = world.seeded().await;
+            let household = TimeZone::get(zone).unwrap();
+            let today = now.to_zoned(household.clone()).date();
+            world
+                .script
+                .bridge_reply(Reply::ok(&balance_dated(now.as_second())));
+            world.sync(connection).await;
+            let account = world.bind("ACT-0001", AccountKind::Checking).await;
+            let day = today.checked_sub(Span::new().days(age)).unwrap();
+            let moment = day.at(hour, 0, 0, 0).to_zoned(household).unwrap();
+            world
+                .script
+                .bridge_reply(Reply::ok(&balance_dated(moment.timestamp().as_second())));
+
+            world.sync(connection).await;
+
+            let mut tx = world.server.store.begin().await.unwrap();
+            let snapshot = tx.balance_on(account, day).await.unwrap();
+            drop(tx);
+            assert_eq!(snapshot.is_some(), written, "{zone}, {age} days");
+            assert_eq!(
+                world.provider_account("ACT-0001").await.error.is_none(),
+                written,
+                "{zone}, {age} days"
+            );
+        }
+    }
+}
+
+/// One account whose balance is dated `seconds` after the epoch.
+fn balance_dated(seconds: i64) -> String {
+    json!({
+        "errors": [],
+        "accounts": [{
+            "id": "ACT-0001",
+            "name": "Checking",
+            "currency": "USD",
+            "balance": "12.34",
+            "balance-date": seconds,
+            "transactions": [],
+        }],
+    })
+    .to_string()
 }
 
 #[tokio::test]
