@@ -13,8 +13,9 @@
 //! - A split linked to a goal counts on the goal's line and never in its category.
 //!
 //! An occurrence a person settled (R9a) stays in `planned`, since it is what was planned, and
-//! the row's `settled` says how much of it is. A rollover doesn't read settlements: it is
-//! for budgets.
+//! the row's `settled` says how much of it is. It takes no share of a rollover's spending,
+//! as in the forecast: a settlement says that bill was paid some other way, so spending in
+//! its category wasn't for it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -201,8 +202,8 @@ pub struct RolloverRow {
     /// The occurrences of the category's budgets in those months.
     pub budgeted: Money,
     /// What those months spent on them, while a budget was running: each month's `actual`
-    /// once the bills and one-offs dated up to and including today have taken their share. A
-    /// month of refunds lowers it.
+    /// once the bills and one-offs dated up to and including today have taken their share, a
+    /// settled one taking none. A month of refunds lowers it.
     pub spent: Money,
     /// `budgeted` minus `spent`: positive for what was left unspent, negative for
     /// overspent.
@@ -305,7 +306,7 @@ struct Planned {
     /// The part of `total` from budgets.
     budget: i128,
     /// The bills and one-offs dated up to and including today, which spending pays first
-    /// (R9).
+    /// (R9), unless a person settled them (R9a).
     due_by_today: i128,
     /// The part of `total` a person settled.
     settled: i128,
@@ -339,7 +340,7 @@ fn planned_by_month(input: &PlanReportInput, reported: &[CalendarMonth]) -> BTre
                 }
                 if is_budget {
                     entry.budget += amount;
-                } else if on <= input.today {
+                } else if on <= input.today && !is_settled {
                     entry.due_by_today += amount;
                 }
             }

@@ -768,7 +768,7 @@ balance dates decide what a forecast may trust, not what happened.
 Unlike the forecast, which carries no leftovers over, the report shows a rollover per
 category and currency with a budget (R9): what was budgeted over the reported months up
 to today's, less what they spent on it. Spending pays each month's bills and one-offs
-dated up to and including today first, floored at 0 unless the month is a net refund, which adds to
+dated up to and including today first, those settled (R9a) excepted, floored at 0 unless the month is a net refund, which adds to
 what is left. Items share a category's pool, so it isn't per item. A bill has none.
 A month's spending counts only while a budget in that category and currency is running,
 from the month of its first occurrence through the month of its end date, so a
@@ -860,9 +860,9 @@ what-if reads settlements as they stand and can't add one, and a hypothetical it
 
 Plan versus actual keeps a settled occurrence in `planned`, since it is what was planned; a
 row's `settled` says how much of `planned` is, and the report's `settled` which item, month
-and kind, so the difference is no surprise. A rollover is for budgets and doesn't read
-settlements, so a settled bill dated up to today still takes its share of the month's spending
-there, unlike in the forecast: a known difference. The forecast page stays read-only (R14): it
+and kind, so the difference is no surprise. A settled occurrence takes no share of a rollover's
+spending, so the rollover and the forecast agree: a settlement says that bill was paid some other
+way, so spending in its category wasn't for it. The forecast page stays read-only (R14): it
 says what is settled in plain words, and acting on it is API only for now.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted

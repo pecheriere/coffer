@@ -73,26 +73,51 @@ fn a_row_says_only_the_settled_part() {
     assert_eq!(row.settled, dollars(600), "one settled");
 }
 
-/// A rollover is for budgets, so it reads as it does without the settlement: the 600 spent
-/// pays the 100 bill first, so 500 of it goes on the budget, settled bill or not.
+/// A settlement says the bill was paid some other way, so the month's spending wasn't for
+/// it: all 600 goes on the budget, where unsettled the 100 bill would take its share first.
 #[test]
-fn a_rollover_does_not_read_a_settlement() {
+fn a_settled_bill_takes_no_share_of_a_rollovers_spending() {
     let food = CategoryId::new();
     let mut asked = input(1);
     asked.actuals = vec![spent("2026-01", food, 600)];
     let mut settled = bill(food, 100);
     asked.items = vec![settled.clone(), budget(food, 800)];
-    let plain = report(&asked).rollovers;
+    let [plain] = report(&asked).rollovers.try_into().unwrap();
+    assert_eq!(
+        plain.spent,
+        dollars(500),
+        "unsettled, the bill is paid first"
+    );
 
     settled
         .settled
         .insert(month("2026-01"), SettlementKind::Paid);
     asked.items = vec![settled, budget(food, 800)];
 
-    let answer = report(&asked);
-    assert_eq!(answer.rollovers, plain, "as it was");
-    let [line] = answer.rollovers.as_slice() else {
-        panic!("one rollover");
-    };
-    assert_eq!(line.spent, dollars(500), "the bill was paid first");
+    let [line] = report(&asked).rollovers.try_into().unwrap();
+    assert_eq!(line.budgeted, dollars(800), "the budget is as it was");
+    assert_eq!(line.spent, dollars(600), "all of it on the budget");
+    assert_eq!(line.rollover, dollars(200), "what is left of it");
+}
+
+/// A settlement names a month: January's bill is settled and February's still takes its
+/// 100 of February's 600, so 600 + 500 went on the budget.
+#[test]
+fn a_rollover_gives_only_the_settled_month_back() {
+    let food = CategoryId::new();
+    let mut asked = input(2);
+    asked.actuals = vec![spent("2026-01", food, 600), spent("2026-02", food, 600)];
+    let mut settled = bill(food, 100);
+    settled
+        .settled
+        .insert(month("2026-01"), SettlementKind::Skipped);
+    asked.items = vec![settled, budget(food, 800)];
+
+    let [line] = report(&asked).rollovers.try_into().unwrap();
+
+    assert_eq!(
+        line.spent,
+        dollars(1_100),
+        "February's bill still took its share"
+    );
 }

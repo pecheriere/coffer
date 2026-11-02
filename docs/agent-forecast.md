@@ -905,9 +905,9 @@ per list.)
   including those still to come, and a refund in a month where a bill absorbs the
   spending is lost to it. A bill has no rollover, and the forecast carries nothing
   over.
-- A settlement doesn't touch `rollovers`, which are for budgets. A settled bill dated
-  up to today still takes its share of the month's spending there, unlike in the
-  forecast.
+- A settled bill or one-off takes no share of the month's spending in `rollovers`, as
+  in the forecast: it was paid some other way, so spending in its category wasn't
+  for it, and all of that goes on the budget.
 - `partial_months` names the reported month that holds today, whose figures
   aren't final.
 

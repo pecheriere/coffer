@@ -76,10 +76,11 @@ async fn an_inactive_item_shows_nothing_settled() {
     assert_eq!(report["settled"], json!([]));
 }
 
-/// A rollover is for budgets, and settling is for bills, so the settlement changes it not
-/// at all: 300.00 budgeted, 150.00 spent less today's 100.00 bill, either way.
+/// 150.00 spent in Food, with a 100.00 bill and a 300.00 budget. The bill takes its 100.00
+/// first, so 50.00 went on the budget. Settled, the spending wasn't for it: all 150.00 did,
+/// as the forecast has it, and the row still plans both.
 #[tokio::test]
-async fn settling_a_bill_leaves_the_rollover_alone() {
+async fn a_settled_bill_takes_no_share_of_the_rollover() {
     let world = world().await;
     let checking = world.checking().await;
     let food = world.expense("Food").await;
@@ -88,11 +89,17 @@ async fn settling_a_bill_leaves_the_rollover_alone() {
         .await;
     world.item(&budget("Groceries", 30_000, food)).await;
     world.posted(checking, "2026-11-05", -15_000, food).await;
-    let before = world.report("from=2026-11&months=1").await["rollovers"].clone();
-    assert_eq!(before[0]["spent"], usd(5_000));
+    let before = world.report("from=2026-11&months=1").await;
+    assert_eq!(before["rollovers"][0]["spent"], usd(5_000));
 
     world.settle(&kit, "2026-11", "paid").await;
 
     let report = world.report("from=2026-11&months=1").await;
-    assert_eq!(report["rollovers"], before);
+    let rollover = &report["rollovers"][0];
+    assert_eq!(rollover["budgeted"], usd(30_000));
+    assert_eq!(rollover["spent"], usd(15_000));
+    assert_eq!(rollover["rollover"], usd(15_000));
+    let row = row(&report, "2026-11", food);
+    assert_eq!(row["planned"], usd(40_000));
+    assert_eq!(row["settled"], usd(10_000));
 }
