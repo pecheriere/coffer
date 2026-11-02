@@ -57,6 +57,11 @@ pub struct ForecastQuery {
                    `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing \
                    money is negative, and a negative `surplus` is a shortfall. Amounts are \
                    integer minor units.\n\n\
+                   A bill or one-off a person settled for a month (`settlePlanItem`) counts as \
+                   nothing in that month: no gross, no gap, no caution, no share of its category's \
+                   spending. `settled` lists it with its amount, so no number silently differs, \
+                   and it doesn't make the status `provisional` of itself, since a person \
+                   decided.\n\n\
                    Every number traces to its lines: `accounts` says which balances counted, \
                    `items` what each planned item added, `months` the same by calendar month. \
                    A stored budget counts its whole month: its occurrences earlier in `as_of`'s \

@@ -104,7 +104,7 @@ curl -X POST -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: applicat
 ```
 
 It answers 201 with the item, which also has `id`, `active`, `spending`,
-`created_at` and `updated_at`, and `end_on: null` in its schedule:
+`settlements`, `created_at` and `updated_at`, and `end_on: null` in its schedule:
 
 ```json
 {
@@ -124,6 +124,7 @@ It answers 201 with the item, which also has `id`, `active`, `spending`,
     "anchor_on": "2026-01-28",
     "end_on": null
   },
+  "settlements": [],
   "created_at": "2026-11-15T12:00:00Z",
   "updated_at": "2026-11-15T12:00:00Z"
 }
@@ -242,9 +243,74 @@ Endpoints, all under `/api/v1`:
 - `DELETE /plan-items/{item_id}` (`write`) deletes an item for good (204); the
   audit log keeps what it held. A goal that splits are linked to is a 409
   `conflict`: mark it complete instead.
+- `PUT` and `DELETE /plan-items/{item_id}/settlements/{month}` (`write`) settle one
+  month of an item, or stop doing so: see [Settling a month](#settling-a-month).
 
 The plan has no history: changing an item changes what the report shows for
 past months too.
+
+### Settling a month
+
+A bill can be paid in a way the forecast never sees: a transfer between accounts,
+or from an account coffer doesn't track. There is then no transaction to
+recategorize, and without this the forecast would keep counting it until the month
+ends. A settlement records that a recurring bill's or a one-off's occurrences in
+one calendar month are `paid`, or `skipped` because they won't happen. It never
+changes the item.
+
+```sh
+curl -X PUT -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \
+  $BASE/api/v1/plan-items/<internet-item>/settlements/2026-11 -d '{"kind": "paid"}'
+```
+
+```json
+{
+  "month": "2026-11",
+  "kind": "paid",
+  "member": "<member>",
+  "agent": "<agent-token>",
+  "settled_at": "2026-11-15T12:00:00Z"
+}
+```
+
+`agent` is `null` when a member signed in did it. Reading the item shows the same
+objects in its `settlements`, ordered by month.
+
+- **On the owner's word, not a guess.** Settling takes money out of what is needed.
+  Settle when the owner says it was paid or won't be; a bill you merely can't find a
+  payment for is what `bill_not_seen` is for.
+- **What may be settled:** a recurring `bill` and a one-off, going out. A budget is
+  reduced by spending and a goal has links, so each answers 422, as does income.
+  An item that has settlements can't become a budget or income: that `PATCH` is a
+  409 `conflict` until they are deleted.
+- **Changing the item:** a settlement was made on what the item then owed and when.
+  A `PATCH` that really changes its `amount`, currency included, or its `schedule`
+  removes its settlements from the household's current month on, so the occurrences
+  count again until someone settles them again. The answer shows what is left, the
+  `planned_item.update` audit entry says which went under `settlements`, and earlier
+  months stay as history. Any other change, such as a name or category, keeps them.
+  Moving a one-off away and back doesn't bring a settlement back.
+- **Which months:** `YYYY-MM`, in the years 1970 to 2200, at most 12 calendar months
+  from today's either way, and holding an occurrence of the item (422 otherwise; a
+  malformed month is a 400). Future months count: a bill you know won't come in
+  March can be skipped now.
+- **Writing it again:** a `PUT` saying what the month already says writes nothing
+  and answers with what is there, its original who and when included. Another `kind`
+  replaces it. `DELETE` answers 204 whether or not the month was settled, and may
+  clear any month of those years, however far from today.
+- **Limit:** an item holds at most 60 settlements; another month is a 409 `conflict`
+  until one is deleted.
+- **Tokens:** as for any other plan write, `write` and `all` at `write`, decided
+  before anything is looked up, so a token without it gets the same 403 for a hidden
+  item as for a missing one. Each change is audited as `planned_item.settle` or
+  `planned_item.unsettle`, with the member and the agent. A settlement goes with its
+  item, whose delete entry in the audit log keeps them.
+- **The forecast page** shows settled items, but acting on one is API only for now.
+
+What it does to the forecast is in
+[What this month's spending does](#what-this-months-spending-does), and to the
+report in [Plan versus actual](#plan-versus-actual). A what-if reads settlements as
+they stand and can't add any.
 
 ## Household settings
 
@@ -269,7 +335,7 @@ the token's grants) hold the forecast's defaults:
   the recurring outflows, bills and budgets, that fall in that many months
   from `as_of`, per currency and before any reduction. A budget's earlier days in
   `as_of`'s month are not in it. One-offs and goals are
-  not in it. If that comes to 0 in a currency the number stays, with the
+  not in it. A settled occurrence is: the floor says how much to hold, not what is owed. If that comes to 0 in a currency the number stays, with the
   caution `months_floor_is_zero`.
 - `include_income` (default `false`) decides whether planned inflows reduce
   the cash needed.
@@ -346,7 +412,8 @@ household's settings. The first example is a household that has just started:
     {"month": "2027-02", "lines": [], "partial": true}
   ],
   "blockers": [{"kind": "floor_not_set"}, {"kind": "no_counted_accounts"}],
-  "cautions": []
+  "cautions": [],
+  "settled": []
 }
 ```
 
@@ -364,6 +431,15 @@ not cover whole. Reading a month's `lines`:
 - `goal_accrual` is what goals add to their need that month, net of money
   already spent against them, and the first month holds everything that built
   up before it. It is not what the schedule alone would set aside.
+
+`settled` lists what a person [settled](#settling-a-month), and so what is in none of
+the numbers above: an entry per item and month, with `source`, `name`, `item_type`,
+`category`, `month`, `kind`, how many `occurrences` and their whole `amount`. A month
+the window doesn't reach changes nothing and isn't listed. `amount` is what was
+planned, so a bill spending had already covered changes the number by less: its
+spending goes to the category's next bill or budget instead. Settling raises no
+caution, so a forecast whose only doubt was that bill is `firm`, since a person
+decided. Say what was settled when you report the number.
 
 ### Status, blockers and cautions
 
@@ -455,7 +531,8 @@ first entry):
     }
   ],
   "blockers": [],
-  "cautions": []
+  "cautions": [],
+  "settled": []
 }
 ```
 
@@ -478,11 +555,11 @@ and the fields shown:
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection is not syncing. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
 | `as_of_not_today` (`today`) | The window does not start today. What falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
-| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. See the limits below. |
+| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. If there is no transaction to recategorize, such as a transfer or a payment from an untracked account, or it won't be paid this month, [settle it](#settling-a-month): `PUT /plan-items/{id}/settlements/{month}`. See the limits below. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
 | `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
-| `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. | Ask which it is; remove one or set it `active: false`. |
+| `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
 | `item_hint_not_counted` (`item`, `account`) | An item is hinted at an account that is not counted (excluded, closed or not cash). It counts anyway, since overstating the need is safe. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. | Categorize it with the [review workflow](agent-usage.md#review-workflow). |
@@ -546,7 +623,12 @@ category pays it. Each category and currency has one pool of spending:
    purchase never reduces two budgets. Spending in the category before a budget's
    first occurrence this month still reduces it, since a budget is a month's
    envelope for its category.
-4. A bill or one-off dated `as_of` counts in full even if it was paid that day and
+4. A bill or one-off a person [settled](#settling-a-month) for the month counts as
+   nothing there, this month or a later one in the window: no `gross`, no `unpaid`,
+   no `bill_not_seen`, and no share of the pool, so spending in its category goes to
+   the next bill or a budget rather than being absorbed. Its other months are as
+   ever.
+5. A bill or one-off dated `as_of` counts in full even if it was paid that day and
    the balance already shows it: it is held twice for that day, the safe
    direction. A hypothetical item neither reduces nor consumes, a hypothetical
    budget counts only inside the window (it doesn't look back), and a goal never
@@ -564,7 +646,8 @@ surplus too high, and the owner should check bills when the number matters:
 - A possible duplicate keeps counting as spending, so it can hide a gap too.
 
 In the other direction, a bill paid under another category shows less to
-invest, not more, until it is recategorized.
+invest, not more, until it is recategorized, and one paid with no transaction to
+recategorize does until it is settled.
 
 ### The household's example
 
@@ -610,6 +693,12 @@ all fall after today, so the whole-month rule changes nothing here), internet 32
 more occurrences and the unpaid one) and the dentist 450.00. The 1,714.36 for
 the holiday is 2,214.36 accrued by 2027-02-15 less the 500.00 spent against it.
 
+If the owner says the internet bill went out from an account coffer doesn't track,
+[settle](#settling-a-month) November's: the unpaid 80.00 goes, so outflows are
+7,640.00, the need 12,354.36 and the surplus **25,845.64**, `firm`, with the bill in
+`settled`. December's and January's still count. Say that it was settled when you
+report the number.
+
 ### What-if
 
 `POST /api/v1/forecast/what-if` answers with a forecast of the same shape
@@ -630,6 +719,10 @@ entry), so `read` may call it. A token with grants needs `all` at
 
 An item outside the window adds nothing. Choose a horizon that covers the date
 you are testing.
+
+Stored settlements count in a what-if as they do in the forecast, and a what-if
+can't add one: its body and its items have no field for it, and a hypothetical item
+never has one. To see a number without a settlement, delete it and ask again.
 
 **Worked example: can we pay for a new roof?** The owner wants a roof for
 18,000.00 in mid-March 2027. Today is 2026-11-15 and the window must reach past
@@ -738,7 +831,8 @@ average covers, ending at its row's month).
       "difference": {"minor_units": 35000, "currency": "USD"},
       "rolling_average": {"minor_units": 12500, "currency": "USD"},
       "left_out": {"minor_units": 0, "currency": "USD"},
-      "possible_duplicate": {"minor_units": 0, "currency": "USD"}
+      "possible_duplicate": {"minor_units": 0, "currency": "USD"},
+      "settled": {"minor_units": 0, "currency": "USD"}
     }
   ],
   "goals": [
@@ -754,6 +848,16 @@ average covers, ending at its row's month).
   ],
   "uncategorized": [
     {"month": "2026-11", "currency": "USD", "count": 1, "total": {"minor_units": 6000, "currency": "USD"}}
+  ],
+  "settled": [
+    {
+      "month": "2026-11",
+      "item": "<internet-item>",
+      "name": "Internet",
+      "category": "<utilities-category>",
+      "kind": "paid",
+      "amount": {"minor_units": 8000, "currency": "USD"}
+    }
   ],
   "rollovers": [
     {
@@ -783,6 +887,11 @@ per list.)
   from its splits, at what its splits say. A refund on such a transaction keeps
   counting. `possible_duplicate` is how much of `actual` is on transactions
   flagged as possible duplicates.
+- A [settled](#settling-a-month) occurrence stays in `planned`, since it is what was
+  planned, so it shows in `difference` when no spending matches it. A row's `settled`
+  says how much of `planned` is settled, and the list `settled` says which item, for
+  which month, and whether `paid` or `skipped`, so the difference is no surprise. An
+  inactive item plans nothing and shows nothing settled.
 - `goals` has a line per goal and month: `accrued` is what its schedule sets
   aside, `spent_against` what was spent on it. A split linked to a goal counts
   only here, not in `rows`. A goal that is inactive but has linked money keeps its
@@ -802,6 +911,9 @@ per list.)
   including those still to come, and a refund in a month where a bill absorbs the
   spending is lost to it. A bill has no rollover, and the forecast carries nothing
   over.
+- A settled bill or one-off takes no share of the month's spending in `rollovers`, as
+  in the forecast: it was paid some other way, so spending in its category wasn't
+  for it, and all of that goes on the budget.
 - `partial_months` names the reported month that holds today, whose figures
   aren't final.
 

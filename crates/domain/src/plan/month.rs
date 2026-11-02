@@ -48,6 +48,13 @@ impl CalendarMonth {
         Date::new(self.year, self.month, 1).unwrap_or(Date::MAX)
     }
 
+    /// How many months this one is after `other`, negative when it is before.
+    #[must_use]
+    pub fn months_from(self, other: Self) -> i32 {
+        (i32::from(self.year) - i32::from(other.year)) * 12 + i32::from(self.month)
+            - i32::from(other.month)
+    }
+
     /// The month after this one. The last month of the calendar, 9999-12, is
     /// its own successor, so a loop over months needs a bound of its own.
     #[must_use]

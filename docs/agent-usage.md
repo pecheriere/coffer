@@ -331,6 +331,9 @@ short:
   reduces), one-offs and goals (sinking funds). `GET` and `PATCH
   /api/v1/household/settings` hold the safety floor, whether income counts, the
   default horizon and when a balance is stale (changing them needs `admin`).
+- `PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` mark one month of a
+  bill or one-off `paid` or `skipped`, for one paid with no transaction to
+  categorize; the forecast then counts it as nothing and lists it in `settled`.
 - `GET /api/v1/forecast` answers `cash_needed` (planned outflows, plus goals,
   plus the floor, minus income when counted) against `cash_available`, as a
   `surplus`. `POST /api/v1/forecast/what-if` answers the same for imagined

@@ -1,6 +1,8 @@
 //! Expected values here are worked out by hand from the dates and amounts in
 //! each test, never taken from the code under test.
 
+use std::collections::BTreeMap;
+
 use jiff::ToSpan;
 use jiff::civil::{Date, date};
 
@@ -26,6 +28,7 @@ mod item_cautions;
 mod newer_spending;
 mod properties;
 mod reduction;
+mod settled;
 mod spending_cautions;
 mod window_and_range;
 
@@ -104,6 +107,7 @@ fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
         schedule,
         spending: spending_applies(direction, &schedule).then_some(PlanSpending::Bill),
         goal_spent_minor: 0,
+        settled: BTreeMap::new(),
     }
 }
 

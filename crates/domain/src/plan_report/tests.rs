@@ -1,5 +1,7 @@
 //! The report's arithmetic. What the store selects is tested through the router.
 
+use std::collections::BTreeMap;
+
 use jiff::civil::{Date, date};
 use proptest::prelude::{ProptestConfig, proptest};
 
@@ -13,6 +15,7 @@ use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, PlanSpending};
 use crate::transactions::CategoryKind;
 
 mod rollover;
+mod settled;
 
 fn usd() -> Currency {
     Currency::parse("USD").unwrap()
@@ -66,6 +69,7 @@ fn item(category: CategoryId, minor_units: i64, schedule: PlanSchedule) -> Repor
         spending: None,
         active: true,
         goal_spent: Vec::new(),
+        settled: BTreeMap::new(),
     }
 }
 

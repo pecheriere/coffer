@@ -11,6 +11,7 @@ pub mod forecast;
 pub mod plan_items;
 pub mod plan_report;
 pub mod settings;
+pub mod settlements;
 pub mod transactions;
 mod unseen;
 

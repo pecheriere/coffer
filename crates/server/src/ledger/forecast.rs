@@ -16,8 +16,9 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    ForecastSettings, MAX_HYPOTHETICAL_ITEMS, PlanDirection, PlanSchedule, PlanSpending,
-    PlannedItemName, SafetyFloor, strict_date, validate_amount, validate_as_of,
+    CalendarMonth, ForecastSettings, MAX_HYPOTHETICAL_ITEMS, PlanDirection, PlanSchedule,
+    PlanSpending, PlannedItemName, SafetyFloor, SettlementKind, strict_date, validate_amount,
+    validate_as_of,
 };
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
@@ -29,6 +30,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::plan_items::{self, check_hint, check_item_category, resolved_spending};
+use super::settlements::settled_months;
 use super::{Ledger, LedgerError, settings};
 
 const TOO_MANY_ITEMS: &str = "a what-if takes at most 50 hypothetical items";
@@ -187,6 +189,7 @@ impl Ledger {
                 schedule: item.schedule,
                 spending,
                 goal_spent_minor: 0,
+                settled: BTreeMap::new(),
             });
         }
         Ok(checked)
@@ -254,6 +257,7 @@ fn input(
     let ForecastData {
         accounts,
         items,
+        settlements,
         goal_spent,
         category_spent,
         loose_ends,
@@ -273,6 +277,7 @@ fn input(
         .collect();
     let (mut problems, unbound) = provider_view(provider_accounts, &currencies, &removed);
     let goal_spent: BTreeMap<PlannedItemId, i64> = goal_spent.into_iter().collect();
+    let mut settled = settled_months(&settlements);
     ForecastInput {
         today,
         as_of,
@@ -298,7 +303,10 @@ fn input(
             .collect(),
         items: items
             .iter()
-            .map(|item| stored_item(item, &goal_spent))
+            .map(|item| {
+                let months = settled.remove(&item.id).unwrap_or_default();
+                stored_item(item, &goal_spent, months)
+            })
             .chain(hypothetical)
             .collect(),
         category_spent: category_spent
@@ -403,7 +411,11 @@ fn feed_problems(record: &ProviderAccountRecord, expected: Option<Currency>) -> 
     found
 }
 
-fn stored_item(item: &PlannedItemRecord, goal_spent: &BTreeMap<PlannedItemId, i64>) -> ItemInput {
+fn stored_item(
+    item: &PlannedItemRecord,
+    goal_spent: &BTreeMap<PlannedItemId, i64>,
+    settled: BTreeMap<CalendarMonth, SettlementKind>,
+) -> ItemInput {
     ItemInput {
         source: LineSource::PlannedItem { id: item.id },
         name: item.name.as_str().to_owned(),
@@ -414,5 +426,6 @@ fn stored_item(item: &PlannedItemRecord, goal_spent: &BTreeMap<PlannedItemId, i6
         schedule: item.schedule,
         spending: item.spending,
         goal_spent_minor: goal_spent.get(&item.id).copied().unwrap_or(0),
+        settled,
     }
 }

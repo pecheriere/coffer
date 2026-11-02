@@ -17,6 +17,7 @@ use jiff::civil::Date;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
+use super::settlements::settled_months;
 use super::{Ledger, LedgerError, plan_items};
 
 const DEFAULT_MONTHS: u8 = 3;
@@ -100,6 +101,7 @@ fn input(
     for (goal, month) in data.goal_spent {
         goal_spent.entry(goal).or_default().push(month);
     }
+    let mut settled = settled_months(&data.settlements);
     PlanReportInput {
         from,
         months,
@@ -110,6 +112,7 @@ fn input(
             .into_iter()
             .map(|item| ReportItem {
                 goal_spent: goal_spent.remove(&item.id).unwrap_or_default(),
+                settled: settled.remove(&item.id).unwrap_or_default(),
                 id: item.id,
                 name: item.name.as_str().to_owned(),
                 category: item.category,
