@@ -10,6 +10,7 @@
 )]
 
 mod access;
+mod bucket_channels;
 mod endpoints;
 mod fx_channels;
 mod hidden_accounts;

@@ -7,6 +7,7 @@
 
 use super::{LEVELS, World, grant, ids, on, s, world};
 use axum::http::{Method, StatusCode};
+use coffer_domain::accounts::AccountKind;
 use coffer_domain::identity::{Actor, Role, Scope, Via};
 use coffer_domain::ids::{AccountId, ConnectionId, PlannedItemId, TransactionId};
 use coffer_domain::policy::{
@@ -108,14 +109,16 @@ proptest::proptest! {
 }
 
 /// One generated household: per account, its level for the token (`None`:
-/// not named), the token's `all` grant, and whether a hidden account holds a large
-/// balance in a currency no visible account uses, with its rates stored.
+/// not named), the token's `all` grant, whether a hidden account holds a large
+/// balance in a currency no visible account uses, with its rates stored, and whether
+/// a hidden bucket account does the same under a distinctive label.
 #[derive(Debug, Clone)]
 struct Household {
     scope: Scope,
     all: Option<AccountLevel>,
     accounts: Vec<Option<AccountLevel>>,
     hidden_foreign: bool,
+    hidden_bucket: bool,
 }
 
 fn capped(scope: Scope, level: AccountLevel) -> AccountLevel {
@@ -137,17 +140,21 @@ fn household_with_hidden_accounts() -> impl proptest::strategy::Strategy<Value =
         proptest::collection::vec(level(), 1..=3),
         1..=2_usize,
         proptest::bool::ANY,
+        proptest::bool::ANY,
     )
-        .prop_map(|(scope, visible, hidden, hidden_foreign)| Household {
-            scope,
-            all: None,
-            accounts: visible
-                .into_iter()
-                .map(|level| Some(capped(scope, level)))
-                .chain(std::iter::repeat_n(None, hidden))
-                .collect(),
-            hidden_foreign,
-        })
+        .prop_map(
+            |(scope, visible, hidden, hidden_foreign, hidden_bucket)| Household {
+                scope,
+                all: None,
+                accounts: visible
+                    .into_iter()
+                    .map(|level| Some(capped(scope, level)))
+                    .chain(std::iter::repeat_n(None, hidden))
+                    .collect(),
+                hidden_foreign,
+                hidden_bucket,
+            },
+        )
 }
 
 /// An `all` grant, so no account is hidden; below `transactions` the
@@ -166,6 +173,7 @@ fn household_with_all_grant() -> impl proptest::strategy::Strategy<Value = House
                 .map(|level| level.map(|level| capped(scope, level)))
                 .collect(),
             hidden_foreign: false,
+            hidden_bucket: false,
         })
 }
 
@@ -280,16 +288,39 @@ async fn seed_plan(
     goals
 }
 
-/// Display USD and the rates the household needs, and, if it has one, the hidden account in
+/// A 529 in Swiss francs for a child no answer may name, with its rates stored. It goes in
+/// `hidden` whole: its label, balance, name, id and currency code.
+async fn seed_hidden_bucket(world: &World, marker: &str, hidden: &mut Vec<String>) -> AccountId {
+    let name = format!("bucket{marker}");
+    let label = format!("Child {marker}");
+    let account = world
+        .bucket_account(&name, AccountKind::Education, "CHF", None, Some(&label))
+        .await;
+    let minor_units = 7_346_196_000;
+    world.balance_on(account, "2026-10-01", minor_units).await;
+    world.rates("CHF", &[("2026-10-01", "0.9412")]).await;
+    world.rates("USD", &[("2026-10-01", "1.1188")]).await;
+    hidden.extend([
+        s(account),
+        name,
+        label,
+        minor_units.to_string(),
+        "CHF".to_owned(),
+    ]);
+    account
+}
+
+/// Display USD and the rates the household needs, and, if it has them, the hidden account in
 /// a currency no visible account uses, which goes in `hidden` whole: its balance, name, id and
-/// currency code. Then the daily table is built, so a report has rows to answer from.
+/// currency code, and the hidden bucket account. Then the daily table is built, so a report has
+/// rows to answer from.
 async fn seed_net_worth(
     world: &World,
     household: &Household,
     marker: &str,
     hidden: &mut Vec<String>,
-) -> Option<AccountId> {
-    let foreign = if household.hidden_foreign {
+) -> Vec<AccountId> {
+    let mut foreign = if household.hidden_foreign {
         let name = format!("foreign{marker}");
         let account = world.holding(&name, "JPY").await;
         let minor_units = 7_346_197_000;
@@ -297,10 +328,13 @@ async fn seed_net_worth(
         world.rates("JPY", &[("2026-10-01", "175.68")]).await;
         world.rates("USD", &[("2026-10-01", "1.1188")]).await;
         hidden.extend([s(account), name, minor_units.to_string(), "JPY".to_owned()]);
-        Some(account)
+        vec![account]
     } else {
-        None
+        Vec::new()
     };
+    if household.hidden_bucket {
+        foreign.push(seed_hidden_bucket(world, marker, hidden).await);
+    }
     world.display("USD").await;
     let today = world.server.clock.now().to_zoned(TimeZone::UTC).date();
     world.rebuild(&today.to_string()).await;
@@ -315,7 +349,8 @@ async fn seed_net_worth(
 /// account's split links to it, and none holds an unhinted item when it holds
 /// `transactions` on nothing. Without an `all` grant at `transactions` no body
 /// holds an unbound provider account or a connection's last error. No body holds
-/// the hidden foreign account's balance, name, id or currency.
+/// the hidden foreign account's balance, name, id or currency, or anything of the hidden
+/// bucket account: its label too.
 async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseError> {
     let world = world().await;
     let marker = uuid_marker();

@@ -176,7 +176,7 @@ impl World {
         tx.commit().await.unwrap();
     }
 
-    async fn close(&self, holder: AccountId) {
+    pub(super) async fn close(&self, holder: AccountId) {
         self.server
             .ledger
             .update_account(
@@ -192,7 +192,7 @@ impl World {
     }
 
     /// Takes one day's row out of the table, as a bug or a lost write would.
-    async fn hole_today(&self, holder: AccountId) {
+    pub(super) async fn hole_today(&self, holder: AccountId) {
         self.server
             .store
             .execute_unchecked_for_tests(
@@ -204,7 +204,7 @@ impl World {
     }
 
     /// Rewrites its rows in another display currency, which the store refuses as corruption.
-    async fn row_in_chf(&self, holder: AccountId) {
+    pub(super) async fn row_in_chf(&self, holder: AccountId) {
         self.server
             .store
             .execute_unchecked_for_tests(
