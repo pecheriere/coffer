@@ -106,6 +106,17 @@ async fn connection_lifecycle() {
     assert_eq!(errored.last_attempt_at, Some(at(2)));
     assert_eq!(errored.last_success_at, None);
     assert_eq!(errored.provider_state.as_deref(), Some("cursor-7"));
+    assert_eq!(errored.reauth_generation, 0);
+
+    let mut tx = store.begin().await.unwrap();
+    tx.bump_reauth_generation(created.id).await.unwrap();
+    tx.commit().await.unwrap();
+    let reauthorized = store.get_connection(created.id).await.unwrap();
+    assert_eq!(reauthorized.reauth_generation, 1);
+    assert_eq!(
+        reauthorized.credentials, errored.credentials,
+        "the credentials stay"
+    );
 
     let mut tx = store.begin().await.unwrap();
     tx.update_connection_status(

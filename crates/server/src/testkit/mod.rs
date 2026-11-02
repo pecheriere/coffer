@@ -454,24 +454,17 @@ pub struct FakeProvider {
     disconnects: Mutex<Vec<SecretString>>,
 }
 
-/// Holds the next call of one kind to a [`FakeProvider`] until released
-/// (see [`FakeProvider::hold_next_fetch`]).
-#[derive(Debug, Clone)]
+/// Holds the next call of one kind until released: to a [`FakeProvider`]
+/// (see [`FakeProvider::hold_next_fetch`]), or to a test's own mock upstream.
+#[derive(Debug, Clone, Default)]
 pub struct CallGate {
     entered: Arc<Notify>,
     release: Arc<Notify>,
 }
 
 impl CallGate {
-    fn new() -> Self {
-        Self {
-            entered: Arc::new(Notify::new()),
-            release: Arc::new(Notify::new()),
-        }
-    }
-
     /// Signals that the held call started, then waits for its release.
-    async fn hold(self) {
+    pub async fn hold(self) {
         self.entered.notify_one();
         self.release.notified().await;
     }
@@ -745,7 +738,7 @@ impl Drop for MockUpstream {
 
 /// Installs a new gate in `slot` and returns it.
 fn hold(slot: &Mutex<Option<CallGate>>) -> CallGate {
-    let gate = CallGate::new();
+    let gate = CallGate::default();
     *lock(slot) = Some(gate.clone());
     gate
 }

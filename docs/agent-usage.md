@@ -336,7 +336,9 @@ before it has passed.
 
 When a connection's status is `reauth_required`, the provider no longer
 accepts its access. For Plaid, the member logs in again from the connection's
-Reconnect button in the browser; its accounts stay bound. For SimpleFin, ask the owner for a new setup token and send
+Reconnect button in the browser; its accounts stay bound. A sync already
+running when they finish no longer changes the status, and the schedule syncs
+the connection when it is next due. For SimpleFin, ask the owner for a new setup token and send
 it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
 `{"setup_token": "..."}`: the connection becomes `active` again and keeps
 its provider accounts, bindings and history.
