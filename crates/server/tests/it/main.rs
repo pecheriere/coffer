@@ -20,6 +20,7 @@ mod identity;
 mod matching;
 mod openapi;
 mod pages;
+mod panics;
 mod plaid_client;
 mod plaid_forget;
 mod plaid_link;

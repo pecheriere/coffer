@@ -125,6 +125,10 @@ worktree when its branch has merged.
   compares it with the generated document and CI lints it with Spectral
   (`.spectral.yaml`, findings fixed in code, never by disabling a rule).
 - Errors use `thiserror`; no `unwrap`/`expect` outside tests.
+- A panic's message never reaches a log or a response: the hook
+  (`cli/panic_report.rs`) leaves it out and `http/panic_answer.rs` answers a
+  fixed 500. A `tokio` `JoinError`'s text holds that message, so log
+  `err.is_panic()` instead of the error.
 - A page may set its own `Content-Security-Policy` only for Plaid Link
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the
