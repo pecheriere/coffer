@@ -45,6 +45,42 @@ optional and local only; CI does not use it.
 For work in parallel, use one git worktree per task; see "Parallel work" in
 `AGENTS.md`.
 
+## Staging
+
+A staging stack on your Mac, or any machine with Docker and `openssl`: the real image,
+built from your checkout, with a made-up household, on `http://localhost:18080`.
+
+```sh
+scripts/staging.sh up      # build, seed if need be, and serve
+scripts/staging.sh token   # the seeded admin's agent token, for the API
+scripts/staging.sh link    # a link to enroll a passkey of your own as the admin
+scripts/staging.sh reset   # back to the seeded state
+scripts/staging.sh down    # remove all of it
+```
+
+It needs no credentials and reaches nothing but its two mock providers, which stand
+in for the SimpleFin bridge and the ECB on a Docker network with no route out. Ports
+are bound to `127.0.0.1`. One stack runs at a time on a machine, so `up` refuses while
+another checkout's is running.
+
+The household has three years of history in four currencies: a current account, savers,
+a brokerage, a home, a mortgage, a car loan, a card from a SimpleFin connection, a closed
+account, bills, a budget, a goal, and accounts held for others. A second SimpleFin account
+is left unbound. The members are `alex`, an admin, and `sam`, each with a passkey whose
+private key is in `staging/fixtures/passkeys.json`. Those keys are made up and public, so
+`coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost.
+
+Everything is dated from the day of the seed, and rebuilt on a new day, or when the
+image, the migrations, the seed or the mocks change. `scripts/staging.sh template <day>`
+seeds as of an earlier day, and `start <port> <day>` serves a throwaway copy of it, on a
+port from 18081 to 18099, until `stop <port>`.
+
+To see a failure, make it happen. Add a SimpleFin connection with the base64 of
+`https://bridge.simplefin.org/claim/<scenario>/<any new name>` as its setup token, where
+the scenario is `healthy`, `outage`, `cut-off`, `bad-json`, `revoked` or `rate-limited`. Add
+an account in `NOK` for an ECB outage, `SEK` for a cut-off answer, or `DKK` for a currency
+it doesn't publish; rates are fetched within a minute.
+
 ## Static assets
 
 Files under `crates/server/assets` are served at content-hashed URLs, so

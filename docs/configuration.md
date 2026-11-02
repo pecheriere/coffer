@@ -281,6 +281,10 @@ issued this way, by `serve` at startup or by `bootstrap-link`, revokes the
 earlier unused setup links, so only the newest works: a restart of `serve`
 invalidates a link printed before it. Both stop once an admin exists.
 
+`serve` refuses to start, with exit code 1, on the data of the staging stack (see
+`CONTRIBUTING.md`) unless `COFFER_PUBLIC_URL` is on localhost, since anyone can sign in
+as its admin.
+
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.
 

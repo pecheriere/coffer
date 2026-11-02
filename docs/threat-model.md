@@ -337,6 +337,13 @@
 
 ## Accepted residual risks
 
+- **A staging seed restored on a real server.** The staging stack's admin signs in with
+  a private key committed to this repository. `serve` refuses a database where an admin
+  holds that credential unless `COFFER_PUBLIC_URL` is on localhost, which stops an
+  accident, not an operator who wants to: a host operator already controls the data. A
+  member can register that credential for themselves, as they can any other, and only
+  gains a key other people know; only an admin's counts, so it can't be used to stop the
+  server.
 - **A released account applies one record per write transaction.** After a
   member releases a held cursor, the sync takes the write lock once per record
   of that account's delta, up to the 100,000 records a fetch may hold. Others

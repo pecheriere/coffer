@@ -34,8 +34,10 @@ use crate::vault::CredentialVault;
 
 mod healthcheck;
 mod panic_report;
+mod staging_seed;
 
 pub use panic_report::install_panic_hook;
+pub use staging_seed::STAGING_ADMIN_CREDENTIAL_ID;
 
 const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
@@ -493,12 +495,14 @@ async fn serve(config: Config) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// When the setup link cannot be issued or the listener fails.
+/// When the database is the staging seed and the public URL isn't localhost, when
+/// the setup link cannot be issued or when the listener fails.
 pub async fn serve_with(
     state: AppState,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), CliError> {
+    staging_seed::refuse_outside_localhost(&state.store, &state.config).await?;
     if let Some(link) = state.identity.bootstrap_link().await? {
         tracing::info!(%link, "no admin exists yet; open this single-use link to create the first admin");
     }

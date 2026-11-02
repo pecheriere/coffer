@@ -3,3 +3,4 @@
 *.db-*
 /data
 __pycache__/
+/staging/.state
