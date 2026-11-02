@@ -292,6 +292,7 @@ fn input(
                 name: account.name.as_str().to_owned(),
                 currency: account.currency,
                 liquidity: account.liquidity,
+                belongs_to: account.belongs_to,
                 include_in_forecast: account.include_in_forecast,
                 closed: account.closed_at.is_some(),
                 balance: balance.map(|snapshot| BalanceInput {

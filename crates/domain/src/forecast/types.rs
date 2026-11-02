@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use jiff::civil::Date;
 use serde::Serialize;
 
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId};
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -56,6 +56,9 @@ pub struct AccountInput {
     pub name: String,
     pub currency: Currency,
     pub liquidity: LiquidityClass,
+    /// Whose money it is. Only the household's can count, whatever else holds (spec §8.11
+    /// B8).
+    pub belongs_to: BelongsTo,
     pub include_in_forecast: bool,
     pub closed: bool,
     /// The latest balance on or before `as_of`.
@@ -278,6 +281,9 @@ pub struct AccountLine {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NotCountedReason {
+    /// The money is someone else's, or given away (spec §8.11 B8). Nothing about the
+    /// account's flags changes this: only saying it is the household's does.
+    NotHousehold,
     /// The account is switched out of the forecast.
     ExcludedByFlag,
     Closed,

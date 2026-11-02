@@ -124,5 +124,6 @@ fn input(
             .collect(),
         actuals: data.actuals,
         uncategorized: data.uncategorized,
+        not_household: data.not_household,
     }
 }

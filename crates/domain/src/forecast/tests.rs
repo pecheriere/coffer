@@ -8,9 +8,9 @@ use jiff::civil::{Date, date};
 
 use super::{
     AccountInput, BalanceInput, CategorySpent, CurrencyTotals, Forecast, ForecastInput,
-    ForecastStatus, ItemInput, ItemLine, LineSource, compute_forecast,
+    ForecastStatus, ItemInput, ItemLine, LineSource, NotCountedReason, compute_forecast,
 };
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::{AccountId, CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -83,6 +83,7 @@ fn cash(name: &str, balance: Money) -> AccountInput {
         name: name.to_owned(),
         currency: balance.currency,
         liquidity: LiquidityClass::Cash,
+        belongs_to: BelongsTo::Household,
         include_in_forecast: true,
         closed: false,
         balance: Some(BalanceInput {
@@ -224,4 +225,90 @@ fn assert_provisional(forecast: &Forecast) {
 
 fn days_before(date: Date, days: i32) -> Date {
     date.checked_sub(days.days()).unwrap()
+}
+
+/// What the forecast says of `held`, beside a counted Checking holding 1,000.
+fn beside_checking(held: AccountInput) -> Forecast {
+    run(&ForecastInput {
+        accounts: vec![cash("Checking", usd(1_000)), held],
+        ..household()
+    })
+}
+
+/// Each shape, flag switched on so that only `belongs_to` can keep it out, as the table's
+/// CHECK wouldn't allow: a closed card still owing is the one that would otherwise count.
+#[test]
+fn not_household_is_the_reason_whatever_else_holds() {
+    let shapes = [
+        cash("Cash", usd(5_000)),
+        AccountInput {
+            liquidity: LiquidityClass::Invested,
+            ..cash("Invested", usd(5_000))
+        },
+        AccountInput {
+            closed: true,
+            ..cash("Closed", usd(5_000))
+        },
+        AccountInput {
+            liquidity: LiquidityClass::ShortTermLiability,
+            closed: true,
+            ..cash("Closed card", usd(-5_000))
+        },
+    ];
+    for belongs_to in [BelongsTo::SomeoneElse, BelongsTo::GivenAway] {
+        for shape in &shapes {
+            let forecast = beside_checking(AccountInput {
+                belongs_to,
+                ..shape.clone()
+            });
+
+            let held = &forecast.accounts[1];
+            assert_eq!(held.not_counted, Some(NotCountedReason::NotHousehold));
+            assert!(!held.counted, "it stays out");
+            assert_eq!(usd_totals(&forecast).cash_available, usd(1_000));
+            assert_eq!(forecast.cautions, [], "and raises nothing");
+        }
+    }
+}
+
+#[test]
+fn a_household_account_keeps_its_reasons() {
+    let shapes = [
+        (
+            AccountInput {
+                liquidity: LiquidityClass::Invested,
+                ..cash("Invested", usd(5_000))
+            },
+            Some(NotCountedReason::NotCash),
+        ),
+        (
+            AccountInput {
+                closed: true,
+                ..cash("Closed", usd(5_000))
+            },
+            Some(NotCountedReason::Closed),
+        ),
+        (
+            AccountInput {
+                include_in_forecast: false,
+                ..cash("Switched out", usd(5_000))
+            },
+            Some(NotCountedReason::ExcludedByFlag),
+        ),
+        (cash("Cash", usd(5_000)), None),
+        (
+            AccountInput {
+                liquidity: LiquidityClass::ShortTermLiability,
+                closed: true,
+                ..cash("Closed card", usd(-5_000))
+            },
+            None,
+        ),
+    ];
+    for (shape, reason) in shapes {
+        let forecast = beside_checking(shape);
+
+        let held = &forecast.accounts[1];
+        assert_eq!(held.not_counted, reason);
+    }
 }

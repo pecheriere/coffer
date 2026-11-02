@@ -375,7 +375,7 @@ units, per currency, and currencies are never netted.
   Invested, illiquid and long-term liability accounts never count. A closed card
   that still owes counts against the cash, with a caution. Every account is
   listed in `accounts` with `counted` and, when not, `not_counted`
-  (`excluded_by_flag`, `closed` or `not_cash`).
+  (`not_household`, `excluded_by_flag`, `closed` or `not_cash`).
 - `planned_outflows` is every occurrence of an outflow in the window, reduced as
   described in [What this month's spending does](#what-this-months-spending-does).
 - `goals` is what the goals hold back at `end_exclusive`.
@@ -561,7 +561,7 @@ and the fields shown:
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
-| `item_hint_not_counted` (`item`, `account`) | An item is hinted at an account that is not counted (excluded, closed or not cash). It counts anyway, since overstating the need is safe. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
+| `item_hint_not_counted` (`item`, `account`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). It counts anyway, since overstating the need is safe. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. | Categorize it with the [review workflow](agent-usage.md#review-workflow). |
 | `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget or hide an unpaid bill. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
@@ -849,6 +849,9 @@ average covers, ending at its row's month).
   "uncategorized": [
     {"month": "2026-11", "currency": "USD", "count": 1, "total": {"minor_units": 6000, "currency": "USD"}}
   ],
+  "not_the_households": [
+    {"month": "2026-11", "net": {"minor_units": -30000, "currency": "USD"}}
+  ],
   "settled": [
     {
       "month": "2026-11",
@@ -878,10 +881,10 @@ per list.)
 - `planned` is the occurrences of today's active items that fall in the month,
   bucketed where they fall, not spread across months. The plan has no history:
   editing an item rewrites past months. `difference` is `planned` minus `actual`.
-- `actual` is posted splits on any account (balance dates decide what a
-  forecast may trust, not what happened): spending in an `expense` category,
-  income in an `income` one, net of refunds, so a month of refunds is
-  negative. `transfer` categories don't count.
+- `actual` is posted splits on any of the household's accounts, counted or not
+  (balance dates decide what a forecast may trust, not what happened): spending
+  in an `expense` category, income in an `income` one, net of refunds, so a month
+  of refunds is negative. `transfer` categories don't count.
 - Money that isn't in `actual` is still reported. `left_out` is a charge (or a
   deposit in an `income` category) whose provider removed it or revised it away
   from its splits, at what its splits say. A refund on such a transaction keeps
@@ -901,6 +904,11 @@ per list.)
   sweep is neither spending nor drowns the list. A transfer, such as a move to
   savings, is not spending either: give it a `transfer` category, or leave it
   uncategorized, where it shows in `uncategorized`, and it stays out of `actual`.
+- `not_the_households` is categorized money on accounts that aren't the household's,
+  per month and currency, net and negative for money out, and only the months
+  reported. It is never in `actual`, so a grant from a donor-advised fund doesn't count
+  again after the contribution that funded it. Flags don't change it, `transfer`
+  categories aren't in it, and a split linked to a goal stays on the goal's line.
 - `rollovers` has a line per category and currency with a budget: what was
   `budgeted` over the reported months up to today's, what they `spent` while a
   budget was running once bills and one-offs dated up to and including today took

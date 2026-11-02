@@ -7,7 +7,7 @@ use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
-use coffer_domain::plan_report::{GoalMonth, MonthActual, MonthUncategorized};
+use coffer_domain::plan_report::{GoalMonth, MonthActual, MonthNotHousehold, MonthUncategorized};
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteConnection};
@@ -69,6 +69,8 @@ pub struct PlanReportData {
     pub goal_spent: Vec<(PlannedItemId, GoalMonth)>,
     /// Per month and currency, ordered by them.
     pub uncategorized: Vec<MonthUncategorized>,
+    /// Per month and currency, ordered by them.
+    pub not_household: Vec<MonthNotHousehold>,
 }
 
 /// What in `as_of`'s month, in one currency, could yet change a category's spending.
@@ -250,8 +252,17 @@ const NEWER_SPENDING: &str = concat!(
      GROUP BY t.currency ORDER BY t.currency"
 );
 
-/// What a report takes as actual: posted splits in the window on any account, since it
-/// says what happened rather than what a balance shows. A goal's are on its own line.
+/// An account `a` whose money is the household's: what happens on any other is no part of
+/// what the household spent (spec §8.11 B10).
+macro_rules! the_households {
+    () => {
+        "a.belongs_to = 'household'"
+    };
+}
+
+/// What a report takes as actual: posted splits in the window on any of the household's
+/// accounts, counted or not, since it says what happened rather than what a balance shows.
+/// A goal's are on its own line.
 const REPORT_ACTUALS: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, s.category_id AS category, c.kind AS kind, \
      t.currency AS currency, \
@@ -268,9 +279,27 @@ const REPORT_ACTUALS: &str = concat!(
     ")), 0) AS possible_duplicate_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
      JOIN transactions t ON t.id = s.transaction_id \
+     JOIN accounts a ON a.id = t.account_id \
      WHERE s.goal_id IS NULL AND t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 \
-     GROUP BY month, s.category_id, c.kind, t.currency \
+     AND ",
+    the_households!(),
+    " GROUP BY month, s.category_id, c.kind, t.currency \
      ORDER BY month, s.category_id, t.currency"
+);
+
+/// What [`REPORT_ACTUALS`] leaves out for being on an account that isn't the household's:
+/// posted splits in `expense` and `income` categories linked to no goal, by month. Flags
+/// are ignored, since it says what is left out, not what it meant.
+const REPORT_NOT_HOUSEHOLD: &str = concat!(
+    "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, \
+     SUM(s.minor_units) AS net_minor \
+     FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
+     JOIN transactions t ON t.id = s.transaction_id \
+     JOIN accounts a ON a.id = t.account_id \
+     WHERE s.goal_id IS NULL AND t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 \
+     AND c.kind IN ('expense', 'income') AND NOT ",
+    the_households!(),
+    " GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
 /// What is linked to each goal by month, on any account: `expense` splits only, as in
@@ -291,7 +320,8 @@ const REPORT_GOAL_SPENT: &str = concat!(
 );
 
 /// Uncategorized outflows by month, as the forecast's loose ends count them, on any
-/// spendable account: a trade or a sweep elsewhere is never spending (R6).
+/// spendable account of the household's: a trade or a sweep elsewhere is never spending (R6),
+/// and nor is what happens on money that isn't the household's (spec §8.11 B10).
 const REPORT_UNCATEGORIZED: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, COUNT(*) ",
     uncategorized!(),
@@ -300,6 +330,8 @@ const REPORT_UNCATEGORIZED: &str = concat!(
     ", 0) AS uncategorized_minor \
      FROM transactions t JOIN accounts a ON a.id = t.account_id \
      WHERE t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 AND ",
+    the_households!(),
+    " AND ",
     spendable!(),
     " GROUP BY month, t.currency HAVING uncategorized_count > 0 \
      ORDER BY month, t.currency"
@@ -372,6 +404,14 @@ fn month_uncategorized_from_row(row: &SqliteRow) -> Result<MonthUncategorized, S
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         count: count(row, "uncategorized_count")?,
         total_minor: summed(row, "uncategorized_minor")?,
+    })
+}
+
+fn month_not_household_from_row(row: &SqliteRow) -> Result<MonthNotHousehold, StoreError> {
+    Ok(MonthNotHousehold {
+        month: parsed(row, "month")?,
+        currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
+        net_minor: summed(row, "net_minor")?,
     })
 }
 
@@ -552,6 +592,15 @@ impl Store {
             .iter()
             .map(month_uncategorized_from_row)
             .collect::<Result<_, _>>()?;
+        let not_household = sqlx::query(REPORT_NOT_HOUSEHOLD)
+            .bind(&from)
+            .bind(&to_exclusive)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(month_not_household_from_row)
+            .collect::<Result<_, _>>()?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(PlanReportData {
             items,
@@ -559,6 +608,7 @@ impl Store {
             actuals,
             goal_spent,
             uncategorized,
+            not_household,
         })
     }
 }

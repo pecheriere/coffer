@@ -9182,10 +9182,28 @@
         "type": "string",
         "description": "Why an account's balance is not part of the cash available.",
         "enum": [
+          "not_household",
           "excluded_by_flag",
           "closed",
           "not_cash"
         ]
+      },
+      "NotHouseholdRow": {
+        "type": "object",
+        "description": "What categorized money did on accounts that aren't the household's, in one month and\ncurrency.",
+        "required": [
+          "month",
+          "net"
+        ],
+        "properties": {
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "net": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Net, negative for money out: a grant is negative, money coming in positive."
+          }
+        }
       },
       "OpenApiDocument": {
         "type": "object",
@@ -9266,6 +9284,7 @@
           "rows",
           "goals",
           "uncategorized",
+          "not_the_households",
           "settled",
           "rollovers",
           "partial_months"
@@ -9277,6 +9296,13 @@
               "$ref": "#/components/schemas/GoalRow"
             },
             "description": "Ordered by month and goal."
+          },
+          "not_the_households": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotHouseholdRow"
+            },
+            "description": "Categorized money on accounts that aren't the household's. Never in `actual`. Ordered\nby month and currency, the reported months only."
           },
           "partial_months": {
             "type": "array",

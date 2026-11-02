@@ -6,8 +6,8 @@ use jiff::civil::{Date, date};
 use proptest::prelude::{ProptestConfig, proptest};
 
 use super::{
-    GoalMonth, MonthActual, MonthUncategorized, PlanReport, PlanReportInput, PlanRow, ReportItem,
-    plan_vs_actual, report_window,
+    GoalMonth, MonthActual, MonthNotHousehold, MonthUncategorized, NotHouseholdRow, PlanReport,
+    PlanReportInput, PlanRow, ReportItem, plan_vs_actual, report_window,
 };
 use crate::ids::{CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
@@ -47,6 +47,7 @@ fn input(months: u8) -> PlanReportInput {
         items: Vec::new(),
         actuals: Vec::new(),
         uncategorized: Vec::new(),
+        not_household: Vec::new(),
     }
 }
 
@@ -510,4 +511,56 @@ proptest! {
 
         assert_eq!(total, i128::from(target));
     }
+}
+
+fn not_household(on: &str, currency: Currency, net_minor: i64) -> MonthNotHousehold {
+    MonthNotHousehold {
+        month: month(on),
+        currency,
+        net_minor,
+    }
+}
+
+/// December is read for the averages and isn't reported, and neither is February.
+#[test]
+fn not_household_rows_are_the_reported_months() {
+    let report = report(&PlanReportInput {
+        average_months: 2,
+        not_household: vec![
+            not_household("2025-12", usd(), -100),
+            not_household("2026-01", eur(), -20),
+            not_household("2026-01", usd(), 300),
+            not_household("2026-02", usd(), -4),
+        ],
+        ..input(1)
+    });
+
+    assert_eq!(
+        report.not_the_households,
+        [
+            NotHouseholdRow {
+                month: month("2026-01"),
+                net: Money {
+                    minor_units: -20,
+                    currency: eur(),
+                },
+            },
+            NotHouseholdRow {
+                month: month("2026-01"),
+                net: dollars(300),
+            },
+        ]
+    );
+}
+
+#[test]
+fn not_household_money_is_in_no_other_list() {
+    let report = report(&PlanReportInput {
+        not_household: vec![not_household("2026-01", usd(), -100)],
+        ..input(1)
+    });
+
+    assert_eq!(report.rows, []);
+    assert_eq!(report.goals, []);
+    assert_eq!(report.uncategorized, []);
 }

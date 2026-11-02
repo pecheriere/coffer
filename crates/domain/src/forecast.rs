@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Span;
 use jiff::civil::Date;
 
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_need};
@@ -242,8 +242,9 @@ impl Book {
     }
 }
 
-/// A closed card's debt does not close with it, so one that still owes counts,
-/// unless the household has switched it out.
+/// Money that isn't the household's never counts, and that is the reason whatever else
+/// holds, since a flag can't change it (spec §8.11 B4, B8). A closed card's debt does not
+/// close with it, so one that still owes counts, unless the household has switched it out.
 fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
     let spendable = matches!(
         account.liquidity,
@@ -253,7 +254,9 @@ fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
         && account
             .balance
             .is_some_and(|balance| balance.minor_units < 0);
-    if account.closed && owing && account.include_in_forecast {
+    if account.belongs_to != BelongsTo::Household {
+        Some(NotCountedReason::NotHousehold)
+    } else if account.closed && owing && account.include_in_forecast {
         None
     } else if account.closed {
         Some(NotCountedReason::Closed)
