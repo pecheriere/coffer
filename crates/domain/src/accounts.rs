@@ -41,6 +41,22 @@ pub enum AccountKind {
 }
 
 impl AccountKind {
+    /// Every kind, in the order a form lists them.
+    pub const ALL: [Self; 12] = [
+        Self::Checking,
+        Self::Savings,
+        Self::CreditCard,
+        Self::Loan,
+        Self::Mortgage,
+        Self::Brokerage,
+        Self::Retirement,
+        Self::EquityComp,
+        Self::Property,
+        Self::Vehicle,
+        Self::OtherAsset,
+        Self::OtherLiability,
+    ];
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -192,21 +208,6 @@ mod tests {
     use super::*;
     use crate::identity::{DisplayName, IdentityError};
 
-    const ALL_KINDS: [AccountKind; 12] = [
-        AccountKind::Checking,
-        AccountKind::Savings,
-        AccountKind::CreditCard,
-        AccountKind::Loan,
-        AccountKind::Mortgage,
-        AccountKind::Brokerage,
-        AccountKind::Retirement,
-        AccountKind::EquityComp,
-        AccountKind::Property,
-        AccountKind::Vehicle,
-        AccountKind::OtherAsset,
-        AccountKind::OtherLiability,
-    ];
-
     #[test]
     fn default_liquidity_table() {
         use AccountKind as K;
@@ -231,7 +232,7 @@ mod tests {
 
     #[test]
     fn kinds_and_classes_roundtrip_as_snake_case() {
-        for kind in ALL_KINDS {
+        for kind in AccountKind::ALL {
             assert_eq!(kind.as_str().parse::<AccountKind>(), Ok(kind));
             assert_eq!(
                 serde_json::to_string(&kind).unwrap(),

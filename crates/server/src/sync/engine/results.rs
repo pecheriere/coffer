@@ -1,5 +1,6 @@
 //! How a run and its provider accounts fared.
 
+use coffer_domain::ids::ProviderAccountId;
 use coffer_domain::sync::SyncRunStatus;
 use coffer_store::ConnectionStatus;
 
@@ -12,9 +13,20 @@ use crate::sync::provider::{MAX_PROVIDER_MESSAGE_CHARS, ProviderError, sanitize_
 pub(super) enum AccountOutcome {
     Applied(ApplyReport),
     /// Nothing of it was applied. `refetch` says the fetch held records of
-    /// it that a later fetch could still store.
+    /// it that a later fetch could still store; `passed` counts the records
+    /// the cursor moves past because no later fetch could store them.
     Failed {
         refetch: bool,
+        passed: u32,
+    },
+    /// Records of it could not be stored, and a member asked for the cursor
+    /// to move past them: the ones that can be were applied (`report`), and
+    /// `failing` is how many the cursor passes for good if it moves on in
+    /// this run.
+    Released {
+        account: ProviderAccountId,
+        report: ApplyReport,
+        failing: u32,
     },
     /// The connection was removed before the account could be applied:
     /// nothing of it was written.
@@ -44,6 +56,9 @@ pub(super) struct Totals {
     pub(super) connection_removed: bool,
     /// Whether some failed account's records must be fetched again.
     pub(super) refetch: bool,
+    /// The released accounts with records that fail, and how many: passed
+    /// only if the cursor moves on.
+    pub(super) released: Vec<(ProviderAccountId, u32)>,
 }
 
 impl Totals {
@@ -54,20 +69,20 @@ impl Totals {
         }
         self.accounts += 1;
         match outcome {
-            AccountOutcome::Applied(report) => {
-                let total = &mut self.report;
-                total.created += report.created;
-                total.possible_duplicates += report.possible_duplicates;
-                total.attached += report.attached;
-                total.updated += report.updated;
-                total.deleted += report.deleted;
-                total.source_removed += report.source_removed;
-                total.held += report.held;
-                total.skipped += report.skipped;
+            AccountOutcome::Applied(report) => self.report.absorb(report),
+            AccountOutcome::Released {
+                account,
+                report,
+                failing,
+            } => {
+                self.failed_accounts += 1;
+                self.report.absorb(report);
+                self.released.push((*account, *failing));
             }
-            AccountOutcome::Failed { refetch } => {
+            AccountOutcome::Failed { refetch, passed } => {
                 self.failed_accounts += 1;
                 self.refetch |= refetch;
+                self.report.skipped = self.report.skipped.saturating_add(*passed);
             }
             AccountOutcome::ConnectionRemoved => {}
         }

@@ -124,6 +124,8 @@ Connections page, in the browser: Plaid Link needs a person to log in to the
 bank, so an agent cannot start it. Agents can still list, sync and remove
 Plaid connections through the API.
 
+New links also ask Plaid for consent to investments, which is not billed until used, so adding holdings later needs no relink.
+
 Create the secret file so that the secret never appears on a command line or
 in shell history: set `umask 077`, then write the file from your secret
 manager's output. For a container, see

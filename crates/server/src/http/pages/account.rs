@@ -48,8 +48,23 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// The navigation bar's data for the signed-in member.
-pub fn viewer(state: &AppState, session: &PageSession) -> Viewer {
+///
+/// A failure to count the accounts to set up leaves the notice out and is
+/// logged: the page it decorates still renders.
+pub async fn viewer(state: &AppState, session: &PageSession) -> Viewer {
+    let setup_needed = match state
+        .sync
+        .count_provider_accounts_to_set_up(&session.actor())
+        .await
+    {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(error = %err, "could not count the provider accounts to set up");
+            0
+        }
+    };
     Viewer {
+        setup_needed,
         display_name: session.member().display_name.to_string(),
         can_manage_members: authorize(&session.actor(), Action::ManageMembers).is_ok(),
         can_manage_household: authorize(&session.actor(), Action::ManageHousehold).is_ok(),
@@ -78,7 +93,7 @@ async fn render(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageOwnCredentials).map_err(AuthError::from)?;
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let look = session.look(state).await;
     let passkeys = state
         .store

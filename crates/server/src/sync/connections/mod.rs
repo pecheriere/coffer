@@ -6,7 +6,9 @@
 //! Credentials exist in clear only in memory: setup input goes to the
 //! provider, the credentials it returns are sealed under the connection's
 //! id before anything is stored, and they are opened again only to give
-//! them up at the provider when the connection is removed. No audit entry,
+//! them up at the provider when the connection is removed, or, for a
+//! provider that bills until removed, to test that they still open (the
+//! value is dropped at once). No audit entry,
 //! log line, error or view ever holds them.
 
 use coffer_domain::accounts::{AccountKind, LiquidityClass};
@@ -22,6 +24,8 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use self::held::held_cursor;
+pub use self::held::{CURSOR_HELD_TEXT, HELD_AFTER_SYNCS, HeldCursorView};
 use super::SyncError;
 use super::engine::SyncService;
 use super::provider::ProviderKind;
@@ -30,6 +34,8 @@ use crate::ledger::LedgerError;
 use crate::ledger::accounts::AccountView;
 
 mod binding;
+mod forget;
+mod held;
 pub(super) mod plaid_budget;
 mod reconnect;
 mod remove;
@@ -141,6 +147,13 @@ pub struct ConnectionView {
     /// the first attempt and for connections the schedule skips.
     #[schema(required)]
     pub next_sync_at: Option<Timestamp>,
+    /// Set while the sync cursor is held; `null` otherwise, for a removed
+    /// connection, and for an actor who does not see every account (it names
+    /// provider accounts, and the last error could too). Only the connection
+    /// list fills it: the responses to creating and reconnecting a
+    /// connection always have `null`.
+    #[schema(required)]
+    pub held_cursor: Option<HeldCursorView>,
     /// Its provider accounts the actor may see.
     pub accounts: Vec<ProviderAccountView>,
 }
@@ -277,6 +290,7 @@ impl SyncService {
             last_attempt_at: connection.last_attempt_at,
             last_success_at: connection.last_success_at,
             next_sync_at,
+            held_cursor: None,
             accounts,
         }
     }
@@ -296,7 +310,8 @@ impl SyncService {
     /// Every connection, removed ones included, oldest first, each with the
     /// provider accounts the actor may see. Its last error is the provider's
     /// text and could name any account it serves, so only an actor who sees
-    /// every account at [`AccountLevel::Transactions`] gets it; the status
+    /// every account at [`AccountLevel::Transactions`] gets it, and the same
+    /// goes for the held cursor, which names provider accounts; the status
     /// still says the connection needs attention.
     ///
     /// # Errors
@@ -313,13 +328,21 @@ impl SyncService {
         Ok(connections
             .into_iter()
             .map(|connection| {
-                let own = accounts
+                let own: Vec<ProviderAccountRecord> = accounts
                     .iter()
                     .filter(|account| account.connection == connection.id)
                     .cloned()
-                    .map(ProviderAccountView::from)
                     .collect();
-                let mut view = self.connection_view(connection, own);
+                let held = if sees_errors && connection.status != ConnectionStatus::Removed {
+                    held_cursor(&own)
+                } else {
+                    None
+                };
+                let mut view = self.connection_view(
+                    connection,
+                    own.into_iter().map(ProviderAccountView::from).collect(),
+                );
+                view.held_cursor = held;
                 if !sees_errors {
                     view.last_error = None;
                 }

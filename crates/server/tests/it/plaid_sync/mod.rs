@@ -7,11 +7,14 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod account_ids;
 mod credentials;
 mod failures;
+mod held_cursor;
 mod limits;
 mod providers;
 mod reauthorized;
+mod released_records;
 mod removal;
 mod transactions;
 

@@ -11,7 +11,7 @@
       "name": "MIT OR Apache-2.0",
       "url": "https://github.com/pecheriere/coffer#license"
     },
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "servers": [
     {
@@ -5672,6 +5672,7 @@
           "last_attempt_at",
           "last_success_at",
           "next_sync_at",
+          "held_cursor",
           "accounts"
         ],
         "properties": {
@@ -5681,6 +5682,17 @@
               "$ref": "#/components/schemas/ProviderAccountView"
             },
             "description": "Its provider accounts the actor may see."
+          },
+          "held_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeldCursorView",
+                "description": "Set while the sync cursor is held; `null` otherwise, for a removed\nconnection, and for an actor who does not see every account (it names\nprovider accounts, and the last error could too). Only the connection\nlist fills it: the responses to creating and reconnecting a\nconnection always have `null`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/ConnectionId"
@@ -5836,6 +5848,44 @@
           }
         },
         "additionalProperties": false
+      },
+      "HeldCursorView": {
+        "type": "object",
+        "description": "A sync cursor that stays in place because records of some provider\naccounts keep failing to store.",
+        "required": [
+          "text",
+          "provider_accounts",
+          "records",
+          "release_pending",
+          "release_withdrawn"
+        ],
+        "properties": {
+          "provider_accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAccountId"
+            },
+            "description": "The provider accounts whose records hold the cursor."
+          },
+          "records": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many records of those accounts the last sync fetched and could\nnot store: what a release is about.",
+            "minimum": 0
+          },
+          "release_pending": {
+            "type": "boolean",
+            "description": "Whether a member already asked for the cursor to move past those\nrecords: a sync does, as soon as no other account blocks it and the\ndatabase and the provider's answer allow trying them."
+          },
+          "release_withdrawn": {
+            "type": "boolean",
+            "description": "Whether such a request was withdrawn because what is wrong with one\nof the accounts, or how many records it has, changed after the member\nasked. Nothing was passed,\nand the cursor moves on only if a member looks again and asks again."
+          },
+          "text": {
+            "type": "string",
+            "description": "Fixed text."
+          }
+        }
       },
       "IntervalUnit": {
         "type": "string",
