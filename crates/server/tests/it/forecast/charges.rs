@@ -86,8 +86,8 @@ impl Fed {
 }
 
 /// Moving money to savings for a goal isn't spending it: the money is still in cash.
-/// A split can't be linked in a `transfer` category, so this one was linked in an
-/// `expense` category that was then changed.
+/// A split can't be linked in a `transfer` category, and a linked split's category can't
+/// change kind, so this is planted, as a database from before that refusal could hold it.
 #[tokio::test]
 async fn a_goal_linked_transfer_is_not_goal_spending() {
     let world = world().await;
@@ -108,12 +108,14 @@ async fn a_goal_linked_transfer_is_not_goal_spending() {
         .spend_linked(checking, "2026-11-02", 500_000, moved, &roof)
         .await;
     world
-        .admin_send(
-            Method::PATCH,
-            &format!("/api/v1/categories/{moved}"),
-            &json!({"kind": "transfer"}),
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE categories SET kind = 'transfer' WHERE id = ?",
+            &moved.to_string(),
         )
-        .await;
+        .await
+        .unwrap();
 
     let forecast = world.forecast().await;
 

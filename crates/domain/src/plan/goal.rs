@@ -17,14 +17,22 @@ pub fn goal_accrued(target_minor: i64, start_on: Date, due_on: Date, at: Date) -
         return if at >= due_on { target_minor } else { 0 };
     }
     let elapsed = days_between(start_on, at).clamp(0, total);
-    let numerator = i128::from(target_minor) * i128::from(elapsed);
-    let total = i128::from(total);
-    let floor = numerator.div_euclid(total);
-    let twice_rest = numerator.rem_euclid(total) * 2;
-    let round_up = twice_rest > total || (twice_rest == total && floor.rem_euclid(2) == 1);
+    let exact = div_half_even(
+        i128::from(target_minor) * i128::from(elapsed),
+        i128::from(total),
+    );
     // elapsed <= total puts the exact value between 0 and the target, both
     // integers, so rounding it stays there and fits: the fallback never runs.
-    i64::try_from(floor + i128::from(round_up)).unwrap_or(target_minor)
+    i64::try_from(exact).unwrap_or(target_minor)
+}
+
+/// `numerator / denominator`, which must be positive, rounded half-even.
+pub(crate) fn div_half_even(numerator: i128, denominator: i128) -> i128 {
+    let floor = numerator.div_euclid(denominator);
+    let twice_rest = numerator.rem_euclid(denominator) * 2;
+    let round_up =
+        twice_rest > denominator || (twice_rest == denominator && floor.rem_euclid(2) == 1);
+    floor + i128::from(round_up)
 }
 
 /// What is left of `target_minor` after `spent_minor`, never below zero and

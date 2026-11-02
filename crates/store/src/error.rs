@@ -11,6 +11,10 @@ const DATABASE_FAULT_CODES: [i32; 10] = [5, 6, 7, 8, 10, 11, 13, 14, 15, 26];
 #[cfg(any(test, feature = "testkit"))]
 pub(crate) const INJECTED_FAULT_MESSAGE: &str = "injected database fault";
 
+/// What `SQLite` says when `SUM` or `ABS` leaves its integers. It has no code of its own: it
+/// comes as a plain `SQLITE_ERROR`.
+const SUM_OVERFLOW_MESSAGE: &str = "integer overflow";
+
 /// Errors returned by the store.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -23,6 +27,10 @@ pub enum StoreError {
     /// the database.
     #[error("invalid value: {0}")]
     Invalid(&'static str),
+    /// A sum over stored amounts doesn't fit in the database's integers. The amounts are
+    /// what they are, so asking again answers the same.
+    #[error("a sum too large for the database")]
+    SumTooLarge,
     /// A pagination cursor that this store did not issue or that was altered.
     #[error("invalid pagination cursor")]
     InvalidCursor,
@@ -50,14 +58,16 @@ impl StoreError {
     }
 
     /// Classify a `sqlx` error: unique violations become [`Self::Conflict`],
-    /// a database that cannot do the work [`Self::DatabaseFault`], and
-    /// everything else, such as a CHECK violation, an opaque backend failure.
+    /// a sum that overflowed [`Self::SumTooLarge`], a database that cannot do
+    /// the work [`Self::DatabaseFault`], and everything else, such as a CHECK
+    /// violation, an opaque backend failure.
     pub(crate) fn from_sqlx(err: sqlx::Error) -> Self {
         match &err {
             sqlx::Error::RowNotFound => Self::NotFound,
             sqlx::Error::Database(db) if db.is_unique_violation() => {
                 Self::Conflict("unique constraint violated")
             }
+            sqlx::Error::Database(db) if db.message() == SUM_OVERFLOW_MESSAGE => Self::SumTooLarge,
             _ if database_fault(&err) => Self::DatabaseFault(Box::new(err)),
             _ => Self::backend(err),
         }

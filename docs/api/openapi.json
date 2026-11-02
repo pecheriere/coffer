@@ -3893,6 +3893,138 @@
         ]
       }
     },
+    "/api/v1/reports/plan-vs-actual": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Plan versus actual.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated before today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "operationId": "getPlanVsActual",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first month, written `YYYY-MM`, in the years 1970 to 2200.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CalendarMonth"
+            }
+          },
+          {
+            "name": "months",
+            "in": "query",
+            "description": "How many months to report, by default 3.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 36,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "average_months",
+            "in": "query",
+            "description": "How many calendar months each rolling average covers, ending at its row's month,\nby default 3.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 12,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/transactions": {
       "get": {
         "tags": [
@@ -6884,6 +7016,45 @@
           }
         }
       },
+      "GoalRow": {
+        "type": "object",
+        "description": "One goal in one month.",
+        "required": [
+          "month",
+          "goal",
+          "name",
+          "currency",
+          "accrued",
+          "spent_against",
+          "left_out"
+        ],
+        "properties": {
+          "accrued": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the goal's schedule sets aside this month."
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/PlannedItemId"
+          },
+          "left_out": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Charges left out of `spent_against`: removed, revised or possibly duplicates."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "name": {
+            "type": "string"
+          },
+          "spent_against": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What was spent on it, net, so a month of refunds is negative."
+          }
+        }
+      },
       "HeldCursorView": {
         "type": "object",
         "description": "A sync cursor that stays in place because records of some provider\naccounts keep failing to store.",
@@ -7622,6 +7793,104 @@
           "goal"
         ]
       },
+      "PlanReport": {
+        "type": "object",
+        "description": "The answer.",
+        "required": [
+          "rows",
+          "goals",
+          "uncategorized",
+          "rollovers",
+          "partial_months"
+        ],
+        "properties": {
+          "goals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GoalRow"
+            },
+            "description": "Ordered by month and goal."
+          },
+          "partial_months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarMonth"
+            },
+            "description": "The reported month holding today, whose figures aren't final."
+          },
+          "rollovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloverRow"
+            },
+            "description": "What each category with a budget has left, one line per category and currency,\nordered by both."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            },
+            "description": "Ordered by month, category and currency. A row with nothing to say is left out."
+          },
+          "uncategorized": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UncategorizedRow"
+            },
+            "description": "Ordered by month and currency. Never spending."
+          }
+        }
+      },
+      "PlanRow": {
+        "type": "object",
+        "description": "One category in one month and currency.",
+        "required": [
+          "month",
+          "category",
+          "currency",
+          "planned",
+          "actual",
+          "difference",
+          "rolling_average",
+          "left_out",
+          "possible_duplicate"
+        ],
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Spending in an `expense` category or income in an `income` one, net, so a month\nof refunds is negative."
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "difference": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`planned` minus `actual`."
+          },
+          "left_out": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Money left out of `actual` because its provider removed the transaction or\nrevised it away from its splits."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "planned": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The occurrences of today's active items that fall in this month."
+          },
+          "possible_duplicate": {
+            "$ref": "#/components/schemas/Money",
+            "description": "How much of `actual` is on transactions flagged as possible duplicates."
+          },
+          "rolling_average": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The mean of `actual` over the window ending this month, zeros included, rounded\nhalf-even."
+          }
+        }
+      },
       "PlanSchedule": {
         "oneOf": [
           {
@@ -8188,6 +8457,37 @@
           "member"
         ]
       },
+      "RolloverRow": {
+        "type": "object",
+        "description": "A category's budgets over the reported months up to today's: bills have no rollover,\nand a month yet to come has left nothing unspent. It covers those months only, so moving\n`from` changes it, and only this report carries it: the forecast doesn't carry leftovers\nover.",
+        "required": [
+          "category",
+          "currency",
+          "budgeted",
+          "spent",
+          "rollover"
+        ],
+        "properties": {
+          "budgeted": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The occurrences of the category's budgets in those months."
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "rollover": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`budgeted` minus `spent`: positive for what was left unspent, negative for\noverspent."
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What those months spent on them, while a budget was running: each month's `actual`\nonce the bills and one-offs dated before today have taken their share. A month of\nrefunds lowers it."
+          }
+        }
+      },
       "SafetyFloor": {
         "oneOf": [
           {
@@ -8746,6 +9046,32 @@
           }
         }
       },
+      "UncategorizedRow": {
+        "type": "object",
+        "description": "Outflows no one has categorized, in one month and currency.",
+        "required": [
+          "month",
+          "currency",
+          "count",
+          "total"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
       "UnmergeRequest": {
         "type": "object",
         "description": "A source record to move into a transaction of its own.",
@@ -8863,6 +9189,10 @@
     {
       "name": "forecast",
       "description": "How much cash the household needs over the coming months, and how much above that could be invested. A planned amount is a positive magnitude with a direction; a balance, `cash_available`, `projected_cash` and `surplus` carry a sign, and a negative `surplus` is a shortfall."
+    },
+    {
+      "name": "reports",
+      "description": "What happened against what was planned, by category and month. `actual` is positive for what the category's kind counts."
     },
     {
       "name": "connections",

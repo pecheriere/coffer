@@ -391,6 +391,26 @@ impl StoreTx {
         Ok(exists)
     }
 
+    /// Whether a split in `category` links to any goal, as seen by this transaction.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn category_has_goal_linked_splits(
+        &mut self,
+        category: CategoryId,
+    ) -> Result<bool, StoreError> {
+        let (exists,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM transaction_splits \
+             WHERE category_id = ? AND goal_id IS NOT NULL)",
+        )
+        .bind(category.to_string())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(exists)
+    }
+
     /// Whether any split links to `goal`, as seen by this transaction.
     ///
     /// # Errors

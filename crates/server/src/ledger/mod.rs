@@ -9,6 +9,7 @@ pub mod categories;
 pub mod duplicates;
 pub mod forecast;
 pub mod plan_items;
+pub mod plan_report;
 pub mod settings;
 pub mod transactions;
 

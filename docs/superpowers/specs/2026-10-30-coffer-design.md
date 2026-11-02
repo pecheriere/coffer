@@ -750,6 +750,36 @@ links: actuals are categorized splits, and `transfer` is a category kind.
 Uncategorized money is never spending and is reported separately, without
 invested and illiquid accounts.
 
+A report says what happened, so money stays visible. A charge in an `expense`
+category or a deposit in an `income` one, on a transaction its provider removed or
+revised away from its splits, stays out of `actual`, and the row's `left_out` says
+how much. Money that lowers `actual`, such as a refund, keeps counting, as in R10a. A
+possible duplicate counts, and the row's `possible_duplicate` says how much of
+`actual` it is. A split linked to a goal counts only on the goal's line, whose
+`left_out` takes what R10a keeps from a goal, and an inactive goal with linked money
+keeps a line, since that money counts nowhere else. Actuals cover every account: R10's
+balance dates decide what a forecast may trust, not what happened.
+
+Unlike the forecast, which carries no leftovers over, the report shows a rollover per
+category and currency with a budget (R9): what was budgeted over the reported months up
+to today's, less what they spent on it. Spending pays each month's bills and one-offs
+dated before today first, floored at 0 unless the month is a net refund, which adds to
+what is left. Items share a category's pool, so it isn't per item. A bill has none.
+A month's spending counts only while a budget in that category and currency is running,
+from the month of its first occurrence through the month of its end date, so a
+bi-monthly budget's off-month counts and what came before or after doesn't.
+
+The rollover is a window over the reported months, not a running balance, so widening or
+moving `from` changes it, and today's month counts all its budget occurrences. A known
+limit: a refund in a month where a bill absorbs the spending is lost to the rollover,
+because of the floor. `left_out` holds the stale splits, not the transaction's revised
+amount. A category's kind can't change while a goal-linked split uses it, so a linked
+split can't vanish from every report.
+
+A sum too large for the database's integers answers 422, as any other total too large to
+represent does, on the forecast and the report alike. A number too big for the query's
+integer type answers 400, as on the forecast.
+
 **R7. The time zone stays an environment variable** (§8.7). Everything reads one
 zone, and changing it at runtime would raise what happens to days already
 assigned, which is a separate question.

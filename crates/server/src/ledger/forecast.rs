@@ -22,7 +22,7 @@ use coffer_domain::plan::{
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
     CategoryGroupRecord, ConnectionHealth, ConnectionStatus, ForecastData, PlannedItemRecord,
-    ProviderAccountRecord,
+    ProviderAccountRecord, StoreError,
 };
 use jiff::civil::Date;
 use serde::Deserialize;
@@ -99,7 +99,7 @@ pub struct WhatIfRequest {
 impl Ledger {
     /// Whether `actor` may have a forecast: it sums every account (R2), so an `all`
     /// grant at `transactions`, decided before anything is read.
-    async fn authorize_forecast(&self, actor: &Actor) -> Result<(), LedgerError> {
+    pub(super) async fn authorize_forecast(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Transactions)
             .await
@@ -202,7 +202,14 @@ impl Ledger {
         let today = self.today();
         let as_of = options.as_of.unwrap_or(today);
         validate_as_of(as_of).map_err(plan_items::invalid)?;
-        let data = self.store.forecast_data(as_of).await?;
+        let data = self
+            .store
+            .forecast_data(as_of)
+            .await
+            .map_err(|err| match err {
+                StoreError::SumTooLarge => LedgerError::Invalid(TOO_LARGE),
+                other => other.into(),
+            })?;
         let chosen = ForecastSettings {
             floor: options.floor.or(data.settings.floor),
             include_income: options
