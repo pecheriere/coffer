@@ -32,6 +32,10 @@ const AFTER_READY: SignedDuration = SignedDuration::from_hours(6);
 const AFTER_FAILING: SignedDuration = SignedDuration::from_hours(1);
 const AFTER_NOT_PUBLISHED: SignedDuration = SignedDuration::from_hours(24);
 
+/// The wait between two requests of one pass, a courtesy to the source. A stop
+/// during it drops the pass, as during a fetch.
+const REQUEST_PAUSE: Duration = Duration::from_secs(1);
+
 /// How far before its last rate a currency is asked for, so a missed day or a
 /// correction arrives by itself.
 const LOOK_BACK_DAYS: i64 = 7;
@@ -50,8 +54,9 @@ pub fn needed(accounts: &[Currency], display: Option<Currency>) -> Vec<Currency>
     currencies
 }
 
-/// Those of `needed` to ask for at `now`: never tried, or tried long enough ago
-/// for how that went.
+/// Those of `needed` to ask for at `now`: never tried, tried long enough ago for
+/// how that went, or tried at a time later than now. That last came from a clock
+/// that ran ahead, and must not silence a currency until that date.
 #[must_use]
 pub fn due(now: Timestamp, needed: &[Currency], coverage: &[FxCoverage]) -> Vec<Currency> {
     needed
@@ -67,9 +72,11 @@ pub fn due(now: Timestamp, needed: &[Currency], coverage: &[FxCoverage]) -> Vec<
                         FxFetchStatus::Failing => AFTER_FAILING,
                         FxFetchStatus::NotPublished => AFTER_NOT_PUBLISHED,
                     };
-                    row.last_attempt_at
-                        .checked_add(wait)
-                        .is_ok_and(|next| next <= now)
+                    row.last_attempt_at > now
+                        || row
+                            .last_attempt_at
+                            .checked_add(wait)
+                            .is_ok_and(|next| next <= now)
                 })
         })
         .collect()
@@ -81,6 +88,12 @@ fn window_start(last_on: Date, today: Date) -> Date {
     last_on
         .min(today)
         .saturating_sub(Span::new().days(LOOK_BACK_DAYS))
+}
+
+/// Logs that a currency's turn couldn't be stored, and hands the error on.
+fn not_stored(currency: Currency, err: StoreError) -> StoreError {
+    tracing::warn!(currency = %currency, error = ?err, "could not store an exchange rate fetch");
+    err
 }
 
 /// Exchange rates and the daily table's days.
@@ -138,12 +151,16 @@ impl FxService {
     }
 
     /// Asks for each currency that is due, one at a time, and answers how many
-    /// were asked for. No transaction is open during a provider's call; each
-    /// answer then commits in one, with its rates, its rows and its coverage.
+    /// were asked for. The attempt commits before the call, so a store that
+    /// can't write means no request, and a crash during one or an answer that
+    /// can't be stored waits its interval like any other try. No transaction is
+    /// open during the call; the answer then commits in one, with its rates, its
+    /// rows and its coverage.
     ///
     /// # Errors
     ///
-    /// Backend failures. A provider's failure isn't one: it is recorded.
+    /// Backend failures, the first of them once every currency has had its turn.
+    /// A provider's failure isn't one: it is recorded.
     pub async fn fetch_due(&self) -> Result<u32, StoreError> {
         let Some(provider) = &self.provider else {
             return Ok(0);
@@ -154,18 +171,36 @@ impl FxService {
         let wanted = needed(&accounts, display);
         let today = self.today();
         let mut asked = 0;
+        let mut failure = None;
         for currency in due(self.clock.now(), &wanted, &coverage) {
+            if asked > 0 {
+                tokio::time::sleep(REQUEST_PAUSE).await;
+            }
             let since = coverage
                 .iter()
                 .find(|row| row.currency == currency)
                 .and_then(|row| row.last_on)
                 .map(|last_on| window_start(last_on, today));
+            if let Err(err) = self.record_attempt(currency).await {
+                failure.get_or_insert(not_stored(currency, err));
+                continue;
+            }
             let answer = provider.fetch(currency, since, today).await;
-            self.record(provider.source(), currency, since, answer)
-                .await?;
             asked += 1;
+            if let Err(err) = self
+                .record(provider.source(), currency, since, answer)
+                .await
+            {
+                failure.get_or_insert(not_stored(currency, err));
+            }
         }
-        Ok(asked)
+        failure.map_or(Ok(asked), Err)
+    }
+
+    async fn record_attempt(&self, currency: Currency) -> Result<(), StoreError> {
+        let mut tx = self.store.begin().await?;
+        tx.record_fx_attempt(currency, self.clock.now()).await?;
+        tx.commit().await
     }
 
     /// Commits one answer about `currency`. An answer with `since` is about a
@@ -322,11 +357,18 @@ async fn every_tick<P, F>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
     use coffer_domain::fx::{FxCoverage, FxFetchStatus};
     use coffer_domain::money::Currency;
+    use coffer_store::StoreError;
     use jiff::{SignedDuration, Timestamp};
+    use tokio::sync::watch;
+    use tokio::time::Instant;
 
-    use super::{due, needed};
+    use super::{due, every_tick, needed};
 
     fn cur(code: &str) -> Currency {
         Currency::parse(code).unwrap()
@@ -334,6 +376,41 @@ mod tests {
 
     fn codes(list: &[&str]) -> Vec<Currency> {
         list.iter().map(|code| cur(code)).collect()
+    }
+
+    /// Each error waits longer, a success waits a tick and starts over.
+    #[tokio::test(start_paused = true)]
+    async fn errors_back_off_and_a_success_starts_over() {
+        let (stop, stopped) = watch::channel(false);
+        let script = Mutex::new(VecDeque::from([false, false, true, false, true]));
+        let passes = Mutex::new(Vec::new());
+
+        every_tick("test", stopped, Duration::from_secs(60), || {
+            passes.lock().unwrap().push(Instant::now());
+            let succeeded = {
+                let mut script = script.lock().unwrap();
+                let succeeded = script.pop_front().unwrap();
+                if script.is_empty() {
+                    stop.send(true).unwrap();
+                }
+                succeeded
+            };
+            async move {
+                if succeeded {
+                    Ok(())
+                } else {
+                    Err(StoreError::NotFound)
+                }
+            }
+        })
+        .await;
+
+        let passes = passes.lock().unwrap();
+        let waits: Vec<_> = passes
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).as_secs())
+            .collect();
+        assert_eq!(waits, [1, 2, 60, 1]);
     }
 
     #[test]
@@ -408,21 +485,23 @@ mod tests {
         assert_eq!(due(now, &[], &[row(FxFetchStatus::Failing, hours(48))]), []);
     }
 
-    /// An attempt so far from now that the next one can't be represented is not
-    /// a reason to stop the others.
+    /// An attempt later than now came from a clock that ran ahead. It says nothing
+    /// of when to ask next, and must not silence the currency until that date.
     #[test]
-    fn due_skips_an_unrepresentable_next_attempt() {
+    fn an_attempt_in_the_future_is_due() {
         let now = Timestamp::from_second(1_800_000_000).unwrap();
-        let (usd, gbp) = (cur("USD"), cur("GBP"));
-        let overflowing = FxCoverage {
-            currency: usd,
-            status: FxFetchStatus::Ready,
-            first_on: None,
-            last_on: None,
-            last_attempt_at: Timestamp::MAX,
-            last_success_at: None,
-            last_error: None,
-        };
-        assert_eq!(due(now, &[usd, gbp], &[overflowing]), vec![gbp]);
+        let usd = cur("USD");
+        for last_attempt_at in [now + SignedDuration::from_secs(1), Timestamp::MAX] {
+            let ahead = FxCoverage {
+                currency: usd,
+                status: FxFetchStatus::Ready,
+                first_on: None,
+                last_on: None,
+                last_attempt_at,
+                last_success_at: None,
+                last_error: None,
+            };
+            assert_eq!(due(now, &[usd], &[ahead]), vec![usd], "{last_attempt_at}");
+        }
     }
 }

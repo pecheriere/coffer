@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use coffer_domain::fx::FxSource;
 use coffer_domain::sync::SyncRunStatus;
+use coffer_domain::time::Clock as _;
 use coffer_server::cli::{open_state, serve_with};
 use coffer_server::config::Config;
 use coffer_server::fx::RateProvider;
@@ -199,6 +200,26 @@ async fn a_stalled_provider_does_not_stop_a_sync() {
     running.stop().await;
 }
 
+/// An attempt is committed before the call, so a crash or a stop during a fetch
+/// can't make the next start ask again at once.
+#[tokio::test]
+async fn a_fetch_cut_short_still_counts_as_an_attempt() {
+    let server = TestServer::new().await;
+    holding(&server.store, "USD").await;
+    holding(&server.store, "GBP").await;
+    let provider = Arc::new(Stalled::default());
+    let running = start(service(
+        &server,
+        Some(Arc::clone(&provider) as Arc<dyn RateProvider>),
+    ));
+    until(|| async { provider.asked.load(Ordering::SeqCst) }).await;
+    running.stop().await;
+
+    let attempted = server.store.fx_coverage().await.unwrap();
+    assert_eq!(attempted.len(), 1, "the first currency's attempt");
+    assert_eq!(attempted[0].last_attempt_at, server.clock.now());
+}
+
 /// Whatever a fetch is doing, shutdown doesn't wait for it.
 #[tokio::test]
 async fn a_stalled_provider_does_not_hold_up_shutdown() {
@@ -216,7 +237,7 @@ async fn a_stalled_provider_does_not_hold_up_shutdown() {
 }
 
 #[tokio::test]
-async fn no_provider_means_no_rate_task_and_still_fills() {
+async fn with_no_provider_days_still_fill_and_no_rate_is_tried() {
     let server = TestServer::new().await;
     server.clock.set(noon(MONDAY));
     holding(&server.store, "USD").await;

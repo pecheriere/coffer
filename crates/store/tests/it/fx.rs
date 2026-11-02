@@ -717,3 +717,106 @@ async fn a_replacement_rolled_back_changes_nothing() {
     assert_eq!(days_of(&store, "USD").await, [fri, sat, mon]);
     assert_eq!(coverage_of(&store, "USD").await.last_attempt_at, at(0));
 }
+
+#[tokio::test]
+async fn a_replacement_removing_two_days_answers_the_earlier() {
+    let (_dir, store) = open().await;
+    let (fri, sat, sun, mon) = (
+        date(2026, 10, 30),
+        date(2026, 10, 31),
+        date(2026, 11, 1),
+        date(2026, 11, 2),
+    );
+    upsert(
+        &store,
+        "USD",
+        &[
+            obs(fri, "1.1"),
+            obs(sat, "9"),
+            obs(sun, "9"),
+            obs(mon, "1.2"),
+        ],
+        at(0),
+    )
+    .await;
+
+    let changed = replace(
+        &store,
+        "USD",
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await;
+
+    assert_eq!(changed, Some(sat));
+    assert_eq!(days_of(&store, "USD").await, [fri, mon]);
+}
+
+/// An empty answer about a window holding a rate says nothing of the source's
+/// health: what is known stays, and only the time of the attempt moves.
+#[tokio::test]
+async fn an_empty_replacement_changes_only_the_attempt() {
+    let (_dir, store) = open().await;
+    let fri = date(2026, 10, 30);
+    upsert(&store, "USD", &[obs(fri, "1.1")], at(0)).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_failure(
+        cur("USD"),
+        FxFetchStatus::Failing,
+        Some(FxErrorCode::Network),
+        at(1),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let before = coverage_of(&store, "USD").await;
+
+    replace(&store, "USD", fri, &[], at(2)).await;
+
+    let after = coverage_of(&store, "USD").await;
+    assert_eq!(
+        after,
+        FxCoverage {
+            last_attempt_at: at(2),
+            ..before
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_attempt_changes_only_its_time() {
+    let (_dir, store) = open().await;
+    upsert(&store, "USD", &[obs(date(2026, 10, 30), "1.1")], at(0)).await;
+    let before = coverage_of(&store, "USD").await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_attempt(cur("USD"), at(5)).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let after = coverage_of(&store, "USD").await;
+    assert_eq!(
+        after,
+        FxCoverage {
+            last_attempt_at: at(5),
+            ..before
+        }
+    );
+}
+
+/// A first attempt that never gets an answer, as after a crash, is tried again
+/// soon rather than a day later, and claims no rate.
+#[tokio::test]
+async fn a_first_attempt_reads_as_failing_with_no_code() {
+    let (_dir, store) = open().await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_attempt(cur("USD"), at(5)).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let coverage = coverage_of(&store, "USD").await;
+    assert_eq!(coverage.status, FxFetchStatus::Failing);
+    assert_eq!(coverage.last_error, None);
+    assert_eq!(coverage.last_on, None);
+    assert_eq!(coverage.last_attempt_at, at(5));
+}

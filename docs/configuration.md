@@ -281,10 +281,12 @@ safe while the server runs: it takes the database's write lock in one
 transaction like any writer, so other writes wait for it, for up to the store's
 15 s busy timeout. Opening the database applies this version's migrations, as
 `backup` does, so run the same version as the server. It never creates a
-database: no database found is exit code 1. You rarely need
+database: no database found, or an empty file, is exit code 1. You rarely need
 it: the first start after the upgrade that adds the table rebuilds it in the
 background while the server already answers, and until then a report says so
-instead of showing a number.
+instead of showing a number. It is also how to undo a clock that ran ahead: the
+table never moves its last day back by itself, and the command resets it to
+today and removes the days after.
 
 `healthcheck` is meant for container health checks and process supervisors.
 It sends `GET /healthz` to `COFFER_LISTEN`, connecting to loopback

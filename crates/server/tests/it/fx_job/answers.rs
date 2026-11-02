@@ -1,17 +1,20 @@
 //! What an answer does to what is stored, and how a failure is recorded.
 
+use std::time::{Duration, Instant};
+
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
 use coffer_domain::fx::{FxErrorCode, FxFetchStatus};
+use coffer_domain::time::Clock as _;
 use coffer_server::fx::RateError;
 use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text, log_marker};
 use jiff::SignedDuration;
 use jiff::civil::date;
 
 use super::{
-    FRIDAY, MONDAY, SATURDAY, SUNDAY, coverage_of, display_minor, ecb_at, holding, hours, noon,
-    rate, rates_of, rows_of, scripted, service, show_in, usd_holding_in_euros,
+    FRIDAY, MONDAY, SATURDAY, SUNDAY, coverage_of, cur, display_minor, ecb_at, holding, hours,
+    noon, rate, rates_of, rows_of, scripted, service, show_in, usd_holding_in_euros,
 };
 
 #[tokio::test]
@@ -138,6 +141,12 @@ async fn an_empty_answer_removes_nothing() {
     let coverage = coverage_of(&server.store, "USD").await.unwrap();
     assert_eq!(coverage.status, FxFetchStatus::Ready);
     assert_eq!(coverage.last_on, Some(MONDAY));
+    assert_eq!(coverage.last_attempt_at, server.clock.now());
+    assert_eq!(
+        coverage.last_success_at,
+        Some(noon(MONDAY)),
+        "an empty answer is not a success"
+    );
     let logged = captured_log_text();
     let (_, after) = logged.split_once(&start).unwrap();
     assert!(
@@ -285,4 +294,110 @@ async fn a_failure_for_one_currency_doesn_t_stop_the_next() {
     assert_eq!(gbp.last_error, Some(FxErrorCode::Network));
     let usd = coverage_of(&server.store, "USD").await.unwrap();
     assert_eq!(usd.status, FxFetchStatus::Ready);
+}
+
+/// An empty 200 doesn't make a failing source healthy.
+#[tokio::test]
+async fn an_empty_answer_leaves_a_failing_source_failing() {
+    let (server, provider, fx) = scripted().await;
+    usd_holding_in_euros(&server, &fx, FRIDAY).await;
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "2")]));
+    fx.fetch_due().await.unwrap();
+    provider.answer("USD", Err(RateError::Network));
+    server.clock.advance(hours(6));
+    fx.fetch_due().await.unwrap();
+
+    provider.answer("USD", Ok(Vec::new()));
+    server.clock.advance(hours(1));
+    assert_eq!(fx.fetch_due().await.unwrap(), 1);
+
+    let coverage = coverage_of(&server.store, "USD").await.unwrap();
+    assert_eq!(coverage.status, FxFetchStatus::Failing);
+    assert_eq!(coverage.last_error, Some(FxErrorCode::Network));
+    assert_eq!(coverage.last_success_at, Some(noon(MONDAY)));
+    assert_eq!(coverage.last_attempt_at, server.clock.now());
+}
+
+/// A store that can't write means no request at all, and the next currency is
+/// still asked for.
+#[tokio::test]
+async fn a_store_that_can_t_record_the_attempt_means_no_request() {
+    let (server, provider, fx) = scripted().await;
+    holding(&server.store, "GBP").await;
+    holding(&server.store, "USD").await;
+    provider.answer("GBP", Ok(vec![rate(FRIDAY, "0.9")]));
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "1.1")]));
+    server
+        .store
+        .inject_fx_coverage_fault_for_tests()
+        .await
+        .unwrap();
+
+    assert!(fx.fetch_due().await.is_err(), "the failure is reported");
+    assert!(fx.fetch_due().await.is_err(), "the failure is reported");
+
+    assert_eq!(provider.calls(), [(cur("USD"), None, MONDAY)]);
+    let usd = coverage_of(&server.store, "USD").await.unwrap();
+    assert_eq!(usd.status, FxFetchStatus::Ready);
+}
+
+/// An answer that can't be stored costs one request per interval, not one per
+/// pass, and doesn't stop the next currency.
+#[tokio::test]
+async fn an_answer_that_can_t_be_stored_is_not_asked_for_again_at_once() {
+    let (server, provider, fx) = scripted().await;
+    holding(&server.store, "GBP").await;
+    holding(&server.store, "USD").await;
+    provider.answer("GBP", Ok(vec![rate(FRIDAY, "0.9")]));
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "1.1")]));
+    server.store.inject_fx_rate_fault_for_tests().await.unwrap();
+
+    assert!(fx.fetch_due().await.is_err(), "the failure is reported");
+    assert_eq!(
+        provider.calls(),
+        [(cur("GBP"), None, MONDAY), (cur("USD"), None, MONDAY)]
+    );
+    assert_eq!(rates_of(&server.store, "USD").await.len(), 1);
+
+    assert_eq!(fx.fetch_due().await.unwrap(), 0);
+    assert_eq!(provider.calls().len(), 2);
+
+    server.clock.advance(hours(1));
+    assert!(fx.fetch_due().await.is_err(), "the failure is reported");
+    assert_eq!(provider.calls().len(), 3);
+}
+
+/// One clock that ran ahead must not silence a currency until that date.
+#[tokio::test]
+async fn a_clock_that_ran_ahead_does_not_stop_rates() {
+    let (server, provider, fx) = scripted().await;
+    holding(&server.store, "USD").await;
+    show_in(&server.store, "EUR").await;
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "1.1")]));
+    server.clock.set(noon(date(2030, 1, 1)));
+    fx.fetch_due().await.unwrap();
+    provider.forget_calls();
+
+    server.clock.set(noon(MONDAY));
+    assert_eq!(fx.fetch_due().await.unwrap(), 1);
+    assert_eq!(fx.fetch_due().await.unwrap(), 0, "once, not on every pass");
+
+    assert_eq!(
+        provider.calls(),
+        [(cur("USD"), Some(date(2026, 10, 23)), MONDAY)]
+    );
+}
+
+/// A courtesy to the source: a pass doesn't ask for currencies back to back.
+#[tokio::test]
+async fn a_pass_pauses_between_requests() {
+    let (server, provider, fx) = scripted().await;
+    holding(&server.store, "GBP").await;
+    holding(&server.store, "USD").await;
+    let started = Instant::now();
+
+    assert_eq!(fx.fetch_due().await.unwrap(), 2);
+
+    assert!(started.elapsed() >= Duration::from_secs(1), "no pause");
+    assert_eq!(provider.calls().len(), 2);
 }

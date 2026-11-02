@@ -1065,7 +1065,11 @@ row: a stored rate absent there is removed and the rows from that day rewritten,
 transaction, so a false rate on a weekend or holiday doesn't last. Rates after its last row
 stay, since an answer cut at the end of a line looks like a shorter one, and the next answer
 to pass them settles them. An empty answer or a failure removes nothing. An empty answer can't
-be true of a window holding a rate that was published, so it is logged and rates are kept.
+be true of a window holding a rate that was published, so it is logged, rates are kept and only
+the time of the attempt moves. On first use an empty answer reads as `not_published`, which is
+what it looks like, at the cost of a 24 hour wait. Each attempt commits before its request, so a
+store that can't write sends none, and an attempt dated after now, from a clock that ran ahead,
+is due.
 
 **N8. The display currency is a household setting,** set by an admin through
 `PATCH /api/v1/household/settings` or `/admin/household`, audited, and replaceable but never

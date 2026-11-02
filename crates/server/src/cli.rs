@@ -283,17 +283,24 @@ async fn open_store(config: &Config) -> Result<Store, CliError> {
 }
 
 /// Opens the database of a command that has no use for an empty one: it never
-/// creates a database or a data directory, and no database found is a failure.
+/// creates a database or a data directory. No database found is a failure, and
+/// so is an empty file, which opening would migrate into an empty database.
 async fn open_existing_store(config: &Config) -> Result<Store, CliError> {
     if config.data_dir.try_exists()? {
         check_private_dir(&config.data_dir)?;
     }
-    if !config.database_path().try_exists()? {
+    let path = config.database_path();
+    if !path.try_exists()? {
         return Err(CliError::Failed(
             "no database found in the data directory".to_owned(),
         ));
     }
-    Ok(Store::open(&config.database_path()).await?)
+    if std::fs::metadata(&path)?.len() == 0 {
+        return Err(CliError::Failed(
+            "the database file in the data directory is empty".to_owned(),
+        ));
+    }
+    Ok(Store::open(&path).await?)
 }
 
 /// Refuses a data directory that group or others can access: it holds the

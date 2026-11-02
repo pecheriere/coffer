@@ -466,3 +466,32 @@ async fn rebuild_net_worth_waits_for_a_writer() {
             .any(|row| row.account == later && row.balance_minor == 7)
     );
 }
+
+/// An empty file isn't a database: opening it would migrate it into an empty one,
+/// and a backup or a rebuild of that would read as if all were well.
+#[tokio::test]
+async fn an_empty_database_file_is_refused() {
+    let dest_dir = tempfile::tempdir().unwrap();
+    let dest = dest_dir.path().join("backup.db");
+    let commands = [
+        vec!["rebuild-net-worth"],
+        vec!["backup", dest.to_str().unwrap()],
+    ];
+    for command in commands {
+        let dir = tempfile::tempdir().unwrap();
+        let env = env(&dir);
+        let database = dir.path().join("coffer.db");
+        std::fs::write(&database, b"").unwrap();
+
+        let failed = run(&command, &env).await;
+
+        assert_eq!(failed.code, ExitCode::from(1), "{command:?}");
+        assert!(failed.err.contains("empty"), "{command:?}");
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().len(),
+            0,
+            "{command:?}"
+        );
+        assert!(!dest.exists(), "{command:?}");
+    }
+}
