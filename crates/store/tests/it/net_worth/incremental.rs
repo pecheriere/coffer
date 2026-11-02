@@ -476,38 +476,56 @@ async fn a_bind_s_days_after_through_wait_for_the_fill() {
     assert_eq!(row_on(&store, one, oct(13)).await.balance_minor, 120);
 }
 
-/// Every file under `crates/store/src` holding `needle`, by name.
-fn files_holding(needle: &str) -> Vec<String> {
-    fn walk(dir: &Path, needle: &str, found: &mut Vec<String>) {
+/// How often `needle`, in lower case, appears in each file under
+/// `crates/store/src` holding it, by path: whatever the case, and whatever spaces,
+/// line breaks and line continuations lie between its words.
+fn counts_of(needle: &str) -> Vec<(String, usize)> {
+    fn walk(dir: &Path, root: &Path, needle: &str, found: &mut Vec<(String, usize)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                walk(&path, needle, found);
-            } else if std::fs::read_to_string(&path).unwrap().contains(needle) {
-                found.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                walk(&path, root, needle, found);
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap().to_lowercase();
+            let words = source.replace('\\', " ");
+            let count = words
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .matches(needle)
+                .count();
+            if count > 0 {
+                let name = path.strip_prefix(root).unwrap().display().to_string();
+                found.push((name, count));
             }
         }
     }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        needle,
-        &mut found,
-    );
+    walk(&root, &root, needle, &mut found);
     found.sort();
     found
 }
 
 /// A snapshot written anywhere else would leave the table stale until the next
-/// rebuild: a new writer fails here until it refreshes the table.
+/// rebuild: a new writer fails here until it refreshes the table. Each file's
+/// count is exact, so a second writer in a known file fails too.
 #[test]
 fn every_snapshot_writer_is_known() {
+    let known = |name: &str, count| (name.to_owned(), count);
     assert_eq!(
-        files_holding("INTO balance_snapshots"),
-        ["balances.rs", "kept_balances.rs"]
+        counts_of("into balance_snapshots"),
+        [
+            known("balances.rs", 1),
+            // The bind, and the fixture of its migration test.
+            known("kept_balances.rs", 2),
+            // The fixture of the migration test.
+            known("net_worth/tests.rs", 1),
+        ]
     );
-    for changing in ["UPDATE balance_snapshots", "DELETE FROM balance_snapshots"] {
-        assert_eq!(files_holding(changing), [] as [String; 0]);
+    for changing in ["update balance_snapshots", "delete from balance_snapshots"] {
+        assert_eq!(counts_of(changing), []);
     }
 }
 

@@ -233,19 +233,18 @@ impl StoreTx {
     }
 
     /// Replace every row, computing every account from its first snapshot, up to
-    /// `through` or the day already filled if that is later, and clear
-    /// `rebuild_needed`. Answers the rows written. It holds the write lock
-    /// throughout: 110,000 rows took 0.4 s in a release build on a desktop machine,
-    /// well inside the store's 15 s busy timeout on a small board too.
+    /// `through`, and clear `rebuild_needed`. `through` becomes `filled_through` even
+    /// if it is earlier: everything is recomputed, so this is how a clock that jumped
+    /// ahead is undone. Answers the rows written.
+    ///
+    /// It holds the write lock throughout. 110,000 rows took about 0.5 s in a release
+    /// build on a desktop machine; it has not been measured on a small board, and the
+    /// first deploy measures it on the Pi against the store's 15 s busy timeout.
     ///
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
     pub async fn rebuild_net_worth(&mut self, through: Date) -> Result<u64, StoreError> {
-        let state = self.net_worth_state().await?;
-        let through = state
-            .filled_through
-            .map_or(through, |filled| filled.max(through));
         sqlx::query("DELETE FROM account_daily_values")
             .execute(&mut *self.tx)
             .await

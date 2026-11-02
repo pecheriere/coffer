@@ -36,7 +36,9 @@ pub struct NetWorthData {
     /// a row missing from the table shows as a hole even on that first day.
     pub first_on: Vec<(AccountId, Date)>,
     /// What is known of fetching the rates of the accounts' currencies and the
-    /// display currency, by currency.
+    /// display currency, by currency. It names no other currency, but what it says
+    /// of these can depend on an account outside the scope: see
+    /// [`Store::net_worth_data`].
     pub coverage: Vec<FxCoverage>,
 }
 
@@ -170,13 +172,25 @@ impl Store {
 
     /// Everything a report over `[from, to]` for `scope` reads, seen at one moment.
     /// Rows stop at the last day filled, and while a rebuild is needed there are
-    /// none. Nothing in the answer but `state` and the settings depends on an
-    /// account outside `scope`.
+    /// none. `accounts`, `rows` and `first_on` hold only what `scope` covers, and
+    /// `state` and the settings are the household's.
+    ///
+    /// `coverage` is limited to the currencies of `accounts` and the display currency,
+    /// yet it can still depend on an account outside `scope`: a currency is fetched
+    /// only when the household needs rates at all (N7), so a hidden account in another
+    /// currency can be why a visible currency has an entry, and what it says.
+    /// **A caller must not expose `coverage` raw:** it only explains why a rate that a
+    /// visible row lacks is missing.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Invalid`] for a range past the most points a report answers;
-    /// backend failures, including a row in another display currency than the
+    /// [`StoreError::Invalid`] for a range past the most points a report answers. That
+    /// is checked only here, after the state is read, on `[from, min(to, last day
+    /// filled)]`, and not at all while a rebuild is needed or when nothing of the
+    /// range is filled. So whether it refuses depends on the table, and a caller whose
+    /// refusal must depend on the query alone checks `period_ends` itself first.
+    ///
+    /// Backend failures, including a row in another display currency than the
     /// setting's, which is corruption: never a number in the wrong units.
     pub async fn net_worth_data(
         &self,

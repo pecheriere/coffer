@@ -512,3 +512,31 @@ async fn a_range_past_the_point_limit_is_refused() {
 
     assert!(matches!(refused, StoreError::Invalid(_)));
 }
+
+/// A display currency flipping back and forth while reads go on: a read that saw
+/// the setting before a change and its rows after one would refuse its own rows.
+/// A correct read can't fail this; a split one fails it, in practice every time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_can_t_split_a_read() {
+    let (_dir, store) = open().await;
+    let one = holding(&store, "USD").await;
+    snap(&store, one, oct(1), 100).await;
+    fx(&store, "USD", &[(oct(1), "1.1")]).await;
+    show_in(&store, "USD").await;
+    rebuild(&store, oct(30)).await;
+
+    let flipping = store.clone();
+    let writer = tokio::spawn(async move {
+        for code in ["EUR", "USD"].into_iter().cycle().take(40) {
+            show_in(&flipping, code).await;
+        }
+    });
+    loop {
+        let data = by_day(&store, &AccountScope::All, oct(1), oct(30)).await;
+        assert_eq!(data.rows.len(), 30);
+        if writer.is_finished() {
+            break;
+        }
+    }
+    writer.await.unwrap();
+}

@@ -108,17 +108,41 @@ async fn rebuild_removes_what_no_source_holds() {
     assert_eq!(rows_of(&store, one).await.len(), 1);
 }
 
+/// A rebuild recomputes everything, so the day it is given is the last the table
+/// holds, earlier than before or not.
 #[tokio::test]
-async fn rebuild_never_moves_through_back() {
+async fn rebuild_resets_through_to_the_day_given() {
     let (_dir, store) = open().await;
     let one = holding(&store, "USD").await;
     snap(&store, one, oct(1), 100).await;
     rebuild(&store, oct(5)).await;
 
-    assert_eq!(rebuild(&store, oct(3)).await, 5);
+    assert_eq!(rebuild(&store, oct(3)).await, 3);
 
-    assert_eq!(state(&store).await.filled_through, Some(oct(5)));
-    assert_eq!(rows_of(&store, one).await.last().unwrap().on, oct(5));
+    assert_eq!(state(&store).await.filled_through, Some(oct(3)));
+    assert_eq!(rows_of(&store, one).await.last().unwrap().on, oct(3));
+}
+
+/// A clock that jumped ahead left its rows behind: a rebuild takes them away, so
+/// later changes don't keep paying for them.
+#[tokio::test]
+async fn a_rebuild_undoes_a_forward_clock_jump() {
+    let (_dir, store) = open().await;
+    let one = holding(&store, "USD").await;
+    snap(&store, one, oct(1), 100).await;
+    rebuild(&store, oct(2)).await;
+    fill(&store, date(2027, 1, 1)).await;
+
+    rebuild(&store, oct(3)).await;
+
+    assert_eq!(state(&store).await.filled_through, Some(oct(3)));
+    assert_eq!(rows_of(&store, one).await.len(), 3);
+    assert_eq!(
+        fill(&store, oct(2)).await,
+        0,
+        "a fill still never moves back"
+    );
+    assert_eq!(state(&store).await.filled_through, Some(oct(3)));
 }
 
 #[tokio::test]
@@ -220,15 +244,26 @@ enum Op {
     },
 }
 
-/// The first day of the 40-day window.
-const START: Date = date(2026, 9, 1);
+/// The first day of the 40-day window, which spans the first day rows may have.
+const START: Date = date(1969, 12, 20);
+
+/// What stands for a day in the distant past, of no row at all.
+const DISTANT: i8 = -1;
 
 fn day(offset: i8) -> Date {
+    if offset == DISTANT {
+        return date(1, 1, 1);
+    }
     START.checked_add(i64::from(offset).days()).unwrap()
 }
 
+/// A day of the window, or now and then one long before it.
+fn offset() -> impl Strategy<Value = i8> {
+    prop_oneof![9 => 0_i8..40, 1 => Just(DISTANT)]
+}
+
 fn code() -> impl Strategy<Value = &'static str> {
-    sample::select(vec!["USD", "EUR", "JPY"])
+    sample::select(vec!["USD", "EUR", "JPY", "KWD"])
 }
 
 fn minor() -> impl Strategy<Value = i64> {
@@ -244,7 +279,7 @@ fn minor() -> impl Strategy<Value = i64> {
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         code().prop_map(Op::Create),
-        (0_usize..8, 0_i8..40, minor(), proptest::bool::ANY).prop_map(
+        (0_usize..8, offset(), minor(), proptest::bool::ANY).prop_map(
             |(account, on, minor, manual)| Op::Snapshot {
                 account,
                 on,
@@ -253,16 +288,16 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         (
-            sample::select(vec!["USD", "JPY"]),
-            0_i8..40,
-            sample::select(vec!["1.1", "1.2", "170"])
+            sample::select(vec!["USD", "JPY", "KWD"]),
+            offset(),
+            sample::select(vec!["0.34", "1.1", "1.2", "170"])
         )
             .prop_map(|(currency, on, rate)| Op::Rates { currency, on, rate }),
         code().prop_map(Op::Display),
         (1_i8..10).prop_map(Op::Fill),
         (
             0_usize..8,
-            collection::vec((0_i8..40, minor(), proptest::bool::weighted(0.8)), 0..5)
+            collection::vec((offset(), minor(), proptest::bool::weighted(0.8)), 0..5)
         )
             .prop_map(|(account, kept)| Op::Bind { account, kept }),
     ]
