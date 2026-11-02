@@ -351,6 +351,12 @@ pub enum Action {
     RemoveConnection {
         owner: MemberId,
     },
+    /// Forget the connection `owner` added without giving its credentials up
+    /// at the provider, which leaves the provider billing it. Never an agent
+    /// token's: it needs a passkey session, and the same role as removal.
+    ForgetConnection {
+        owner: MemberId,
+    },
     /// Let the sync cursor of the connection `owner` added move past records
     /// that keep failing to store. Those records are passed for good, so
     /// this needs a member signed in with a passkey: an agent token can read
@@ -413,6 +419,9 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<(), Denied> {
             Requirement::Scope(Scope::Write)
         }
         Action::RemoveConnection { .. } => Requirement::Scope(Scope::Admin),
+        Action::ForgetConnection { owner } if owner == actor.member => {
+            Requirement::SessionWithScope(Scope::Write)
+        }
         Action::ReleaseHeldCursor { owner } if owner == actor.member => {
             Requirement::SessionWithScope(Scope::Write)
         }
@@ -421,9 +430,9 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<(), Denied> {
         Action::ManageMembers | Action::ManageInvites | Action::ManageHousehold => {
             Requirement::Scope(Scope::Admin)
         }
-        Action::ReleaseHeldCursor { .. } | Action::IssueEnrollmentLink => {
-            Requirement::SessionWithScope(Scope::Admin)
-        }
+        Action::ForgetConnection { .. }
+        | Action::ReleaseHeldCursor { .. }
+        | Action::IssueEnrollmentLink => Requirement::SessionWithScope(Scope::Admin),
     };
     let session = matches!(actor.via, Via::Session);
     let reason = match requirement {

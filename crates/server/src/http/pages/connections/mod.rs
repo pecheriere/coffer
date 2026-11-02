@@ -2,15 +2,17 @@
 //! errors, and the provider accounts it reports by name and binding. No
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
-//! request a sync, remove a connection, let a held sync cursor move past
-//! the records that keep failing and bind a provider account to an
+//! request a sync, remove a connection, forget one whose sealed token
+//! cannot be opened (see [`forget`]), let a held sync cursor move past the
+//! records that keep failing and bind a provider account to an
 //! account (see [`bind`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
 
 mod bind;
+mod forget;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::Router;
 use axum::extract::{Path, State};
@@ -53,6 +55,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/connections/{id}/sync", post(sync))
         .route("/connections/{id}/remove", post(remove))
+        .route("/connections/{id}/forget", post(forget::forget))
         .route("/connections/{id}/release-cursor", post(release_cursor))
         .route(
             "/connections/provider-accounts/{id}/create-account",
@@ -116,7 +119,9 @@ async fn render(
     let can_manage = authorize(&actor, Action::ManageConnections).is_ok();
     let csrf = &viewer.csrf;
     let plaid_offered = state.config.plaid.is_some();
+    let forgettable = state.sync.forgettable(&actor).await.map_err(page_error)?;
     let shared = Shared {
+        forgettable: &forgettable,
         account_names: &account_names,
         binding: &binding,
         timezone: &state.config.timezone,
@@ -194,6 +199,9 @@ struct Shared<'a> {
     csrf: &'a str,
     can_manage: bool,
     plaid_offered: bool,
+    /// The connections the viewer may forget: their sealed token cannot be
+    /// opened, so removal cannot give the credentials up.
+    forgettable: &'a HashSet<ConnectionId>,
 }
 
 /// What the viewer may do with one connection beyond what everyone with
@@ -286,6 +294,14 @@ fn connection_card(
                     }
                     button.btn.btn-primary type="submit" { "Reconnect" }
                 }
+            }
+            @if live && plaid && !plaid_offered && !shared.forgettable.contains(&id) {
+                p.fine {
+                    "Plaid is not configured on this server. Configure it again to remove this connection."
+                }
+            }
+            @if shared.forgettable.contains(&id) {
+                (forget::section(id, &connection.label, csrf))
             }
             @if waiting {
                 h3 { "Set up your accounts" }
