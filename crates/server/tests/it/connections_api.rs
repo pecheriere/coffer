@@ -46,6 +46,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tower::ServiceExt as _;
 
+mod stuck_run;
+
 const PLAINTEXT: &str = "https://user:SECRET-CREDENTIAL-MARKER@bridge.example/simplefin";
 
 /// How long a test waits for the worker before failing.
