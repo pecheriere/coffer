@@ -7,6 +7,7 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod settings;
 pub mod transactions;
 
 use std::sync::Arc;

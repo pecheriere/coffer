@@ -16,6 +16,7 @@ mod egress;
 mod egress_relay;
 mod grants;
 mod healthcheck;
+mod household_settings;
 mod identity;
 mod matching;
 mod openapi;

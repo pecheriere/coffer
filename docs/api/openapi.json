@@ -2294,6 +2294,208 @@
         ]
       }
     },
+    "/api/v1/household/settings": {
+      "get": {
+        "tags": [
+          "household"
+        ],
+        "summary": "The household's forecast settings.",
+        "description": "The forecast settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon and when a balance counts as stale. Needs `read`. Account grants do not apply: settings describe no account.",
+        "operationId": "getHouseholdSettings",
+        "responses": {
+          "200": {
+            "description": "The settings; the defaults until some are set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "household"
+        ],
+        "summary": "Changes the household's forecast settings.",
+        "description": "Changes the settings given; a field left out stays. A floor can be replaced but never unset: `floor: null` leaves it. A patch that changes nothing writes nothing. Needs `admin`. Account grants do not apply.",
+        "operationId": "updateHouseholdSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForecastSettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings as they now are.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "tags": [
@@ -4990,6 +5192,91 @@
         },
         "additionalProperties": false
       },
+      "ForecastSettings": {
+        "type": "object",
+        "description": "The household's defaults for a forecast.",
+        "required": [
+          "include_income",
+          "default_horizon_months",
+          "stale_after_days"
+        ],
+        "properties": {
+          "default_horizon_months": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The horizon of a forecast that names none: 1 to 60 months.",
+            "maximum": 60,
+            "minimum": 1
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SafetyFloor",
+                "description": "The safety floor. Until one is set a forecast has no number: a silent\nfloor of 0 would overstate what can be invested."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_income": {
+            "type": "boolean",
+            "description": "Whether planned inflows reduce the cash needed."
+          },
+          "stale_after_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How old a balance may be before it is flagged: 1 to 365 days.",
+            "maximum": 365,
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "ForecastSettingsPatch": {
+        "type": "object",
+        "description": "The settings to change. A field left out stays as it is. A floor can be\nreplaced but never unset: `null` leaves it.",
+        "properties": {
+          "default_horizon_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 to 60 months.",
+            "maximum": 60,
+            "minimum": 1
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SafetyFloor",
+                "description": "A new safety floor; `null` or absent keeps the current one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_income": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stale_after_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 to 365 days.",
+            "maximum": 365,
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
       "LinkedAccountView": {
         "type": "object",
         "description": "An account created for a provider account, and the provider account\nbound to it.",
@@ -5566,6 +5853,52 @@
           "member"
         ]
       },
+      "SafetyFloor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A fixed amount, 0 included, in its own currency.",
+            "required": [
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "This many months of planned recurring outflows, per currency: 1 to 60.",
+            "required": [
+              "months",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "months_of_outflows"
+                ]
+              },
+              "months": {
+                "type": "integer",
+                "format": "int32",
+                "maximum": 60,
+                "minimum": 1
+              }
+            }
+          }
+        ],
+        "description": "The cash that must stay untouched on top of the horizon's planned spending\nand goals."
+      },
       "Scope": {
         "type": "string",
         "description": "The rights an agent token or role carries. Ordered `Read < Write < Admin`.",
@@ -6087,6 +6420,10 @@
     {
       "name": "members",
       "description": "The household's members."
+    },
+    {
+      "name": "household",
+      "description": "The household-wide forecast settings: safety floor, income, horizon and stale-balance threshold."
     },
     {
       "name": "accounts",

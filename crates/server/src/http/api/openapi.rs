@@ -23,6 +23,7 @@ pub(super) const BEARER: &str = "bearer";
 pub(super) mod tags {
     pub const IDENTITY: &str = "identity";
     pub const MEMBERS: &str = "members";
+    pub const HOUSEHOLD: &str = "household";
     pub const ACCOUNTS: &str = "accounts";
     pub const CATEGORIES: &str = "categories";
     pub const TRANSACTIONS: &str = "transactions";
@@ -106,6 +107,11 @@ pub(super) fn base() -> OpenApi {
         .tags(Some([
             tag(tags::IDENTITY, "Who the token belongs to."),
             tag(tags::MEMBERS, "The household's members."),
+            tag(
+                tags::HOUSEHOLD,
+                "The household-wide forecast settings: safety floor, income, horizon and \
+                 stale-balance threshold.",
+            ),
             tag(
                 tags::ACCOUNTS,
                 "Accounts and their daily balances. Amounts are integer minor units of the \

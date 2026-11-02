@@ -7,6 +7,7 @@ mod audit;
 mod categories;
 pub(crate) mod connections;
 pub mod extract;
+mod household;
 mod me;
 mod members;
 pub mod openapi;
@@ -36,6 +37,7 @@ pub(super) fn router() -> Router<AppState> {
 fn routes() -> ApiRouter {
     ApiRouter::new()
         .op(routes!(me::me))
+        .op(routes!(household::get, household::update))
         .op(routes!(members::list))
         .op(routes!(audit::list))
         .op(routes!(accounts::list, accounts::create))
