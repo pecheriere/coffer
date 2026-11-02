@@ -1076,7 +1076,9 @@ may be before 1990-01-01 or the `startPeriod` asked for, or after tomorrow. The 
 account's or the display currency, EUR aside, and only when those come to more than one
 currency. First use of a currency fetches its whole history. After that the job asks every
 6 hours from 7 days before its last rate, so a missed day or a correction arrives by itself.
-A failure is logged with fixed text, recorded as a fixed code and retried. It never touches
+A failure is logged with fixed text, recorded as a fixed code and retried. A warning comes with
+the first failure and each change of status or code, and repeats are at `debug`, judged by the
+coverage so a restart isn't a change. It never touches
 sync, which has its own worker.
 
 Such an answer replaces the days it speaks for, from the start of the window to its own last

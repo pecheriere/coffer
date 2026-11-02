@@ -1,5 +1,6 @@
 //! What an answer does to what is stored, and how a failure is recorded.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -7,14 +8,14 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use coffer_domain::fx::{FxErrorCode, FxFetchStatus};
 use coffer_domain::time::Clock as _;
-use coffer_server::fx::RateError;
+use coffer_server::fx::{FxService, RateError, RateProvider};
 use coffer_server::testkit::{MockUpstream, TestServer, captured_log_text, log_marker};
 use jiff::SignedDuration;
 use jiff::civil::date;
 
 use super::{
-    FRIDAY, MONDAY, SATURDAY, SUNDAY, coverage_of, cur, display_minor, ecb_at, holding, hours,
-    noon, rate, rates_of, rows_of, scripted, service, show_in, usd_holding_in_euros,
+    FRIDAY, MONDAY, SATURDAY, SUNDAY, Scripted, coverage_of, cur, display_minor, ecb_at, holding,
+    hours, noon, rate, rates_of, rows_of, scripted, service, show_in, usd_holding_in_euros,
 };
 
 #[tokio::test]
@@ -400,4 +401,161 @@ async fn a_pass_pauses_between_requests() {
 
     assert!(started.elapsed() >= Duration::from_secs(1), "no pause");
     assert_eq!(provider.calls().len(), 2);
+}
+
+/// How many lines since `start` are at `level` about `code` and say `text`.
+fn lines_since(start: &str, level: &str, code: &str, text: &str) -> usize {
+    let logged = captured_log_text();
+    let (_, after) = logged.split_once(start).unwrap();
+    after
+        .lines()
+        .filter(|line| line.contains(level) && line.contains(code) && line.contains(text))
+        .count()
+}
+
+const FETCH_FAILED: &str = "could not fetch";
+
+/// A household holding `code` beside the euro, and a marker for the logs. Each
+/// test has a currency of its own, since tests share the log.
+async fn logging(code: &str) -> (TestServer, Arc<Scripted>, FxService, String) {
+    let (server, provider, fx) = scripted().await;
+    holding(&server.store, code).await;
+    show_in(&server.store, "EUR").await;
+    (server, provider, fx, log_marker())
+}
+
+/// A blocked host fails every hour for as long as it is blocked: that is one
+/// warning, and repeats only at `debug`.
+#[tokio::test]
+async fn a_repeated_failure_warns_once() {
+    let (server, provider, fx, start) = logging("SEK").await;
+    provider.answer("SEK", Err(RateError::Network));
+
+    for _ in 0..3 {
+        assert_eq!(fx.fetch_due().await.unwrap(), 1);
+        server.clock.advance(hours(1));
+    }
+
+    assert_eq!(lines_since(&start, "WARN", "SEK", FETCH_FAILED), 1);
+    assert_eq!(lines_since(&start, "DEBUG", "SEK", FETCH_FAILED), 2);
+}
+
+/// What was already said is in the store, so a restart doesn't say it again.
+#[tokio::test]
+async fn a_start_repeating_a_known_failure_is_a_repeat() {
+    let (server, provider, fx, start) = logging("DKK").await;
+    provider.answer("DKK", Err(RateError::Network));
+    fx.fetch_due().await.unwrap();
+
+    server.clock.advance(hours(1));
+    let restarted = service(
+        &server,
+        Some(Arc::clone(&provider) as Arc<dyn RateProvider>),
+    );
+    assert_eq!(restarted.fetch_due().await.unwrap(), 1);
+
+    assert_eq!(lines_since(&start, "WARN", "DKK", FETCH_FAILED), 1);
+    assert_eq!(lines_since(&start, "DEBUG", "DKK", FETCH_FAILED), 1);
+}
+
+#[tokio::test]
+async fn a_different_failure_warns_again() {
+    let (server, provider, fx, start) = logging("PLN").await;
+    for (failure, warnings) in [
+        (RateError::Network, 1),
+        (RateError::Unavailable { status: 503 }, 2),
+        (RateError::Unavailable { status: 502 }, 2),
+        (RateError::Network, 3),
+    ] {
+        provider.answer("PLN", Err(failure));
+        fx.fetch_due().await.unwrap();
+        server.clock.advance(hours(1));
+        assert_eq!(
+            lines_since(&start, "WARN", "PLN", FETCH_FAILED),
+            warnings,
+            "{failure:?}"
+        );
+    }
+}
+
+/// Whoever saw the warning sees the end of it, once.
+#[tokio::test]
+async fn a_recovery_is_said_once() {
+    let (server, provider, fx, start) = logging("HUF").await;
+    provider.answer("HUF", Err(RateError::Network));
+    fx.fetch_due().await.unwrap();
+
+    provider.answer("HUF", Ok(vec![rate(FRIDAY, "400")]));
+    for _ in 0..2 {
+        server.clock.advance(hours(6));
+        fx.fetch_due().await.unwrap();
+    }
+
+    assert_eq!(lines_since(&start, "WARN", "HUF", "again"), 1);
+    assert_eq!(lines_since(&start, "WARN", "HUF", FETCH_FAILED), 1);
+}
+
+/// A currency the source doesn't have, whether it says so or answers with
+/// nothing, is said once as well.
+#[tokio::test]
+async fn not_published_is_said_once() {
+    for (code, answer) in [
+        ("CZK", Err(RateError::NotPublished)),
+        ("ISK", Ok(Vec::new())),
+    ] {
+        let (server, provider, fx, start) = logging(code).await;
+        provider.answer(code, answer);
+        for _ in 0..2 {
+            assert_eq!(fx.fetch_due().await.unwrap(), 1);
+            server.clock.advance(hours(24));
+        }
+
+        assert_eq!(
+            lines_since(&start, "WARN", code, "not published"),
+            1,
+            "{code}"
+        );
+        assert_eq!(
+            lines_since(&start, "DEBUG", code, "not published"),
+            1,
+            "{code}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_good_answer_says_nothing() {
+    let (server, provider, fx, start) = logging("RON").await;
+    provider.answer("RON", Ok(vec![rate(FRIDAY, "5")]));
+    for _ in 0..2 {
+        fx.fetch_due().await.unwrap();
+        server.clock.advance(hours(6));
+    }
+
+    assert_eq!(lines_since(&start, "WARN", "RON", ""), 0);
+    assert_eq!(lines_since(&start, "DEBUG", "RON", ""), 0);
+}
+
+/// An attempt whose answer never came, as after a crash, is on record as failing
+/// with no code. Nothing was said about it, so it isn't a failure to repeat or to
+/// recover from.
+#[tokio::test]
+async fn an_attempt_cut_short_is_not_a_failure_said_before() {
+    for (code, answer, warnings) in [
+        ("KRW", Err(RateError::Network), 1),
+        ("THB", Ok(vec![rate(FRIDAY, "38")]), 0),
+    ] {
+        let (server, provider, fx, start) = logging(code).await;
+        let mut tx = server.store.begin().await.unwrap();
+        tx.record_fx_attempt(cur(code), server.clock.now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        provider.answer(code, answer);
+
+        server.clock.advance(hours(1));
+        assert_eq!(fx.fetch_due().await.unwrap(), 1);
+
+        assert_eq!(lines_since(&start, "WARN", code, ""), warnings, "{code}");
+    }
 }

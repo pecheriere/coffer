@@ -551,6 +551,33 @@ async fn all_range_stays_under_the_point_limit() {
     assert_eq!(row(&reply.body, "October 2026"), ["10.00"]);
 }
 
+/// From May 2053 every month since 1970 would pass the 1,000 periods a report
+/// answers, so the page would turn into an error. It shows the latest 1,000.
+#[tokio::test]
+async fn all_range_still_answers_past_the_point_limit() {
+    let world = world().await;
+    world.display("USD").await;
+    let old = world.holding("Old", "USD").await;
+    world.balance(old, "1970-01-01", 1_000).await;
+    world
+        .server
+        .clock
+        .set("2060-06-15T12:00:00Z".parse().unwrap());
+    world
+        .server
+        .app_state()
+        .fx
+        .keep_table_current()
+        .await
+        .unwrap();
+
+    let reply = page(&world, "?range=all").await;
+
+    assert_eq!(row(&reply.body, "May 2060"), ["10.00"]);
+    assert_eq!(row(&reply.body, "March 1977"), ["10.00"]);
+    assert!(!reply.body.contains("February 1977"), "one month too many");
+}
+
 #[tokio::test]
 async fn nav_links_to_net_worth_for_every_member() {
     let world = world().await;

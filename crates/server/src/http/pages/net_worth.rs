@@ -59,6 +59,11 @@ enum Range {
     All,
 }
 
+/// How many months before this one `All` reaches: with this month, the most
+/// periods a report answers, so from May 2053 it shows the latest of them rather
+/// than an error.
+const ALL_MONTHS: i64 = 999;
+
 impl Range {
     const ALL: [Self; 4] = [Self::ThreeMonths, Self::OneYear, Self::FiveYears, Self::All];
 
@@ -80,20 +85,20 @@ impl Range {
         }
     }
 
-    /// How far back it reaches, or `None` for everything, and how long its periods are.
-    fn reach(self) -> (Option<Span>, NetWorthInterval) {
+    /// How far back it reaches, and how long its periods are.
+    fn reach(self) -> (Span, NetWorthInterval) {
         match self {
-            Self::ThreeMonths => (Some(3.months()), NetWorthInterval::Day),
-            Self::OneYear => (Some(1.year()), NetWorthInterval::Week),
-            Self::FiveYears => (Some(5.years()), NetWorthInterval::Month),
-            Self::All => (None, NetWorthInterval::Month),
+            Self::ThreeMonths => (3.months(), NetWorthInterval::Day),
+            Self::OneYear => (1.year(), NetWorthInterval::Week),
+            Self::FiveYears => (5.years(), NetWorthInterval::Month),
+            Self::All => (ALL_MONTHS.months(), NetWorthInterval::Month),
         }
     }
 
     fn query(self, today: Date) -> NetWorthQuery {
         let (reach, interval) = self.reach();
-        let from = reach
-            .and_then(|reach| today.checked_sub(reach).ok())
+        let from = today
+            .checked_sub(reach)
             .map_or(MIN_VALUE_DATE, |from| from.max(MIN_VALUE_DATE));
         NetWorthQuery {
             from: Some(from),

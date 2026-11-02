@@ -8,10 +8,10 @@
 //! and dates read strictly, and a status.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use coffer_domain::fx::{FxCoverage, FxFetchStatus, FxSource, RateObservation};
+use coffer_domain::fx::{FxCoverage, FxErrorCode, FxFetchStatus, FxSource, RateObservation};
 use coffer_domain::money::Currency;
 use coffer_domain::time::Clock;
 use coffer_store::{Store, StoreError};
@@ -90,6 +90,52 @@ fn window_start(last_on: Date, today: Date) -> Date {
         .saturating_sub(Span::new().days(LOOK_BACK_DAYS))
 }
 
+/// How fetching a currency stood, as far as what the log has said goes. A row
+/// failing with no code is an attempt whose answer never came, of which nothing
+/// was said, so it counts as nothing known.
+fn said_before(row: &FxCoverage) -> Option<(FxFetchStatus, Option<FxErrorCode>)> {
+    let state = (row.status, row.last_error);
+    (state != (FxFetchStatus::Failing, None)).then_some(state)
+}
+
+/// Says that the source doesn't have `currency`, once until that changes.
+fn say_not_published(currency: Currency, before: Option<(FxFetchStatus, Option<FxErrorCode>)>) {
+    const TEXT: &str = "a currency's exchange rates are not published";
+    let status = FxFetchStatus::NotPublished.as_str();
+    if before == Some((FxFetchStatus::NotPublished, None)) {
+        tracing::debug!(currency = %currency, status, "{TEXT}");
+    } else {
+        tracing::warn!(currency = %currency, status, "{TEXT}");
+    }
+}
+
+/// Says that `currency` failed, once until the failure or the status changes. A
+/// blocked host fails every hour, and an hourly warning buries everything else.
+fn say_failed(
+    currency: Currency,
+    before: Option<(FxFetchStatus, Option<FxErrorCode>)>,
+    error: RateError,
+) {
+    const TEXT: &str = "could not fetch a currency's exchange rates";
+    let status = FxFetchStatus::Failing.as_str();
+    if before == Some((FxFetchStatus::Failing, error.code())) {
+        tracing::debug!(currency = %currency, status, reason = %error, "{TEXT}");
+    } else {
+        tracing::warn!(currency = %currency, status, reason = %error, "{TEXT}");
+    }
+}
+
+/// Says that `currency` has rates again, if it was said that it hadn't.
+fn say_fetched(currency: Currency, before: Option<(FxFetchStatus, Option<FxErrorCode>)>) {
+    if before.is_some_and(|(status, _)| status != FxFetchStatus::Ready) {
+        tracing::warn!(
+            currency = %currency,
+            status = FxFetchStatus::Ready.as_str(),
+            "a currency's exchange rates can be fetched again"
+        );
+    }
+}
+
 /// Logs that a currency's turn couldn't be stored, and hands the error on.
 fn not_stored(currency: Currency, err: StoreError) -> StoreError {
     tracing::warn!(currency = %currency, error = ?err, "could not store an exchange rate fetch");
@@ -104,6 +150,8 @@ pub struct FxService {
     timezone: TimeZone,
     provider: Option<Arc<dyn RateProvider>>,
     tick: Duration,
+    /// The household's day it was last said that the table runs ahead of it.
+    ahead_said_on: Mutex<Option<Date>>,
 }
 
 impl std::fmt::Debug for FxService {
@@ -127,6 +175,7 @@ impl FxService {
             timezone,
             provider,
             tick: TICK,
+            ahead_said_on: Mutex::new(None),
         }
     }
 
@@ -176,11 +225,11 @@ impl FxService {
             if asked > 0 {
                 tokio::time::sleep(REQUEST_PAUSE).await;
             }
-            let since = coverage
-                .iter()
-                .find(|row| row.currency == currency)
+            let known = coverage.iter().find(|row| row.currency == currency);
+            let since = known
                 .and_then(|row| row.last_on)
                 .map(|last_on| window_start(last_on, today));
+            let before = known.and_then(said_before);
             if let Err(err) = self.record_attempt(currency).await {
                 failure.get_or_insert(not_stored(currency, err));
                 continue;
@@ -188,7 +237,7 @@ impl FxService {
             let answer = provider.fetch(currency, since, today).await;
             asked += 1;
             if let Err(err) = self
-                .record(provider.source(), currency, since, answer)
+                .record(provider.source(), currency, since, before, answer)
                 .await
             {
                 failure.get_or_insert(not_stored(currency, err));
@@ -211,19 +260,24 @@ impl FxService {
         source: FxSource,
         currency: Currency,
         since: Option<Date>,
+        before: Option<(FxFetchStatus, Option<FxErrorCode>)>,
         answer: Result<Vec<RateObservation>, RateError>,
     ) -> Result<(), StoreError> {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         match answer {
             Ok(rates) => {
+                if !rates.is_empty() {
+                    say_fetched(currency, before);
+                } else if since.is_some() {
+                    tracing::warn!(
+                        currency = %currency,
+                        "the rate source gave no rates where some are stored; they are kept"
+                    );
+                } else {
+                    say_not_published(currency, before);
+                }
                 if let Some(since) = since {
-                    if rates.is_empty() {
-                        tracing::warn!(
-                            currency = %currency,
-                            "the rate source gave no rates where some are stored; they are kept"
-                        );
-                    }
                     tx.replace_fx_rates(currency, source, since, &rates, now)
                         .await?;
                 } else {
@@ -231,16 +285,12 @@ impl FxService {
                 }
             }
             Err(RateError::NotPublished) => {
+                say_not_published(currency, before);
                 tx.record_fx_failure(currency, FxFetchStatus::NotPublished, None, now)
                     .await?;
             }
             Err(error) => {
-                tracing::warn!(
-                    currency = %currency,
-                    status = FxFetchStatus::Failing.as_str(),
-                    reason = %error,
-                    "could not fetch a currency's exchange rates"
-                );
+                say_failed(currency, before, error);
                 tx.record_fx_failure(currency, FxFetchStatus::Failing, error.code(), now)
                     .await?;
             }
@@ -257,7 +307,10 @@ impl FxService {
     pub async fn keep_table_current(&self) -> Result<(), StoreError> {
         let today = self.today();
         let state = self.store.net_worth_state().await?;
-        if !state.rebuild_needed && state.filled_through.is_some_and(|filled| filled >= today) {
+        if let (false, Some(filled)) = (state.rebuild_needed, state.filled_through)
+            && filled >= today
+        {
+            self.say_if_far_ahead(filled, today);
             return Ok(());
         }
         let mut tx = self.store.begin().await?;
@@ -271,6 +324,30 @@ impl FxService {
         } else {
             tx.fill_net_worth(today).await?;
             tx.commit().await
+        }
+    }
+}
+
+impl FxService {
+    /// Says, at most once a day, that the table's last day is more than a day
+    /// past today. A changed time zone can do one day; more is a clock that ran
+    /// ahead, which nothing here undoes, since a fill never moves back.
+    fn say_if_far_ahead(&self, filled: Date, today: Date) {
+        if today.tomorrow().is_ok_and(|tomorrow| filled <= tomorrow) {
+            return;
+        }
+        let mut said_on = self
+            .ahead_said_on
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *said_on != Some(today) {
+            *said_on = Some(today);
+            tracing::warn!(
+                through = %filled,
+                today = %today,
+                "the net worth table runs past today, as after a clock that ran ahead; \
+                 `coffer rebuild-net-worth` resets it"
+            );
         }
     }
 }

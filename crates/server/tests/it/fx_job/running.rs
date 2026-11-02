@@ -103,6 +103,68 @@ async fn a_table_ahead_of_today_is_left_alone() {
     assert_eq!(rows_of(&server.store, usd).await.len(), 3);
 }
 
+/// How many warnings since `start` name the command and the table's last day.
+fn table_warnings(start: &str, through: &str) -> usize {
+    let logged = captured_log_text();
+    let (_, after) = logged.split_once(start).unwrap();
+    after
+        .lines()
+        .filter(|line| {
+            line.contains("WARN")
+                && line.contains("coffer rebuild-net-worth")
+                && line.contains(through)
+        })
+        .count()
+}
+
+/// A clock ahead at first start leaves the table's last day in the future, where
+/// nothing moves it back: that is said, once a day and not on every pass.
+#[tokio::test]
+async fn a_table_far_ahead_warns_once_a_day() {
+    let server = TestServer::new().await;
+    let fx = service(&server, None);
+    server.clock.set(noon(date(2044, 3, 3)));
+    fx.keep_table_current().await.unwrap();
+    server.clock.set(noon(MONDAY));
+    let start_log = log_marker();
+
+    for _ in 0..3 {
+        fx.keep_table_current().await.unwrap();
+    }
+    assert_eq!(table_warnings(&start_log, "2044-03-03"), 1);
+
+    server.clock.advance(hours(24));
+    for _ in 0..2 {
+        fx.keep_table_current().await.unwrap();
+    }
+    assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
+
+    let mut tx = server.store.begin().await.unwrap();
+    tx.rebuild_net_worth(date(2026, 11, 3)).await.unwrap();
+    tx.commit().await.unwrap();
+    server.clock.advance(hours(24));
+    fx.keep_table_current().await.unwrap();
+    assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
+}
+
+/// A day ahead is what a changed time zone can do. More is a clock.
+#[tokio::test]
+async fn a_table_one_day_ahead_says_nothing() {
+    let server = TestServer::new().await;
+    let fx = service(&server, None);
+    server.clock.set(noon(date(2041, 5, 6)));
+    fx.keep_table_current().await.unwrap();
+    let start_log = log_marker();
+
+    server.clock.set(noon(date(2041, 5, 5)));
+    fx.keep_table_current().await.unwrap();
+    assert_eq!(table_warnings(&start_log, "2041-05-06"), 0);
+
+    server.clock.set(noon(date(2041, 5, 4)));
+    fx.keep_table_current().await.unwrap();
+    assert_eq!(table_warnings(&start_log, "2041-05-06"), 1);
+}
+
 #[tokio::test]
 async fn the_migration_s_rebuild_runs_at_start() {
     let server = TestServer::new().await;

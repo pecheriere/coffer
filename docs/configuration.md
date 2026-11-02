@@ -82,7 +82,9 @@ makes outbound https requests. It connects only to:
   CDN's can change: `dig +short CNAME data-api.ecb.europa.eu`. A firewall that
   allow-lists by SNI needs only `data-api.ecb.europa.eu` on port 443. A household
   with one currency contacts nobody. Nothing breaks while the host isn't allowed:
-  syncs and everything else go on, and rates are tried again every hour. A
+  syncs and everything else go on, and rates are tried again every hour. Each
+  currency logs one warning, then another only when its failure changes, and one
+  when it recovers; repeats are at `debug`, and a restart isn't a change. A
   currency never fetched reports `rate_missing` with the reason `fetch_failing`;
   one already held is carried forward at its last rate, with `rate_stale` once that
   is a week old.
@@ -293,7 +295,8 @@ it: the first start after the upgrade that adds the table rebuilds it in the
 background while the server already answers, and until then a report says so
 instead of showing a number. It is also how to undo a clock that ran ahead: the
 table never moves its last day back by itself, and the command resets it to
-today and removes the days after.
+today and removes the days after. The server warns once a day while that last
+day is more than a day past today.
 
 `healthcheck` is meant for container health checks and process supervisors.
 It sends `GET /healthz` to `COFFER_LISTEN`, connecting to loopback
