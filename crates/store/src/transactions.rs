@@ -1,6 +1,8 @@
 //! Canonical transactions and their splits.
 
-use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, SplitId, TransactionId};
+use coffer_domain::ids::{
+    AccountId, AgentTokenId, CategoryId, MemberId, PlannedItemId, SplitId, TransactionId,
+};
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountScope;
 use coffer_domain::transactions::{
@@ -46,6 +48,7 @@ pub struct SplitRecord {
     pub id: SplitId,
     pub category: CategoryId,
     pub minor_units: i64,
+    pub goal: Option<PlannedItemId>,
 }
 
 /// A stored transaction with its splits, in order.
@@ -446,7 +449,7 @@ async fn attach_children(
         return Ok(());
     }
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT transaction_id, id, category_id, minor_units FROM transaction_splits \
+        "SELECT transaction_id, id, category_id, minor_units, goal_id FROM transaction_splits \
          WHERE transaction_id IN (",
     );
     let mut separated = query.separated(", ");
@@ -468,6 +471,7 @@ async fn attach_children(
                 id: parsed(row, "id")?,
                 category: parsed(row, "category_id")?,
                 minor_units: row.try_get("minor_units").map_err(StoreError::from_sqlx)?,
+                goal: parsed_opt(row, "goal_id")?,
             });
     }
     let ids: Vec<TransactionId> = records.iter().map(|record| record.id).collect();
@@ -637,7 +641,7 @@ impl StoreTx {
     /// # Errors
     ///
     /// `NotFound` if the transaction does not exist; backend failures,
-    /// including a category that does not exist.
+    /// including a category or goal that does not exist.
     pub async fn replace_splits(
         &mut self,
         id: TransactionId,
@@ -666,14 +670,15 @@ impl StoreTx {
         for (position, split) in (0_i64..).zip(splits) {
             sqlx::query(
                 "INSERT INTO transaction_splits \
-                 (id, transaction_id, category_id, minor_units, position) \
-                 VALUES (?, ?, ?, ?, ?)",
+                 (id, transaction_id, category_id, minor_units, position, goal_id) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(SplitId::new().to_string())
             .bind(id.to_string())
             .bind(split.category.to_string())
             .bind(split.minor_units)
             .bind(position)
+            .bind(split.goal.map(|goal| goal.to_string()))
             .execute(&mut *self.tx)
             .await
             .map_err(StoreError::from_sqlx)?;

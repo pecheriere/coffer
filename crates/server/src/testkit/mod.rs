@@ -11,16 +11,17 @@
 )]
 
 pub mod browser;
+mod fake_provider;
 mod log_capture;
+mod passkeys;
+mod upstream;
 
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::identity::{DisplayName, TokenName, Username};
 use coffer_domain::ids::{ConnectionId, MemberId};
 use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
 pub use coffer_store::{
@@ -28,19 +29,9 @@ pub use coffer_store::{
     INJECTED_FAULT_RECORD_ID,
 };
 use coffer_store::{NewConnection, Store};
-use jiff::civil::Date;
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use secrecy::SecretString;
 use tempfile::TempDir;
-use tokio::sync::Notify;
-use url::Url;
-use webauthn_authenticator_rs::WebauthnAuthenticator;
-use webauthn_authenticator_rs::error::WebauthnCError;
-use webauthn_authenticator_rs::softpasskey::SoftPasskey;
-use webauthn_rs::prelude::{
-    CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential,
-    RequestChallengeResponse,
-};
 
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
@@ -48,17 +39,18 @@ use crate::config::{Config, PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, HostAllowList};
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
-use crate::secrets::{SecretToken, ServerKey};
+use crate::secrets::ServerKey;
 use crate::sync::engine::{FETCH_DEADLINE, SyncService};
 use crate::sync::plaid::client::PlaidClient;
 use crate::sync::plaid::provider::Plaid;
-use crate::sync::provider::{
-    Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider, ProviderError,
-    ProviderFuture, ProviderKind, ProviderRegistry,
-};
+use crate::sync::provider::{Provider, ProviderKind, ProviderRegistry};
 use crate::sync::simplefin::SimpleFin;
 use crate::vault::CredentialVault;
+
+pub use fake_provider::{CallGate, FakeFetch, FakeProvider, SCRIPTED_PANIC};
 pub use log_capture::{capture_logs, captured_log_text, event_signal, log_marker};
+pub use passkeys::{SoftAuthenticator, link_token};
+pub use upstream::{MockUpstream, RecordedRequest};
 
 /// Public URL (and `WebAuthn` origin) of the test server.
 pub const TEST_PUBLIC_URL: &str = "https://coffer.test";
@@ -369,6 +361,7 @@ impl TestServer {
             store.clone(),
             clock.clone(),
             Arc::clone(&access),
+            config.timezone.clone(),
         ));
         let registry = registry(&config);
         let sync = Arc::new(SyncService::new(
@@ -433,6 +426,20 @@ impl TestServer {
             .expect("write an unchecked theme");
     }
 
+    /// Stores a category name the schema would refuse (empty) for the category with this
+    /// id, as a database edited with constraint checks off could hold, so listing the
+    /// categories fails.
+    ///
+    /// # Panics
+    ///
+    /// If the write fails.
+    pub async fn corrupt_category_name(&self, category: &str) {
+        self.store
+            .execute_unchecked_for_tests("UPDATE categories SET name = '' WHERE id = ?", category)
+            .await
+            .expect("write an unchecked category name");
+    }
+
     /// Stores a colour scheme the schema would refuse (`purple`) for
     /// `member`, as a database edited with constraint checks off could hold.
     ///
@@ -480,9 +487,6 @@ fn registry(config: &Config) -> ProviderRegistry {
     ProviderRegistry::from_config(&config, &Egress::for_tests()).expect("provider registry")
 }
 
-/// The message of every panic a [`FakeProvider`] is scripted to raise.
-pub const SCRIPTED_PANIC: &str = "scripted provider panic";
-
 /// The message of the panic of [`panic_with_marker`].
 pub const PANIC_MARKER: &str = "panic-marker-do-not-log";
 
@@ -495,450 +499,7 @@ pub fn panic_with_marker() -> ! {
     panic!("{PANIC_MARKER}")
 }
 
-/// One fetch a [`FakeProvider`] received.
-#[derive(Debug, Clone)]
-pub struct FakeFetch {
-    /// The opened credentials it was given.
-    pub credentials: SecretString,
-    pub window_start: Option<Date>,
-    pub cursor: Option<String>,
-    pub today: Date,
-    /// The IANA name of the time zone it was given.
-    pub timezone: String,
-}
-
-/// A [`ProviderKind::SimpleFin`] provider that answers fetches from a
-/// script and records each request. Its capabilities are those of a
-/// windowed provider: 88 days at most, 14 days of overlap.
-pub struct FakeProvider {
-    capabilities: Capabilities,
-    responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
-    requests: Mutex<Vec<FakeFetch>>,
-    fetch_gate: Mutex<Option<CallGate>>,
-    fetch_panics: Mutex<bool>,
-    capabilities_panic: Mutex<bool>,
-    connect_gate: Mutex<Option<CallGate>>,
-    disconnect_gate: Mutex<Option<CallGate>>,
-    disconnect_error: Mutex<Option<ProviderError>>,
-    disconnects: Mutex<Vec<SecretString>>,
-}
-
-/// Holds the next call of one kind until released: to a [`FakeProvider`]
-/// (see [`FakeProvider::hold_next_fetch`]), or to a test's own mock upstream.
-#[derive(Debug, Clone, Default)]
-pub struct CallGate {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-
-impl CallGate {
-    /// Signals that the held call started, then waits for its release.
-    pub async fn hold(self) {
-        self.entered.notify_one();
-        self.release.notified().await;
-    }
-
-    /// Waits until the held call has started.
-    pub async fn entered(&self) {
-        self.entered.notified().await;
-    }
-
-    /// Lets the held call answer.
-    pub fn release(&self) {
-        self.release.notify_one();
-    }
-}
-
-impl fmt::Debug for FakeProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FakeProvider").finish_non_exhaustive()
-    }
-}
-
-impl Default for FakeProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl FakeProvider {
-    /// A provider with an empty script.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::with_capabilities(Capabilities {
-            pending: true,
-            mode: FetchMode::Window {
-                max_days: 88,
-                overlap_days: 14,
-            },
-            min_interval: SignedDuration::from_hours(1),
-            min_scheduled_interval: SignedDuration::from_hours(2),
-            daily_budget: 16,
-        })
-    }
-
-    /// A provider with an empty script and `capabilities`.
-    #[must_use]
-    pub fn with_capabilities(capabilities: Capabilities) -> Self {
-        Self {
-            capabilities,
-            responses: Mutex::new(VecDeque::new()),
-            requests: Mutex::new(Vec::new()),
-            fetch_gate: Mutex::new(None),
-            fetch_panics: Mutex::new(false),
-            capabilities_panic: Mutex::new(false),
-            connect_gate: Mutex::new(None),
-            disconnect_gate: Mutex::new(None),
-            disconnect_error: Mutex::new(None),
-            disconnects: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Makes the next fetch wait, once it has started, until the returned
-    /// gate is released, so a test can act while a sync is mid-fetch.
-    #[must_use]
-    pub fn hold_next_fetch(&self) -> CallGate {
-        hold(&self.fetch_gate)
-    }
-
-    /// Makes the next fetch panic, as a bug in a provider would.
-    pub fn panic_next_fetch(&self) {
-        *lock(&self.fetch_panics) = true;
-    }
-
-    /// Makes the next look at the capabilities panic: on the scheduler's
-    /// ticker, outside any run, when nothing else is using the provider.
-    pub fn panic_next_capabilities(&self) {
-        *lock(&self.capabilities_panic) = true;
-    }
-
-    /// Makes the next `connect` wait, once it has started, until the
-    /// returned gate is released.
-    #[must_use]
-    pub fn hold_next_connect(&self) -> CallGate {
-        hold(&self.connect_gate)
-    }
-
-    /// Makes the next `disconnect` wait, once it has started, until the
-    /// returned gate is released.
-    #[must_use]
-    pub fn hold_next_disconnect(&self) -> CallGate {
-        hold(&self.disconnect_gate)
-    }
-
-    /// Makes the next `disconnect` fail with `error`.
-    pub fn fail_next_disconnect(&self, error: ProviderError) {
-        *lock(&self.disconnect_error) = Some(error);
-    }
-
-    /// The credentials of every `disconnect` received so far, oldest first.
-    #[must_use]
-    pub fn disconnects(&self) -> Vec<SecretString> {
-        lock(&self.disconnects).clone()
-    }
-
-    /// Adds the answer to the next fetch not yet scripted.
-    pub fn push(&self, response: Result<FetchResult, ProviderError>) {
-        self.responses
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push_back(response);
-    }
-
-    /// Every fetch received so far, oldest first.
-    #[must_use]
-    pub fn requests(&self) -> Vec<FakeFetch> {
-        self.requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl Provider for FakeProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::SimpleFin
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        assert!(
-            !std::mem::take(&mut *lock(&self.capabilities_panic)),
-            "{SCRIPTED_PANIC}"
-        );
-        self.capabilities
-    }
-
-    fn connect(
-        &self,
-        input: ConnectInput,
-    ) -> ProviderFuture<'_, Result<SecretString, ProviderError>> {
-        let (ConnectInput::SimpleFinSetupToken(token) | ConnectInput::PlaidPublicToken(token)) =
-            input;
-        let gate = lock(&self.connect_gate).take();
-        Box::pin(async move {
-            if let Some(gate) = gate {
-                gate.hold().await;
-            }
-            Ok(token)
-        })
-    }
-
-    fn fetch<'a>(
-        &'a self,
-        request: FetchRequest<'a>,
-    ) -> ProviderFuture<'a, Result<FetchResult, ProviderError>> {
-        self.requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(FakeFetch {
-                credentials: request.credentials.clone(),
-                window_start: request.window_start,
-                cursor: request.cursor.map(str::to_owned),
-                today: request.today,
-                timezone: request.timezone.iana_name().unwrap_or_default().to_owned(),
-            });
-        // A panicking fetch leaves the script for the next one.
-        let panics = std::mem::take(&mut *lock(&self.fetch_panics));
-        let response = (!panics).then(|| {
-            self.responses
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .pop_front()
-                .unwrap_or_else(|| Err(ProviderError::Unavailable("no scripted response".into())))
-        });
-        let gate = lock(&self.fetch_gate).take();
-        Box::pin(async move {
-            if let Some(gate) = gate {
-                gate.hold().await;
-            }
-            match response {
-                Some(response) => response,
-                None => panic!("{SCRIPTED_PANIC}"),
-            }
-        })
-    }
-
-    fn disconnect<'a>(
-        &'a self,
-        credentials: &'a SecretString,
-    ) -> ProviderFuture<'a, Result<(), ProviderError>> {
-        lock(&self.disconnects).push(credentials.clone());
-        let result = match lock(&self.disconnect_error).take() {
-            Some(error) => Err(error),
-            None => Ok(()),
-        };
-        let gate = lock(&self.disconnect_gate).take();
-        Box::pin(async move {
-            if let Some(gate) = gate {
-                gate.hold().await;
-            }
-            result
-        })
-    }
-}
-
-/// One request a [`MockUpstream`] received. Whether it carried an
-/// `Authorization` header is recorded, never its value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordedRequest {
-    pub method: axum::http::Method,
-    pub path: String,
-    pub query: Option<String>,
-    pub authorization: bool,
-}
-
-/// A provider's upstream, mocked: `router` served over plain HTTP on
-/// `127.0.0.1` at an ephemeral port, recording every request. Stops when
-/// dropped.
-pub struct MockUpstream {
-    /// `http://127.0.0.1:<port>/`.
-    pub base: Url,
-    requests: Arc<Mutex<Vec<RecordedRequest>>>,
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl fmt::Debug for MockUpstream {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MockUpstream")
-            .field("base", &self.base.as_str())
-            .finish_non_exhaustive()
-    }
-}
-
-impl MockUpstream {
-    /// Starts serving `router`.
-    ///
-    /// # Panics
-    ///
-    /// If no loopback port can be bound.
-    pub async fn start(router: axum::Router) -> MockUpstream {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind a loopback port");
-        let addr = listener.local_addr().expect("bound address");
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&requests);
-        let app = router.layer(axum::middleware::from_fn(
-            move |request: axum::extract::Request, next: axum::middleware::Next| {
-                lock(&recorder).push(RecordedRequest {
-                    method: request.method().clone(),
-                    path: request.uri().path().to_owned(),
-                    query: request.uri().query().map(str::to_owned),
-                    authorization: request
-                        .headers()
-                        .contains_key(axum::http::header::AUTHORIZATION),
-                });
-                next.run(request)
-            },
-        ));
-        let task = tokio::spawn(async move {
-            if axum::serve(listener, app).await.is_err() {
-                tracing::warn!("the mock upstream stopped");
-            }
-        });
-        MockUpstream {
-            base: Url::parse(&format!("http://{addr}/")).expect("loopback URL"),
-            requests,
-            task,
-        }
-    }
-
-    /// Every request received so far, oldest first.
-    #[must_use]
-    pub fn requests(&self) -> Vec<RecordedRequest> {
-        lock(&self.requests).clone()
-    }
-}
-
-impl Drop for MockUpstream {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-/// Installs a new gate in `slot` and returns it.
-fn hold(slot: &Mutex<Option<CallGate>>) -> CallGate {
-    let gate = CallGate::default();
-    *lock(slot) = Some(gate.clone());
-    gate
-}
-
 /// Locks `mutex`, recovering the data of a test that panicked holding it.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The token at the end of a setup, invite or re-enroll link.
-///
-/// # Panics
-///
-/// If the link has no path segment.
-#[must_use]
-pub fn link_token(link: &Url) -> String {
-    link.path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .expect("link ends with a token")
-        .to_owned()
-}
-
-fn origin() -> Url {
-    Url::parse(TEST_PUBLIC_URL).expect("valid test origin")
-}
-
-/// A software authenticator bound to a test server's identity service.
-pub struct SoftAuthenticator {
-    inner: WebauthnAuthenticator<SoftPasskey>,
-    identity: Arc<Identity>,
-    sessions: Arc<Sessions>,
-}
-
-impl SoftAuthenticator {
-    fn new(identity: Arc<Identity>, sessions: Arc<Sessions>, verifies_user: bool) -> Self {
-        Self {
-            inner: WebauthnAuthenticator::new(SoftPasskey::new(verifies_user)),
-            identity,
-            sessions,
-        }
-    }
-
-    /// Answers registration `options` as a browser would.
-    ///
-    /// # Errors
-    ///
-    /// When the authenticator declines (for example, it cannot verify the
-    /// user, or it already holds an excluded credential).
-    pub fn register(
-        &mut self,
-        options: CreationChallengeResponse,
-    ) -> Result<RegisterPublicKeyCredential, WebauthnCError> {
-        self.inner.do_registration(origin(), options)
-    }
-
-    /// Signs authentication `options` as a browser would.
-    ///
-    /// # Panics
-    ///
-    /// If the authenticator holds none of the allowed credentials.
-    pub fn sign(&mut self, options: RequestChallengeResponse) -> PublicKeyCredential {
-        self.inner
-            .do_authentication(origin(), options)
-            .expect("soft passkey assertion")
-    }
-
-    /// Redeems `link` with this authenticator: begin, register, finish.
-    /// `username` and `display_name` are ignored for re-enroll links.
-    ///
-    /// # Panics
-    ///
-    /// If any step fails.
-    pub async fn enroll(&mut self, link: &Url, username: &str, display_name: &str) -> MemberId {
-        let (ceremony, options) = self
-            .identity
-            .begin_enrollment(
-                &link_token(link),
-                Some(Username::parse(username).expect("valid username")),
-                Some(DisplayName::parse(display_name).expect("valid display name")),
-            )
-            .await
-            .expect("begin enrollment");
-        let credential = self.register(options).expect("soft passkey registration");
-        self.identity
-            .finish_enrollment(
-                ceremony,
-                TokenName::parse("soft passkey").expect("valid label"),
-                credential,
-            )
-            .await
-            .expect("finish enrollment")
-    }
-
-    /// Signs in as `username`: begin, sign, finish.
-    ///
-    /// # Panics
-    ///
-    /// If any step fails.
-    pub async fn login(&mut self, username: &str) -> MemberId {
-        let (ceremony, options) = self
-            .identity
-            .begin_login(&Username::parse(username).expect("valid username"))
-            .await
-            .expect("begin login");
-        let credential = self.sign(options);
-        self.identity
-            .finish_login(ceremony, credential)
-            .await
-            .expect("finish login")
-    }
-
-    /// Signs in as `username` and starts a session, as the login endpoint
-    /// does: returns the member and the cookie value.
-    ///
-    /// # Panics
-    ///
-    /// If sign-in or session creation fails.
-    pub async fn login_with_session(&mut self, username: &str) -> (MemberId, SecretToken) {
-        let member = self.login(username).await;
-        let cookie = self.sessions.create(member).await.expect("create session");
-        (member, cookie)
-    }
 }

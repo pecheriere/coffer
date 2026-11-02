@@ -224,6 +224,7 @@ async fn follow_amount(
                 &[SplitInput {
                     category: only.category,
                     minor_units: amount_minor,
+                    goal: only.goal,
                 }],
                 split_by.clone(),
             )

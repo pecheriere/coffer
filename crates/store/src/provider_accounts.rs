@@ -99,7 +99,9 @@ pub struct ProviderAccountUpsert {
     pub seen_at: Timestamp,
 }
 
-fn provider_account_from_row(row: &SqliteRow) -> Result<ProviderAccountRecord, StoreError> {
+pub(crate) fn provider_account_from_row(
+    row: &SqliteRow,
+) -> Result<ProviderAccountRecord, StoreError> {
     let last_balance = match (
         parsed_opt::<Date>(row, "last_balance_on")?,
         text_opt(row, "last_balance_raw")?,

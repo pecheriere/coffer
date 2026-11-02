@@ -1,7 +1,7 @@
 //! Connections to data providers: each with its status, last sync and
 //! errors, and the provider accounts it reports by name and binding. No
-//! balance or transaction is shown (spec §6.4: pages carry no financial
-//! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
+//! balance or transaction is shown (spec §6.4: the forecast page is the only
+//! one with financial data). Forms add a `SimpleFin` connection, reconnect one that needs it,
 //! request a sync, remove a connection, forget one whose sealed token
 //! cannot be opened (see [`forget`]), let a held sync cursor move past the
 //! records that keep failing and bind a provider account to an

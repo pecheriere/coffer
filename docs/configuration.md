@@ -19,7 +19,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
 | `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
@@ -256,6 +256,11 @@ coffer recover-admin <username> # print a re-enroll link for an admin who lost e
 coffer backup <dest>            # consistent copy of the database, mode 0600; refuses an existing file
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
+
+On first start with no admin yet, `serve` also logs the setup link. Every link
+issued this way, by `serve` at startup or by `bootstrap-link`, revokes the
+earlier unused setup links, so only the newest works: a restart of `serve`
+invalidates a link printed before it. Both stop once an admin exists.
 
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.

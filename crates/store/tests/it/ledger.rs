@@ -564,10 +564,12 @@ async fn deleting_transaction_cascades_splits() {
         SplitInput {
             category: food.id,
             minor_units: -600,
+            goal: None,
         },
         SplitInput {
             category: home.id,
             minor_units: -400,
+            goal: None,
         },
     ];
     tx.replace_splits(gone.id, &splits, by.clone())
@@ -578,6 +580,7 @@ async fn deleting_transaction_cascades_splits() {
         &[SplitInput {
             category: food.id,
             minor_units: -300,
+            goal: None,
         }],
         by.clone(),
     )

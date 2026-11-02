@@ -7,10 +7,14 @@ mod audit;
 mod categories;
 pub(crate) mod connections;
 pub mod extract;
+mod forecast;
+mod household;
 mod me;
 mod members;
 pub mod openapi;
+mod plan_items;
 mod provider_accounts;
+mod reports;
 mod router;
 mod transactions;
 
@@ -36,6 +40,7 @@ pub(super) fn router() -> Router<AppState> {
 fn routes() -> ApiRouter {
     ApiRouter::new()
         .op(routes!(me::me))
+        .op(routes!(household::get, household::update))
         .op(routes!(members::list))
         .op(routes!(audit::list))
         .op(routes!(accounts::list, accounts::create))
@@ -56,6 +61,15 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(plan_items::list, plan_items::create))
+        .op(routes!(
+            plan_items::get,
+            plan_items::update,
+            plan_items::delete
+        ))
+        .op(routes!(forecast::get))
+        .op(routes!(forecast::what_if))
+        .op(routes!(reports::plan_vs_actual))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

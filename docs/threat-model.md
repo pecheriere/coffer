@@ -145,6 +145,39 @@
     As defence in depth, a transaction's duplicate candidates leave out those
     in an account the token cannot read: the store refuses a candidate
     pair across accounts, so none should exist.
+  - A planned item hinted at an account the token holds below `transactions`
+    answers like a missing one, and a split on a visible account linked to such a
+    goal reads `goal: null`: its id would confirm a hidden item exists, tell when
+    it was made (ids are UUIDv7) and which transactions share it. Naming it is
+    refused like a missing goal even on the transaction holding the link, and a
+    patch keeps a link it could not see while a split of that amount is sent, so
+    its answer and whether it writes are those of a split with no link. What is
+    left: such a patch dividing the money into other amounts drops the link,
+    which the token cannot know. The audit log records it.
+  - A safety floor is a figure of the whole household's plan, and a fixed one's
+    currency could show money the token isn't granted. So
+    `GET /api/v1/household/settings` and a patch's answer say `floor: null` below
+    `all` at `transactions`, the access a forecast needs, exactly as with none set,
+    and a restricted `admin` token that may replace the floor can't confirm a guess
+    at it by the answer. The other settings (whether income counts, the default
+    horizon, when a balance is stale) read the same for every token: they say how
+    a forecast is worked out, not what the household holds or plans.
+  - A forecast, a what-if and a plan-versus-actual report sum every account's
+    balances and category spending, so each needs `all` at `transactions` before
+    anything is read (spec §8.9 R2). There is no partial answer: a number over the
+    visible accounts would be confidently wrong, and marking it partial would
+    reveal that hidden accounts exist. The refusal is the same 403 whether or not
+    any account is hidden, and a what-if, which carries items and settings of its
+    own, is checked the same way, so it can't be used to probe an account. A
+    what-if is a `POST` that persists nothing (no item, setting, audit entry or
+    idempotency key), so a `read` token may call it.
+  - The plan is shared by every account, as categories are. Creating, changing or
+    deleting a planned item needs `all` at `write`. Reading one needs
+    `transactions` on its hinted account, or, for an item with no hint, on at least
+    one account (R3), so a token holding only `balances` sees an empty list, not a
+    403, and one hinted at an account the token can't read is a 404, never a 403
+    that would confirm it exists. A balances grant shows only the account and its
+    balances; an item's name, amount, cadence and notes show more.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to
@@ -210,6 +243,18 @@
   browsers send `Origin: null` on plain form POSTs, which the origin rule
   refuses; `same-origin` lets them send the real origin, and the rule stays
   strict (it never accepts `null`).
+- **One page holds financial data.** `/forecast` shows the household's totals,
+  monthly figures and the names in its cautions, the only page that does (spec
+  §6.4, §8.9 R14). It takes the session cookie only, never a bearer token, calls
+  the same service as `GET /api/v1/forecast`, so with the same access (R2), and has
+  no form or other write action, no inline script or style, and only the default
+  content security policy. Like every
+  page it is sent with `Cache-Control: no-store`, so neither the browser's nor an
+  intermediary's cache keeps it, and `Referrer-Policy: same-origin`, so following a
+  link off it tells another site nothing. The back button after signing out depends
+  on that `no-store`: signing out ends the session on the server but can't reach
+  into the browser, so it is `no-store` that makes the browser ask again and be sent
+  to sign in rather than redraw the figures from a stored copy.
 - Every mutation is written with its audit entry in one transaction; entries
   record the member and the agent token involved.
 
@@ -391,7 +436,23 @@
   (whose first sync queues work on accounts not yet granted), needs `all` at
   `write`. A connection's last error, the provider's sanitized text, could
   name an account the token cannot see, so it needs `all` at `transactions`;
-  without it the token sees only that the status says something is wrong.
+  without it the token sees only that the status says something is wrong. It also
+  reads the forecast settings other than the floor, and the planned items without
+  an account hint if it holds `transactions` on any account (below).
+- **An unhinted planned item's name is household data.** A name such as
+  "Payment on the savings card" names an account to every token that sees the item,
+  and an item with no `account_hint` is visible to any token holding `transactions`
+  on at least one account. Hinting the item at that account hides it from tokens
+  that can't read the account, but coffer can't tell which words in a name are
+  sensitive, so it hides nothing by itself. The docs tell agents not to put an
+  account's name in an unhinted item.
+- **Reshaping a split can drop a goal link the token can't see.** A token that
+  can't see a goal reads `goal: null` on the split linked to it, and sending
+  back what it read keeps the link and writes nothing. Dividing that split into
+  other amounts drops the link, because there is no way to carry it over; the
+  token can't know it did. The audit log records the split list before and
+  after, with the goal's id, and a member can link it again. Until then the goal
+  looks less spent, and the money counts as its category's spending instead.
 - **No rate limiting beyond ceremony caps and browser reports.** Brute-forcing a
   256-bit token is infeasible; password-style guessing does not exist. Network
   access control is the defense against abuse volume.
@@ -421,9 +482,9 @@
   `[withheld]`. A message is also kept only from a page in the list in
   `http/browser_reports/fields.rs`. Some of those pages show names or provider
   accounts, which is safe only because coffer's code never reads them into an
-  error. **The forecast page will show amounts, so it stays out of that list if its
-  scripts handle them:** a report from any page not listed has `page` `other` and
-  its message `[withheld]`, so a new page is safe until someone decides otherwise.
+  error. **The forecast page shows amounts, so it is not in that list:** a report from
+  any page not listed has `page` `other` and its message `[withheld]`, so a new
+  page is safe until someone decides otherwise.
   What is left:
   - An `unhandled_rejection` names no script, so one from another script on a
     listed page keeps its message, which could hold page content. Withholding them

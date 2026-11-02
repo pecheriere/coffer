@@ -10,11 +10,13 @@ mod categories;
 mod connections;
 mod convert;
 mod error;
+mod forecast;
 mod household;
 mod idempotency;
 mod invites;
 mod members;
 mod passkeys;
+mod planned_items;
 mod provider_accounts;
 mod sessions;
 mod sources;
@@ -41,10 +43,15 @@ pub use connections::{
     UnknownConnectionStatus,
 };
 pub use error::StoreError;
+pub use forecast::{
+    CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
+    PlanReportData,
+};
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};
 pub use passkeys::{NewPasskey, PasskeyRecord};
+pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};

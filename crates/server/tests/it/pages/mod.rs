@@ -7,6 +7,7 @@
 )]
 
 mod admin_grants;
+mod forecast;
 mod members;
 mod rendering;
 mod security;

@@ -2,19 +2,20 @@
 //! and agents set on any — splits, payee, notes, review and assignee — with
 //! who categorized and who reviewed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{
-    AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, ProviderAccountId, SourceRecordId,
-    SplitId, TransactionId,
+    AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, PlannedItemId, ProviderAccountId,
+    SourceRecordId, SplitId, TransactionId,
 };
-use coffer_domain::money::Money;
-use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account};
+use coffer_domain::money::{Currency, Money};
+use coffer_domain::plan::PlanItemType;
+use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account, plan_item_visible};
 use coffer_domain::transactions::{
-    Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput, TransactionFlag,
-    TransactionOrigin, validate_splits,
+    CategoryKind, Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput,
+    TransactionFlag, TransactionOrigin, validate_splits,
 };
 use coffer_store::{
     AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange, ReviewChange,
@@ -25,6 +26,7 @@ use jiff::civil::Date;
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
+use super::unseen::{hide_unseen_in_tx, keep_unseen_links, splits_as_shown};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::ProblemCode;
@@ -38,6 +40,10 @@ const NOTES_INVALID: &str =
 const ASSIGNEE_INVALID: &str = "the assignee must be an active member";
 const UNKNOWN_CATEGORY: &str = "a split names a category that does not exist";
 const ARCHIVED_CATEGORY: &str = "a split names an archived category";
+const UNKNOWN_GOAL: &str = "a split names a goal that does not exist";
+const NOT_A_GOAL: &str = "a split names a planned item that is not a goal";
+const GOAL_CURRENCY: &str = "a split's goal must be in the transaction's currency";
+const GOAL_CATEGORY: &str = "only a split in an expense category can count towards a goal";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NOT_MANUAL: &str = "only manual transactions can be deleted";
 const ACCOUNT_LINKED: &str =
@@ -93,7 +99,9 @@ pub struct TransactionPatch {
     pub assignee: Patch<MemberId>,
     /// Replaces every split and records who categorized it: `[]`
     /// uncategorizes, otherwise 1 to 50 non-zero splits on categories that
-    /// are not archived, summing exactly to the amount.
+    /// are not archived, summing exactly to the amount. A split sent without
+    /// a `goal` loses any link it had, unless it is one the token can't see: that
+    /// stays on a split of its amount.
     pub splits: Option<Vec<SplitInput>>,
 }
 
@@ -129,6 +137,11 @@ pub struct SplitView {
     pub id: SplitId,
     pub category: CategoryId,
     pub amount: Money,
+    /// The goal this part counts towards; `null` for none, and for one the token
+    /// may not see, so that nothing says such a goal exists. A patch keeps that
+    /// link while it sends a split of the amount it is on.
+    #[schema(required)]
+    pub goal: Option<PlannedItemId>,
 }
 
 /// A provider record a transaction was imported from.
@@ -229,6 +242,7 @@ impl TransactionView {
                     id: split.id,
                     category: split.category,
                     amount: money(split.minor_units),
+                    goal: split.goal,
                 })
                 .collect(),
             flags: record.flags.clone(),
@@ -314,7 +328,7 @@ fn payee(input: &str) -> Result<Payee, LedgerError> {
 }
 
 /// Notes as stored: empty notes are none.
-fn notes(input: &str) -> Result<Option<Notes>, LedgerError> {
+pub(super) fn notes(input: &str) -> Result<Option<Notes>, LedgerError> {
     let notes = Notes::parse(input).map_err(|_| LedgerError::Invalid(NOTES_INVALID))?;
     Ok((!notes.is_empty()).then_some(notes))
 }
@@ -345,6 +359,7 @@ pub(super) fn current_splits(record: &TransactionRecord) -> Vec<SplitInput> {
         .map(|split| SplitInput {
             category: split.category,
             minor_units: split.minor_units,
+            goal: split.goal,
         })
         .collect()
 }
@@ -370,6 +385,47 @@ async fn check_categories(tx: &mut StoreTx, splits: &[SplitInput]) -> Result<(),
         let group = tx.get_category_group(category.group).await?;
         if category.archived_at.is_some() || group.archived_at.is_some() {
             return Err(LedgerError::Invalid(ARCHIVED_CATEGORY));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a split naming a goal that does not exist, or one `access` may not see,
+/// in the same words, because a difference would confirm a hidden item exists (R3).
+/// That holds on a transaction already linked to it too, or naming it would confirm
+/// the link.
+///
+/// Then the item must be a goal, in `currency`; a completed or inactive one may
+/// still take late receipts.
+///
+/// A link needs an `expense` category, since moving money to savings for a goal
+/// isn't spending it. That is checked first and says nothing about the goal, so it
+/// answers the same for a hidden one.
+async fn check_goals(
+    tx: &mut StoreTx,
+    access: &AccountAccess,
+    currency: Currency,
+    splits: &[SplitInput],
+) -> Result<(), LedgerError> {
+    for split in splits.iter().filter(|split| split.goal.is_some()) {
+        if tx.get_category(split.category).await?.kind != CategoryKind::Expense {
+            return Err(LedgerError::Invalid(GOAL_CATEGORY));
+        }
+    }
+    for goal in splits.iter().filter_map(|split| split.goal) {
+        let item = match tx.get_planned_item(goal).await {
+            Ok(item) => item,
+            Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
+            Err(other) => return Err(other.into()),
+        };
+        if !plan_item_visible(access, item.account_hint) {
+            return Err(LedgerError::Invalid(UNKNOWN_GOAL));
+        }
+        if item.schedule.item_type() != PlanItemType::Goal {
+            return Err(LedgerError::Invalid(NOT_A_GOAL));
+        }
+        if item.amount.currency != currency {
+            return Err(LedgerError::Invalid(GOAL_CURRENCY));
         }
     }
     Ok(())
@@ -477,8 +533,11 @@ async fn apply_patch(
         validate_splits(current.amount_minor, &splits)
             .map_err(|err| LedgerError::Invalid(split_message(err)))?;
         let before = current_splits(&current);
-        if splits != before {
+        let shown = splits_as_shown(tx, access, &before).await?;
+        if splits != shown {
             check_categories(tx, &splits).await?;
+            check_goals(tx, access, current.currency, &splits).await?;
+            let splits = keep_unseen_links(tx, &before, &shown, splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
             if current.flags.contains(&TransactionFlag::SplitMismatch) {
                 audited = audited.change("split_mismatch", true, false);
@@ -621,8 +680,9 @@ impl Ledger {
     /// [`LedgerError::NotFound`] for an unknown transaction or one in a
     /// hidden account; [`LedgerError::Denied`] without write access to its
     /// account; [`LedgerError::Invalid`] for an invalid value (text, an
-    /// assignee who is not an active member, splits that do not fit, or an
-    /// unknown or archived category); storage failures.
+    /// assignee who is not an active member, splits that do not fit, an
+    /// unknown or archived category, or a goal that can't be linked); storage
+    /// failures.
     pub async fn update_transaction(
         &self,
         actor: &Actor,
@@ -634,7 +694,7 @@ impl Ledger {
         let mut tx = self.store.begin().await?;
         let record = apply_patch(&mut tx, actor, &access, now, id, patch).await?;
         let mut views = [TransactionView::new(&record)];
-        hide_candidates_in_tx(&mut tx, &access, &mut views).await?;
+        hide_unseen_in_tx(&mut tx, &access, &mut views).await?;
         tx.commit().await?;
         let [view] = views;
         Ok(view)
@@ -699,7 +759,7 @@ impl Ledger {
         let record = self.store.get_transaction(id).await?;
         authorize_account(actor, &access, record.account, AccountLevel::Transactions)?;
         let mut views = [TransactionView::new(&record)];
-        self.hide_candidates(&access, &mut views).await?;
+        self.hide_unseen(&access, &mut views).await?;
         let [view] = views;
         Ok(view)
     }
@@ -760,7 +820,7 @@ impl Ledger {
         };
         let page = self.store.list_transactions(&filter, &query.page).await?;
         let mut items: Vec<TransactionView> = page.items.iter().map(TransactionView::new).collect();
-        self.hide_candidates(&access, &mut items).await?;
+        self.hide_unseen(&access, &mut items).await?;
         Ok(TransactionPage {
             items,
             next: page.next,
@@ -800,74 +860,9 @@ impl Ledger {
                 .map_err(|error| LedgerError::operation(index, error))?;
             views.push(TransactionView::new(&record));
         }
-        hide_candidates_in_tx(&mut tx, &access, &mut views).await?;
+        hide_unseen_in_tx(&mut tx, &access, &mut views).await?;
         tx.commit().await?;
         Ok(views)
-    }
-
-    /// Removes the duplicate candidates `access` may not see, for reads; see
-    /// [`candidates_to_check`].
-    async fn hide_candidates(
-        &self,
-        access: &AccountAccess,
-        views: &mut [TransactionView],
-    ) -> Result<(), LedgerError> {
-        if let Some(candidates) = candidates_to_check(access, views) {
-            let accounts = self.store.accounts_of_transactions(&candidates).await?;
-            keep_visible_candidates(access, views, &accounts);
-        }
-        Ok(())
-    }
-}
-
-/// Removes the duplicate candidates `access` may not see, inside `tx`, so a
-/// write fails before its commit if they cannot be read; see
-/// [`candidates_to_check`].
-pub(super) async fn hide_candidates_in_tx(
-    tx: &mut StoreTx,
-    access: &AccountAccess,
-    views: &mut [TransactionView],
-) -> Result<(), LedgerError> {
-    if let Some(candidates) = candidates_to_check(access, views) {
-        let accounts = tx.accounts_of_transactions(&candidates).await?;
-        keep_visible_candidates(access, views, &accounts);
-    }
-    Ok(())
-}
-
-/// The distinct candidates of `views` whose accounts decide what `access`
-/// sees, or `None` when it reads every account.
-///
-/// Defence in depth: the server pairs candidates and merges only within one
-/// account, so a transaction the token can read should not list one it
-/// cannot. Should such a pair ever exist, naming it would reveal a hidden
-/// transaction. `possible_duplicate` stays: it says only that a member
-/// should look.
-fn candidates_to_check(
-    access: &AccountAccess,
-    views: &[TransactionView],
-) -> Option<Vec<TransactionId>> {
-    if access.sees_every_account(AccountLevel::Transactions) {
-        return None;
-    }
-    let distinct: HashSet<TransactionId> = views
-        .iter()
-        .flat_map(|view| view.duplicate_candidates.iter().copied())
-        .collect();
-    Some(distinct.into_iter().collect())
-}
-
-fn keep_visible_candidates(
-    access: &AccountAccess,
-    views: &mut [TransactionView],
-    accounts: &HashMap<TransactionId, AccountId>,
-) {
-    for view in views {
-        view.duplicate_candidates.retain(|candidate| {
-            accounts.get(candidate).is_some_and(|account| {
-                access.level_for(*account) >= Some(AccountLevel::Transactions)
-            })
-        });
     }
 }
 

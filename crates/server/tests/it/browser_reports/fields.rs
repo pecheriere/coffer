@@ -6,7 +6,10 @@ use coffer_server::assets::{JS_COFFER_JS, JS_PLAID_LINK_JS};
 use coffer_server::testkit::TEST_PUBLIC_URL;
 use serde_json::{Value, json};
 
-use super::{JSON, browser, post, post_script, script_events, script_report, the_event};
+use super::{
+    JSON, browser, csp_on_fresh_line, csp_report, events_on, post, post_csp, post_script,
+    script_events, script_report, the_event,
+};
 
 async fn event_for(body: &Value, marker: &str) -> String {
     let (_server, mut browser) = browser().await;
@@ -314,8 +317,8 @@ async fn a_path_outside_the_table_logs_other_and_withholds_the_message() {
     );
 }
 
-/// The forecast page will show amounts. Until someone adds it to the table
-/// with that in mind, a message from it stays out of the log.
+/// The forecast page shows amounts. It is not in the table, so a message from it
+/// stays out of the log.
 #[tokio::test]
 async fn a_message_from_the_forecast_page_is_withheld() {
     let (_server, mut browser) = browser().await;
@@ -324,6 +327,61 @@ async fn a_message_from_the_forecast_page_is_withheld() {
     let log = script_events(&mut browser, &body).await;
     assert!(log.contains("client_message=\"[withheld]\""), "{log}");
     assert!(!log.contains("1234.56"), "{log}");
+}
+
+/// Whatever kind of report comes from the forecast page, whatever its address
+/// looks like and whichever script it names, no text of it reaches the log.
+#[tokio::test]
+async fn no_report_from_the_forecast_page_keeps_its_text() {
+    for kind in ["error", "unhandled_rejection", "passkey", "plaid"] {
+        for page in [
+            "/forecast",
+            "/forecast?as_of=2026-11-01",
+            "/forecast#reasons",
+            "https://coffer.test/forecast",
+        ] {
+            // A server each, so the endpoint's rate limit doesn't drop any.
+            let (_server, mut browser) = browser().await;
+            let body = json!({
+                "kind": kind,
+                "message": "Surplus 1234.56 Fortune",
+                "script": JS_COFFER_JS.url,
+                "page": page,
+            });
+            let log = script_events(&mut browser, &body).await;
+            assert!(log.contains("client_message=\"[withheld]\""), "{log}");
+            assert!(log.contains("page=\"other\""), "{log}");
+            assert!(
+                !log.contains("1234.56") && !log.contains("Fortune"),
+                "{log}"
+            );
+        }
+    }
+}
+
+/// A CSP report on the forecast page says a class of what was blocked, never its
+/// address, which a query could fill with figures.
+#[tokio::test]
+async fn a_csp_report_from_the_forecast_page_names_no_address() {
+    let (_server, mut browser) = browser().await;
+    let body = csp_report(
+        "/forecast?surplus=1234.56",
+        "img-src",
+        "https://evil.test/leak?surplus=1234.56&name=Fortune",
+    );
+    let (body, line) = csp_on_fresh_line(&body);
+    post_csp(&mut browser, &body).await;
+    let log = events_on(line);
+    assert!(log.contains("page=\"other\""), "{log}");
+    assert!(
+        log.contains("client_message=\"img-src blocked other\""),
+        "{log}"
+    );
+    assert!(
+        !log.contains("1234.56") && !log.contains("Fortune"),
+        "{log}"
+    );
+    assert!(!log.contains("evil.test"), "{log}");
 }
 
 #[tokio::test]

@@ -29,6 +29,7 @@ async fn merge_moves_sources_and_refuses_user_state() {
             splits: Some(vec![SplitInput {
                 category: groceries,
                 minor_units: -1_250,
+                goal: None,
             }]),
             ..TransactionPatch::default()
         },
@@ -118,6 +119,7 @@ async fn merge_takes_the_posted_fields_of_a_posted_duplicate() {
             splits: Some(vec![SplitInput {
                 category: groceries,
                 minor_units: -1_250,
+                goal: None,
             }]),
             ..TransactionPatch::default()
         },
@@ -439,6 +441,7 @@ async fn merged_records_of_two_connections_stay_put_through_resyncs() {
             splits: Some(vec![SplitInput {
                 category: tools,
                 minor_units: -2_999,
+                goal: None,
             }]),
             ..TransactionPatch::default()
         },

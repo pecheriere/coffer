@@ -2,10 +2,13 @@
 
 pub mod accounts;
 pub mod audit;
+pub mod forecast;
 pub mod identity;
 pub mod ids;
 pub mod matching;
 pub mod money;
+pub mod plan;
+pub mod plan_report;
 pub mod policy;
 pub mod sync;
 pub mod time;
