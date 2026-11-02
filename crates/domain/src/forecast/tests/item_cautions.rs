@@ -214,7 +214,7 @@ fn hints_that_change_nothing_do_not_warn() {
             },
             inflow(ItemInput {
                 account_hint: Some(elsewhere),
-                ..one_off("Excluded", usd(1), date(2026, 12, 1), CategoryId::new())
+                ..one_off("Income off", usd(1), date(2026, 12, 1), CategoryId::new())
             }),
         ],
         ..household()
@@ -222,7 +222,7 @@ fn hints_that_change_nothing_do_not_warn() {
     assert_eq!(
         forecast.cautions,
         [],
-        "a counted hint, an item outside the window, income left out"
+        "a counted hint, an item outside the window, income off"
     );
 }
 
@@ -329,24 +329,114 @@ fn an_inflow_in_another_currency_hinted_at_a_held_account_mixes_nothing() {
     assert_eq!(forecast.surplus, Some(usd(1_000_000)));
 }
 
-/// Out of this ruling's scope: the household's own money switched out still counts as income,
-/// and the caution says so.
+/// The household's own account switched out of the forecast: the money may never reach counted
+/// cash, so it stays out, as it does for a held account. The surplus is what it is without the
+/// inflow, and the caution says why it reads low.
 #[test]
-fn an_inflow_hinted_at_an_excluded_household_account_still_counts() {
+fn an_inflow_hinted_at_an_excluded_household_account_is_left_out() {
     let side = AccountInput {
         include_in_forecast: false,
         ..cash("Side", usd(0))
     };
     let forecast = hinted_at(side, gift(usd(10_000)));
 
-    assert_eq!(forecast.surplus, Some(usd(1_010_000)));
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+    assert_eq!(usd_totals(&forecast).planned_inflows, usd(0));
+    assert_eq!(usd_totals(&forecast).excluded_inflows, usd(0));
+    assert_eq!(line(&forecast, "Gift").counted, usd(0));
     assert!(matches!(
         forecast.cautions.as_slice(),
         [Caution::ItemHintNotCounted {
-            effect: HintEffect::StillIncome,
+            effect: HintEffect::LeftOut,
             ..
         }]
     ));
+}
+
+/// Hinting an inflow at an account that stays out never changes the surplus: it is the same
+/// number as for an inflow that was never planned.
+#[test]
+fn a_hint_at_an_excluded_account_leaves_the_surplus_unchanged_with_income_on() {
+    let side = AccountInput {
+        include_in_forecast: false,
+        ..cash("Side", usd(0))
+    };
+    let without = run(&ForecastInput {
+        include_income: true,
+        accounts: vec![cash("Checking", usd(1_000_000)), side.clone()],
+        ..household()
+    });
+    let hinted = hinted_at(side, gift(usd(10_000)));
+
+    assert_eq!(hinted.surplus, without.surplus);
+}
+
+/// Whatever the reason an account doesn't count, income hinted at it stays out with income on.
+#[test]
+fn an_inflow_hinted_at_any_uncounted_account_is_left_out() {
+    let uncounted = [
+        AccountInput {
+            closed: true,
+            ..cash("Closed", usd(0))
+        },
+        AccountInput {
+            liquidity: crate::accounts::LiquidityClass::Invested,
+            ..cash("Brokerage", usd(0))
+        },
+    ];
+    for account in uncounted {
+        let forecast = hinted_at(account, gift(usd(10_000)));
+        assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+        assert!(matches!(
+            forecast.cautions.as_slice(),
+            [Caution::ItemHintNotCounted {
+                effect: HintEffect::LeftOut,
+                ..
+            }]
+        ));
+    }
+}
+
+#[test]
+fn an_inflow_hinted_at_an_unlisted_account_is_left_out() {
+    let forecast = run(&ForecastInput {
+        include_income: true,
+        items: vec![ItemInput {
+            account_hint: Some(AccountId::new()),
+            ..gift(usd(10_000))
+        }],
+        ..household()
+    });
+
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::ItemHintNotCounted {
+            effect: HintEffect::LeftOut,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn an_inflow_hinted_at_a_counted_account_counts() {
+    let savings = cash("Savings", usd(0));
+    let forecast = hinted_at(savings, gift(usd(10_000)));
+
+    assert_eq!(forecast.surplus, Some(usd(1_010_000)));
+    assert_eq!(forecast.cautions, []);
+}
+
+#[test]
+fn an_inflow_with_no_hint_counts() {
+    let forecast = run(&ForecastInput {
+        include_income: true,
+        items: vec![gift(usd(10_000))],
+        ..household()
+    });
+
+    assert_eq!(forecast.surplus, Some(usd(1_010_000)));
+    assert_eq!(forecast.cautions, []);
 }
 
 #[test]

@@ -1536,8 +1536,8 @@
         "tags": [
           "connections"
         ],
-        "summary": "Every connection.",
-        "description": "Every connection, removed ones included, oldest first: its status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`. The last error could name any account the connection serves: a token with account grants gets it only with `all` at `transactions`, otherwise it is `null` and the status still shows the problem.",
+        "summary": "The connections the token may see.",
+        "description": "The connections the token may see, removed ones included, oldest first: each one's status, last error (sanitized), last attempt and success, when the schedule syncs it next, and the provider accounts the token may see. Never its credentials. Needs `read`. A token with account grants sees a connection only if it serves an account the token sees; one serving none needs an `all` grant, at any level. The last error could name any account the connection serves: a token with account grants gets it only with `all` at `transactions`, otherwise it is `null` and the status still shows the problem.",
         "operationId": "listConnections",
         "responses": {
           "200": {
@@ -7392,7 +7392,7 @@
       },
       "ConnectionList": {
         "type": "object",
-        "description": "Every connection.",
+        "description": "The connections the token may see.",
         "required": [
           "items"
         ],
@@ -7542,7 +7542,7 @@
           },
           "excluded_inflows": {
             "$ref": "#/components/schemas/Money",
-            "description": "Planned inflows left out because `include_income` is off. Income expected in an account\nthat isn't the household's isn't among them, since turning it on wouldn't add it."
+            "description": "Planned inflows left out because `include_income` is off. Income expected in an account\nthat doesn't count isn't among them, since turning it on wouldn't add it."
           },
           "floor": {
             "$ref": "#/components/schemas/Money"
@@ -8010,7 +8010,6 @@
         "description": "What became of an item hinted at an account that does not count.",
         "enum": [
           "still_needed",
-          "still_income",
           "left_out"
         ]
       },
