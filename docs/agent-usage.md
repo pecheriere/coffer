@@ -71,7 +71,8 @@ token's access.
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
   named in an error (a batch names the failing operation by index only) or
-  in another transaction's `duplicate_candidates`.
+  in another transaction's `duplicate_candidates`. A planned item hinted at one
+  answers likewise, and a split linked to such a goal reads `goal: null`.
 - A visible account below the level needed is a 403 `forbidden` whose
   detail names the level: "this action needs transactions access to this
   account". `GET /api/v1/transactions` silently leaves out the accounts the
@@ -191,7 +192,7 @@ A transaction has a signed `amount` (`{"minor_units": -1234, "currency":
 `payee`, `notes`, `review` (`unreviewed` or `reviewed`), `assignee` (a
 member id or `null`) and `splits` (`[{id, category, amount, goal}]`, empty when
 uncategorized; `goal` is the id of the goal the split counts towards, or
-`null`). `reviewed_by` and `categorized_by` say who reviewed and who
+`null`, as it also is for a goal the token can't see). `reviewed_by` and `categorized_by` say who reviewed and who
 last changed the splits (`{member, agent, system, at}`); `origin` is
 `manual` or `imported`.
 
@@ -263,9 +264,11 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   in the transaction's currency; a split sent without one loses its link). Only
   a split in an `expense` category takes a `goal`: moving money to savings for a
   goal isn't spending it, so it doesn't lower what the goal needs. A
-  goal the token can't see answers like one that does not exist, unless the
-  transaction is already linked to it. A patch that changes nothing records
-  nothing.
+  goal the token can't see answers like one that does not exist, even on a
+  transaction linked to it. A link the token can't see stays on a split sent
+  without a `goal` for the same amount, so sending back what it read changes
+  nothing and recategorizing keeps it; divided into other amounts it is gone,
+  and the audit log says so. A patch that changes nothing records nothing.
 - `DELETE /api/v1/transactions/{transaction_id}` (`write`) deletes a manual
   transaction (204); an imported one is a 409 `conflict`.
 - `POST /api/v1/transactions/batch` (`write`) applies

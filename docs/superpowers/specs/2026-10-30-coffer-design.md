@@ -792,7 +792,11 @@ FX. A purchase in another currency cannot be linked until FX exists, which
 overstates that goal's need: the safe direction. Only a split in an `expense`
 category may be linked, and only those lower the need: moving money to savings for
 a goal is not spending it, since the money is still cash. Every split names a
-category, so uncategorized money has no split to link.
+category, so uncategorized money has no split to link. A split linked to a goal the
+actor can't see (R3) reads `goal: null`, and naming that goal is refused like a
+missing one even on that transaction; a patch sending a split of the same amount
+with no goal keeps the link, since a token can't be asked to send what it isn't
+shown.
 
 **R9. Bills and budgets.** A recurring outflow has a `spending` of `bill` or
 `budget`, which replaces §6.8's reduction of every recurring item. Only a budget is

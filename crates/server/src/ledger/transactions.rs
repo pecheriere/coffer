@@ -2,7 +2,7 @@
 //! and agents set on any — splits, payee, notes, review and assignee — with
 //! who categorized and who reviewed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
@@ -26,6 +26,7 @@ use jiff::civil::Date;
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
+use super::unseen::{hide_unseen_in_tx, keep_unseen_links, splits_as_shown};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::ProblemCode;
@@ -99,7 +100,8 @@ pub struct TransactionPatch {
     /// Replaces every split and records who categorized it: `[]`
     /// uncategorizes, otherwise 1 to 50 non-zero splits on categories that
     /// are not archived, summing exactly to the amount. A split sent without
-    /// a `goal` loses any link it had.
+    /// a `goal` loses any link it had, unless it is one the token can't see: that
+    /// stays on a split of its amount.
     pub splits: Option<Vec<SplitInput>>,
 }
 
@@ -135,8 +137,9 @@ pub struct SplitView {
     pub id: SplitId,
     pub category: CategoryId,
     pub amount: Money,
-    /// The goal this part counts towards; `null` for none. The token may not
-    /// be able to see that goal: the id then answers 404, like any other.
+    /// The goal this part counts towards; `null` for none, and for one the token
+    /// may not see, so that nothing says such a goal exists. A patch keeps that
+    /// link while it sends a split of the amount it is on.
     #[schema(required)]
     pub goal: Option<PlannedItemId>,
 }
@@ -387,17 +390,13 @@ async fn check_categories(tx: &mut StoreTx, splits: &[SplitInput]) -> Result<(),
     Ok(())
 }
 
-/// Refuses a split naming a goal that does not exist, or one new to this
-/// transaction that `access` may not see, in the same words, because a
-/// difference would confirm a hidden item exists (R3). A goal in `before` may be
-/// sent again unseen: the token already reads its id, and refusing would push it
-/// to drop the link, changing the goal's figures.
+/// Refuses a split naming a goal that does not exist, or one `access` may not see,
+/// in the same words, because a difference would confirm a hidden item exists (R3).
+/// That holds on a transaction already linked to it too, or naming it would confirm
+/// the link.
 ///
 /// Then the item must be a goal, in `currency`; a completed or inactive one may
-/// still take late receipts. A hidden item that fails those also answers as
-/// missing, because its own refusal would say what kind of item it is or that
-/// its currency differs. Nothing the ledger allows leaves a link like that: an
-/// item's type never changes, nor does a linked goal's currency.
+/// still take late receipts.
 ///
 /// A link needs an `expense` category, since moving money to savings for a goal
 /// isn't spending it. That is checked first and says nothing about the goal, so it
@@ -406,7 +405,6 @@ async fn check_goals(
     tx: &mut StoreTx,
     access: &AccountAccess,
     currency: Currency,
-    before: &[SplitInput],
     splits: &[SplitInput],
 ) -> Result<(), LedgerError> {
     for split in splits.iter().filter(|split| split.goal.is_some()) {
@@ -420,23 +418,14 @@ async fn check_goals(
             Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
             Err(other) => return Err(other.into()),
         };
-        let visible = plan_item_visible(access, item.account_hint);
-        if !visible && !before.iter().any(|split| split.goal == Some(goal)) {
+        if !plan_item_visible(access, item.account_hint) {
             return Err(LedgerError::Invalid(UNKNOWN_GOAL));
         }
-        let refusal = if item.schedule.item_type() != PlanItemType::Goal {
-            Some(NOT_A_GOAL)
-        } else if item.amount.currency != currency {
-            Some(GOAL_CURRENCY)
-        } else {
-            None
-        };
-        if let Some(refusal) = refusal {
-            return Err(LedgerError::Invalid(if visible {
-                refusal
-            } else {
-                UNKNOWN_GOAL
-            }));
+        if item.schedule.item_type() != PlanItemType::Goal {
+            return Err(LedgerError::Invalid(NOT_A_GOAL));
+        }
+        if item.amount.currency != currency {
+            return Err(LedgerError::Invalid(GOAL_CURRENCY));
         }
     }
     Ok(())
@@ -544,9 +533,11 @@ async fn apply_patch(
         validate_splits(current.amount_minor, &splits)
             .map_err(|err| LedgerError::Invalid(split_message(err)))?;
         let before = current_splits(&current);
-        if splits != before {
+        let shown = splits_as_shown(tx, access, &before).await?;
+        if splits != shown {
             check_categories(tx, &splits).await?;
-            check_goals(tx, access, current.currency, &before, &splits).await?;
+            check_goals(tx, access, current.currency, &splits).await?;
+            let splits = keep_unseen_links(tx, &before, &shown, splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
             if current.flags.contains(&TransactionFlag::SplitMismatch) {
                 audited = audited.change("split_mismatch", true, false);
@@ -703,7 +694,7 @@ impl Ledger {
         let mut tx = self.store.begin().await?;
         let record = apply_patch(&mut tx, actor, &access, now, id, patch).await?;
         let mut views = [TransactionView::new(&record)];
-        hide_candidates_in_tx(&mut tx, &access, &mut views).await?;
+        hide_unseen_in_tx(&mut tx, &access, &mut views).await?;
         tx.commit().await?;
         let [view] = views;
         Ok(view)
@@ -768,7 +759,7 @@ impl Ledger {
         let record = self.store.get_transaction(id).await?;
         authorize_account(actor, &access, record.account, AccountLevel::Transactions)?;
         let mut views = [TransactionView::new(&record)];
-        self.hide_candidates(&access, &mut views).await?;
+        self.hide_unseen(&access, &mut views).await?;
         let [view] = views;
         Ok(view)
     }
@@ -829,7 +820,7 @@ impl Ledger {
         };
         let page = self.store.list_transactions(&filter, &query.page).await?;
         let mut items: Vec<TransactionView> = page.items.iter().map(TransactionView::new).collect();
-        self.hide_candidates(&access, &mut items).await?;
+        self.hide_unseen(&access, &mut items).await?;
         Ok(TransactionPage {
             items,
             next: page.next,
@@ -869,74 +860,9 @@ impl Ledger {
                 .map_err(|error| LedgerError::operation(index, error))?;
             views.push(TransactionView::new(&record));
         }
-        hide_candidates_in_tx(&mut tx, &access, &mut views).await?;
+        hide_unseen_in_tx(&mut tx, &access, &mut views).await?;
         tx.commit().await?;
         Ok(views)
-    }
-
-    /// Removes the duplicate candidates `access` may not see, for reads; see
-    /// [`candidates_to_check`].
-    async fn hide_candidates(
-        &self,
-        access: &AccountAccess,
-        views: &mut [TransactionView],
-    ) -> Result<(), LedgerError> {
-        if let Some(candidates) = candidates_to_check(access, views) {
-            let accounts = self.store.accounts_of_transactions(&candidates).await?;
-            keep_visible_candidates(access, views, &accounts);
-        }
-        Ok(())
-    }
-}
-
-/// Removes the duplicate candidates `access` may not see, inside `tx`, so a
-/// write fails before its commit if they cannot be read; see
-/// [`candidates_to_check`].
-pub(super) async fn hide_candidates_in_tx(
-    tx: &mut StoreTx,
-    access: &AccountAccess,
-    views: &mut [TransactionView],
-) -> Result<(), LedgerError> {
-    if let Some(candidates) = candidates_to_check(access, views) {
-        let accounts = tx.accounts_of_transactions(&candidates).await?;
-        keep_visible_candidates(access, views, &accounts);
-    }
-    Ok(())
-}
-
-/// The distinct candidates of `views` whose accounts decide what `access`
-/// sees, or `None` when it reads every account.
-///
-/// Defence in depth: the server pairs candidates and merges only within one
-/// account, so a transaction the token can read should not list one it
-/// cannot. Should such a pair ever exist, naming it would reveal a hidden
-/// transaction. `possible_duplicate` stays: it says only that a member
-/// should look.
-fn candidates_to_check(
-    access: &AccountAccess,
-    views: &[TransactionView],
-) -> Option<Vec<TransactionId>> {
-    if access.sees_every_account(AccountLevel::Transactions) {
-        return None;
-    }
-    let distinct: HashSet<TransactionId> = views
-        .iter()
-        .flat_map(|view| view.duplicate_candidates.iter().copied())
-        .collect();
-    Some(distinct.into_iter().collect())
-}
-
-fn keep_visible_candidates(
-    access: &AccountAccess,
-    views: &mut [TransactionView],
-    accounts: &HashMap<TransactionId, AccountId>,
-) {
-    for view in views {
-        view.duplicate_candidates.retain(|candidate| {
-            accounts.get(candidate).is_some_and(|account| {
-                access.level_for(*account) >= Some(AccountLevel::Transactions)
-            })
-        });
     }
 }
 

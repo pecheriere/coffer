@@ -145,6 +145,19 @@
     As defence in depth, a transaction's duplicate candidates leave out those
     in an account the token cannot read: the store refuses a candidate
     pair across accounts, so none should exist.
+  - A planned item hinted at an account the token holds below `transactions`
+    answers like a missing one, and a split on a visible account linked to such a
+    goal reads `goal: null`: its id would confirm a hidden item exists, tell when
+    it was made (ids are UUIDv7) and which transactions share it. Naming it is
+    refused like a missing goal even on the transaction holding the link, and a
+    patch keeps a link it could not see while a split of that amount is sent, so
+    its answer and whether it writes are those of a split with no link. What is
+    left: such a patch dividing the money into other amounts drops the link,
+    which the token cannot know. The audit log records it.
+  - A fixed safety floor's amount and currency are readable by any `read` token
+    (`GET /api/v1/household/settings`): settings describe no account, so grants
+    don't apply. A token holding only an account in another currency learns the
+    household plans in that one, and roughly how much it keeps.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to

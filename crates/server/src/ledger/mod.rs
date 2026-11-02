@@ -12,6 +12,7 @@ pub mod plan_items;
 pub mod plan_report;
 pub mod settings;
 pub mod transactions;
+mod unseen;
 
 use std::sync::Arc;
 

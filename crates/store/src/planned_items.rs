@@ -2,6 +2,8 @@
 //! Every value read is parsed back into its domain type, so a row that no
 //! longer fits is a backend error.
 
+use std::collections::HashMap;
+
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
@@ -12,7 +14,7 @@ use coffer_domain::transactions::Notes;
 use jiff::Timestamp;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{QueryBuilder, Row, Sqlite, SqliteExecutor};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, SqliteExecutor};
 
 use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time};
 use crate::members::expect_one;
@@ -203,6 +205,33 @@ async fn fetch<'e>(
     .await
     .map_err(StoreError::from_sqlx)?;
     from_row(&row)
+}
+
+/// The account hint of each of `ids` that exists.
+async fn hints_of(
+    conn: &mut SqliteConnection,
+    ids: &[PlannedItemId],
+) -> Result<HashMap<PlannedItemId, Option<AccountId>>, StoreError> {
+    let mut hints = HashMap::new();
+    if ids.is_empty() {
+        return Ok(hints);
+    }
+    let mut query =
+        QueryBuilder::<Sqlite>::new("SELECT id, account_hint_id FROM planned_items WHERE id IN (");
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(id.to_string());
+    }
+    separated.push_unseparated(")");
+    let rows = query
+        .build()
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+    for row in &rows {
+        hints.insert(parsed(row, "id")?, parsed_opt(row, "account_hint_id")?);
+    }
+    Ok(hints)
 }
 
 impl StoreTx {
@@ -426,6 +455,19 @@ impl StoreTx {
         Ok(exists)
     }
 
+    /// The account hints of `ids`, as [`Store::hints_of_planned_items`], read in
+    /// this transaction.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::hints_of_planned_items`].
+    pub async fn hints_of_planned_items(
+        &mut self,
+        ids: &[PlannedItemId],
+    ) -> Result<HashMap<PlannedItemId, Option<AccountId>>, StoreError> {
+        hints_of(&mut self.tx, ids).await
+    }
+
     /// How many planned items exist, inactive ones included, as seen by this
     /// transaction.
     ///
@@ -442,6 +484,19 @@ impl StoreTx {
 }
 
 impl Store {
+    /// The account hint of each of `ids` that exists, whichever are active.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a row that no longer parses.
+    pub async fn hints_of_planned_items(
+        &self,
+        ids: &[PlannedItemId],
+    ) -> Result<HashMap<PlannedItemId, Option<AccountId>>, StoreError> {
+        let mut conn = self.pool.acquire().await.map_err(StoreError::from_sqlx)?;
+        hints_of(&mut conn, ids).await
+    }
+
     /// Fetch a planned item.
     ///
     /// # Errors

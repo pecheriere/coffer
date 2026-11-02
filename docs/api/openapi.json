@@ -8623,7 +8623,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlannedItemId",
-                "description": "The goal this part counts towards, which must exist and be in the\ntransaction's currency, on a split in an `expense` category: moving money to\nsavings for a goal isn't spending it. A completed or inactive goal may be named. One\nthe token can't see answers as missing, unless the transaction is\nalready linked to it. Left out, the part counts towards none."
+                "description": "The goal this part counts towards, which must exist and be in the\ntransaction's currency, on a split in an `expense` category: moving money to\nsavings for a goal isn't spending it. A completed or inactive goal may be named. One\nthe token can't see answers as missing. Left out, the part counts towards none,\nbut for a link the token can't see, which stays on a part of its amount."
               },
               {
                 "type": "null"
@@ -8658,7 +8658,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlannedItemId",
-                "description": "The goal this part counts towards; `null` for none. The token may not\nbe able to see that goal: the id then answers 404, like any other."
+                "description": "The goal this part counts towards; `null` for none, and for one the token\nmay not see, so that nothing says such a goal exists. A patch keeps that\nlink while it sends a split of the amount it is on."
               },
               {
                 "type": "null"
@@ -8891,7 +8891,7 @@
             "items": {
               "$ref": "#/components/schemas/SplitInput"
             },
-            "description": "Replaces every split and records who categorized it: `[]`\nuncategorizes, otherwise 1 to 50 non-zero splits on categories that\nare not archived, summing exactly to the amount. A split sent without\na `goal` loses any link it had."
+            "description": "Replaces every split and records who categorized it: `[]`\nuncategorizes, otherwise 1 to 50 non-zero splits on categories that\nare not archived, summing exactly to the amount. A split sent without\na `goal` loses any link it had, unless it is one the token can't see: that\nstays on a split of its amount."
           }
         },
         "additionalProperties": false

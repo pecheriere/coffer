@@ -35,7 +35,8 @@
 //! an item that does not exist ([`plan_item_visible`], spec §8.9 R3). A
 //! planned item without a hint is household data, which needs `Transactions`
 //! on at least one account, named or through an `all` grant. An actor holding
-//! only `Balances` sees no planned items: an empty list, not a refusal.
+//! only `Balances` sees no planned items: an empty list, not a refusal. A split
+//! linked to an item the actor can't see reads as linked to nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

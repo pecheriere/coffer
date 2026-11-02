@@ -1,5 +1,5 @@
-//! A goal the token can't see: new to a transaction it answers like a missing
-//! one, already linked it may be kept, and every change to it is audited.
+//! A goal the token can't see: naming it answers like a missing one, a link to it
+//! reads as none and stays on a split of its amount, and every change is audited.
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
@@ -9,7 +9,7 @@ use coffer_domain::policy::AccountLevel::{Balances, Transactions, Write};
 use coffer_domain::transactions::CategoryKind;
 use serde_json::{Value, json};
 
-use super::super::{World, goal, item_uri, on, one_off, with, world};
+use super::super::{World, goal, on, one_off, with, world};
 use super::{HiddenLink, NO_SUCH_GOAL, TRANSACTIONS, euros, linked, transaction_uri};
 
 impl World {
@@ -109,7 +109,7 @@ async fn goal_hinted_at_a_readable_ledger_may_be_linked() {
 }
 
 #[tokio::test]
-async fn read_with_hidden_goal_shows_only_its_opaque_id() {
+async fn read_with_hidden_goal_shows_no_link() {
     let world = world().await;
     let (home, hidden) = (world.account("Home").await, world.account("Hidden").await);
     let goal_id = world
@@ -123,48 +123,10 @@ async fn read_with_hidden_goal_shows_only_its_opaque_id() {
     let (status, read) = world.send(Method::GET, &uri, &token, None, None).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(read.contains(&goal_id));
+    assert!(!read.contains(&goal_id));
     assert!(!read.contains("Summer trip"));
-    let (status, _) = world
-        .send(Method::GET, &item_uri(&goal_id), &token, None, None)
-        .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn unchanged_link_to_a_hidden_goal_is_no_change() {
-    let world = world().await;
-    let (home, hidden) = (world.account("Home").await, world.account("Hidden").await);
-    let goal_id = world
-        .create(&with(goal(world.expense), "account_hint", json!(hidden)))
-        .await;
-    let transaction = world.manual(home, -500).await;
-    world.link(&transaction, -500, &goal_id).await;
-    let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
-    let audited = world.transaction_audit(&transaction).await.len();
-
-    let splits = linked(world.expense, -500, &goal_id);
-    let (status, _) = world.set_splits(&token, &transaction, splits).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(world.transaction_audit(&transaction).await.len(), audited);
-}
-
-#[tokio::test]
-async fn kept_link_to_a_hidden_goal_survives_a_changed_split() {
-    let world = world().await;
-    let link = world.hidden_link(goal(world.expense)).await;
-    let (_, other) = world.category(CategoryKind::Expense).await;
-
-    let splits = linked(other, -500, &link.goal_id);
-    let (status, _) = world
-        .set_splits(&link.token, &link.transaction, splits)
-        .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let read = world.read_transaction(&link.transaction).await;
-    assert_eq!(read["splits"][0]["category"], json!(other));
-    assert_eq!(read["splits"][0]["goal"], link.goal_id.as_str());
+    let read: Value = serde_json::from_str(&read).unwrap();
+    assert_eq!(read["splits"][0]["goal"], Value::Null);
 }
 
 #[tokio::test]
@@ -186,7 +148,7 @@ async fn moving_a_hidden_goal_to_another_transaction_answers_like_a_missing_goal
 }
 
 #[tokio::test]
-async fn a_kept_link_opens_no_other_hidden_goal() {
+async fn an_unseen_link_opens_no_other_hidden_goal() {
     let world = world().await;
     let link = world.hidden_link(goal(world.expense)).await;
     let another = world
@@ -213,10 +175,10 @@ async fn a_kept_link_opens_no_other_hidden_goal() {
     );
 }
 
-/// The rules still hold a kept link, but a hidden item's own refusal would say
-/// what it is: it answers like a missing goal.
+/// A hidden item's own refusal would say what it is: on the transaction holding
+/// the link too, naming it answers like a missing goal.
 #[tokio::test]
-async fn kept_hidden_link_breaking_a_rule_answers_like_a_missing_goal() {
+async fn naming_a_linked_item_breaking_a_rule_answers_like_a_missing_goal() {
     let world = world().await;
     let (_, other) = world.category(CategoryKind::Expense).await;
     for item in [
@@ -239,8 +201,23 @@ async fn kept_hidden_link_breaking_a_rule_answers_like_a_missing_goal() {
     }
 }
 
+/// The splits of a read, as the store holds them: each amount and its goal.
+fn held(read: &Value) -> Vec<(i64, Option<String>)> {
+    read["splits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|split| {
+            (
+                split["amount"]["minor_units"].as_i64().unwrap(),
+                split["goal"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
 #[tokio::test]
-async fn a_kept_goal_may_move_between_splits() {
+async fn an_unseen_link_stays_on_its_amount_when_the_splits_swap() {
     let world = world().await;
     let home = world.account("Home").await;
     let hidden = world.hidden_goal().await;
@@ -250,17 +227,16 @@ async fn a_kept_goal_may_move_between_splits() {
         .await;
     let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
 
-    let splits = world.parts(&[(-200, Some(&hidden)), (-300, None)]);
+    let splits = world.parts(&[(-300, None), (-200, None)]);
     let (status, _) = world.set_splits(&token, &transaction, splits).await;
 
     assert_eq!(status, StatusCode::OK);
     let read = world.read_transaction(&transaction).await;
-    assert_eq!(read["splits"][0]["goal"], hidden.as_str());
-    assert_eq!(read["splits"][1]["goal"], Value::Null);
+    assert_eq!(held(&read), [(-300, Some(hidden)), (-200, None)]);
 }
 
 #[tokio::test]
-async fn of_two_linked_goals_the_later_one_may_be_kept_alone() {
+async fn each_of_two_unseen_links_stays_on_its_own_amount() {
     let world = world().await;
     let home = world.account("Home").await;
     let (first, second) = (world.hidden_goal().await, world.hidden_goal().await);
@@ -270,49 +246,93 @@ async fn of_two_linked_goals_the_later_one_may_be_kept_alone() {
         .await;
     let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
 
-    let splits = world.parts(&[(-500, Some(&second))]);
+    let splits = world.parts(&[(-300, None), (-200, None)]);
     let (status, _) = world.set_splits(&token, &transaction, splits).await;
 
     assert_eq!(status, StatusCode::OK);
     let read = world.read_transaction(&transaction).await;
-    assert_eq!(read["splits"][0]["goal"], second.as_str());
+    assert_eq!(held(&read), [(-300, Some(second)), (-200, Some(first))]);
 }
 
+/// Of two splits of the amount, the one still in the link's category holds it.
 #[tokio::test]
-async fn of_two_linked_goals_the_earlier_one_may_be_kept_alone() {
+async fn an_unseen_link_prefers_a_split_of_its_own_category() {
     let world = world().await;
     let home = world.account("Home").await;
-    let (first, second) = (world.hidden_goal().await, world.hidden_goal().await);
+    let hidden = world.hidden_goal().await;
+    let (_, other) = world.category(CategoryKind::Expense).await;
     let transaction = world.manual(home, -500).await;
     world
-        .force_splits(&transaction, &[(-200, Some(&first)), (-300, Some(&second))])
+        .force_splits(&transaction, &[(-250, Some(&hidden)), (-250, None)])
         .await;
     let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
 
-    let splits = world.parts(&[(-500, Some(&first))]);
+    let splits = json!([
+        {"category": other, "minor_units": -250},
+        {"category": world.expense, "minor_units": -250},
+    ]);
     let (status, _) = world.set_splits(&token, &transaction, splits).await;
 
     assert_eq!(status, StatusCode::OK);
     let read = world.read_transaction(&transaction).await;
-    assert_eq!(read["splits"][0]["goal"], first.as_str());
+    assert_eq!(held(&read), [(-250, None), (-250, Some(hidden))]);
+}
+
+/// A link is only ever on an `expense` split, unseen or not, and a refusal would
+/// say it is there: on money moved to another kind of category it goes.
+#[tokio::test]
+async fn an_unseen_link_does_not_follow_money_out_of_expenses() {
+    for kind in [CategoryKind::Income, CategoryKind::Transfer] {
+        let world = world().await;
+        let link = world.hidden_link(goal(world.expense)).await;
+        let (_, other) = world.category(kind).await;
+
+        let splits = json!([{"category": other, "minor_units": -500}]);
+        let (status, _) = world
+            .set_splits(&link.token, &link.transaction, splits)
+            .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let read = world.read_transaction(&link.transaction).await;
+        assert_eq!(held(&read), [(-500, None)]);
+    }
+}
+
+/// A goal it may see, sent for that money, takes the place of one it can't.
+#[tokio::test]
+async fn a_visible_goal_sent_replaces_an_unseen_link() {
+    let world = world().await;
+    let link = world.hidden_link(goal(world.expense)).await;
+    let visible = world
+        .create(&with(goal(world.expense), "account_hint", json!(link.home)))
+        .await;
+
+    let splits = linked(world.expense, -500, &visible);
+    let (status, _) = world
+        .set_splits(&link.token, &link.transaction, splits)
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let read = world.read_transaction(&link.transaction).await;
+    assert_eq!(held(&read), [(-500, Some(visible))]);
 }
 
 #[tokio::test]
-async fn a_new_hidden_goal_beside_a_kept_one_answers_like_a_missing_goal() {
+async fn a_new_hidden_goal_beside_an_unseen_link_answers_like_a_missing_goal() {
     let world = world().await;
     let home = world.account("Home").await;
-    let (kept, new) = (world.hidden_goal().await, world.hidden_goal().await);
+    let (unseen, new) = (world.hidden_goal().await, world.hidden_goal().await);
     let transaction = world.manual(home, -500).await;
     world
-        .force_splits(&transaction, &[(-200, None), (-300, Some(&kept))])
+        .force_splits(&transaction, &[(-200, None), (-300, Some(&unseen))])
         .await;
     let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
     let absent = PlannedItemId::new().to_string();
-    let missing = world.parts(&[(-200, Some(&kept)), (-300, Some(&absent))]);
+    let missing = world.parts(&[(-200, Some(&absent)), (-300, None)]);
     let missing = world.set_splits(&token, &transaction, missing).await;
     assert_eq!(missing.0, StatusCode::UNPROCESSABLE_ENTITY);
 
-    let splits = world.parts(&[(-200, Some(&kept)), (-300, Some(&new))]);
+    let splits = world.parts(&[(-200, Some(&new)), (-300, None)]);
     let answer = world.set_splits(&token, &transaction, splits).await;
 
     assert!(
@@ -356,9 +376,9 @@ async fn batch_answers_a_hidden_goal_like_a_missing_one() {
 }
 
 /// A link kept on one transaction opens its goal to no other in the batch,
-/// and the refusal undoes the kept operation too.
+/// and the refusal undoes that operation too.
 #[tokio::test]
-async fn batch_keeping_a_hidden_link_refuses_a_hidden_goal_new_to_another_transaction() {
+async fn batch_keeping_an_unseen_link_refuses_a_hidden_goal_on_another_transaction() {
     let world = world().await;
     let link = world.hidden_link(goal(world.expense)).await;
     let another = world.hidden_goal().await;
@@ -366,7 +386,7 @@ async fn batch_keeping_a_hidden_link_refuses_a_hidden_goal_new_to_another_transa
     let (_, other) = world.category(CategoryKind::Expense).await;
     let naming = |goal: &str| {
         json!({"operations": [
-            {"id": link.transaction, "patch": {"splits": linked(other, -500, &link.goal_id)}},
+            {"id": link.transaction, "patch": {"splits": [{"category": other, "minor_units": -500}]}},
             {"id": elsewhere, "patch": {"splits": linked(world.expense, -700, goal)}},
         ]})
     };
@@ -396,39 +416,11 @@ async fn batch_keeping_a_hidden_link_refuses_a_hidden_goal_new_to_another_transa
 }
 
 #[tokio::test]
-async fn dropping_a_kept_link_unseen_is_audited() {
+async fn dropping_an_unseen_link_is_audited() {
     let world = world().await;
     let link = world.hidden_link(goal(world.expense)).await;
 
-    let splits = world.parts(&[(-500, None)]);
-    let (status, _) = world
-        .set_splits(&link.token, &link.transaction, splits)
-        .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let (before, after) = world.audited_splits(&link).await;
-    let category = world.expense;
-    assert_eq!(
-        before,
-        AuditValue::Text(format!(
-            r#"[{{"category":"{category}","minor_units":-500,"goal":"{}"}}]"#,
-            link.goal_id
-        ))
-    );
-    assert_eq!(
-        after,
-        AuditValue::Text(format!(
-            r#"[{{"category":"{category}","minor_units":-500}}]"#
-        ))
-    );
-}
-
-#[tokio::test]
-async fn changing_a_kept_links_amount_unseen_is_audited() {
-    let world = world().await;
-    let link = world.hidden_link(goal(world.expense)).await;
-
-    let splits = world.parts(&[(-200, Some(&link.goal_id)), (-300, None)]);
+    let splits = world.parts(&[(-200, None), (-300, None)]);
     let (status, _) = world
         .set_splits(&link.token, &link.transaction, splits)
         .await;
@@ -445,7 +437,7 @@ async fn changing_a_kept_links_amount_unseen_is_audited() {
     assert_eq!(
         after,
         AuditValue::Text(format!(
-            r#"[{{"category":"{category}","minor_units":-200,"goal":"{goal_id}"}},{{"category":"{category}","minor_units":-300}}]"#
+            r#"[{{"category":"{category}","minor_units":-200}},{{"category":"{category}","minor_units":-300}}]"#
         ))
     );
 }

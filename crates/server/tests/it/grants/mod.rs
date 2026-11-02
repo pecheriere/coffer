@@ -13,20 +13,27 @@ mod access;
 mod endpoints;
 mod hidden_accounts;
 mod management;
+mod plan_channels;
 mod proptests;
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use coffer_domain::accounts::{AccountKind, ConnectionLabel};
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
-use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, TransactionId};
+use coffer_domain::ids::{
+    AccountId, AgentTokenId, CategoryId, ConnectionId, PlannedItemId, TransactionId,
+};
 use coffer_domain::money::Currency;
 use coffer_domain::policy::{AccountLevel, GrantTarget, TokenGrant};
 use coffer_domain::time::Clock as _;
-use coffer_domain::transactions::{Description, TransactionFlag, TransactionOrigin};
+use coffer_domain::transactions::{
+    CategoryKind, Description, SplitInput, TransactionFlag, TransactionOrigin,
+};
 use coffer_server::http::router;
 use coffer_server::ledger::accounts::NewAccountInput;
-use coffer_server::ledger::transactions::NewManualTransactionInput;
+use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
+use coffer_server::ledger::plan_items::PlannedItemInput;
+use coffer_server::ledger::transactions::{NewManualTransactionInput, TransactionPatch};
 use coffer_server::secrets::SecretToken;
 use coffer_server::sync::provider::ProviderKind;
 use coffer_server::testkit::{FakeProvider, TestServer};
@@ -37,7 +44,7 @@ use coffer_store::{
 use http_body_util::BodyExt as _;
 use jiff::civil::date;
 use secrecy::ExposeSecret as _;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt as _;
 
@@ -135,6 +142,89 @@ impl World {
             .await
             .unwrap()
             .id
+    }
+
+    /// An expense category for planned items and splits to use.
+    async fn expense_category(&self) -> CategoryId {
+        let group = self
+            .server
+            .ledger
+            .create_category_group(
+                &self.alice,
+                CategoryGroupInput {
+                    name: "Plan".to_owned(),
+                    position: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        self.server
+            .ledger
+            .create_category(
+                &self.alice,
+                CategoryInput {
+                    group: group.id,
+                    name: "Planned".to_owned(),
+                    kind: CategoryKind::Expense,
+                    position: None,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    /// A goal called `name` for `minor_units` USD, hinted at `hint`.
+    async fn planned_item(
+        &self,
+        name: &str,
+        hint: Option<AccountId>,
+        category: CategoryId,
+        minor_units: i64,
+    ) -> PlannedItemId {
+        let input: PlannedItemInput = serde_json::from_value(json!({
+            "name": name,
+            "category": category,
+            "amount": {"minor_units": minor_units, "currency": "USD"},
+            "direction": "outflow",
+            "account_hint": hint,
+            "schedule": {"type": "goal", "start_on": "2026-11-01", "due_on": "2027-11-01"},
+        }))
+        .unwrap();
+        self.server
+            .ledger
+            .create_planned_item(&self.alice, input, None)
+            .await
+            .unwrap()
+            .id
+    }
+
+    /// Links all of `transaction`, of `minor_units`, to `goal` as alice.
+    async fn link_split(
+        &self,
+        transaction: TransactionId,
+        category: CategoryId,
+        minor_units: i64,
+        goal: PlannedItemId,
+    ) {
+        self.server
+            .ledger
+            .update_transaction(
+                &self.alice,
+                transaction,
+                TransactionPatch {
+                    splits: Some(vec![SplitInput {
+                        category,
+                        minor_units,
+                        goal: Some(goal),
+                    }]),
+                    ..TransactionPatch::default()
+                },
+            )
+            .await
+            .unwrap();
     }
 
     async fn balance(&self, account: AccountId) {
@@ -327,6 +417,25 @@ impl World {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    /// A `GET` with everything it answers: status, every header and the body.
+    async fn get_whole(&self, uri: &str, token: &SecretToken) -> (StatusCode, HeaderMap, String) {
+        let request = Request::builder()
+            .uri(uri)
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", token.expose_secret()),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let response = router(self.server.app_state())
+            .oneshot(request)
+            .await
+            .unwrap();
+        let (status, headers) = (response.status(), response.headers().clone());
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
     }
 
     async fn call(
