@@ -5,35 +5,38 @@ Humans and agents follow the same rules; see `AGENTS.md` for conventions.
 ## Setup
 
 Install [rustup](https://rustup.rs); the pinned toolchain in
-`rust-toolchain.toml` is fetched automatically. Install `cargo-deny` with
-`cargo install cargo-deny --locked`.
+`rust-toolchain.toml` is fetched automatically. Install `cargo-deny` and
+[cargo-nextest](https://nexte.st) with
+`cargo install cargo-deny cargo-nextest --locked`.
 
 ## Checks
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-features --locked
+cargo nextest run --workspace --all-features --locked
+cargo test --doc --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 cargo deny check
 ```
 
-All five must pass (run `cargo fmt` to fix formatting); CI runs them on
+All six must pass (run `cargo fmt` to fix formatting); CI runs them on
 every pull request.
 
 ## Fast local loop
 
-While iterating, run only the crate you are changing with
-[cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`, or
-your package manager), which runs tests in parallel processes:
+While iterating, run only the crate you are changing with nextest, which runs
+each test in its own process:
 
 ```sh
 cargo nextest run -p coffer-server --all-features            # one crate
 cargo nextest run -p coffer-store --all-features -E 'test(idempotency)'  # a filter
 ```
 
-Before committing, run the five checks above unchanged. nextest does not run
-doctests, so the full `cargo test` stays the gate, locally and in CI.
+Before committing, run the checks above unchanged (`scripts/gate.sh` runs them
+all). nextest is the test runner in the gate and in CI, so a test passes or
+fails the same in both. It does not run doctests, which run separately with
+`cargo test --doc`.
 
 A compiler cache such as [sccache](https://github.com/mozilla/sccache)
 (`RUSTC_WRAPPER=sccache`) speeds up rebuilds after branch switches. It is
