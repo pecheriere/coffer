@@ -2622,7 +2622,7 @@
           "plan"
         ],
         "summary": "Creates a planned item.",
-        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A recurring outflow is a `bill`, counted in full, unless `spending` makes it a `budget`, reduced by what was spent in its category so far this month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createPlanItem",
         "parameters": [
           {
@@ -2958,7 +2958,7 @@
           "plan"
         ],
         "summary": "Changes a planned item.",
-        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. `spending` applies only to an item left a recurring outflow; changing `direction` drops it, or makes the item a `bill`, unless `spending` is sent too. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updatePlanItem",
         "parameters": [
           {
@@ -6038,6 +6038,14 @@
         ],
         "description": "When a planned item falls due."
       },
+      "PlanSpending": {
+        "type": "string",
+        "description": "How a recurring outflow relates to what was spent in its category so\nfar this month: a bill counts in full, a budget is reduced by it.",
+        "enum": [
+          "bill",
+          "budget"
+        ]
+      },
       "PlannedItemId": {
         "type": "string",
         "format": "uuid",
@@ -6098,6 +6106,17 @@
           "schedule": {
             "$ref": "#/components/schemas/PlanSchedule",
             "description": "Its type never changes once it exists."
+          },
+          "spending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanSpending",
+                "description": "Only on a recurring outflow, where it is `bill` by default: a `budget`\nis reduced by what was spent in its category so far this month, a\n`bill` counts in full."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -6195,6 +6214,17 @@
                 "type": "null"
               }
             ]
+          },
+          "spending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanSpending",
+                "description": "Only on an item left a recurring outflow. An item that stops being an\noutflow loses its kind; one that becomes an outflow is a `bill` unless\nthis says otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -6212,6 +6242,7 @@
           "notes",
           "active",
           "schedule",
+          "spending",
           "created_at",
           "updated_at"
         ],
@@ -6259,6 +6290,17 @@
           },
           "schedule": {
             "$ref": "#/components/schemas/PlanSchedule"
+          },
+          "spending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanSpending",
+                "description": "A recurring outflow's kind; `null` on anything else. A `budget` is\nreduced by what was spent in its category so far this month, a `bill`\ncounts in full."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "updated_at": {
             "type": "string",

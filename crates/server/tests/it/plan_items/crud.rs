@@ -140,6 +140,7 @@ async fn patch_changes_only_what_was_sent() {
     let after = world.patch(&id, &json!({"name": "  Sewer bill  "})).await;
     assert_eq!(after["name"], json!("Sewer bill"), "the name is trimmed");
     for field in [
+        "spending",
         "category",
         "amount",
         "direction",
@@ -246,6 +247,7 @@ async fn noop_patch_writes_no_audit() {
         "notes": before["notes"],
         "active": before["active"],
         "schedule": before["schedule"],
+        "spending": before["spending"],
     });
     for patch in [json!({}), same] {
         let after = world.patch(&id, &patch).await;
@@ -291,6 +293,7 @@ async fn create_and_update_are_audited_field_by_field() {
     assert_eq!(after("account_hint"), text(&account.to_string()));
     assert_eq!(after("notes"), text("Remember"));
     assert_eq!(after("active"), AuditValue::Bool(true));
+    assert_eq!(after("spending"), text("bill"));
     let AuditValue::Text(schedule) = after("schedule") else {
         panic!("the schedule is recorded as text");
     };
@@ -327,6 +330,126 @@ async fn create_and_update_are_audited_field_by_field() {
     assert_eq!(name.before, text("Water bill"));
     assert_eq!(name.after, text("Sewer bill"));
     assert_eq!(change(updated, "account_hint").after, AuditValue::Null);
+}
+
+#[tokio::test]
+async fn spending_defaults_to_bill_on_a_recurring_outflow_only() {
+    let world = world().await;
+    let income = world.category(CategoryKind::Income).await.1;
+    let cases = [
+        (recurring(world.expense), json!("bill")),
+        (
+            with(recurring(world.expense), "spending", Value::Null),
+            json!("bill"),
+        ),
+        (
+            with(recurring(world.expense), "spending", json!("bill")),
+            json!("bill"),
+        ),
+        (
+            with(recurring(world.expense), "spending", json!("budget")),
+            json!("budget"),
+        ),
+        (one_off(world.expense), Value::Null),
+        (goal(world.expense), Value::Null),
+        (
+            with(recurring(income), "direction", json!("inflow")),
+            Value::Null,
+        ),
+    ];
+    for (body, expected) in cases {
+        let id = world.create(&body).await;
+        let (_, read) = world
+            .call(Method::GET, &item_uri(&id), &world.admin, None)
+            .await;
+        assert!(
+            read.get("spending").is_some(),
+            "the field is always present"
+        );
+        assert_eq!(read["spending"], expected);
+    }
+}
+
+#[tokio::test]
+async fn spending_is_patchable_and_audited() {
+    let world = world().await;
+    let id = world
+        .create(&with(recurring(world.expense), "spending", json!("budget")))
+        .await;
+
+    // Absent or null keeps it, like any field that can't be cleared.
+    let after = world.patch(&id, &json!({"name": "Groceries"})).await;
+    assert_eq!(after["spending"], json!("budget"));
+    let after = world.patch(&id, &json!({"spending": null})).await;
+    assert_eq!(after["spending"], json!("budget"));
+
+    let audited = world.audit().await.len();
+    let after = world.patch(&id, &json!({"spending": "budget"})).await;
+    assert_eq!(after["spending"], json!("budget"));
+    assert_eq!(
+        world.audit().await.len(),
+        audited,
+        "the same value is no change"
+    );
+
+    let after = world.patch(&id, &json!({"spending": "bill"})).await;
+    assert_eq!(after["spending"], json!("bill"));
+    let events = world.audit().await;
+    assert_eq!(events.len(), audited + 1);
+    let latest = events
+        .iter()
+        .find(|event| {
+            event.action == "planned_item.update"
+                && event.changes.iter().any(|(field, _)| field == "spending")
+        })
+        .unwrap();
+    let fields: Vec<_> = latest.changes.iter().map(|(field, _)| field).collect();
+    assert_eq!(fields, ["spending"], "only the changed field");
+    assert_eq!(change(latest, "spending").before, text("budget"));
+    assert_eq!(change(latest, "spending").after, text("bill"));
+
+    world.patch(&id, &json!({"spending": "budget"})).await;
+    let (status, _) = world
+        .call(Method::DELETE, &item_uri(&id), &world.admin, None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let events = world.audit().await;
+    let deleted = events
+        .iter()
+        .find(|event| event.action == "planned_item.delete")
+        .unwrap();
+    assert_eq!(change(deleted, "spending").before, text("budget"));
+}
+
+#[tokio::test]
+async fn changing_direction_keeps_spending_in_step() {
+    let world = world().await;
+    let income = world.category(CategoryKind::Income).await.1;
+    let id = world
+        .create(&with(recurring(world.expense), "spending", json!("budget")))
+        .await;
+
+    // An inflow has no spending kind, so it goes, and the audit says so.
+    let after = world
+        .patch(&id, &json!({"direction": "inflow", "category": income}))
+        .await;
+    assert_eq!(after["spending"], Value::Null);
+    let events = world.audit().await;
+    let cleared = events
+        .iter()
+        .find(|event| event.changes.iter().any(|(field, _)| field == "direction"))
+        .unwrap();
+    assert_eq!(change(cleared, "spending").before, text("budget"));
+    assert_eq!(change(cleared, "spending").after, AuditValue::Null);
+
+    // Back to an outflow it takes the default, not what it once held.
+    let after = world
+        .patch(
+            &id,
+            &json!({"direction": "outflow", "category": world.expense}),
+        )
+        .await;
+    assert_eq!(after["spending"], json!("bill"));
 }
 
 #[tokio::test]
@@ -369,6 +492,7 @@ async fn delete_is_audited_with_before_values() {
     assert_eq!(before("account_hint"), text(&account.to_string()));
     assert_eq!(before("notes"), text("Remember"));
     assert_eq!(before("active"), AuditValue::Bool(true));
+    assert_eq!(before("spending"), AuditValue::Null, "a goal has none");
     let AuditValue::Text(schedule) = before("schedule") else {
         panic!("the schedule is recorded as text");
     };

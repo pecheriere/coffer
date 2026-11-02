@@ -80,7 +80,9 @@ pub(super) async fn list(
     tag = tags::PLAN,
     description = "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow \
                    needs an `expense` category and an inflow an `income` one; a goal must be an \
-                   outflow. A goal and a one-off describing the same expense are both counted, \
+                   outflow. A recurring outflow is a `bill`, counted in full, unless `spending` \
+                   makes it a `budget`, reduced by what was spent in its category so far this \
+                   month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, \
                    so the expense counts twice: nothing de-duplicates them. Its type never \
                    changes once it exists. Needs `write`; a token with account grants also needs \
                    `all` at `write`. With an `Idempotency-Key`, a retry of the same request \
@@ -155,7 +157,9 @@ pub(super) async fn get(
     tag = tags::PLAN,
     description = "Changes the fields given and checks them against the item they would leave. \
                    `null` clears `account_hint` and `notes`. `schedule` replaces the whole \
-                   schedule, and its `type` must stay the item's own. Needs `write`; a token \
+                   schedule, and its `type` must stay the item's own. `spending` applies only to \
+                   an item left a recurring outflow; changing `direction` drops it, or makes the \
+                   item a `bill`, unless `spending` is sent too. Needs `write`; a token \
                    with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(PlannedItemPath),

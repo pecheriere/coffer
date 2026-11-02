@@ -11,7 +11,8 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Money;
 use coffer_domain::plan::{
-    MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule, PlannedItemName, validate_amount,
+    MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule, PlanSpending, PlannedItemName,
+    spending_applies, validate_amount,
 };
 use coffer_domain::policy::{Action, authorize, plan_item_visible};
 use coffer_domain::transactions::{CategoryKind, Notes};
@@ -35,6 +36,7 @@ const ARCHIVED_CATEGORY: &str = "the category is archived";
 const OUTFLOW_CATEGORY: &str = "an outflow needs an expense category";
 const INFLOW_CATEGORY: &str = "an inflow needs an income category";
 const TYPE_CHANGED: &str = "a planned item's type never changes";
+const SPENDING_REFUSED: &str = "only a recurring outflow has a spending kind";
 const TOO_MANY: &str = "a household holds at most 500 planned items";
 const SCHEDULE_TEXT_FAILED: &str = "schedule serialization failed";
 
@@ -56,6 +58,11 @@ pub struct PlannedItemView {
     /// lists that don't ask for it.
     pub active: bool,
     pub schedule: PlanSchedule,
+    /// A recurring outflow's kind; `null` on anything else. A `budget` is
+    /// reduced by what was spent in its category so far this month, a `bill`
+    /// counts in full.
+    #[schema(required)]
+    pub spending: Option<PlanSpending>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -72,6 +79,7 @@ impl PlannedItemView {
             notes: record.notes.as_ref().map(|notes| notes.as_str().to_owned()),
             active: record.active,
             schedule: record.schedule,
+            spending: record.spending,
             created_at: record.created_at,
             updated_at: record.updated_at,
         }
@@ -102,6 +110,10 @@ pub struct PlannedItemInput {
     pub active: Option<bool>,
     /// Its type never changes once it exists.
     pub schedule: PlanSchedule,
+    /// Only on a recurring outflow, where it is `bill` by default: a `budget`
+    /// is reduced by what was spent in its category so far this month, a
+    /// `bill` counts in full.
+    pub spending: Option<PlanSpending>,
 }
 
 /// Changes to a planned item. An absent field stays as it is.
@@ -130,6 +142,10 @@ pub struct PlannedItemPatch {
     /// Replaces the whole schedule, whose `type` must stay the item's own: a
     /// goal's `completed` goes back to `false` unless it is sent.
     pub schedule: Option<PlanSchedule>,
+    /// Only on an item left a recurring outflow. An item that stops being an
+    /// outflow loses its kind; one that becomes an outflow is a `bill` unless
+    /// this says otherwise.
+    pub spending: Option<PlanSpending>,
 }
 
 /// The message for a rejected plan value; never echoes the input.
@@ -149,6 +165,23 @@ fn invalid(error: PlanError) -> LedgerError {
 
 fn schedule_text(schedule: &PlanSchedule) -> Result<String, LedgerError> {
     serde_json::to_string(schedule).map_err(|_| LedgerError::Internal(SCHEDULE_TEXT_FAILED))
+}
+
+/// The kind an item ends up with: what `sent` says, or `default` when it says
+/// nothing. An item that can't have one must not be sent one.
+fn resolved_spending(
+    sent: Option<PlanSpending>,
+    default: PlanSpending,
+    direction: PlanDirection,
+    schedule: &PlanSchedule,
+) -> Result<Option<PlanSpending>, LedgerError> {
+    if spending_applies(direction, schedule) {
+        Ok(Some(sent.unwrap_or(default)))
+    } else if sent.is_some() {
+        Err(LedgerError::Invalid(SPENDING_REFUSED))
+    } else {
+        Ok(None)
+    }
 }
 
 /// `Ok` when `found`, the caller's own lookup of a hinted account, is an open
@@ -214,6 +247,7 @@ struct CheckedPatch {
     account_hint: Patch<AccountId>,
     active: Option<bool>,
     schedule: Option<PlanSchedule>,
+    spending: Option<PlanSpending>,
 }
 
 impl CheckedPatch {
@@ -242,6 +276,7 @@ impl CheckedPatch {
             account_hint: patch.account_hint,
             active: patch.active,
             schedule: patch.schedule,
+            spending: patch.spending,
         })
     }
 
@@ -267,6 +302,13 @@ impl CheckedPatch {
         if direction_changed || category != current.category {
             check_category(tx, category, direction).await?;
         }
+
+        let spending = resolved_spending(
+            self.spending,
+            current.spending.unwrap_or(PlanSpending::Bill),
+            direction,
+            &schedule,
+        )?;
 
         let mut changes = PlannedItemChanges::default();
         let mut audited = AuditChanges::new();
@@ -336,6 +378,14 @@ impl CheckedPatch {
             );
             changes.schedule = Some(schedule);
         }
+        if spending != current.spending {
+            audited = audited.change(
+                "spending",
+                current.spending.map(PlanSpending::as_str),
+                spending.map(PlanSpending::as_str),
+            );
+            changes.spending = Some(spending);
+        }
         Ok((changes, audited))
     }
 }
@@ -372,6 +422,12 @@ impl Ledger {
         let name = PlannedItemName::parse(&input.name).map_err(invalid)?;
         validate_amount(input.amount).map_err(invalid)?;
         input.schedule.validate(input.direction).map_err(invalid)?;
+        let spending = resolved_spending(
+            input.spending,
+            PlanSpending::Bill,
+            input.direction,
+            &input.schedule,
+        )?;
         let new_notes = input.notes.as_deref().map(notes).transpose()?.flatten();
         let schedule = schedule_text(&input.schedule)?;
         let now = self.clock.now();
@@ -394,6 +450,7 @@ impl Ledger {
                 notes: new_notes,
                 active: input.active.unwrap_or(true),
                 schedule: input.schedule,
+                spending,
                 created_at: now,
             })
             .await?;
@@ -406,7 +463,8 @@ impl Ledger {
             .set("account_hint", record.account_hint)
             .set("notes", record.notes.as_ref().map(Notes::as_str))
             .set("active", record.active)
-            .set("schedule", schedule);
+            .set("schedule", schedule)
+            .set("spending", record.spending.map(PlanSpending::as_str));
         audit(
             &mut tx,
             now,
@@ -487,7 +545,8 @@ impl Ledger {
             .unset("account_hint", current.account_hint)
             .unset("notes", current.notes.as_ref().map(Notes::as_str))
             .unset("active", current.active)
-            .unset("schedule", schedule_text(&current.schedule)?);
+            .unset("schedule", schedule_text(&current.schedule)?)
+            .unset("spending", current.spending.map(PlanSpending::as_str));
         audit(
             &mut tx,
             now,

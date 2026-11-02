@@ -5,7 +5,8 @@
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlannedItemName, validate_amount,
+    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlannedItemName,
+    spending_applies, validate_amount,
 };
 use coffer_domain::transactions::Notes;
 use jiff::Timestamp;
@@ -21,7 +22,7 @@ macro_rules! columns {
     () => {
         "id, name, category_id, amount_minor, currency, direction, account_hint_id, notes, \
          active, item_type, every, unit, anchor_on, end_on, one_off_on, goal_start_on, \
-         goal_due_on, goal_completed, created_at, updated_at"
+         goal_due_on, goal_completed, spending, created_at, updated_at"
     };
 }
 
@@ -38,6 +39,8 @@ pub struct PlannedItemRecord {
     pub notes: Option<Notes>,
     pub active: bool,
     pub schedule: PlanSchedule,
+    /// Set on a recurring outflow, and only there.
+    pub spending: Option<PlanSpending>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -53,6 +56,8 @@ pub struct NewPlannedItem {
     pub notes: Option<Notes>,
     pub active: bool,
     pub schedule: PlanSchedule,
+    /// Set on a recurring outflow, and only there: the table refuses others.
+    pub spending: Option<PlanSpending>,
     pub created_at: Timestamp,
 }
 
@@ -70,6 +75,8 @@ pub struct PlannedItemChanges {
     pub active: Option<bool>,
     /// A schedule of the item's own type: the table refuses any other.
     pub schedule: Option<PlanSchedule>,
+    /// `Some(None)` clears it.
+    pub spending: Option<Option<PlanSpending>>,
 }
 
 /// The schedule columns of one row, each `None` where its type has none.
@@ -159,6 +166,10 @@ fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError> {
     let direction = parsed(row, "direction")?;
     let schedule = schedule_from_row(row)?;
     schedule.validate(direction).map_err(StoreError::backend)?;
+    let spending = parsed_opt(row, "spending")?;
+    if spending.is_some() != spending_applies(direction, &schedule) {
+        return Err(corrupt("planned item spending does not fit its type"));
+    }
     Ok(PlannedItemRecord {
         id: parsed(row, "id")?,
         name: PlannedItemName::parse(&text(row, "name")?).map_err(StoreError::backend)?,
@@ -172,6 +183,7 @@ fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError> {
             .map_err(StoreError::backend)?,
         active: row.try_get("active").map_err(StoreError::from_sqlx)?,
         schedule,
+        spending,
         created_at: time(row, "created_at")?,
         updated_at: time(row, "updated_at")?,
     })
@@ -209,7 +221,7 @@ impl StoreTx {
         sqlx::query(concat!(
             "INSERT INTO planned_items (",
             columns!(),
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(id.to_string())
         .bind(new.name.as_str())
@@ -229,6 +241,7 @@ impl StoreTx {
         .bind(columns.goal_start_on)
         .bind(columns.goal_due_on)
         .bind(columns.goal_completed)
+        .bind(new.spending.map(PlanSpending::as_str))
         .bind(new.created_at.as_millisecond())
         .bind(new.created_at.as_millisecond())
         .execute(&mut *self.tx)
@@ -244,6 +257,7 @@ impl StoreTx {
             notes: new.notes,
             active: new.active,
             schedule: new.schedule,
+            spending: new.spending,
             created_at: new.created_at,
             updated_at: new.created_at,
         })
@@ -316,6 +330,11 @@ impl StoreTx {
                 .push_bind(columns.goal_due_on)
                 .push(", goal_completed = ")
                 .push_bind(columns.goal_completed);
+        }
+        if let Some(spending) = changes.spending {
+            query
+                .push(", spending = ")
+                .push_bind(spending.map(PlanSpending::as_str));
         }
         query.push(" WHERE id = ").push_bind(id.to_string());
         let result = query

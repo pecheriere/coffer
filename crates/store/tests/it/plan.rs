@@ -10,7 +10,9 @@
 use coffer_domain::accounts::{AccountKind, AccountName, LiquidityClass};
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
-use coffer_domain::plan::{IntervalUnit, PlanDirection, PlanSchedule, PlannedItemName};
+use coffer_domain::plan::{
+    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, spending_applies,
+};
 use coffer_domain::transactions::{CategoryGroupName, CategoryKind, CategoryName, Notes};
 use coffer_store::{
     NewAccount, NewCategory, NewCategoryGroup, NewPlannedItem, PlannedItemChanges, Store,
@@ -94,6 +96,8 @@ impl World {
             notes: None,
             active: true,
             schedule,
+            spending: spending_applies(PlanDirection::Outflow, &schedule)
+                .then_some(PlanSpending::Bill),
             created_at: at(1),
         }
     }
@@ -155,6 +159,7 @@ async fn planned_item_roundtrips_each_schedule() {
         new.notes = Some(Notes::parse("first line\nsecond line").unwrap());
         new.active = false;
         let expected_notes = new.notes.clone();
+        let expected_spending = new.spending;
 
         let id = world.insert(new).await;
 
@@ -167,6 +172,7 @@ async fn planned_item_roundtrips_each_schedule() {
         assert_eq!(record.account_hint, Some(world.account));
         assert_eq!(record.notes, expected_notes);
         assert!(!record.active, "the active flag comes back");
+        assert_eq!(record.spending, expected_spending);
         assert_eq!(record.created_at, at(1));
         assert_eq!(record.updated_at, at(1));
 
@@ -217,6 +223,59 @@ async fn update_changes_only_the_named_columns() {
     assert_eq!(record.name.as_str(), "Water bill");
     assert_eq!(record.created_at, at(1));
     assert_eq!(record.updated_at, at(9));
+}
+
+#[tokio::test]
+async fn spending_roundtrips_and_changes() {
+    let world = world().await;
+    let schedule = schedules()[0];
+    let mut new = world.new_item(schedule);
+    new.spending = Some(PlanSpending::Budget);
+    let id = world.insert(new).await;
+    let read = world.store.get_planned_item(id).await.unwrap();
+    assert_eq!(read.spending, Some(PlanSpending::Budget));
+
+    let mut tx = world.store.begin().await.unwrap();
+    let record = tx
+        .update_planned_item(
+            id,
+            PlannedItemChanges {
+                spending: Some(Some(PlanSpending::Bill)),
+                ..PlannedItemChanges::default()
+            },
+            at(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record.spending, Some(PlanSpending::Bill));
+    // An inflow has none, so the two change together.
+    let record = tx
+        .update_planned_item(
+            id,
+            PlannedItemChanges {
+                direction: Some(PlanDirection::Inflow),
+                spending: Some(None),
+                ..PlannedItemChanges::default()
+            },
+            at(4),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record.spending, None);
+    let refused = tx
+        .update_planned_item(
+            id,
+            PlannedItemChanges {
+                spending: Some(Some(PlanSpending::Bill)),
+                ..PlannedItemChanges::default()
+            },
+            at(5),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Backend(_))),
+        "the table's check refuses a spending kind on an inflow"
+    );
 }
 
 #[tokio::test]
@@ -294,73 +353,104 @@ async fn list_is_ordered_by_id_and_keeps_inactive_only_when_asked() {
     );
 }
 
+/// Rows the schema refuses: direction, item type, then the schedule's columns
+/// and the spending kind. Each sets columns that don't fit its type.
+const REFUSED_ROWS: &[(&str, &str, &str)] = &[
+    // A recurring item without its anchor.
+    (
+        "outflow",
+        "recurring",
+        "1, 'months', NULL, NULL, NULL, NULL, NULL, NULL, 'bill'",
+    ),
+    // A recurring item that also has a one-off date.
+    (
+        "outflow",
+        "recurring",
+        "1, 'months', '2027-01-01', NULL, '2027-01-01', NULL, NULL, NULL, 'bill'",
+    ),
+    // A recurring item that also has a goal's columns.
+    (
+        "outflow",
+        "recurring",
+        "1, 'months', '2027-01-01', NULL, NULL, '2027-01-01', '2027-02-01', 0, 'bill'",
+    ),
+    // A recurring outflow without a spending kind.
+    (
+        "outflow",
+        "recurring",
+        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, NULL",
+    ),
+    // A recurring outflow with an unknown one.
+    (
+        "outflow",
+        "recurring",
+        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'splurge'",
+    ),
+    // A recurring inflow with one.
+    (
+        "inflow",
+        "recurring",
+        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'bill'",
+    ),
+    // A one-off without its date.
+    (
+        "outflow",
+        "one_off",
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL",
+    ),
+    // A one-off with a recurring item's end date.
+    (
+        "outflow",
+        "one_off",
+        "NULL, NULL, NULL, '2027-01-01', '2027-01-01', NULL, NULL, NULL, NULL",
+    ),
+    // A one-off with a spending kind.
+    (
+        "outflow",
+        "one_off",
+        "NULL, NULL, NULL, NULL, '2027-01-01', NULL, NULL, NULL, 'bill'",
+    ),
+    // A goal without its completed flag.
+    (
+        "outflow",
+        "goal",
+        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', NULL, NULL",
+    ),
+    // A goal that brings money in.
+    (
+        "inflow",
+        "goal",
+        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, NULL",
+    ),
+    // A goal with a spending kind.
+    (
+        "outflow",
+        "goal",
+        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, 'budget'",
+    ),
+    // A date that isn't one.
+    (
+        "outflow",
+        "one_off",
+        "NULL, NULL, NULL, NULL, 'soon', NULL, NULL, NULL, NULL",
+    ),
+];
+
 #[tokio::test]
 async fn check_refuses_mixed_schedule_columns() {
     let world = world().await;
     let pool = world.pool().await;
-    // The columns before the schedule's, then the schedule's. Each row names
-    // an item type and sets columns that don't fit it.
-    let refused = [
-        // A recurring item without its anchor.
-        (
-            "outflow",
-            "recurring",
-            "1, 'months', NULL, NULL, NULL, NULL, NULL, NULL",
-        ),
-        // A recurring item that also has a one-off date.
-        (
-            "outflow",
-            "recurring",
-            "1, 'months', '2027-01-01', NULL, '2027-01-01', NULL, NULL, NULL",
-        ),
-        // A recurring item that also has a goal's columns.
-        (
-            "outflow",
-            "recurring",
-            "1, 'months', '2027-01-01', NULL, NULL, '2027-01-01', '2027-02-01', 0",
-        ),
-        // A one-off without its date.
-        (
-            "outflow",
-            "one_off",
-            "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL",
-        ),
-        // A one-off with a recurring item's end date.
-        (
-            "outflow",
-            "one_off",
-            "NULL, NULL, NULL, '2027-01-01', '2027-01-01', NULL, NULL, NULL",
-        ),
-        // A goal without its completed flag.
-        (
-            "outflow",
-            "goal",
-            "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', NULL",
-        ),
-        // A goal that brings money in.
-        (
-            "inflow",
-            "goal",
-            "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0",
-        ),
-        // A date that isn't one.
-        (
-            "outflow",
-            "one_off",
-            "NULL, NULL, NULL, NULL, 'soon', NULL, NULL, NULL",
-        ),
-    ];
     let insert = |direction: &str, item_type: &str, schedule: &str| {
         format!(
             "INSERT INTO planned_items (id, name, category_id, amount_minor, currency, direction, \
              active, item_type, every, unit, anchor_on, end_on, one_off_on, goal_start_on, \
-             goal_due_on, goal_completed, created_at, updated_at) VALUES ('{id}', 'Water bill', \
+             goal_due_on, goal_completed, spending, created_at, updated_at) VALUES ('{id}', 'Water bill', \
              '{category}', 100, 'USD', '{direction}', 1, '{item_type}', {schedule}, 0, 0)",
             id = PlannedItemId::new(),
             category = world.category,
         )
     };
-    for (direction, item_type, schedule) in refused {
+    for (direction, item_type, schedule) in REFUSED_ROWS {
         let sql = insert(direction, item_type, schedule);
         assert!(
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
@@ -370,15 +460,28 @@ async fn check_refuses_mixed_schedule_columns() {
             "the schema refuses a row whose columns don't fit its type"
         );
     }
-    let fits = insert(
-        "outflow",
-        "goal",
-        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0",
-    );
-    sqlx::raw_sql(sqlx::AssertSqlSafe(fits))
-        .execute(&pool)
-        .await
-        .unwrap();
+    for (direction, item_type, schedule) in [
+        (
+            "outflow",
+            "goal",
+            "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, NULL",
+        ),
+        (
+            "outflow",
+            "recurring",
+            "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'budget'",
+        ),
+        (
+            "inflow",
+            "recurring",
+            "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, NULL",
+        ),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(insert(direction, item_type, schedule)))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     pool.close().await;
 }
 
@@ -401,6 +504,44 @@ async fn corrupt_currency_is_a_backend_error() {
         world.store.list_planned_items(true).await,
         Err(StoreError::Backend(_))
     ));
+}
+
+#[tokio::test]
+async fn corrupt_spending_is_a_backend_error() {
+    let world = world().await;
+    let recurring = world.insert(world.new_item(schedules()[0])).await;
+    world
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE planned_items SET spending = ? WHERE item_type = 'recurring'",
+            "splurge",
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            world.store.get_planned_item(recurring).await,
+            Err(StoreError::Backend(_))
+        ),
+        "an unknown kind is corruption"
+    );
+
+    let other = world.insert(world.new_item(one_off())).await;
+    world
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE planned_items SET spending = ? WHERE item_type = 'one_off'",
+            "bill",
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            world.store.get_planned_item(other).await,
+            Err(StoreError::Backend(_))
+        ),
+        "a kind on an item that can't have one is corruption"
+    );
 }
 
 #[tokio::test]

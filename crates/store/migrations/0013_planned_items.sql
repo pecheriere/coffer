@@ -1,6 +1,7 @@
 -- The spending plan's items (spec §6.7, §8.9). Each row's schedule columns are
 -- exactly those of its type, and the amount is a positive magnitude with a
--- direction. An item's type never changes.
+-- direction. An item's type never changes. A recurring outflow, and nothing
+-- else, says whether it is a bill or a budget.
 CREATE TABLE planned_items (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
@@ -25,8 +26,10 @@ CREATE TABLE planned_items (
     goal_due_on TEXT
         CHECK (goal_due_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     goal_completed INTEGER CHECK (goal_completed IN (0, 1)),
+    spending TEXT CHECK (spending IN ('bill', 'budget')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    CHECK ((item_type = 'recurring' AND direction = 'outflow') = (spending IS NOT NULL)),
     CHECK (
         (item_type = 'recurring'
             AND every IS NOT NULL AND unit IS NOT NULL AND anchor_on IS NOT NULL

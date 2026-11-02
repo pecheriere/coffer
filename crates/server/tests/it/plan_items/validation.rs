@@ -397,6 +397,54 @@ async fn unknown_field_is_400() {
 }
 
 #[tokio::test]
+async fn spending_refused_on_non_recurring_or_inflow() {
+    const REFUSAL: &str = "only a recurring outflow has a spending kind";
+    let world = world().await;
+    let income = world.category(CategoryKind::Income).await.1;
+    let inflow = with(recurring(income), "direction", json!("inflow"));
+    for spending in ["bill", "budget"] {
+        for body in [one_off(world.expense), goal(world.expense), inflow.clone()] {
+            let body = with(body, "spending", json!(spending));
+            assert_eq!(world.refused(&body, UNPROCESSABLE).await, REFUSAL);
+        }
+    }
+
+    let patch = json!({"spending": "budget"});
+    for body in [one_off(world.expense), goal(world.expense), inflow.clone()] {
+        let id = world.create(&body).await;
+        let detail = world.patch_refused(&id, &patch, UNPROCESSABLE).await;
+        assert_eq!(detail, REFUSAL);
+    }
+
+    // Against the item the patch would leave, not the one it found.
+    let id = world.create(&recurring(world.expense)).await;
+    let to_inflow = json!({"direction": "inflow", "category": income, "spending": "budget"});
+    let detail = world.patch_refused(&id, &to_inflow, UNPROCESSABLE).await;
+    assert_eq!(detail, REFUSAL);
+    let id = world.create(&inflow).await;
+    let to_outflow =
+        json!({"direction": "outflow", "category": world.expense, "spending": "budget"});
+    let after = world.patch(&id, &to_outflow).await;
+    assert_eq!(
+        after["spending"],
+        json!("budget"),
+        "this one leaves an outflow"
+    );
+}
+
+#[tokio::test]
+async fn unknown_spending_is_400() {
+    let world = world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    let bad = StatusCode::BAD_REQUEST;
+    let body = with(recurring(world.expense), "spending", json!("splurge"));
+    world.refused(&body, bad).await;
+    world
+        .patch_refused(&id, &json!({"spending": "splurge"}), bad)
+        .await;
+}
+
+#[tokio::test]
 async fn item_limit_is_409() {
     let world = world().await;
     let now = world.server.clock.now();
@@ -416,6 +464,7 @@ async fn item_limit_is_409() {
             schedule: PlanSchedule::OneOff {
                 on: date(2027, 1, 1),
             },
+            spending: None,
             created_at: now,
         })
         .await
