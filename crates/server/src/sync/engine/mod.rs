@@ -17,14 +17,16 @@ use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
+use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId, SyncRunId};
+use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, Store, StoreError, StoreTx, SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
+    StoreTx, SyncRunRecord,
 };
-use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -190,7 +192,14 @@ impl SyncService {
             Ok(started) => started,
             Err(StoreError::Conflict(_)) => {
                 drop(tx);
-                let current = self.store.get_sync_run(run).await?;
+                // The start conflicted, so the run is not this caller's to
+                // touch: if the lookup fails, say only that it is held, which
+                // leaves it alone.
+                let current = self
+                    .store
+                    .get_sync_run(run)
+                    .await
+                    .map_err(|_| SyncError::InProgress)?;
                 return Err(if current.status == SyncRunStatus::Running {
                     SyncError::InProgress
                 } else {
@@ -218,26 +227,34 @@ impl SyncService {
             }
             Err(err) => {
                 tracing::error!(run = %run, connection = %started.connection, error = ?err, "sync run failed");
-                self.abandon(run).await;
+                if let Err(abandon_err) = self.abandon(run, QueuedRun::Keep).await {
+                    tracing::error!(run = %run, error = ?abandon_err, "could not mark the sync run failed");
+                }
                 Err(err)
             }
         }
     }
 
-    /// Marks `run` failed after a storage error or a panic, whether it is
-    /// still queued or running, if the store allows; a run that already
-    /// finished is left as it is.
-    pub(super) async fn abandon(&self, run: SyncRunId) {
-        let finished = async {
-            let mut tx = self.store.begin().await?;
-            tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
-                .await?;
-            tx.commit().await
-        }
-        .await;
-        if let Err(err) = finished {
-            tracing::error!(run = %run, error = ?err, "could not mark the sync run failed");
-        }
+    /// Marks `run` failed after a storage error or a panic, if it is
+    /// running. A run still queued is failed too when `queued` says so, as
+    /// when it can never start; otherwise it stays queued, to be performed
+    /// again. A run that already finished is left as it is, which says so
+    /// with [`StoreError::Conflict`].
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Conflict`] for a finished run; [`StoreError::NotFound`]
+    /// for an unknown one; any other error means the store did not allow it,
+    /// and the run is as it was.
+    pub(super) async fn abandon(
+        &self,
+        run: SyncRunId,
+        queued: QueuedRun,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.store.begin().await?;
+        tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now(), queued)
+            .await?;
+        tx.commit().await
     }
 
     async fn perform(
@@ -301,6 +318,56 @@ pub(super) async fn ensure_not_removed(
         return Err(SyncError::Conflict(CONNECTION_REMOVED));
     }
     Ok(record)
+}
+
+/// How many days back a balance reported for an unbound account may be dated:
+/// a bank's date can honestly lag, but nothing older is believed.
+const KEPT_BALANCE_MAX_AGE_DAYS: i64 = 31;
+
+/// The oldest day a balance of an unbound account may be taken for.
+pub(super) fn oldest_kept_day(today: Date) -> Date {
+    today.saturating_sub(Span::new().days(KEPT_BALANCE_MAX_AGE_DAYS))
+}
+
+/// A balance a provider reported, converted to minor units of its currency.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ReportedBalance {
+    pub(super) on: Date,
+    pub(super) balance_minor: i64,
+    pub(super) currency: Currency,
+}
+
+/// Records the balance a provider reported for `provider_account`: the day's
+/// snapshot of the account it is bound to or, while unbound, kept for the bind
+/// to bring in, unless it is dated before [`oldest_kept_day`]. Never on a future
+/// day, which would hide later balances.
+/// Keeping isn't audited: the audit log would then hold the balances of an
+/// account nobody has bound, and the bind's entry counts them.
+pub(super) async fn record_balance(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    provider_account: ProviderAccountId,
+    account: Option<AccountId>,
+    balance: ReportedBalance,
+    today: Date,
+) -> Result<(), SyncError> {
+    let on = balance.on.min(today);
+    if let Some(account) = account {
+        return write_balance(tx, now, account, on, balance.balance_minor).await;
+    }
+    if on < oldest_kept_day(today) {
+        tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
+        return Ok(());
+    }
+    tx.keep_balance(KeptBalance {
+        provider_account,
+        on,
+        balance_minor: balance.balance_minor,
+        currency: balance.currency,
+        recorded_at: now,
+    })
+    .await?;
+    Ok(())
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes

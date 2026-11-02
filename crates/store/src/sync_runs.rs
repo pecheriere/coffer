@@ -92,6 +92,15 @@ async fn fetch_sync_run<'e>(
     sync_run_from_row(&row)
 }
 
+/// What [`StoreTx::fail_sync_run`] does with a run that is still queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedRun {
+    /// Leave it queued.
+    Keep,
+    /// Fail it as well.
+    Fail,
+}
+
 impl StoreTx {
     /// Queue a run.
     ///
@@ -183,8 +192,11 @@ impl StoreTx {
         Ok(run)
     }
 
-    /// Mark the run `failed` with `detail` whether it is still queued or
-    /// already running, as when the task performing it ended abnormally.
+    /// Mark a running run `failed` with `detail`, as when the task performing
+    /// it ended abnormally. A run still queued is failed too when `queued` is
+    /// [`QueuedRun::Fail`], as when it can never start; with
+    /// [`QueuedRun::Keep`] it is left queued, to be performed later, and the
+    /// answer is `None`.
     ///
     /// # Errors
     ///
@@ -195,22 +207,33 @@ impl StoreTx {
         id: SyncRunId,
         detail: &str,
         at: Timestamp,
-    ) -> Result<SyncRunRecord, StoreError> {
-        let result = sqlx::query(
-            "UPDATE sync_runs SET status = 'failed', detail = ?, finished_at = ? \
-             WHERE id = ? AND status IN ('queued', 'running')",
-        )
-        .bind(detail)
-        .bind(at.as_millisecond())
-        .bind(id.to_string())
-        .execute(&mut *self.tx)
-        .await
-        .map_err(StoreError::from_sqlx)?;
+        queued: QueuedRun,
+    ) -> Result<Option<SyncRunRecord>, StoreError> {
+        let sql = match queued {
+            QueuedRun::Keep => {
+                "UPDATE sync_runs SET status = 'failed', detail = ?, finished_at = ? \
+                 WHERE id = ? AND status = 'running'"
+            }
+            QueuedRun::Fail => {
+                "UPDATE sync_runs SET status = 'failed', detail = ?, finished_at = ? \
+                 WHERE id = ? AND status IN ('queued', 'running')"
+            }
+        };
+        let result = sqlx::query(sql)
+            .bind(detail)
+            .bind(at.as_millisecond())
+            .bind(id.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
         let run = fetch_sync_run(&mut *self.tx, id).await?;
-        if result.rows_affected() == 0 {
-            return Err(StoreError::Conflict("the sync run has already finished"));
+        if result.rows_affected() > 0 {
+            return Ok(Some(run));
         }
-        Ok(run)
+        if run.status == SyncRunStatus::Queued {
+            return Ok(None);
+        }
+        Err(StoreError::Conflict("the sync run has already finished"))
     }
 
     /// Mark every running run `failed` with `detail`, as after a restart

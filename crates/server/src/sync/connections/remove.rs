@@ -21,8 +21,9 @@ const CANNOT_GIVE_UP: &str = "the provider keeps billing this connection until i
 impl SyncService {
     /// Gives up the connection's credentials at the provider, then erases
     /// them and marks the connection `removed`. Its provider accounts,
-    /// accounts, transactions and bindings stay; no sync writes anything
-    /// for it once the removal commits. Credentials that cannot be opened,
+    /// accounts, transactions and bindings stay, and the balances kept for
+    /// its unbound provider accounts go, since they can no longer be bound;
+    /// no sync writes anything for it once the removal commits. Credentials that cannot be opened,
     /// a provider this server no longer offers, or a provider that already
     /// refuses them leave nothing to give up, and the removal goes ahead,
     /// unless the provider bills until removed: then it is a conflict.
@@ -65,6 +66,7 @@ impl SyncService {
             return Err(SyncError::Conflict(CONNECTION_CHANGED));
         }
         tx.set_connection_credentials(id, None).await?;
+        tx.discard_kept_balances(id).await?;
         tx.update_connection_status(
             id,
             ConnectionStatusChange {

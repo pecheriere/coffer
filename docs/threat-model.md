@@ -186,6 +186,15 @@
     changing a category or group), and is refused with a 403
     that names no account otherwise.
   - Connections list only the provider accounts the token may see.
+  - Balances reported for an unbound provider account are kept apart from the
+    accounts' snapshots (`kept_balances`), and no route, page, report or audit
+    entry reads them. Only the bind does, which needs `all` at `write`; it
+    turns them into the account's snapshots, in its transaction, and deletes
+    them. A removed or forgotten connection's go in the same transaction as
+    the removal. They do stay in a backup, like everything else in the database.
+    Reconnecting a connection keeps them, as it keeps held records: new
+    credentials may be a different login at the provider, and what the old one
+    reported stays until a bind brings it in or the connection is removed.
   - Idempotency keys belong to the credential that sent them, so a token
     never receives a stored response another token (or the member's
     session) earned, and a create is authorized before its key is
@@ -292,6 +301,21 @@
   holds for every URL, redirects are never followed) and it never receives
   more than the connection's own credentials. Members review imported
   transactions, and removing the connection stops further imports.
+- **A provider chooses the day of a balance it reports for an unbound account.**
+  coffer keeps one row per provider account per day, about 135 bytes, so an
+  honest provider costs about 50 KB per unbound account per year, kept until the
+  account is bound or its connection removed, with no retention job. A day more
+  than 31 days back is not kept, since a bank's date can lag but no further, so
+  one account can never hold more than 32 rows plus one per day after that.
+  Nothing dedupes ids within an answer, so a provider that repeats an id with
+  different days writes up to 32 rows for it in one sync, and one that invents
+  ids adds accounts as well. Either way a sync writes at most one row per entry
+  of its answer, at most 1,000 entries: 16,000 rows or about 2 MB a day through
+  SimpleFin's 16 syncs, 48,000 rows or about 6.5 MB through Plaid's 48. Whatever
+  it reports within those days becomes history at the bind, as it would for a
+  bound account, but it can't change a snapshot the account already has. The
+  limit applies to keeping and to the bind's use of the last report, not to a
+  bound account's balance, whose day is still the provider's to choose.
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24

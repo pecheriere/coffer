@@ -487,3 +487,45 @@ async fn gated(State(gate): State<Arc<Mutex<Option<CallGate>>>>, uri: Uri) -> Re
     };
     ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
+
+/// An unbound account's balances, kept by a real sync, go with the connection
+/// when it is forgotten.
+#[tokio::test]
+async fn forgetting_clears_the_kept_balances() {
+    let gate = Arc::new(Mutex::new(None::<CallGate>));
+    let (server, signed_in, _) = with_admin().await;
+    let mock =
+        MockUpstream::start(Router::new().fallback(gated).with_state(Arc::clone(&gate))).await;
+    let world = finish(server.with_plaid(&mock), signed_in, mock).await;
+    let id = world.healthy(LABEL).await;
+    let run = world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), id, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    world.server.sync.run(run.id).await.unwrap();
+    let before = world
+        .server
+        .store
+        .kept_balances_for_tests(id)
+        .await
+        .unwrap();
+    assert!(!before.is_empty(), "the sync kept the reported balances");
+    world.corrupt(id).await;
+
+    world
+        .server
+        .sync
+        .forget_connection(&world.alice, id, LABEL)
+        .await
+        .unwrap();
+
+    let after = world
+        .server
+        .store
+        .kept_balances_for_tests(id)
+        .await
+        .unwrap();
+    assert_eq!(after, []);
+}

@@ -63,9 +63,9 @@ impl SyncService {
             .collect())
     }
 
-    /// Marks the connection `removed` and erases its sealed credentials
+    /// Marks the connection `removed`, erases its sealed credentials
     /// without giving them up at the provider, which may keep billing the
-    /// Item. Only for a connection whose sealed token cannot be opened, and
+    /// Item, and drops the balances kept for its unbound provider accounts. Only for a connection whose sealed token cannot be opened, and
     /// only when `confirmation` is the connection's label. Audited as
     /// `connection.forget` with its reason, never as a removal.
     ///
@@ -111,6 +111,7 @@ impl SyncService {
             return Err(SyncError::Conflict(CONNECTION_CHANGED));
         }
         tx.set_connection_credentials(id, None).await?;
+        tx.discard_kept_balances(id).await?;
         tx.update_connection_status(
             id,
             ConnectionStatusChange {
