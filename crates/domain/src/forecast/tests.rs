@@ -15,14 +15,16 @@ use crate::plan::{
     IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, SafetyFloor, spending_applies,
 };
 
+mod account_cautions;
 mod blockers;
-mod cautions;
 mod clamp_and_duplicates;
 mod goals_and_floor;
 mod golden;
+mod item_cautions;
 mod newer_spending;
 mod properties;
 mod reduction;
+mod spending_cautions;
 mod window_and_range;
 
 const AS_OF: Date = date(2026, 11, 15);
