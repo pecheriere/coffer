@@ -113,7 +113,9 @@ pub(super) async fn plan_vs_actual(
                    see at `balances`, and nothing marks it as partial**, since that would reveal \
                    that there are others. An agent holding such a token must not report the sum as \
                    the whole household's. Nothing in the answer depends on an account the token \
-                   can't see. Amounts are integer minor units. It writes nothing.",
+                   can't see, except that rates are stored once for the household: a currency the \
+                   token sees has its rates as soon as anyone's use fetched them. Amounts are \
+                   integer minor units. It writes nothing.",
     security(("bearer" = [])),
     params(NetWorthQuery),
     responses(

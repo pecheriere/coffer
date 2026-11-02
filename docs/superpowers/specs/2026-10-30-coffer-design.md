@@ -1001,6 +1001,21 @@ currency, rate state, age and existence don't show, and a token seeing no counte
 reads exactly like an empty household. Which rates are stored depends on the currencies in
 use, so the FX endpoints span every account and need `all` at `balances`.
 
+One thing crosses that line, and it is accepted. A rate is reference data the household
+stores once, so a visible currency a hidden account already caused to be fetched has rates
+sooner than it would have alone. A row needing a rate means that currency and the display
+currency make more than one, so N7 fetches them with or without the hidden account: only
+the order differs, and the same rates give the same bytes whoever caused them. Before the first fetch for
+that currency, or for as long as an outage lasts or the provider stays off, a token can
+compare `not_fetched_yet`, `fetch_failing` or `provider_off` with an amount at an old
+`rate_on`. That is one bit about a currency it already sees, and a date: some use of the
+currency predates this, and the last fetch was about then. The use could be an account now
+closed, a past display currency or a visible account. It shows no amount, count, name or
+id, and no other currency. An outage lengthens how long the bit can be read without adding to it,
+and hiding a true rate from one token would make its number wrong, so the answer stays. No
+token can make this happen: creating an account needs `all` at `write`, and changing the
+display currency needs `all` at `balances` (N8).
+
 **N3. A daily table holds one row per account per day.** It holds the balance used, the
 date and source of its snapshot, the amount in the display currency, that currency, the
 rate date and the state of the conversion. It is derived: `balance_snapshots`, `fx_rates`
@@ -1073,7 +1088,10 @@ is due.
 
 **N8. The display currency is a household setting,** set by an admin through
 `PATCH /api/v1/household/settings` or `/admin/household`, audited, and replaceable but never
-unset. It starts unset and is never guessed, since a guess from the oldest account would
+unset. A token with grants also needs `all` at `balances` to name one in a patch, whatever it
+names: a visible row converts at once if the code's rates are held, so a token held to one
+account could otherwise try each code and read from its own report which ones the household
+uses (the report answers an amount where a code nobody uses says `not_fetched_yet`). It starts unset and is never guessed, since a guess from the oldest account would
 reveal that account's currency to a restricted token. Until it is set a report has sums per
 currency, no totals, and the blocker `display_currency_not_set`. This replaces §6.1's base
 currency and each member's display currency.

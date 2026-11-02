@@ -80,7 +80,13 @@ token's access.
   answers likewise, and a split linked to such a goal reads `goal: null`.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
-  same for every token.
+  same for every token. A patch naming `display_currency` also needs `all` at
+  `balances`, whatever it names, even with `admin`: a 403 whose detail is "this
+  action needs balances access to every account". A patch of other settings doesn't.
+- `GET /api/v1/reports/net-worth` needs only `read`, and sums the accounts the token
+  sees at `balances`. **Nothing marks that sum as partial**, so don't report it as the
+  whole household's. `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
+  at `balances`: which rates are stored depends on the currencies in use.
 - The forecast, a what-if and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
   detail is "this action needs transactions access to every account",

@@ -6,12 +6,12 @@ use std::sync::Arc;
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
 use coffer_domain::identity::Scope;
-use coffer_domain::policy::AccountLevel::Write;
+use coffer_domain::policy::AccountLevel::{Balances, Write};
 use coffer_server::ledger::settings::ForecastSettingsPatch;
 use coffer_server::secrets::SecretToken;
 use serde_json::{Value, json};
 
-use super::{SETTINGS, World, day, on, world};
+use super::{SETTINGS, World, all, day, on, world};
 
 impl World {
     async fn settings_as(&self, token: &SecretToken) -> Value {
@@ -292,8 +292,9 @@ async fn it_reads_the_same_for_every_token() {
     }
 }
 
-/// An admin token limited to one account may still set it (it is `admin`, whatever the
-/// grants), and neither whether it may nor what it answers depends on what else is held.
+/// Whether a token may set it depends on its grants alone, and what it answers on nothing
+/// else held: an admin token limited to one account is refused (`grants::fx_channels` says
+/// why), a token of `all` at `balances` isn't, and a token below `admin` is refused anyway.
 #[tokio::test]
 async fn setting_it_says_nothing_of_hidden_accounts() {
     let bare = world().await;
@@ -305,33 +306,27 @@ async fn setting_it_says_nothing_of_hidden_accounts() {
             let hidden = world.holding("Hidden", "JPY").await;
             world.balance(hidden, "2026-10-26", 7_777_777).await;
         }
-        let token = world.token(Scope::Admin, vec![on(visible, Write)]).await;
-        for code in ["JPY", "THB"] {
+        let tokens = [
+            world.token(Scope::Admin, vec![on(visible, Write)]).await,
+            world.token(Scope::Admin, vec![all(Balances)]).await,
+            world.token(Scope::Write, vec![on(visible, Write)]).await,
+        ];
+        for token in &tokens {
             answers.push(
                 world
                     .send(
                         Method::PATCH,
                         SETTINGS,
-                        &token,
-                        Some(&json!({"display_currency": code})),
+                        token,
+                        Some(&json!({"display_currency": "JPY"})),
                     )
                     .await,
             );
         }
-        let refused = world.token(Scope::Write, vec![on(visible, Write)]).await;
-        answers.push(
-            world
-                .send(
-                    Method::PATCH,
-                    SETTINGS,
-                    &refused,
-                    Some(&json!({"display_currency": "JPY"})),
-                )
-                .await,
-        );
     }
     let (first, second) = answers.split_at(3);
-    assert_eq!(first[0].0, StatusCode::OK);
+    assert_eq!(first[0].0, StatusCode::FORBIDDEN);
+    assert_eq!(first[1].0, StatusCode::OK);
     assert_eq!(first[2].0, StatusCode::FORBIDDEN);
     assert!(first == second, "byte-identical");
 }
