@@ -274,7 +274,7 @@ async fn a_pending_record_in_the_zone_now_vanishes_on_the_window_s_first_day() {
     )])));
     world.sync().await;
 
-    assert!(world.transactions(held).await.is_empty());
+    assert_eq!(world.transactions(held).await.len(), 0);
 }
 
 /// A change landing during a fetch: what the run writes uses the zone at the time it writes,
