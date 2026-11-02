@@ -32,6 +32,11 @@
   database stores only a keyed BLAKE3 hash, domain-separated per token kind,
   so a stolen database or backup cannot be replayed without the server key.
   Secrets are shown once and never logged; errors never echo credentials.
+- **A panic's message is never logged or answered.** It can hold anything,
+  so the panic log has only the source location and a backtrace of code
+  locations, and a client gets a fixed 500. No crash reports leave the host.
+  The release binary keeps its symbols and line tables for those backtraces,
+  which reveals nothing the public source does not.
 - **Provider credentials are stored only sealed.** They are encrypted with
   XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
   the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider

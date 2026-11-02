@@ -30,7 +30,9 @@ use coffer_server::sync::provider::{
     FetchResult, ProviderAccountData, ProviderError, ProviderKind, ProviderTransaction,
 };
 use coffer_server::sync::scheduler;
-use coffer_server::testkit::{FakeProvider, TestServer};
+use coffer_server::testkit::{
+    FakeProvider, SCRIPTED_PANIC, TestServer, captured_log_text, log_marker,
+};
 use coffer_store::{
     AuditFilter, ConnectionStatus, ConnectionStatusChange, NewSyncRun, PageRequest, SyncRunRecord,
     TransactionFilter,
@@ -579,6 +581,85 @@ async fn panicking_run_is_failed_and_the_queue_drains() {
 
     assert_eq!(failed.status, SyncRunStatus::Failed);
     assert_eq!(drained.status, SyncRunStatus::Succeeded);
+}
+
+/// The log says a run panicked, but not what the panic said: a panic's
+/// message can hold anything, and logs carry no financial data.
+#[tokio::test]
+async fn panicking_run_is_logged_without_its_message() {
+    let world = world().await;
+    world.fake.panic_next_fetch();
+    let panicking = world.queue_run().await;
+    let start = log_marker();
+
+    let running = world.spawn_scheduler();
+    let failed = world.finished(panicking).await;
+    running.stop().await;
+
+    assert_eq!(failed.status, SyncRunStatus::Failed);
+    let log = captured_log_text();
+    let (_, since_start) = log.split_once(&start).unwrap();
+    assert!(
+        since_start
+            .lines()
+            .any(|line| line.contains("a sync run ended abnormally")
+                && line.contains(&panicking.to_string())),
+        "the panicked run is logged"
+    );
+    assert!(
+        !since_start.contains(SCRIPTED_PANIC),
+        "the panic's message stays out of the log"
+    );
+}
+
+/// What is stored on the failed run, and so shown in the API, says nothing
+/// of the panic either.
+#[tokio::test]
+async fn panicking_run_stores_a_fixed_detail() {
+    let world = world().await;
+    world.fake.panic_next_fetch();
+    let panicking = world.queue_run().await;
+
+    let running = world.spawn_scheduler();
+    let failed = world.finished(panicking).await;
+    running.stop().await;
+
+    assert_eq!(
+        failed.detail.as_deref(),
+        Some("the sync failed on the server")
+    );
+}
+
+/// A panic in the ticker, outside any run, stops only that pass: scheduled
+/// syncs go on.
+#[tokio::test]
+async fn panic_in_the_ticker_leaves_scheduled_syncs_running() {
+    let world = world().await;
+    world.script_one_account();
+    world.fake.panic_next_capabilities();
+
+    let running = world.spawn_scheduler();
+    let run = tokio::time::timeout(WAIT, async {
+        loop {
+            let runs = world
+                .server
+                .store
+                .list_sync_runs(world.connection, &PageRequest::default())
+                .await
+                .unwrap()
+                .items;
+            if let Some(run) = runs.into_iter().find(|run| run.finished_at.is_some()) {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    running.stop().await;
+
+    assert_eq!(run.trigger, SyncTrigger::Schedule);
+    assert_eq!(run.status, SyncRunStatus::Succeeded);
 }
 
 /// Runs already queued when the scheduler starts are performed.
