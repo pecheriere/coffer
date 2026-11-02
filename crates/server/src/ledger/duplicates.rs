@@ -21,8 +21,6 @@
 //! Stale candidate pairs are forgotten after a merge; see
 //! [`crate::canonical`].
 
-use std::collections::HashSet;
-
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{SourceRecordId, TransactionId};
@@ -220,9 +218,8 @@ impl Ledger {
         {
             return Err(LedgerError::Invalid(MERGE_NOT_IMPORTED));
         }
-        let none = HashSet::new();
-        if !posted_connections(&target.sources, &none)
-            .is_disjoint(&posted_connections(&duplicate.sources, &none))
+        if !posted_connections(&target.sources, &[])
+            .is_disjoint(&posted_connections(&duplicate.sources, &[]))
         {
             return Err(LedgerError::Invalid(MERGE_REPORTED_APART));
         }
@@ -289,7 +286,7 @@ impl Ledger {
             };
             audit(&mut tx, now, actor, action, "transaction", lister, changes).await?;
         }
-        drop_stale_candidates(&mut tx, now, &actor.into(), target.id, &HashSet::new()).await?;
+        drop_stale_candidates(&mut tx, now, &actor.into(), target.id, &[]).await?;
         let record = tx.get_transaction(target.id).await?;
         let mut views = [TransactionView::new(&record)];
         hide_candidates_in_tx(&mut tx, &access, &mut views).await?;

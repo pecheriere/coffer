@@ -51,7 +51,7 @@ async fn render_members(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageMembers).map_err(AuthError::from)?;
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let look = session.look(state).await;
     let members = state.store.list_members().await.map_err(AuthError::from)?;
     let mut tokens = Vec::new();
@@ -236,7 +236,7 @@ async fn render_invites(
 ) -> Result<Markup, PageError> {
     let actor = session.actor();
     let pending = state.identity.list_pending_invites(&actor).await?;
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let look = session.look(state).await;
     let csrf = &viewer.csrf;
     let content = html! {

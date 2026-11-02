@@ -84,7 +84,23 @@
   removed, and an Item that needs a new login is not removed until it has been
   reconnected. If coffer cannot reach Plaid to remove it, because Plaid is no
   longer configured or the sealed token no longer opens, the removal is refused
-  and the token kept, so the Item is never orphaned while still billing. Plaid's `error_message` and request id are deliberately not
+  and the token kept, so the Item is never orphaned while still billing.
+  When Plaid is merely not configured, the token still works: configure Plaid
+  again and retry; nothing can be forgotten. When the sealed token itself
+  cannot be opened and that is permanent (the server key is truly lost), the
+  member can instead forget the connection from the Connections page. The
+  action is offered only for a connection whose Plaid token cannot be opened,
+  needs a passkey session (an agent token cannot do it, and the API's `DELETE`
+  stays refused), the same role as removal and the anti-forgery token, and
+  asks for the connection's label to be typed. The page warns that a wrong key
+  or a restored backup should be fixed first, since forgetting cannot be
+  undone and removal then works normally. Forgetting marks the connection
+  removed and erases the sealed token without calling Plaid. `/item/remove`
+  needs the token, so coffer can no longer end billing for the Item; the page
+  says so and tells the member to contact Plaid or check their Plaid
+  dashboard. It is audited as `connection.forget` with `given_up_at_provider`
+  false and the reason, never as
+  `connection.remove`. Plaid's `error_message` and request id are deliberately not
   kept: its free text can quote credentials, so coffer keeps only Plaid's error
   type and code, which are restricted to capitals, digits and underscores.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
@@ -150,6 +166,11 @@
 
 ## Accepted residual risks
 
+- **A released account applies one record per write transaction.** After a
+  member releases a held cursor, the sync takes the write lock once per record
+  of that account's delta, up to the 100,000 records a fetch may hold. Others
+  can write between records, but a large delta can keep a sync busy for a long
+  time. Only an owner or admin can start it, and only for a held cursor.
 - **Usernames are not secret.** Anyone on the network can learn whether a
   username exists by calling login begin. Sign-in itself reveals nothing
   further and fails identically for unknown users and bad assertions.
@@ -249,8 +270,44 @@
   lost, and every sync fetches those records again until they apply. A balance
   Plaid sends in a form coffer cannot read (an exponent such as `1e3`) marks
   that account unreadable and holds the cursor the same way. The cost is
-  repeated work and a connection that reports an error until the cause is
-  gone; showing and clearing a hold is issue #20.
+  repeated work, and a hold that lasts. After three syncs in a row, the
+  connection says so, with a fixed text and the provider accounts that cause
+  it (never a provider text), in the API (`held_cursor`) and on the
+  Connections page; as with `last_error`, only an actor who sees every account
+  gets it. The way out is a button on the page: the connection's owner or an
+  admin, signed in with a passkey, lets the next sync move the cursor past the
+  records that still fail. The form carries the provider accounts and the
+  record count the page showed, and a release is refused if the accounts
+  holding the cursor or their count are no longer exactly those. The sync then
+  applies those accounts' records one by one and gives up only the ones that
+  fail twice; the others are stored. An account that is itself refused (for
+  instance one that cannot be read) is different: if the refusal is the one
+  recorded when the member released, none of its records can be tried, so all
+  of them are given up untried, and the page says so before the member
+  releases. A failure that says nothing about the record (a busy, locked or
+  damaged database, a failing or full disk, no connection in time) gives up
+  nothing: the hold and the release stay for a later sync. A refusal other than
+  the recorded one, or a fetch with more records for the account than the
+  member agreed to, takes the release back (audited as
+  `connection.release_withdrawn`, with a fixed reason): the account stays held,
+  the page says so, and the member has to look again and release again. A
+  record given up is lost for good, only counted as skipped, so the page says
+  so plainly, with how many records the last fetch could not store. The records
+  are given up, counted and audited (`connection.cursor_passed`, under the sync
+  actor, with their count) only in the transaction that really moves the
+  cursor; if another account still blocks it, the release waits, and a
+  completed fetch without an account ends that account's hold and release. A
+  waiting request never covers more records than the member agreed to. It is
+  checked by count: a fetch of the same size or smaller may hold a record the
+  member did not see, when others in the delta were netted away. The request
+  needs the anti-forgery token, write access to every account and leaves an
+  audit entry with the record count and each account's recorded error,
+  naming the provider accounts. An agent token cannot do it, whatever its
+  scope: an agent able to
+  discard records could hide a transaction from the household. A provider's
+  account id that is empty, holds a control character or is over-long is
+  refused when a Plaid answer is read, as a record of no account, so it is
+  counted as skipped and cannot hold the cursor for good.
 - **Some copies of provider secrets are not wiped.** While a SimpleFin
   setup token is claimed and while a sync fetches, the claim URL, the access
   URL and its user name pass through `url::Url` and `String` buffers (the

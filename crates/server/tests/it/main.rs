@@ -22,6 +22,7 @@ mod matching;
 mod openapi;
 mod pages;
 mod plaid_client;
+mod plaid_forget;
 mod plaid_link;
 mod plaid_sync;
 mod plan_items;

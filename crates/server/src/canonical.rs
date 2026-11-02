@@ -23,11 +23,13 @@ use jiff::Timestamp;
 /// `ignored` ones.
 pub(crate) fn posted_connections(
     sources: &[SourceRecord],
-    ignored: &HashSet<SourceRecordId>,
+    ignored: &[&HashSet<SourceRecordId>],
 ) -> HashSet<ConnectionId> {
     sources
         .iter()
-        .filter(|source| !source.fields.pending && !ignored.contains(&source.id))
+        .filter(|source| {
+            !source.fields.pending && !ignored.iter().any(|set| set.contains(&source.id))
+        })
         .map(|source| source.connection)
         .collect()
 }
@@ -104,7 +106,7 @@ pub(crate) async fn drop_stale_candidates(
     now: Timestamp,
     actor: &AuditActor,
     transaction: TransactionId,
-    ignored: &HashSet<SourceRecordId>,
+    ignored: &[&HashSet<SourceRecordId>],
 ) -> Result<(), StoreError> {
     let current = tx.get_transaction(transaction).await?;
     let posted = posted_connections(&current.sources, ignored);
@@ -291,7 +293,7 @@ mod tests {
         let ignored = source(two, false, 1, -1);
         let skip = HashSet::from([ignored.id]);
         assert_eq!(
-            posted_connections(&[posted, pending, ignored], &skip),
+            posted_connections(&[posted, pending, ignored], &[&skip]),
             HashSet::from([one])
         );
     }

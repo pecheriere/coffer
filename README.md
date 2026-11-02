@@ -26,6 +26,7 @@ What exists and what comes next:
   synced on a schedule and on demand, with duplicate matching and merging;
   agent tokens that can be limited to chosen accounts at a chosen level; a
   typed OpenAPI document of the JSON API.
+- **0.2.1:** bind accounts from the Connections page, a notice when new accounts need setting up, a time and memory cap on syncs, and an optional egress relay.
 - **Next:** planned items, sinking funds and the cash forecast; then reports
   and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.

@@ -2,11 +2,17 @@
 //! errors, and the provider accounts it reports by name and binding. No
 //! balance or transaction is shown (spec §6.4: pages carry no financial
 //! data). Forms add a `SimpleFin` connection, reconnect one that needs it,
-//! request a sync and remove a connection; each needs the session's
+//! request a sync, remove a connection, forget one whose sealed token
+//! cannot be opened (see [`forget`]), let a held sync cursor move past the
+//! records that keep failing and bind a provider account to an
+//! account (see [`bind`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
 
-use std::collections::HashMap;
+mod bind;
+mod forget;
+
+use std::collections::{HashMap, HashSet};
 
 use axum::Router;
 use axum::extract::{Path, State};
@@ -14,7 +20,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::ids::{AccountId, ConnectionId};
+use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId};
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::sync::SyncTrigger;
 use jiff::tz::TimeZone;
@@ -29,11 +35,14 @@ use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::{Problem, set_retry_after};
-use crate::sync::connections::{ConnectionState, ConnectionView, ProviderAccountView};
+use crate::sync::connections::{
+    ConnectionState, ConnectionView, HeldCursorView, ProviderAccountView,
+};
 use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 use crate::sync::{SyncError, retry_seconds};
 
 const LABEL_INVALID: &str = "The label must be 1 to 100 characters without control characters.";
+const RELEASE_UNREADABLE: &str = "the release form could not be read";
 const TOKEN_MISSING: &str = "Paste the setup token from the SimpleFin Bridge.";
 
 pub fn routes() -> Router<AppState> {
@@ -46,6 +55,16 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/connections/{id}/sync", post(sync))
         .route("/connections/{id}/remove", post(remove))
+        .route("/connections/{id}/forget", post(forget::forget))
+        .route("/connections/{id}/release-cursor", post(release_cursor))
+        .route(
+            "/connections/provider-accounts/{id}/create-account",
+            post(bind::create_account),
+        )
+        .route(
+            "/connections/provider-accounts/{id}/bind",
+            post(bind::link_account),
+        )
 }
 
 /// A message about a form that did not go through, shown above the list
@@ -80,25 +99,36 @@ async fn render(
     notice: Option<Notice>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let look = session.look(state).await;
     let connections = state
         .sync
         .list_connections(&actor)
         .await
         .map_err(page_error)?;
-    let account_names: HashMap<AccountId, String> = state
+    let accounts = state
         .ledger
         .list_accounts(&actor, true)
         .await
-        .map_err(|err| PageError(err.into()))?
+        .map_err(|err| PageError(err.into()))?;
+    let binding = bind::Binding::load(state, &actor, &accounts).await?;
+    let account_names: HashMap<AccountId, String> = accounts
         .into_iter()
         .map(|account| (account.id, account.name))
         .collect();
     let can_manage = authorize(&actor, Action::ManageConnections).is_ok();
     let csrf = &viewer.csrf;
-    let timezone = &state.config.timezone;
     let plaid_offered = state.config.plaid.is_some();
+    let forgettable = state.sync.forgettable(&actor).await.map_err(page_error)?;
+    let shared = Shared {
+        forgettable: &forgettable,
+        account_names: &account_names,
+        binding: &binding,
+        timezone: &state.config.timezone,
+        csrf,
+        can_manage,
+        plaid_offered,
+    };
     let content = html! {
         h1 { "Connections" }
         @if let Some(notice) = &notice {
@@ -111,7 +141,8 @@ async fn render(
         }
         @for connection in &connections {
             @let may_remove = authorize(&actor, Action::RemoveConnection { owner: connection.owner }).is_ok();
-            (connection_card(connection, &account_names, timezone, csrf, can_manage, may_remove, plaid_offered))
+            @let may_release = authorize(&actor, Action::ReleaseHeldCursor { owner: connection.owner }).is_ok();
+            (connection_card(connection, Permissions { may_remove, may_release }, &shared))
         }
         @if can_manage {
             section.card {
@@ -160,18 +191,54 @@ async fn render(
     Ok(response)
 }
 
+/// What every connection card shares.
+struct Shared<'a> {
+    account_names: &'a HashMap<AccountId, String>,
+    binding: &'a bind::Binding,
+    timezone: &'a TimeZone,
+    csrf: &'a str,
+    can_manage: bool,
+    plaid_offered: bool,
+    /// The connections the viewer may forget: their sealed token cannot be
+    /// opened, so removal cannot give the credentials up.
+    forgettable: &'a HashSet<ConnectionId>,
+}
+
+/// What the viewer may do with one connection beyond what everyone with
+/// `can_manage` may.
+#[derive(Clone, Copy)]
+struct Permissions {
+    may_remove: bool,
+    may_release: bool,
+}
+
 fn connection_card(
     connection: &ConnectionView,
-    account_names: &HashMap<AccountId, String>,
-    timezone: &TimeZone,
-    csrf: &str,
-    can_manage: bool,
-    may_remove: bool,
-    plaid_offered: bool,
+    permissions: Permissions,
+    shared: &Shared<'_>,
 ) -> Markup {
+    let Permissions {
+        may_remove,
+        may_release,
+    } = permissions;
+    let Shared {
+        timezone,
+        csrf,
+        can_manage,
+        plaid_offered,
+        ..
+    } = *shared;
     let plaid = connection.provider == ProviderKind::Plaid.as_str();
     let live = connection.status != ConnectionState::Removed;
     let id = connection.id;
+    // The accounts that wait for a binding come first.
+    let mut accounts: Vec<&ProviderAccountView> = connection.accounts.iter().collect();
+    accounts.sort_by_key(|account| account.account.is_some());
+    let waiting = live
+        && shared.binding.can_bind()
+        && accounts
+            .first()
+            .is_some_and(|first| first.account.is_none());
     html! {
         section.card {
             h2 { (connection.label) }
@@ -207,31 +274,36 @@ fn connection_card(
                     }
                 }
             }
-            @if may_remove && plaid && plaid_offered && connection.status == ConnectionState::ReauthRequired {
-                h3 { "Reconnect" }
-                p { "Plaid needs a new login to this institution; its accounts stay bound." }
-                a.btn.btn-primary href={ "/connections/" (id) "/plaid/reconnect" } { "Reconnect" }
+            @if let Some(held) = &connection.held_cursor {
+                (held_notice(connection, held, may_release, csrf))
             }
-            @if may_remove && !plaid && connection.status == ConnectionState::ReauthRequired {
-                h3 { "Reconnect" }
-                p { "SimpleFin no longer accepts this connection's access. Paste a new setup token to restore it; its accounts stay bound." }
-                form method="post" action={ "/connections/" (id) "/simplefin/reconnect" } {
-                    (csrf_field(csrf))
-                    label.field {
-                        "New setup token"
-                        input .input type="password" name="setup_token" autocomplete="off"
-                            required;
-                    }
-                    button.btn.btn-primary type="submit" { "Reconnect" }
+            @if may_remove && connection.status == ConnectionState::ReauthRequired {
+                (reconnect_section(id, plaid, plaid_offered, csrf))
+            }
+            @if live && plaid && !plaid_offered && !shared.forgettable.contains(&id) {
+                p.fine {
+                    "Plaid is not configured on this server. Configure it again to remove this connection."
                 }
             }
-            h3 { "Accounts" }
-            @if connection.accounts.is_empty() {
+            @if shared.forgettable.contains(&id) {
+                (forget::section(id, &connection.label, csrf))
+            }
+            @if waiting {
+                h3 { "Set up your accounts" }
+                p {
+                    "coffer found these bank accounts. Until each is bound to an account, "
+                    "its transactions are held. Name each one and choose its kind, or link "
+                    "it to an account you already have."
+                }
+            } @else {
+                h3 { "Accounts" }
+            }
+            @if accounts.is_empty() {
                 p.fine { "No accounts reported yet." }
             } @else {
                 ul.items {
-                    @for account in &connection.accounts {
-                        (account_item(account, account_names))
+                    @for (index, account) in accounts.iter().enumerate() {
+                        (account_item(connection, account, shared, waiting && index == 0))
                     }
                 }
             }
@@ -239,9 +311,106 @@ fn connection_card(
     }
 }
 
+/// What a connection that needs a new login asks of who may remove it. Plaid's
+/// login happens on its own page, so a server not configured for it has none
+/// to offer.
+fn reconnect_section(id: ConnectionId, plaid: bool, plaid_offered: bool, csrf: &str) -> Markup {
+    html! {
+        @if plaid && plaid_offered {
+            h3 { "Reconnect" }
+            p { "Plaid needs a new login to this institution; its accounts stay bound." }
+            a.btn.btn-primary href={ "/connections/" (id) "/plaid/reconnect" } { "Reconnect" }
+        }
+        @if !plaid {
+            h3 { "Reconnect" }
+            p { "SimpleFin no longer accepts this connection's access. Paste a new setup token to restore it; its accounts stay bound." }
+            form method="post" action={ "/connections/" (id) "/simplefin/reconnect" } {
+                (csrf_field(csrf))
+                label.field {
+                    "New setup token"
+                    input .input type="password" name="setup_token" autocomplete="off"
+                        required;
+                }
+                button.btn.btn-primary type="submit" { "Reconnect" }
+            }
+        }
+    }
+}
+
+/// The notice of a held sync cursor: why, what letting it move on loses and,
+/// for who may, the form that does.
+fn held_notice(
+    connection: &ConnectionView,
+    held: &HeldCursorView,
+    may_release: bool,
+    csrf: &str,
+) -> Markup {
+    let accounts = held
+        .provider_accounts
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    html! {
+        div.once.held-cursor {
+            h3 { "Sync cursor held" }
+            p { (held.text) }
+            ul {
+                @for account in connection.accounts.iter().filter(|account| held.provider_accounts.contains(&account.id)) {
+                    li { (account.name) }
+                }
+            }
+            @if held.release_withdrawn {
+                p {
+                    "Your earlier release was withdrawn: what is wrong with these accounts, or "
+                    "how many records they have, changed after it was asked for, so nothing was "
+                    "passed. Look at them again. "
+                    "The cursor stays held unless the release is asked for again."
+                }
+            }
+            @if held.release_pending || may_release {
+                p {
+                    "The last fetch held " (held.records) " records of these accounts that could "
+                    "not be stored."
+                }
+            }
+            @if held.release_pending {
+                p {
+                    "Release requested: a sync moves the cursor on as soon as no other account "
+                    "blocks it and the failing records can be tried. If a fetch brings more "
+                    "records than this, the request is withdrawn and you are asked again."
+                }
+            } @else if may_release {
+                p {
+                    "If you let the cursor move on, the next sync tries each of them one by one. "
+                    "Those that can be stored are stored. Those that still fail are passed for "
+                    "good: coffer does not fetch them again, they are only counted as skipped in "
+                    "that sync, and the audit log records how many. Whatever they carry (new "
+                    "transactions, changes, removals) is lost, unless you enter it by hand. "
+                    "If another account still blocks the cursor, nothing is passed yet and "
+                    "your request waits."
+                }
+                p {
+                    "If an account's own error (shown beside it) is what holds the cursor, for "
+                    "instance one that cannot be read, nothing of it can be tried: while that "
+                    "error lasts, all its records are passed for good untried."
+                }
+                form method="post" action={ "/connections/" (connection.id) "/release-cursor" } {
+                    (csrf_field(csrf))
+                    input type="hidden" name="accounts" value=(accounts);
+                    input type="hidden" name="records" value=(held.records);
+                    button.btn type="submit" { "Pass the failing records for good" }
+                }
+            }
+        }
+    }
+}
+
 fn account_item(
+    connection: &ConnectionView,
     account: &ProviderAccountView,
-    account_names: &HashMap<AccountId, String>,
+    shared: &Shared<'_>,
+    open: bool,
 ) -> Markup {
     html! {
         li.item {
@@ -261,11 +430,12 @@ fn account_item(
                 Some(bound) => {
                     span.chip {
                         "Bound to "
-                        (account_names.get(&bound).map_or("an account", String::as_str))
+                        (shared.account_names.get(&bound).map_or("an account", String::as_str))
                     }
                 }
                 None => span.chip.chip-quiet { "Not bound" },
             }
+            (shared.binding.forms(connection, account, shared.csrf, open))
         }
     }
 }
@@ -357,7 +527,7 @@ fn notice_for(err: &SyncError, form: FormKind) -> Option<Notice> {
             ),
             retry_after: Some(retry_seconds(*retry_after)),
         },
-        SyncError::InProgress | SyncError::Conflict(_) => {
+        SyncError::InProgress | SyncError::Conflict(_) | SyncError::CurrencyMismatch => {
             Notice::new(StatusCode::CONFLICT, capitalized(&err.to_string()))
         }
         SyncError::Invalid(_) => Notice::new(
@@ -426,6 +596,18 @@ struct ReconnectForm {
     csrf: String,
     #[serde(default)]
     setup_token: Option<SecretString>,
+}
+
+/// The provider accounts the page showed as holding the cursor.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseForm {
+    #[serde(default)]
+    csrf: String,
+    #[serde(default)]
+    accounts: String,
+    #[serde(default)]
+    records: String,
 }
 
 #[derive(Deserialize)]
@@ -525,6 +707,39 @@ async fn remove(
     let id = connection_id(&id)?;
     match state.sync.remove_connection(&actor, id).await {
         Ok(()) => Ok(back()),
+        Err(err) => refused(&state, &session, err, FormKind::Action).await,
+    }
+}
+
+async fn release_cursor(
+    State(state): State<AppState>,
+    session: PageSession,
+    Path(id): Path<String>,
+    PageForm(form): PageForm<ReleaseForm>,
+) -> Result<Response, PageError> {
+    let actor = session.verify(&state, &form.csrf)?;
+    let id = connection_id(&id)?;
+    let shown: Result<Vec<ProviderAccountId>, _> = form
+        .accounts
+        .split(',')
+        .filter(|part| !part.is_empty())
+        .map(str::parse)
+        .collect();
+    let (Ok(shown), Ok(records)) = (shown, form.records.parse::<u32>()) else {
+        return refused(
+            &state,
+            &session,
+            SyncError::Invalid(RELEASE_UNREADABLE),
+            FormKind::Action,
+        )
+        .await;
+    };
+    match state
+        .sync
+        .release_held_cursor(&actor, id, &shown, records)
+        .await
+    {
+        Ok(_) => Ok(back()),
         Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }
 }

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-30-coffer-design.md`: §1, §2 goals 6–8, §3, §6.1, §6.5–§6.9, §6.11, §8.2, §8.7, §8.8. Task 1 records this plan's rulings in the spec as §8.9.
 
-**Depends on:** `main` at `0cf0872` or later. The highest migration there is `0011_connection_reauth_generation.sql`, so this plan owns `0012`–`0014`. Open PR #41 adds no migration and touches none of the new files. If anything has taken `0012` when a task starts, renumber and say so in its PR.
+**Depends on:** `main` at `0cf0872` or later. Held-cursor PR #53 took `0012` and `0013`, so this plan owns `0014`–`0016`. Open PR #41 adds no migration and touches none of the new files. If anything has taken `0012` when a task starts, renumber and say so in its PR.
 
 ## Global Constraints
 
@@ -79,7 +79,7 @@ Most consequential first. Each was decided without asking; review them before Ta
 | 5 | 7, 8 | **In parallel**, after 10. | 7 is itself adversarial: a fresh agent given only §8.2 and the rule table **[security]**. 8: report math |
 | 6 | 9 | **Alone**, last. Not parallel: it reads everything and reviews the whole branch. | Docs against behaviour **[security]** |
 
-Each task is one PR, in wave order. Migrations are pre-assigned, so parallel branches don't collide, but merge `0013` before `0014`.
+Each task is one PR, in wave order. Migrations are pre-assigned, so parallel branches don't collide, but merge `0015` before `0016`.
 
 ---
 
@@ -179,12 +179,12 @@ Each task is one PR, in wave order. Migrations are pre-assigned, so parallel bra
 ### Task 3: Household forecast settings
 
 **Files:**
-- Create: `crates/store/migrations/0012_household_settings.sql`, `crates/server/src/ledger/settings.rs`, `crates/server/src/http/api/household.rs`, `crates/server/tests/it/household_settings.rs`
+- Create: `crates/store/migrations/0014_household_settings.sql`, `crates/server/src/ledger/settings.rs`, `crates/server/src/http/api/household.rs`, `crates/server/tests/it/household_settings.rs`
 - Modify: `crates/store/src/household.rs`, `crates/server/src/ledger/mod.rs`, `crates/server/src/http/api/{mod,openapi}.rs`, `crates/server/tests/it/main.rs`, `crates/store/tests/it/foundation.rs`, `docs/api/openapi.json`
 
 **Interfaces:**
 - Consumes (Task 1): `ForecastSettings`, `SafetyFloor`; `Action::{ReadHousehold, ManageHousehold}`.
-- Schema `0012`: `household_settings (id INTEGER PRIMARY KEY CHECK (id = 1), floor_kind TEXT CHECK (floor_kind IN ('fixed', 'months_of_outflows')), floor_minor INTEGER CHECK (floor_minor BETWEEN 0 AND 1000000000000000), floor_currency TEXT CHECK (length(floor_currency) = 3), floor_months INTEGER CHECK (floor_months BETWEEN 1 AND 60), include_income INTEGER NOT NULL CHECK (include_income IN (0, 1)), default_horizon_months INTEGER NOT NULL CHECK (default_horizon_months BETWEEN 1 AND 60), stale_after_days INTEGER NOT NULL CHECK (stale_after_days BETWEEN 1 AND 365), CHECK` on the shape: no floor has all three null; `fixed` has minor and currency; `months_of_outflows` has months `)) STRICT`. No row means `ForecastSettings::default()`.
+- Schema `0014`: `household_settings (id INTEGER PRIMARY KEY CHECK (id = 1), floor_kind TEXT CHECK (floor_kind IN ('fixed', 'months_of_outflows')), floor_minor INTEGER CHECK (floor_minor BETWEEN 0 AND 1000000000000000), floor_currency TEXT CHECK (length(floor_currency) = 3), floor_months INTEGER CHECK (floor_months BETWEEN 1 AND 60), include_income INTEGER NOT NULL CHECK (include_income IN (0, 1)), default_horizon_months INTEGER NOT NULL CHECK (default_horizon_months BETWEEN 1 AND 60), stale_after_days INTEGER NOT NULL CHECK (stale_after_days BETWEEN 1 AND 365), CHECK` on the shape: no floor has all three null; `fixed` has minor and currency; `months_of_outflows` has months `)) STRICT`. No row means `ForecastSettings::default()`.
 - Store: `Store::forecast_settings() -> Result<ForecastSettings, StoreError>`; `StoreTx::forecast_settings()`; `StoreTx::set_forecast_settings(&ForecastSettings) -> Result<(), StoreError>`.
 - Produces: `Ledger::forecast_settings(&self, actor: &Actor) -> Result<ForecastSettings, LedgerError>` (`ReadHousehold`); `Ledger::update_forecast_settings(&self, actor: &Actor, patch: ForecastSettingsPatch) -> Result<ForecastSettings, LedgerError>` (`ManageHousehold`); `ForecastSettingsPatch { floor: Option<SafetyFloor>, include_income: Option<bool>, default_horizon_months: Option<u8>, stale_after_days: Option<u16> }`, `deny_unknown_fields`, absent stays. A floor can be replaced, never unset.
 - Audit: action `household.settings`, entity type `household`, entity id `household` (as `appearance.rs` does), one field per changed setting, the floor by `SafetyFloor::canonical`. A patch that changes nothing writes nothing.
@@ -199,12 +199,12 @@ Each task is one PR, in wave order. Migrations are pre-assigned, so parallel bra
 ### Task 4: Planned items **[security]**
 
 **Files:**
-- Create: `crates/store/migrations/0013_planned_items.sql`, `crates/store/src/planned_items.rs`, `crates/server/src/ledger/plan_items.rs`, `crates/server/src/http/api/plan_items.rs`, `crates/store/tests/it/plan.rs`, `crates/server/tests/it/plan_items/{mod,crud,validation,grants}.rs`
+- Create: `crates/store/migrations/0015_planned_items.sql`, `crates/store/src/planned_items.rs`, `crates/server/src/ledger/plan_items.rs`, `crates/server/src/http/api/plan_items.rs`, `crates/store/tests/it/plan.rs`, `crates/server/tests/it/plan_items/{mod,crud,validation,grants}.rs`
 - Modify: `crates/store/src/lib.rs`, `crates/store/tests/it/main.rs`, `crates/server/src/ledger/mod.rs`, `crates/server/src/http/api/{mod,openapi,categories}.rs`, `crates/server/src/ledger/{categories,transactions}.rs`, `crates/domain/src/{plan,money}.rs`, `crates/server/tests/it/main.rs`, `docs/api/openapi.json`
 
 **Interfaces:**
 - Consumes (Task 1): every `plan` type, `PlannedItemId`, `plan_item_visible`. Existing: `ledger::transactions::Patch`, `idempotency::{create, CreateRequest}`, `ledger::complete_created`, `ledger::audit`, `TypedJsonBytes`, `transactions::Notes`, `StoreTx::{get_category, get_category_group, get_account}`.
-- Schema `0013`: `planned_items (id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100), category_id TEXT NOT NULL REFERENCES categories (id), amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN 1 AND 1000000000000000), currency TEXT NOT NULL CHECK (length(currency) = 3), direction TEXT NOT NULL CHECK (direction IN ('outflow', 'inflow')), account_hint_id TEXT REFERENCES accounts (id), notes TEXT CHECK (length(notes) BETWEEN 1 AND 2000), active INTEGER NOT NULL CHECK (active IN (0, 1)), item_type TEXT NOT NULL CHECK (item_type IN ('recurring', 'one_off', 'goal')), every INTEGER CHECK (every BETWEEN 1 AND 999), unit TEXT CHECK (unit IN ('days', 'weeks', 'months', 'years')), anchor_on TEXT, end_on TEXT, one_off_on TEXT, goal_start_on TEXT, goal_due_on TEXT, goal_completed INTEGER CHECK (goal_completed IN (0, 1)), spending TEXT CHECK (spending IN ('bill', 'budget')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`, each date column with the repo's `GLOB` CHECK, a table CHECK that exactly the type's columns are set and goals are outflows, and a table CHECK that `spending` is set on a recurring outflow and on nothing else. `STRICT`. Indexes on `category_id` and `account_hint_id`.
+- Schema `0015`: `planned_items (id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100), category_id TEXT NOT NULL REFERENCES categories (id), amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN 1 AND 1000000000000000), currency TEXT NOT NULL CHECK (length(currency) = 3), direction TEXT NOT NULL CHECK (direction IN ('outflow', 'inflow')), account_hint_id TEXT REFERENCES accounts (id), notes TEXT CHECK (length(notes) BETWEEN 1 AND 2000), active INTEGER NOT NULL CHECK (active IN (0, 1)), item_type TEXT NOT NULL CHECK (item_type IN ('recurring', 'one_off', 'goal')), every INTEGER CHECK (every BETWEEN 1 AND 999), unit TEXT CHECK (unit IN ('days', 'weeks', 'months', 'years')), anchor_on TEXT, end_on TEXT, one_off_on TEXT, goal_start_on TEXT, goal_due_on TEXT, goal_completed INTEGER CHECK (goal_completed IN (0, 1)), spending TEXT CHECK (spending IN ('bill', 'budget')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`, each date column with the repo's `GLOB` CHECK, a table CHECK that exactly the type's columns are set and goals are outflows, and a table CHECK that `spending` is set on a recurring outflow and on nothing else. `STRICT`. Indexes on `category_id` and `account_hint_id`.
 - Store (`coffer_store`): `PlannedItemRecord { id, name: PlannedItemName, category: CategoryId, amount: Money, direction, account_hint: Option<AccountId>, notes: Option<Notes>, active: bool, schedule: PlanSchedule, spending: Option<PlanSpending>, created_at, updated_at }`; `NewPlannedItem`; `PlannedItemChanges` (each field `Option`; `account_hint`, `notes` and `spending` are `Option<Option<_>>`). `StoreTx::{insert_planned_item, update_planned_item, delete_planned_item, get_planned_item, count_planned_items, category_has_planned_items}`; `Store::{get_planned_item, list_planned_items(include_inactive: bool)}`, ordered by id.
 - Produces (`coffer_domain::plan`): `string_enum` `PlanSpending { Bill => "bill", Budget => "budget" }`; `fn spending_applies(direction, &schedule) -> bool`, true only for a recurring outflow. `Money` gains `deny_unknown_fields`.
 - Produces (`ledger::plan_items`), `Serialize` on the view and `Deserialize` on the input and patch, + `ToSchema`:
@@ -235,12 +235,12 @@ Each task is one PR, in wave order. Migrations are pre-assigned, so parallel bra
 ### Task 5: Goal links on splits **[security]**
 
 **Files:**
-- Create: `crates/store/migrations/0014_split_goal_link.sql`, `crates/server/tests/it/plan_items/goal_links.rs`
+- Create: `crates/store/migrations/0016_split_goal_link.sql`, `crates/server/tests/it/plan_items/goal_links.rs`
 - Modify: `crates/server/tests/it/plan_items/mod.rs`, `crates/domain/src/transactions.rs`, `crates/store/src/{transactions,planned_items}.rs`, `crates/server/src/canonical.rs:222`, `crates/server/src/ledger/{transactions,plan_items}.rs`, `docs/api/openapi.json`, and `goal: None` at every `SplitInput` literal in tests: `crates/store/tests/it/ledger.rs`, `crates/server/tests/it/{duplicates/unmerging,duplicates/merging,matching/mod,transactions_core/mod,plaid_sync/transactions,simplefin/sync}.rs`
 
 **Interfaces:**
 - Consumes (Task 4): `planned_items`, `PlannedItemRecord`, `Store`/`StoreTx::get_planned_item`; `plan_item_visible`.
-- Schema `0014`: `ALTER TABLE transaction_splits ADD COLUMN goal_id TEXT REFERENCES planned_items (id);` and `CREATE INDEX transaction_splits_goal_id ON transaction_splits (goal_id) WHERE goal_id IS NOT NULL;`.
+- Schema `0016`: `ALTER TABLE transaction_splits ADD COLUMN goal_id TEXT REFERENCES planned_items (id);` and `CREATE INDEX transaction_splits_goal_id ON transaction_splits (goal_id) WHERE goal_id IS NOT NULL;`.
 - Produces: `SplitInput` gains `#[serde(default, skip_serializing_if = "Option::is_none")] pub goal: Option<PlannedItemId>`, so audit text for unlinked splits doesn't change. `SplitRecord.goal: Option<PlannedItemId>`. `SplitView.goal: Option<PlannedItemId>` (`#[schema(required)]`). `StoreTx::replace_splits` writes it. `StoreTx::goal_has_links(PlannedItemId) -> Result<bool, StoreError>`.
 - `ledger::transactions`: `current_splits` carries `goal`. New `check_goals(tx, access: &AccountAccess, currency: Currency, splits: &[SplitInput])`, run with `check_categories` wherever splits are written (single patch and batch), only when `splits != before`.
   - Missing, or `!plan_item_visible` (a hint the actor can't see at `transactions`): `Invalid("a split names a goal that does not exist")`, the same text for both, checked first.
