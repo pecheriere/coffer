@@ -57,6 +57,43 @@ async fn stale_or_unknown_static_paths_are_404() {
 }
 
 #[tokio::test]
+async fn encoded_static_paths_never_escape_the_asset_list() {
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+    for path in [
+        "/static/%2e%2e/Cargo.toml",
+        "/static/%2E%2E%2FCargo.toml",
+        "/static/css/%2e%2e/css/base.css",
+        "/static/..%2fCargo.toml",
+        "/static/%00",
+    ] {
+        assert_eq!(
+            browser.get(path).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    // Bytes that are not UTF-8 are refused by the path extractor.
+    assert_eq!(
+        browser.get("/static/%ff").await.status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn an_encoded_slash_in_an_asset_url_names_the_same_asset() {
+    // The router decodes the path before the exact lookup, so this is an
+    // alias of the hashed URL, not another file.
+    let server = TestServer::new().await;
+    let mut browser = Browser::new(&server);
+    let aliased = CSS_BASE_CSS.url.replacen("/css/", "/css%2F", 1);
+    assert_ne!(aliased, CSS_BASE_CSS.url);
+    let reply = browser.get(&aliased).await;
+    assert_eq!(reply.status, StatusCode::OK, "{aliased}");
+    assert_eq!(reply.bytes, CSS_BASE_CSS.body);
+}
+
+#[tokio::test]
 async fn pages_reference_only_served_assets() {
     let server = TestServer::new().await;
     let mut browser = Browser::new(&server);
