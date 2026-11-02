@@ -36,7 +36,7 @@ use tempfile::TempDir;
 
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
-use crate::config::{Config, PlaidConfig, PlaidEnvironment};
+use crate::config::{Config, FxProviderKind, PlaidConfig, PlaidEnvironment};
 use crate::egress::{Egress, HostAllowList};
 use crate::http::idempotency::RequestHasher;
 use crate::ledger::Ledger;
@@ -298,6 +298,7 @@ impl TestServer {
             clock.clone(),
             Arc::clone(&access),
             config.timezone.clone(),
+            config.fx_provider != FxProviderKind::Off,
         ));
         let registry = registry(&config);
         let sync = Arc::new(SyncService::new(
