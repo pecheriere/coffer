@@ -24,6 +24,7 @@ mod pages;
 mod plaid_client;
 mod plaid_link;
 mod plaid_sync;
+mod plan_items;
 mod serve;
 mod sessions;
 mod simplefin;

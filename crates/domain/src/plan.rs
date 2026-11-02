@@ -81,6 +81,8 @@ pub enum PlanError {
     UnknownIntervalUnit,
     #[error("unknown plan item type")]
     UnknownItemType,
+    #[error("unknown plan spending kind")]
+    UnknownSpending,
 }
 
 string_enum!(
@@ -110,6 +112,16 @@ string_enum!(
         Recurring => "recurring",
         OneOff => "one_off",
         Goal => "goal",
+    }
+);
+
+string_enum!(
+    /// How a recurring outflow relates to what was spent in its category so
+    /// far this month: a bill counts in full, a budget is reduced by it.
+    PlanSpending, PlanError::UnknownSpending,
+    {
+        Bill => "bill",
+        Budget => "budget",
     }
 );
 
@@ -211,6 +223,13 @@ impl PlanSchedule {
     }
 }
 
+/// Whether an item going in `direction` on `schedule` has a [`PlanSpending`]:
+/// only a recurring outflow does.
+#[must_use]
+pub fn spending_applies(direction: PlanDirection, schedule: &PlanSchedule) -> bool {
+    direction == PlanDirection::Outflow && matches!(schedule, PlanSchedule::Recurring { .. })
+}
+
 /// The whole days from `earlier` to `later`, negative when they are the other
 /// way round. Civil dates have 24-hour days, so this is exact.
 fn days_between(earlier: Date, later: Date) -> i64 {
@@ -248,7 +267,8 @@ mod tests {
 
     use super::{
         ForecastSettings, IntervalUnit, MAX_PLAN_AMOUNT_MINOR, PlanDirection, PlanError,
-        PlanItemType, PlanSchedule, PlannedItemName, SafetyFloor, validate_amount, validate_as_of,
+        PlanItemType, PlanSchedule, PlannedItemName, SafetyFloor, spending_applies,
+        validate_amount, validate_as_of,
     };
     use crate::money::{Currency, Money};
 
@@ -277,6 +297,28 @@ mod tests {
     }
 
     const OUT: PlanDirection = PlanDirection::Outflow;
+
+    #[test]
+    fn only_a_recurring_outflow_has_a_spending_kind() {
+        let recurring = PlanSchedule::Recurring {
+            every: 1,
+            unit: IntervalUnit::Months,
+            anchor_on: date(2027, 1, 1),
+            end_on: None,
+        };
+        let one_off = PlanSchedule::OneOff {
+            on: date(2027, 1, 1),
+        };
+        let goal = PlanSchedule::Goal {
+            start_on: date(2027, 1, 1),
+            due_on: date(2027, 2, 1),
+            completed: false,
+        };
+        assert!(spending_applies(PlanDirection::Outflow, &recurring));
+        assert!(!spending_applies(PlanDirection::Inflow, &recurring));
+        assert!(!spending_applies(PlanDirection::Outflow, &one_off));
+        assert!(!spending_applies(PlanDirection::Outflow, &goal));
+    }
 
     /// One case per `PlanError` that a value check raises.
     #[test]

@@ -314,7 +314,7 @@ fn payee(input: &str) -> Result<Payee, LedgerError> {
 }
 
 /// Notes as stored: empty notes are none.
-fn notes(input: &str) -> Result<Option<Notes>, LedgerError> {
+pub(super) fn notes(input: &str) -> Result<Option<Notes>, LedgerError> {
     let notes = Notes::parse(input).map_err(|_| LedgerError::Invalid(NOTES_INVALID))?;
     Ok((!notes.is_empty()).then_some(notes))
 }

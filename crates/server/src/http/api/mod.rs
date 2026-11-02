@@ -11,6 +11,7 @@ mod household;
 mod me;
 mod members;
 pub mod openapi;
+mod plan_items;
 mod provider_accounts;
 mod router;
 mod transactions;
@@ -57,6 +58,12 @@ fn routes() -> ApiRouter {
             transactions::get,
             transactions::update,
             transactions::delete
+        ))
+        .op(routes!(plan_items::list, plan_items::create))
+        .op(routes!(
+            plan_items::get,
+            plan_items::update,
+            plan_items::delete
         ))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
