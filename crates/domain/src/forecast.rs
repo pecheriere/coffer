@@ -654,10 +654,11 @@ fn account_cautions(account: &AccountInput, input: &ForecastInput, cautions: &mu
                 },
             });
         }
-        // At `as_of`, the day the forecast describes. A date after it has no age.
+        // At the day the forecast describes, or today if that is yet to come, since a
+        // balance can't be fresher than today. A date after it has no age.
         let age_days = balance
             .on
-            .until(input.as_of)
+            .until(input.as_of.min(input.today))
             .map_or(0, |age| age.get_days());
         if let Ok(age_days) = u32::try_from(age_days)
             && age_days > u32::from(input.stale_after_days)

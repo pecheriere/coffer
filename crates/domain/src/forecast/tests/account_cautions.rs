@@ -70,6 +70,42 @@ fn staleness_is_measured_at_as_of() {
     );
 }
 
+/// Looking ahead, a balance dated today is as fresh as a balance can be.
+#[test]
+fn a_future_as_of_leaves_a_balance_dated_today_fresh() {
+    let forecast = run(&ForecastInput {
+        as_of: date(2026, 12, 15),
+        accounts: vec![aged(0)],
+        ..household()
+    });
+    assert!(
+        !forecast
+            .cautions
+            .iter()
+            .any(|caution| matches!(caution, Caution::BalanceStale { .. })),
+        "only as_of is in the future"
+    );
+}
+
+#[test]
+fn a_future_as_of_ages_a_balance_against_today() {
+    let account = aged(8);
+    let id = account.id;
+    let forecast = run(&ForecastInput {
+        as_of: date(2026, 12, 15),
+        accounts: vec![account],
+        ..household()
+    });
+    assert!(
+        forecast.cautions.contains(&Caution::BalanceStale {
+            account: id,
+            on: date(2026, 11, 7),
+            age_days: 8,
+        }),
+        "eight days old today, not thirty-eight"
+    );
+}
+
 #[test]
 fn an_uncounted_account_is_never_stale() {
     let forecast = run(&ForecastInput {
