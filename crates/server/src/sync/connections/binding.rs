@@ -157,6 +157,8 @@ impl SyncService {
             liquidity: input.liquidity,
             include_in_net_worth: input.include_in_net_worth,
             include_in_forecast: input.include_in_forecast,
+            belongs_to: input.belongs_to,
+            beneficiary: input.beneficiary,
             opening_balance: None,
         })?;
         let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;

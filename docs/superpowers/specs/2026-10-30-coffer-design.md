@@ -1188,13 +1188,14 @@ request doesn't name, as a new account has them, and clears its beneficiary. The
 result and the audit entry each change.
 
 **B5. A beneficiary is a label, not a person.** `beneficiary` is an optional free-text label, 1 to
-64 characters, on an account that isn't `household`, and refused on one that is: a child, or a
+64 characters with something visible and no control, format or separator characters other than the
+plain space, on an account that isn't `household`, and refused on one that is: a child, or a
 purpose such as a family fund. It isn't a member, since a child has no login, and it isn't a record
 of its own. A record would need endpoints, a delete rule and a household-wide list of names that a
 restricted token must not read, to save retyping a name on two or three accounts. Labels compare
 exactly after trimming, so two spellings make two buckets, and the forms offer the labels the
 actor can already see. A provider's text never fills it. It may be a child's name, so it is never
-logged, is shown only with its account, and goes in the audit log as an account's name does.
+logged, its `Debug` is redacted, it is shown only with its account, and goes in the audit log as an account's name does.
 
 **B6. A report has buckets.** `GET /api/v1/reports/net-worth` keeps its shape for the household's
 money and adds `buckets`: one per `belongs_to` and exact `beneficiary` among the accounts that

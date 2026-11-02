@@ -75,8 +75,10 @@ async fn every_signed_in_page_counts_the_accounts_to_set_up() {
                 name: None,
                 kind: Some(AccountKind::CreditCard),
                 liquidity: None,
-                include_in_net_worth: true,
-                include_in_forecast: true,
+                include_in_net_worth: Some(true),
+                include_in_forecast: Some(true),
+                belongs_to: None,
+                beneficiary: None,
             },
         )
         .await

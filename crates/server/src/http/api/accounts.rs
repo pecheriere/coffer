@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{Method, Uri};
 use axum::response::Response;
-use coffer_domain::accounts::{AccountKind, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountLevel;
@@ -75,7 +75,8 @@ pub struct BalanceQuery {
 }
 
 /// A manual account to create.
-#[derive(Debug, Deserialize, ToSchema)]
+// No `Debug`, so its beneficiary can't reach a log line.
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewAccountRequest {
     /// 1 to 100 characters, without control characters.
@@ -86,10 +87,18 @@ pub struct NewAccountRequest {
     /// A chosen liquidity class; by default the kind's (a credit card is a
     /// `short_term_liability`).
     pub liquidity: Option<LiquidityClass>,
-    /// Count the account in net worth (default `true`).
+    /// Count the account in net worth (default true, and always false for an account that isn't the household's)
     pub include_in_net_worth: Option<bool>,
-    /// Count the account in the forecast (default `true`).
+    /// Count the account in the forecast (default true, and always false for an account that isn't the household's)
     pub include_in_forecast: Option<bool>,
+    /// Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,
+    /// `given_away` for `charitable`, otherwise `household`). A value given here stays over a
+    /// later change of kind.
+    pub belongs_to: Option<BelongsTo>,
+    /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
+    /// something visible and no control, format or separator characters. `""` is the same as
+    /// absent.
+    pub beneficiary: Option<String>,
     /// A manual balance snapshot to record with the account.
     pub opening_balance: Option<OpeningBalance>,
 }
@@ -168,8 +177,10 @@ pub(super) async fn create(
         kind: value.kind,
         currency: value.currency,
         liquidity: value.liquidity,
-        include_in_net_worth: value.include_in_net_worth.unwrap_or(true),
-        include_in_forecast: value.include_in_forecast.unwrap_or(true),
+        include_in_net_worth: value.include_in_net_worth,
+        include_in_forecast: value.include_in_forecast,
+        belongs_to: value.belongs_to,
+        beneficiary: value.beneficiary,
         opening_balance: value.opening_balance,
     };
     let request = CreateRequest {
@@ -223,7 +234,10 @@ pub(super) async fn get(
     tag = tags::ACCOUNTS,
     description = "Changes the fields given. The currency cannot change. A new `kind` \
                    without `liquidity` re-defaults the liquidity class unless one was chosen. \
-                   Needs `write` on the account.",
+                   It also moves `belongs_to` to the new kind's default unless that was chosen, \
+                   and `include_in_net_worth` and `include_in_forecast` go with it: both off \
+                   when it moves away from `household`, both on when it moves back, and the \
+                   beneficiary removed. Needs `write` on the account.",
     security(("bearer" = [])),
     params(AccountPath),
     request_body = AccountPatch,

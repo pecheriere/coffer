@@ -495,8 +495,10 @@ async fn delete_connection_keeps_transactions() {
                 name: None,
                 kind: None,
                 liquidity: None,
-                include_in_net_worth: true,
-                include_in_forecast: true,
+                include_in_net_worth: Some(true),
+                include_in_forecast: Some(true),
+                belongs_to: None,
+                beneficiary: None,
             },
         )
         .await

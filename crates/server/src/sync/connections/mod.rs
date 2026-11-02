@@ -11,7 +11,7 @@
 //! value is dropped at once). No audit entry,
 //! log line, error or view ever holds them.
 
-use coffer_domain::accounts::{AccountKind, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
@@ -160,8 +160,9 @@ pub struct ConnectionView {
     pub accounts: Vec<ProviderAccountView>,
 }
 
-/// An account to create for a provider account and bind to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An account to create for a provider account and bind to it. It has no `Debug`, so its
+/// beneficiary can't reach a log line.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NewLinkedAccountInput {
     /// By default the provider account's name.
     pub name: Option<String>,
@@ -169,8 +170,14 @@ pub struct NewLinkedAccountInput {
     pub kind: Option<AccountKind>,
     /// By default the kind's class.
     pub liquidity: Option<LiquidityClass>,
-    pub include_in_net_worth: bool,
-    pub include_in_forecast: bool,
+    /// By default what the kind and `belongs_to` lead to.
+    pub include_in_net_worth: Option<bool>,
+    /// By default what the kind and `belongs_to` lead to.
+    pub include_in_forecast: Option<bool>,
+    /// By default the kind's.
+    pub belongs_to: Option<BelongsTo>,
+    /// Empty is the same as `None`. A provider's text never fills it.
+    pub beneficiary: Option<String>,
 }
 
 /// An account created for a provider account, and the provider account

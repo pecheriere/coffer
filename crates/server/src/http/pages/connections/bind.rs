@@ -237,8 +237,10 @@ pub(super) async fn create_account(
         name,
         kind,
         liquidity: None,
-        include_in_net_worth: true,
-        include_in_forecast: true,
+        include_in_net_worth: None,
+        include_in_forecast: None,
+        belongs_to: None,
+        beneficiary: None,
     };
     match state.sync.create_account_and_bind(&actor, id, input).await {
         Ok(_) => Ok(back()),

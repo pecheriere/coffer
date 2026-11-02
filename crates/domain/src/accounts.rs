@@ -1,5 +1,7 @@
 //! Account classification and validated account and connection names.
 
+pub mod belonging;
+
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -10,24 +12,47 @@ use crate::transactions::string_enum;
 
 /// Why an account value was rejected. Messages never echo the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{}", self.message())]
 pub enum AccountError {
-    #[error("account name must be 1 to 100 characters without control characters")]
     InvalidName,
-    #[error("connection label must be 1 to 100 characters without control characters")]
     InvalidConnectionLabel,
-    #[error("unknown account kind")]
     UnknownKind,
-    #[error("unknown liquidity class")]
     UnknownLiquidity,
-    #[error("unknown balance source")]
     UnknownBalanceSource,
-    #[error("unknown value for whose money an account is")]
     UnknownBelongsTo,
-    #[error(
-        "beneficiary must be 1 to 64 characters with something visible and no control, format or \
-         separator characters"
-    )]
     InvalidBeneficiary,
+    CountedButNotTheHouseholds,
+    BeneficiaryOnTheHousehold,
+}
+
+impl AccountError {
+    /// The refusal's fixed words, which outlive the error.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::InvalidName => {
+                "account name must be 1 to 100 characters without control characters"
+            }
+            Self::InvalidConnectionLabel => {
+                "connection label must be 1 to 100 characters without control characters"
+            }
+            Self::UnknownKind => "unknown account kind",
+            Self::UnknownLiquidity => "unknown liquidity class",
+            Self::UnknownBalanceSource => "unknown balance source",
+            Self::UnknownBelongsTo => "unknown value for whose money an account is",
+            Self::InvalidBeneficiary => {
+                "beneficiary must be 1 to 64 characters with something visible and no control, \
+                 format or separator characters"
+            }
+            Self::CountedButNotTheHouseholds => {
+                "an account that isn't the household's can't be counted: set belongs_to to \
+                 household first"
+            }
+            Self::BeneficiaryOnTheHousehold => {
+                "only an account that isn't the household's has a beneficiary"
+            }
+        }
+    }
 }
 
 /// What an account is.

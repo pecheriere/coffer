@@ -112,7 +112,7 @@ If the owner drops #39, skip Task 7; nothing else reads it. `0022` still widens 
   - `default_liquidity` gives `Invested` for all three.
   - `BelongsTo` (through `string_enum!`, with `ToSchema` under `openapi`): `Household => "household"`, `SomeoneElse => "someone_else"`, `GivenAway => "given_away"`. Error `AccountError::UnknownBelongsTo`.
   - `#[must_use] pub fn default_belongs_to(kind: AccountKind) -> BelongsTo`.
-  - `label_type!` `Beneficiary`, `AccountError::InvalidBeneficiary`, `max = 64`. Message: `"beneficiary must be 1 to 64 characters without control characters"`.
+  - `label_type!` `Beneficiary`, `AccountError::InvalidBeneficiary`, `max = 64`. It also refuses format characters and separators other than the plain space, and any label with nothing visible, and its `Debug` is redacted. Message: `"beneficiary must be 1 to 64 characters with something visible and no control, format or separator characters"`.
 - Produces (`coffer_store`): `AccountRecord` and `NewAccount` gain `belongs_to: BelongsTo`, `belongs_to_overridden: bool`, `beneficiary: Option<Beneficiary>`. `AccountChanges` gains `belongs_to: Option<BelongsTo>`, `belongs_to_overridden: Option<bool>`, `beneficiary: Option<Option<Beneficiary>>` (`Some(None)` clears, as `closed_at`). `columns!`, `account_from_row`, `insert_account` and `update_account` follow.
 - Until Task 2, `Ledger::insert_account` passes `BelongsTo::Household`, `false`, `None`. That is why this branch isn't released alone.
 - Schema `0022`, tried in this exact form (see Review Focus 1). The holding tables are how the foreign key counter gets uncounted: don't "simplify" to a rename.

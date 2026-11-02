@@ -178,15 +178,34 @@ money owed or going out.
   transactions and balances).
 - `POST /api/v1/accounts` (`write`) creates a manual account from `name`,
   `kind` (`checking`, `savings`, `credit_card`, `loan`, `mortgage`, `brokerage`,
-  `retirement`, `equity_comp`, `property`, `vehicle`, `other_asset` or
-  `other_liability`), `currency` and optionally `liquidity` (by default the kind's: a
-  credit card is a `short_term_liability`; `checking` and `savings` are `cash`;
-  the forecast counts `cash` and `short_term_liability` accounts), `include_in_net_worth`,
-  `include_in_forecast` (both default `true`) and `opening_balance`
+  `retirement`, `education`, `custodial`, `charitable`, `equity_comp`, `property`,
+  `vehicle`, `other_asset` or `other_liability`), `currency` and optionally `liquidity`
+  (by default the kind's: a credit card is a `short_term_liability`; `checking` and
+  `savings` are `cash`; `education`, `custodial` and `charitable` are `invested`; the
+  forecast counts `cash` and `short_term_liability` accounts), `belongs_to`,
+  `beneficiary`, `include_in_net_worth`, `include_in_forecast` (both default `true`,
+  and always `false` for an account that isn't the household's) and `opening_balance`
   (`{"on": "YYYY-MM-DD", "minor_units": n}`). Answers 201.
+- `belongs_to` says whose money an account is: `household`, `someone_else` (the
+  default for `education` and `custodial`) or `given_away` (the default for
+  `charitable`); every other kind defaults to `household`. It says how coffer treats
+  the money and is not a legal statement. An account that isn't `household` counts in
+  neither net worth nor the forecast, and asking for either flag `true` on one answers
+  422: to count a 529 as the household's, set `belongs_to` to `household`, which is
+  audited. `beneficiary` is an optional label on an account that isn't `household`, 1
+  to 64 characters with something visible and no control, format or separator
+  characters, and 422 on one that is. It is exact after trimming, may be a child's
+  name, and goes in the audit log as an account's name does. On a create `""` is the
+  same as leaving it out. `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
+  takes these fields and follows the same rule, after the provider's hint has decided
+  the kind.
 - `GET` and `PATCH /api/v1/accounts/{account_id}` read and change an
-  account. The currency never changes (sending it is a 400 `invalid`); a
-  new `kind` re-defaults the liquidity class unless one was chosen;
+  account. An account answers its `belongs_to` and `beneficiary` at `balances`, and
+  they change with `write` on it. The currency never changes (sending it is a 400
+  `invalid`); a new `kind` re-defaults the liquidity class unless one was chosen, and
+  `belongs_to` unless that was chosen: moving away from `household` turns both flags
+  off, and moving back turns on any the request doesn't name and removes the
+  beneficiary. `beneficiary: ""` removes it, since leaving it out keeps it;
   `closed: true` closes the account.
 - `GET /api/v1/accounts/{account_id}/balances` pages the daily balances,
   newest first (`from` inclusive, `to` exclusive, `after`, `limit`).

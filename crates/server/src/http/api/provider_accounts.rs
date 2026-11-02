@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use coffer_domain::accounts::{AccountKind, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, ProviderAccountId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -49,7 +49,8 @@ pub struct BindRequest {
 }
 
 /// An account to create for a provider account.
-#[derive(Debug, Deserialize, ToSchema)]
+// No `Debug`, so its beneficiary can't reach a log line.
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewLinkedAccountRequest {
     /// 1 to 100 characters, without control characters; by default the
@@ -60,10 +61,18 @@ pub struct NewLinkedAccountRequest {
     pub kind: Option<AccountKind>,
     /// A chosen liquidity class; by default the kind's.
     pub liquidity: Option<LiquidityClass>,
-    /// Count the account in net worth (default `true`).
+    /// Count the account in net worth (default true, and always false for an account that isn't the household's)
     pub include_in_net_worth: Option<bool>,
-    /// Count the account in the forecast (default `true`).
+    /// Count the account in the forecast (default true, and always false for an account that isn't the household's)
     pub include_in_forecast: Option<bool>,
+    /// Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,
+    /// `given_away` for `charitable`, otherwise `household`). A value given here stays over a
+    /// later change of kind.
+    pub belongs_to: Option<BelongsTo>,
+    /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
+    /// something visible and no control, format or separator characters. `""` is the same as
+    /// absent.
+    pub beneficiary: Option<String>,
 }
 
 /// The provider accounts the token may see.
@@ -167,8 +176,10 @@ pub(super) async fn create_account(
         name: body.name,
         kind: body.kind,
         liquidity: body.liquidity,
-        include_in_net_worth: body.include_in_net_worth.unwrap_or(true),
-        include_in_forecast: body.include_in_forecast.unwrap_or(true),
+        include_in_net_worth: body.include_in_net_worth,
+        include_in_forecast: body.include_in_forecast,
+        belongs_to: body.belongs_to,
+        beneficiary: body.beneficiary,
     };
     let linked = state
         .sync

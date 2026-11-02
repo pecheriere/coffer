@@ -375,7 +375,7 @@
           "accounts"
         ],
         "summary": "Changes an account.",
-        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. Needs `write` on the account.",
+        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. It also moves `belongs_to` to the new kind's default unless that was chosen, and `include_in_net_worth` and `include_in_forecast` go with it: both off when it moves away from `household`, both on when it moves back, and the beneficiary removed. Needs `write` on the account.",
         "operationId": "updateAccount",
         "parameters": [
           {
@@ -5971,6 +5971,24 @@
         "type": "object",
         "description": "Changes to an account; absent (or `null`) fields stay as they are. The\ncurrency cannot change.",
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is, kept from then on whatever the kind. Moving away from `household`\nturns both flags off. Moving back turns on any this request doesn't name and removes\nthe beneficiary."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` removes it,\nsince absent keeps it."
+          },
           "closed": {
             "type": [
               "boolean",
@@ -5982,19 +6000,21 @@
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "`true` is refused on an account that isn't the household's."
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "`true` is refused on an account that isn't the household's."
           },
           "kind": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "A new kind; a defaulted liquidity class follows it."
+                "description": "A new kind; a defaulted liquidity class and a defaulted `belongs_to` follow it, and\nthe flags with `belongs_to`."
               },
               {
                 "type": "null"
@@ -6169,9 +6189,22 @@
           "source",
           "closed",
           "latest_balance",
-          "created_at"
+          "created_at",
+          "belongs_to",
+          "beneficiary"
         ],
         "properties": {
+          "belongs_to": {
+            "$ref": "#/components/schemas/BelongsTo",
+            "description": "Whose money it is. It defaults from `kind` and follows a change of `kind` until it is\nchosen, then stays. An account that isn't `household` counts in neither net worth nor\nthe forecast."
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't `household` is held for; `null` when it says nobody."
+          },
           "closed": {
             "type": "boolean"
           },
@@ -6546,6 +6579,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "BelongsTo": {
+        "type": "string",
+        "description": "Whose money an account holds, apart from what kind of account it is. It says how\ncoffer treats the money and is not a legal statement.",
+        "enum": [
+          "household",
+          "someone_else",
+          "given_away"
+        ]
       },
       "BindRequest": {
         "type": "object",
@@ -8923,6 +8965,24 @@
           "currency"
         ],
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,\n`given_away` for `charitable`, otherwise `household`). A value given here stays over a\nlater change of kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` is the same as\nabsent."
+          },
           "currency": {
             "$ref": "#/components/schemas/Currency",
             "description": "Fixed for the account's life."
@@ -8932,14 +8992,14 @@
               "boolean",
               "null"
             ],
-            "description": "Count the account in the forecast (default `true`)."
+            "description": "Count the account in the forecast (default true, and always false for an account that isn't the household's)"
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in net worth (default `true`)."
+            "description": "Count the account in net worth (default true, and always false for an account that isn't the household's)"
           },
           "kind": {
             "$ref": "#/components/schemas/AccountKind"
@@ -8977,19 +9037,37 @@
         "type": "object",
         "description": "An account to create for a provider account.",
         "properties": {
+          "belongs_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BelongsTo",
+                "description": "Whose money it is; by default the kind's (`someone_else` for `education` and `custodial`,\n`given_away` for `charitable`, otherwise `household`). A value given here stays over a\nlater change of kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beneficiary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` is the same as\nabsent."
+          },
           "include_in_forecast": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in the forecast (default `true`)."
+            "description": "Count the account in the forecast (default true, and always false for an account that isn't the household's)"
           },
           "include_in_net_worth": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Count the account in net worth (default `true`)."
+            "description": "Count the account in net worth (default true, and always false for an account that isn't the household's)"
           },
           "kind": {
             "oneOf": [
