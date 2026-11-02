@@ -6,7 +6,7 @@ use jiff::civil::{Date, date};
 
 use super::{
     AS_OF, budget, cash, currency, eur, every, fixed_floor, has_line, household, hypothetical,
-    line, monthly, run, spent, usd,
+    line, monthly, one_off, run, spent, usd,
 };
 use crate::forecast::{
     AccountInput, BalanceInput, Blocker, CategorySpent, Forecast, ForecastInput, ForecastStatus,
@@ -372,4 +372,114 @@ fn a_bill_earlier_this_month_stays_out_of_gross() {
         ..household()
     });
     assert_eq!(line(&forecast, "Rent").gross, usd(600_000), "three months");
+}
+
+/// Rent of 200,000 on `as_of` and a budget of 20,000 on the 20th in one category, so the
+/// window holds Nov, Dec and Jan of each, with `spent_minor` seen through `as_of`.
+fn rent_due_today(spent_minor: i64) -> ForecastInput {
+    let home = CategoryId::new();
+    ForecastInput {
+        items: vec![
+            monthly("Rent", usd(200_000), date(2026, 1, 15), home),
+            budget(monthly("Upkeep", usd(20_000), date(2026, 1, 20), home)),
+        ],
+        category_spent: vec![spent(home, spent_minor)],
+        ..household()
+    }
+}
+
+#[test]
+fn a_bill_paid_on_as_of_does_not_eat_a_budget() {
+    let forecast = run(&rent_due_today(200_000));
+    let upkeep = line(&forecast, "Upkeep");
+    assert_eq!(upkeep.reduced_by, usd(0), "the spending was the rent");
+    assert_eq!(upkeep.counted, usd(60_000), "three months in full");
+}
+
+/// The balance dated `as_of` already shows the payment, so this holds it twice, which
+/// lasts the day and is the safe direction.
+#[test]
+fn spending_on_as_of_does_not_reduce_that_days_bill() {
+    let forecast = run(&rent_due_today(200_000));
+    let rent = line(&forecast, "Rent");
+    assert_eq!(rent.reduced_by, usd(0), "a bill is never reduced");
+    assert_eq!(rent.counted, usd(600_000), "November's counts in full");
+}
+
+#[test]
+fn spending_beyond_a_bill_on_as_of_reduces_a_budget() {
+    let forecast = run(&rent_due_today(205_000));
+    assert_eq!(line(&forecast, "Upkeep").reduced_by, usd(5_000), "the rest");
+}
+
+/// The data cannot tell what it was for, and it may be the rent: the safe direction.
+#[test]
+fn spending_short_of_a_bill_on_as_of_reduces_no_budget() {
+    let forecast = run(&rent_due_today(150_000));
+    assert_eq!(
+        line(&forecast, "Upkeep").reduced_by,
+        usd(0),
+        "all to the rent"
+    );
+}
+
+#[test]
+fn a_bill_on_as_of_is_still_no_gap() {
+    let forecast = run(&rent_due_today(150_000));
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(0), "still to come");
+    assert_eq!(forecast.cautions, [], "nothing to warn of");
+}
+
+#[test]
+fn a_one_off_paid_on_as_of_does_not_eat_a_budget() {
+    let car = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        horizon_months: 1,
+        items: vec![
+            one_off("Tyres", usd(30_000), AS_OF, car),
+            budget(monthly("Fuel", usd(20_000), date(2026, 1, 20), car)),
+        ],
+        category_spent: vec![spent(car, 30_000)],
+        ..household()
+    });
+    assert_eq!(
+        line(&forecast, "Fuel").reduced_by,
+        usd(0),
+        "it was the tyres"
+    );
+}
+
+#[test]
+fn a_bill_the_day_after_as_of_takes_no_share_of_the_pool() {
+    let home = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        horizon_months: 1,
+        items: vec![
+            monthly("Rent", usd(200_000), date(2026, 1, 16), home),
+            budget(monthly("Upkeep", usd(20_000), date(2026, 1, 20), home)),
+        ],
+        category_spent: vec![spent(home, 5_000)],
+        ..household()
+    });
+    assert_eq!(
+        line(&forecast, "Upkeep").reduced_by,
+        usd(5_000),
+        "not due yet"
+    );
+}
+
+/// Spending pays what has passed: the 100,000 pays the 10th's bill, and today's bill,
+/// still to come, owes nothing.
+#[test]
+fn a_bill_on_as_of_leaves_spending_to_an_earlier_one() {
+    let home = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![
+            monthly("Today", usd(100_000), date(2026, 1, 15), home),
+            monthly("Passed", usd(100_000), date(2026, 1, 10), home),
+        ],
+        category_spent: vec![spent(home, 100_000)],
+        ..household()
+    });
+    assert_eq!(forecast.cautions, [], "no gap either way");
 }

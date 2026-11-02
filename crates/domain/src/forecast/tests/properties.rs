@@ -223,6 +223,8 @@ struct PoolFigures {
     spent: i128,
     /// Recurring bills and one-offs dated earlier this month.
     earlier_bills: i128,
+    /// The same, with those dated `as_of`: what comes off the pool.
+    bills_so_far: i128,
     /// Budgets' occurrences anywhere in the month.
     month_budgets: i128,
     /// Budgets' occurrences in the window after the month.
@@ -244,9 +246,9 @@ fn dated(item: &ItemInput, from: Date, to: Date) -> Result<i128, String> {
 }
 
 /// Checks reductions and unpaid bills against aggregates worked out apart from the
-/// walk: the pool (spending less earlier bills and one-offs, floored at 0) is either all
-/// used or covers the month's budgets, and the gap is earlier bills less spending, floored
-/// at 0. What budgets count is then what the month's leave plus the later months' whole.
+/// walk: the pool (spending less bills and one-offs dated up to `as_of`, floored at 0) is
+/// either all used or covers the month's budgets, and the gap is those dated before `as_of`
+/// less spending, floored at 0. What budgets count is then what the month's leave plus the later months' whole.
 fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), String> {
     let month_start = input.as_of.first_of_month();
     let window_ends = window_end(input.as_of, input.horizon_months)?;
@@ -276,6 +278,12 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs.
             figures.earlier_bills += dated(item, month_start, input.as_of)?;
+            figures.bills_so_far += dated(item, month_start, input.as_of)?
+                + dated(
+                    item,
+                    input.as_of,
+                    input.as_of.tomorrow().map_err(|_| "no tomorrow")?,
+                )?;
         }
     }
     for (&(category, code), figures) in &pools {
@@ -286,7 +294,7 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
                 .filter(move |line| line.category == Some(category) && line.gross.currency == code)
         };
         let reduced: i128 = lines().map(|line| wide(line.reduced_by)).sum();
-        let pool = (figures.spent - figures.earlier_bills).max(0);
+        let pool = (figures.spent - figures.bills_so_far).max(0);
         let reduced_expected = pool.min(figures.month_budgets);
         if reduced != reduced_expected {
             return Err("a pool was not spent exactly once".to_owned());

@@ -2,7 +2,8 @@
 //! stored outflows are touched: a hypothetical item neither reduces, consumes nor
 //! owes, and a goal has spending of its own.
 //!
-//! A recurring bill or a one-off counts in full until its date passes. Past it,
+//! A recurring bill or a one-off counts in full until its date passes, so one dated
+//! `as_of` counts in full even if it was paid that day. Past it,
 //! spending in its category pays them in date order, and whatever it does not cover
 //! is still needed: a gap, reported, since the money may have gone under another
 //! category. Spending goes to them before any budget, since the data cannot tell
@@ -12,8 +13,8 @@
 //! `as_of`'s month, before `as_of` too, go into its line and the first bucket, so what it
 //! has not spent is still needed. Later months count only inside the window. Each
 //! category and currency has one pool: the month's spending less the recurring bills and
-//! one-offs dated earlier this month, since that spending was already planned for, floored
-//! at 0. The pool then pays for the month's budget occurrences in date order, so one
+//! one-offs dated this month up to and including `as_of`, since that spending was already
+//! planned for, floored at 0. The pool then pays for the month's budget occurrences in date order, so one
 //! purchase never reduces two items, and a paid bill never eats a budget.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,7 +112,8 @@ pub(super) fn reduce(
         *spent.entry((row.category, row.currency)).or_default() += i128::from(row.spent_minor);
     }
 
-    let mut planned_earlier: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    let through_as_of = input.as_of.tomorrow().unwrap_or(Date::MAX);
+    let mut planned_so_far: BTreeMap<PoolKey, i128> = BTreeMap::new();
     let mut earlier_payments = Vec::new();
     let mut month_budgets = Vec::new();
     for (index, item) in input.items.iter().enumerate() {
@@ -123,10 +125,13 @@ pub(super) fn reduce(
             let dates = item.schedule.occurrences(month_start, reducible_until);
             month_budgets.extend(occurrences(dates, index, key, amount));
         } else {
-            // A goal has no occurrences, so this is recurring bills and one-offs.
-            let earlier = item.schedule.occurrences(month_start, input.as_of);
-            *planned_earlier.entry(key).or_default() += amount * i128::from(count(&earlier)?);
-            earlier_payments.extend(occurrences(earlier, index, key, amount));
+            // A goal has no occurrences, so this is recurring bills and one-offs. Today's
+            // spending may be one dated `as_of`, so it takes its share of the pool, but it
+            // has not passed, so it owes no gap.
+            let so_far = item.schedule.occurrences(month_start, through_as_of);
+            *planned_so_far.entry(key).or_default() += amount * i128::from(count(&so_far)?);
+            let passed = so_far.into_iter().filter(|&on| on < input.as_of).collect();
+            earlier_payments.extend(occurrences(passed, index, key, amount));
         }
     }
 
@@ -141,7 +146,7 @@ pub(super) fn reduce(
     spending_sensitive_currencies.extend(month_budgets.iter().map(|one| one.key.1));
 
     let mut pools = spent;
-    for (key, planned) in planned_earlier {
+    for (key, planned) in planned_so_far {
         if let Some(pool) = pools.get_mut(&key) {
             *pool -= planned;
         }

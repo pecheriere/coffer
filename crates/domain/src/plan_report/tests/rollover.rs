@@ -106,23 +106,40 @@ fn a_month_yet_to_come_has_no_rollover() {
     assert_eq!(row.rollover, dollars(140));
 }
 
-/// R9: a bill counts as paid only once its date has passed, so today's month keeps what
-/// was spent on the budget until then.
+/// R9: a bill dated later than today isn't paid yet, so today's month keeps what was spent
+/// on the budget until then.
 #[test]
-fn a_bill_dated_from_today_on_takes_no_share_of_the_spending() {
+fn a_bill_dated_after_today_takes_no_share_of_the_spending() {
     let house = CategoryId::new();
     let mut asked = input(1);
     asked.from = month("2026-12");
-    let mut due_today = bill(house, 500);
-    due_today.schedule = every_months(1, date(2025, 1, 15));
+    let mut due_tomorrow = bill(house, 500);
+    due_tomorrow.schedule = every_months(1, date(2025, 1, 16));
     let mut due_before = bill(house, 7);
     due_before.schedule = every_months(1, date(2025, 1, 14));
-    asked.items = vec![budget(house, 100), due_today, due_before];
+    asked.items = vec![budget(house, 100), due_tomorrow, due_before];
     asked.actuals = vec![spent("2026-12", house, 67)];
 
     let row = report(&asked).rollovers[0];
 
     assert_eq!(row.spent, dollars(60));
+}
+
+/// R9: spending today may be today's bill, so it isn't charged to the budget, as in the
+/// forecast.
+#[test]
+fn a_bill_dated_today_takes_its_share_of_the_spending() {
+    let house = CategoryId::new();
+    let mut asked = input(1);
+    asked.from = month("2026-12");
+    let mut due_today = bill(house, 50);
+    due_today.schedule = every_months(1, date(2025, 1, 15));
+    asked.items = vec![budget(house, 100), due_today];
+    asked.actuals = vec![spent("2026-12", house, 67)];
+
+    let row = report(&asked).rollovers[0];
+
+    assert_eq!(row.spent, dollars(17));
 }
 
 /// Spending from before a budget's first occurrence isn't charged to it.
