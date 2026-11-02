@@ -20,8 +20,13 @@ use tokio::sync::oneshot;
 
 const TOO_MUCH_DATA: &str = "Plaid sent more data than one sync accepts";
 const TOO_SLOW: &str = "the provider did not finish within the time one sync may take";
+const TOO_MUCH_RECORDS: &str = "Plaid sent more records than one sync accepts";
 const TOO_MANY_ACCOUNTS: &str = "Plaid listed more accounts than one sync accepts";
 const MAX_ACCOUNTS: usize = 1_000;
+const TOO_MANY_RECORDS_IN_A_PAGE: &str = "Plaid sent more records in one page than a sync accepts";
+/// The most records one page may hold, and the most one fetch may gather.
+const MAX_PAGE_RECORDS: usize = 1_000;
+const MAX_FETCH_RECORDS: usize = 100_000;
 const NO_ACCOUNT: &str = "Plaid sent records coffer could not read or assign to an account";
 const NO_ACCOUNT_ID: &str = "Plaid sent an account without a usable id";
 
@@ -72,6 +77,140 @@ async fn first_sync(world: &World) {
     ));
     let run = world.sync().await;
     assert_eq!(run.status, SyncRunStatus::Succeeded, "the first sync works");
+}
+
+/// A page of `count` records too small to read, each costing a few bytes,
+/// split as `added`, `modified` and `removed` take them in turn.
+fn page_of_empty_records(count: usize, split: [usize; 3], cursor: &str, more: bool) -> String {
+    assert_eq!(split.iter().sum::<usize>(), count);
+    let list = |size: usize| vec!["{}"; size].join(",");
+    format!(
+        r#"{{"added":[{}],"modified":[{}],"removed":[{}],"next_cursor":"{cursor}","has_more":{more}}}"#,
+        list(split[0]),
+        list(split[1]),
+        list(split[2]),
+    )
+}
+
+/// A page of exactly the limit is read; the records it holds are counted as
+/// unreadable and the cursor moves on.
+#[tokio::test]
+async fn a_page_of_exactly_the_record_limit_is_read() {
+    let world = world().await;
+    world.bound("acct-checking").await;
+    world.script.page(page_of_empty_records(
+        MAX_PAGE_RECORDS,
+        [MAX_PAGE_RECORDS, 0, 0],
+        "done",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert!(
+        run.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("1000 skipped")),
+        "every record of the page is counted"
+    );
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("done")
+    );
+}
+
+/// One record over the limit fails the fetch: nothing is applied and the
+/// cursor stays where it was, so the records are not lost.
+#[tokio::test]
+async fn a_page_one_record_over_the_limit_fails_the_fetch_and_keeps_the_cursor() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    first_sync(&world).await;
+    world.script.page(page_of_empty_records(
+        MAX_PAGE_RECORDS + 1,
+        [MAX_PAGE_RECORDS + 1, 0, 0],
+        "lost",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some(TOO_MANY_RECORDS_IN_A_PAGE));
+    let connection = world.connection().await;
+    assert_eq!(connection.provider_state.as_deref(), Some("saved"));
+    assert_eq!(connection.status, ConnectionStatus::Error);
+    assert_eq!(
+        connection.last_error.as_deref(),
+        Some(TOO_MANY_RECORDS_IN_A_PAGE)
+    );
+    assert_eq!(world.transactions(checking).await.len(), 1);
+}
+
+/// The limit is on the three lists together: a page whose lists each stay
+/// under it, but whose sum passes it, is refused.
+#[tokio::test]
+async fn a_page_is_counted_across_its_three_lists() {
+    let world = world().await;
+    world.bound("acct-checking").await;
+    first_sync(&world).await;
+    world.script.page(page_of_empty_records(
+        MAX_PAGE_RECORDS + 1,
+        [400, 300, MAX_PAGE_RECORDS + 1 - 700],
+        "lost",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some(TOO_MANY_RECORDS_IN_A_PAGE));
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("saved")
+    );
+}
+
+/// Pages each within the limit still add up: a fetch of exactly the record
+/// cap is read, and one more record in a later page fails it.
+#[tokio::test]
+async fn the_record_total_across_pages_is_capped() {
+    let world = world().await;
+    world.bound("acct-checking").await;
+    first_sync(&world).await;
+    let full_pages = MAX_FETCH_RECORDS / MAX_PAGE_RECORDS;
+    let script_full_pages = |last_has_more: bool| {
+        for number in 0..full_pages {
+            let more = last_has_more || number + 1 < full_pages;
+            world.script.page(page_of_empty_records(
+                MAX_PAGE_RECORDS,
+                [MAX_PAGE_RECORDS, 0, 0],
+                &format!("c{number}"),
+                more,
+            ));
+        }
+    };
+
+    script_full_pages(true);
+    world
+        .script
+        .page(page_of_empty_records(1, [1, 0, 0], "lost", false));
+    let run = world.sync().await;
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some(TOO_MUCH_RECORDS));
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("saved")
+    );
+
+    script_full_pages(false);
+    let run = world.sync().await;
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some(format!("c{}", full_pages - 1).as_str())
+    );
 }
 
 /// A few big pages, far below the record cap, go over the byte cap: the fetch

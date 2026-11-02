@@ -23,6 +23,7 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 RESVG_VERSION = "0.48.1"
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +86,9 @@ LICENSED_UNDER = "This Font Software is licensed under the SIL Open Font License
 RESERVED_FONT_NAME = "Reserved Font Name"
 GOOGLE_FONTS = "https://raw.githubusercontent.com/google/fonts"
 DOWNLOAD_TIMEOUT = 60
+# The sha256 pin proves a download's content; this bounds what is read before
+# it can be checked. The source fonts are far smaller.
+DOWNLOAD_MAX_BYTES = 4 * 1024 * 1024
 # The unicode-range of every @font-face in the theme files.
 UNICODE_RANGES = (
     "U+0000-024F",
@@ -187,14 +191,24 @@ def declares_reserved_font_name(licence: str) -> bool:
 
 
 def download(url: str, destination: Path) -> Path:
-    """Download an https URL to `destination`."""
+    """Download an https URL to `destination`, refusing more than DOWNLOAD_MAX_BYTES."""
     if not url.startswith("https://"):
         message = f"refusing a non-https URL: {url}"
         raise SystemExit(message)
     # The scheme is checked above and every URL is built from GOOGLE_FONTS.
     with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as reply:  # noqa: S310
-        destination.write_bytes(reply.read())
+        body = read_capped(reply, url)
+    destination.write_bytes(body)
     return destination
+
+
+def read_capped(reply: BinaryIO, url: str) -> bytes:
+    """Read all of `reply`, failing if it holds more than DOWNLOAD_MAX_BYTES."""
+    body = reply.read(DOWNLOAD_MAX_BYTES + 1)
+    if len(body) > DOWNLOAD_MAX_BYTES:
+        message = f"{url}: more than {DOWNLOAD_MAX_BYTES} bytes"
+        raise SystemExit(message)
+    return body
 
 
 def font_tools(work: Path) -> Path:

@@ -53,6 +53,9 @@ source and rerun the tool. `icons` needs resvg 0.48.1:
 cargo install resvg --version 0.48.1 --locked
 ```
 
+CI runs `icons` and fails if `crates/server/assets/icons` differs from what it
+commits.
+
 `fonts` needs `uv`, which installs the hash-pinned fontTools of
 `tools/requirements-fonts.txt` into a throwaway environment.
 
