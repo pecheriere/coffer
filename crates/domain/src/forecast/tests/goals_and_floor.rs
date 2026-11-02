@@ -4,7 +4,7 @@ use jiff::civil::date;
 
 use super::{cash, eur, every, every_month, fixed_floor, goal, household, inflow, line};
 use super::{has_line, monthly, one_off, run, stored, totals_of, usd, usd_totals};
-use crate::forecast::{ForecastInput, ForecastStatus, ItemInput};
+use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule, SafetyFloor};
 
@@ -196,7 +196,7 @@ fn months_floor_sums_unreduced_recurring_per_currency() {
         floor: Some(SafetyFloor::MonthsOfOutflows { months: 2 }),
         items: vec![
             monthly("Rent", usd(200_000), date(2026, 1, 1), home),
-            monthly("Groceries", usd(60_000), date(2026, 1, 20), food),
+            super::budget(monthly("Groceries", usd(60_000), date(2026, 1, 20), food)),
             monthly("Miete", eur(1_000), date(2026, 1, 28), home),
         ],
         category_spent: vec![crate::forecast::CategorySpent {
@@ -242,7 +242,24 @@ fn months_floor_ignores_one_offs_goals_and_inflows() {
         usd(0),
         "only recurring outflows"
     );
-    assert_eq!(forecast.status, ForecastStatus::Firm, "and a floor is set");
+    assert_eq!(
+        forecast.cautions,
+        [Caution::MonthsFloorIsZero {
+            currency: super::currency("USD"),
+            months: 3,
+        }],
+        "a floor that came to 0 is not silent"
+    );
+    assert_eq!(
+        forecast.status,
+        ForecastStatus::Provisional,
+        "the number stays"
+    );
+    assert_eq!(
+        forecast.surplus,
+        Some(usd(1_000_000 - 1_000 - 2_000)),
+        "as computed"
+    );
 }
 
 #[test]
@@ -313,5 +330,112 @@ fn a_fixed_floor_is_taken_as_given() {
         forecast.floor,
         Some(fixed_floor(usd(123_456))),
         "and echoed"
+    );
+}
+
+#[test]
+fn a_months_floor_above_zero_does_not_warn() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        items: vec![monthly("Rent", usd(1_000), date(2026, 1, 20), other)],
+        ..household()
+    });
+    assert_eq!(
+        forecast.status,
+        ForecastStatus::Firm,
+        "the floor holds money"
+    );
+}
+
+#[test]
+fn a_months_floor_warns_only_for_the_currency_at_zero() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        accounts: vec![cash("Checking", usd(10)), cash("Konto", eur(10))],
+        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        items: vec![monthly("Rent", usd(1_000), date(2026, 1, 20), other)],
+        ..household()
+    });
+    assert_eq!(
+        forecast.cautions,
+        [Caution::MonthsFloorIsZero {
+            currency: super::currency("EUR"),
+            months: 1,
+        }],
+        "dollars have a floor and euros do not"
+    );
+}
+
+#[test]
+fn an_explicit_zero_floor_does_not_warn() {
+    let forecast = run(&household());
+    assert_eq!(forecast.cautions, [], "the household said 0");
+    assert_eq!(forecast.status, ForecastStatus::Firm, "so it is firm");
+}
+
+/// A recurring item whose first occurrence is beyond the floor's months holds
+/// nothing, so its currency is not in use.
+#[test]
+fn a_foreign_item_outside_the_floor_months_is_not_in_use() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        items: vec![
+            monthly("Rent", usd(1_000), date(2026, 1, 20), other),
+            monthly("Miete", eur(1_000), date(2030, 1, 20), other),
+        ],
+        ..household()
+    });
+    assert_eq!(forecast.blockers, [], "not mixed");
+    assert_eq!(forecast.totals.len(), 1, "no row for euros");
+    assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
+}
+
+/// With no floor there is nothing to dip below, however low the cash goes.
+#[test]
+fn without_a_floor_no_dip_is_reported() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        floor: None,
+        include_income: true,
+        items: vec![one_off("Big", usd(5_000_000), date(2026, 12, 1), other)],
+        ..household()
+    });
+    assert_eq!(forecast.cautions, [], "no floor, no dip");
+    assert_eq!(
+        forecast.status,
+        ForecastStatus::Unavailable,
+        "and no number"
+    );
+}
+
+/// A bucket's need is measured at its end, which for November is December 1, the
+/// due date: the goal is already whole there, so December adds nothing.
+#[test]
+fn a_goal_due_on_the_first_fills_the_month_before() {
+    let forecast = run(&ForecastInput {
+        items: vec![goal(
+            "First",
+            usd(90_000),
+            date(2026, 1, 1),
+            date(2026, 12, 1),
+            0,
+        )],
+        ..household()
+    });
+    let accruals: Vec<_> = forecast
+        .months
+        .iter()
+        .map(|bucket| bucket.lines.first().unwrap().goal_accrual)
+        .collect();
+    assert_eq!(
+        accruals,
+        [usd(90_000), usd(0), usd(0), usd(0)],
+        "all by the end of November"
+    );
+    assert!(
+        line(&forecast, "First").goal.unwrap().due_in_horizon,
+        "though it is due in the window"
     );
 }

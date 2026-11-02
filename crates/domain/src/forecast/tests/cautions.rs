@@ -510,7 +510,12 @@ fn loose(uncategorized_count: u32, possible_duplicates: u32) -> LooseEnds {
 fn uncategorized_spending_warns_only_with_current_month_recurring() {
     let food = CategoryId::new();
     let warned = run(&ForecastInput {
-        items: vec![monthly("Groceries", usd(10_000), date(2026, 1, 20), food)],
+        items: vec![super::budget(monthly(
+            "Groceries",
+            usd(10_000),
+            date(2026, 1, 20),
+            food,
+        ))],
         loose_ends: vec![loose(3, 2)],
         ..household()
     });
@@ -530,13 +535,24 @@ fn uncategorized_spending_warns_only_with_current_month_recurring() {
 
     for items in [
         Vec::new(),
-        vec![monthly("Next month", usd(1), date(2026, 12, 20), food)],
-        vec![monthly("Already past", usd(1), date(2026, 1, 10), food)],
+        vec![super::budget(monthly(
+            "Next month",
+            usd(1),
+            date(2026, 12, 20),
+            food,
+        ))],
+        vec![super::budget(monthly(
+            "Already past",
+            usd(1),
+            date(2026, 1, 10),
+            food,
+        ))],
+        vec![monthly("A bill to come", usd(1), date(2026, 1, 20), food)],
         vec![one_off("One-off", usd(1), date(2026, 11, 20), food)],
         vec![inflow(monthly("Pay", usd(1), date(2026, 1, 20), food))],
         vec![super::hypothetical(
             0,
-            monthly("What if", usd(1), date(2026, 1, 20), food),
+            super::budget(monthly("What if", usd(1), date(2026, 1, 20), food)),
         )],
     ] {
         let forecast = run(&ForecastInput {
@@ -549,11 +565,43 @@ fn uncategorized_spending_warns_only_with_current_month_recurring() {
     }
 }
 
+/// Categorizing that spending could close the gap, so here it can change the number.
+#[test]
+fn uncategorized_spending_warns_with_an_unpaid_bill() {
+    let home = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![monthly("Rent", usd(10_000), date(2026, 1, 10), home)],
+        loose_ends: vec![loose(3, 0)],
+        ..household()
+    });
+    assert_eq!(
+        forecast.cautions,
+        [
+            Caution::BillNotSeen {
+                category: home,
+                amount: usd(10_000),
+            },
+            Caution::UncategorizedSpending {
+                currency: currency("USD"),
+                count: 3,
+                total: usd(7_000),
+            },
+        ],
+        "the gap, and what might explain it"
+    );
+    assert_provisional(&forecast);
+}
+
 #[test]
 fn loose_ends_of_another_currency_do_not_warn() {
     let food = CategoryId::new();
     let forecast = run(&ForecastInput {
-        items: vec![monthly("Groceries", usd(10), date(2026, 1, 20), food)],
+        items: vec![super::budget(monthly(
+            "Groceries",
+            usd(10),
+            date(2026, 1, 20),
+            food,
+        ))],
         loose_ends: vec![LooseEnds {
             currency: currency("EUR"),
             ..loose(1, 1)
@@ -567,7 +615,12 @@ fn loose_ends_of_another_currency_do_not_warn() {
 fn settled_loose_ends_do_not_warn() {
     let food = CategoryId::new();
     let forecast = run(&ForecastInput {
-        items: vec![monthly("Groceries", usd(10), date(2026, 1, 20), food)],
+        items: vec![super::budget(monthly(
+            "Groceries",
+            usd(10),
+            date(2026, 1, 20),
+            food,
+        ))],
         loose_ends: vec![loose(0, 0)],
         ..household()
     });
@@ -669,4 +722,95 @@ fn spent_categories_do_not_warn() {
         ..household()
     });
     assert_eq!(forecast.cautions, [], "a reduction is not a caution");
+}
+
+fn closed_card(balance: i64) -> AccountInput {
+    AccountInput {
+        closed: true,
+        liquidity: LiquidityClass::ShortTermLiability,
+        ..cash("Old card", usd(balance))
+    }
+}
+
+#[test]
+fn a_closed_card_still_owing_counts_and_warns() {
+    let card = closed_card(-150_000);
+    let id = card.id;
+    let forecast = run(&ForecastInput {
+        accounts: vec![cash("Checking", usd(1_000_000)), card],
+        ..household()
+    });
+    assert_eq!(
+        forecast.cautions,
+        [Caution::ClosedLiabilityOwing {
+            account: id,
+            balance: usd(-150_000),
+        }],
+        "names the account and what it owes"
+    );
+    assert_provisional(&forecast);
+    assert_eq!(
+        forecast.surplus,
+        Some(usd(850_000)),
+        "the debt comes off cash"
+    );
+    let line = forecast.accounts.get(1).unwrap();
+    assert!(line.counted, "it counts");
+    assert_eq!(line.not_counted, None, "with no reason not to");
+}
+
+#[test]
+fn a_closed_card_owing_nothing_is_left_out() {
+    for balance in [0, 500] {
+        let forecast = run(&ForecastInput {
+            accounts: vec![cash("Checking", usd(1_000)), closed_card(balance)],
+            ..household()
+        });
+        assert_eq!(forecast.status, ForecastStatus::Firm, "nothing owed");
+        assert_eq!(forecast.surplus, Some(usd(1_000)), "not in the sum");
+        assert_eq!(
+            forecast.accounts.get(1).unwrap().not_counted,
+            Some(crate::forecast::NotCountedReason::Closed),
+            "closed says so"
+        );
+    }
+}
+
+#[test]
+fn other_closed_debts_stay_out() {
+    let forecast = run(&ForecastInput {
+        accounts: vec![
+            cash("Checking", usd(1_000)),
+            AccountInput {
+                liquidity: LiquidityClass::LongTermLiability,
+                ..closed_card(-500)
+            },
+            AccountInput {
+                include_in_forecast: false,
+                ..closed_card(-500)
+            },
+            AccountInput {
+                balance: None,
+                ..closed_card(0)
+            },
+        ],
+        ..household()
+    });
+    assert_eq!(forecast.status, ForecastStatus::Firm, "none of them counts");
+    assert_eq!(forecast.surplus, Some(usd(1_000)), "not in the sum");
+}
+
+/// A debt is no cash to forecast from, so a closed card alone leaves no number.
+#[test]
+fn a_closed_card_alone_has_no_number() {
+    let forecast = run(&ForecastInput {
+        accounts: vec![closed_card(-500)],
+        ..household()
+    });
+    assert_eq!(
+        forecast.blockers,
+        [crate::forecast::Blocker::NoCountedAccounts],
+        "no open account counts"
+    );
+    assert_eq!(forecast.surplus, None, "no number");
 }

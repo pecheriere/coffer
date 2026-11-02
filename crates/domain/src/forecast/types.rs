@@ -11,7 +11,9 @@ use serde::Serialize;
 use crate::accounts::LiquidityClass;
 use crate::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId};
 use crate::money::{Currency, Money};
-use crate::plan::{CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, SafetyFloor};
+use crate::plan::{
+    CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, SafetyFloor,
+};
 
 /// Everything one forecast reads, gathered by the caller at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +95,9 @@ pub struct ItemInput {
     pub direction: PlanDirection,
     pub account_hint: Option<AccountId>,
     pub schedule: PlanSchedule,
+    /// Whether this month's spending reduces it: `None` unless a recurring
+    /// outflow, and a recurring outflow without one is a bill.
+    pub spending: Option<PlanSpending>,
     /// Spending linked to a goal, positive for money spent. 0 for anything else.
     pub goal_spent_minor: i64,
 }
@@ -185,7 +190,7 @@ pub struct Forecast {
     pub totals: Vec<CurrencyTotals>,
     /// Every account, with whether it counted.
     pub accounts: Vec<AccountLine>,
-    /// Every item that falls in the window, in input order.
+    /// Every item that adds to the window, in input order.
     pub items: Vec<ItemLine>,
     /// One bucket per calendar month the window touches.
     pub months: Vec<MonthBucket>,
@@ -275,11 +280,15 @@ pub struct ItemLine {
     pub first_on: Option<Date>,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub last_on: Option<Date>,
-    /// The whole amount in the window, before any reduction. Never 0 here.
+    /// The whole amount in the window, before any reduction. 0 only with `unpaid`.
     pub gross: Money,
     /// What this month's actual spending takes off `gross`.
     pub reduced_by: Money,
-    /// What goes into the totals: 0 for an inflow unless `include_income`.
+    /// What a bill dated earlier this month, before the window, still needs: the
+    /// part its category's spending does not cover.
+    pub unpaid: Money,
+    /// What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow
+    /// unless `include_income`.
     pub counted: Money,
     /// The sinking fund's own figures, for a goal.
     #[cfg_attr(feature = "openapi", schema(required))]
@@ -386,10 +395,21 @@ pub enum Caution {
     },
     /// The window does not start today, so whatever falls between is left out.
     AsOfNotToday { today: Date },
+    /// Bills dated earlier this month exceed the category's spending so far. The
+    /// gap counts as still needed; if it was paid under another category, the
+    /// number shows less to invest, which is the safe direction.
+    BillNotSeen { category: CategoryId, amount: Money },
+    /// A closed card still owes money, which counts against cash.
+    ClosedLiabilityOwing { account: AccountId, balance: Money },
+    /// A floor of some months of recurring outflows came to 0 in this currency:
+    /// a silent floor of 0 would overstate the surplus.
+    MonthsFloorIsZero { currency: Currency, months: u8 },
     /// A short-term liability shows money in hand, perhaps entered with the
     /// wrong sign. It was added as it stands.
     LiabilityBalancePositive { account: AccountId, balance: Money },
-    /// A goal and a one-off may describe the same expense. Both are counted.
+    /// A goal and a one-off may describe the same expense. Neither is
+    /// de-duplicated: each counts as it would alone, so a one-off outside the
+    /// window warns without adding to the number.
     GoalOneOffOverlap {
         goal: LineSource,
         one_off: LineSource,

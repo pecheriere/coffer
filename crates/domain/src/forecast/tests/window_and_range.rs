@@ -3,7 +3,7 @@
 use jiff::civil::{Date, date};
 
 use super::{cash, fixed_floor, household, inflow, line, one_off, run, stored, usd, usd_totals};
-use super::{every, goal};
+use super::{every, every_month, goal};
 use crate::forecast::{ForecastError, ForecastInput, MonthBucket, compute_forecast};
 use crate::ids::CategoryId;
 use crate::plan::{
@@ -41,11 +41,15 @@ fn a_window_from_the_first_covers_whole_months() {
 #[test]
 fn a_month_end_as_of_clamps() {
     let forecast = run(&window(date(2027, 1, 31), 1));
-    assert_eq!(forecast.end_exclusive, date(2027, 2, 28), "February has 28");
+    assert_eq!(
+        forecast.end_exclusive,
+        date(2027, 3, 1),
+        "the clamped day, February 28, stays in the window"
+    );
     assert_eq!(
         buckets(&forecast.months),
-        [("2027-01".to_owned(), true), ("2027-02".to_owned(), true)],
-        "one day of January, then all but the last of February"
+        [("2027-01".to_owned(), true), ("2027-02".to_owned(), false)],
+        "one day of January, then all of February"
     );
 }
 
@@ -323,4 +327,75 @@ fn json_shapes_are_stable() {
     assert_eq!(json["months"][0]["month"], "2026-11", "a month is YYYY-MM");
     assert_eq!(json["items"][0]["item_type"], "one_off", "the item's type");
     assert_eq!(json["items"][0]["direction"], "outflow", "its direction");
+}
+
+/// How many times a monthly item on `anchor_on` falls in a window, and the window's
+/// end. Items have no category, so an earlier occurrence adds nothing.
+fn monthly_count(as_of: Date, horizon_months: u8, anchor_on: Date) -> (u32, Date) {
+    let forecast = run(&ForecastInput {
+        items: vec![stored("Bill", usd(1), every_month(anchor_on))],
+        ..window(as_of, horizon_months)
+    });
+    (line(&forecast, "Bill").occurrences, forecast.end_exclusive)
+}
+
+#[test]
+fn a_clamped_window_keeps_a_bill_on_its_last_day() {
+    assert_eq!(
+        monthly_count(date(2027, 1, 30), 1, date(2026, 1, 28)),
+        (1, date(2027, 3, 1)),
+        "January 30 + 1 month clamps to February 28, where the bill falls"
+    );
+    assert_eq!(
+        monthly_count(date(2027, 3, 31), 1, date(2026, 1, 30)),
+        (1, date(2027, 5, 1)),
+        "March 31 + 1 month clamps to April 30, where the bill falls"
+    );
+    assert_eq!(
+        monthly_count(date(2026, 8, 31), 6, date(2026, 2, 28)),
+        (6, date(2027, 3, 1)),
+        "September through February, the last on the clamped February 28"
+    );
+    assert_eq!(
+        monthly_count(date(2028, 1, 30), 1, date(2026, 1, 29)),
+        (1, date(2028, 3, 1)),
+        "a leap year clamps January 30 + 1 month to February 29, where the bill falls"
+    );
+}
+
+#[test]
+fn a_clamped_window_may_count_a_month_end_bill_twice() {
+    assert_eq!(
+        monthly_count(date(2027, 1, 31), 1, date(2026, 1, 31)),
+        (2, date(2027, 3, 1)),
+        "January 31 and February 28: one extra is the safe direction"
+    );
+}
+
+#[test]
+fn an_exact_month_is_still_end_exclusive() {
+    assert_eq!(
+        monthly_count(date(2027, 1, 28), 1, date(2026, 1, 28)),
+        (1, date(2027, 2, 28)),
+        "January 28 only: February 28 is the same day next month, and outside"
+    );
+    assert_eq!(
+        monthly_count(date(2028, 1, 29), 1, date(2026, 1, 29)),
+        (1, date(2028, 2, 29)),
+        "February 29 exists in a leap year, so nothing clamps"
+    );
+}
+
+#[test]
+fn a_months_floor_keeps_the_clamped_day_too() {
+    let forecast = run(&ForecastInput {
+        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        items: vec![stored("Bill", usd(1_000), every_month(date(2026, 1, 28)))],
+        ..window(date(2027, 1, 30), 1)
+    });
+    assert_eq!(
+        usd_totals(&forecast).floor,
+        usd(1_000),
+        "February 28 counts"
+    );
 }

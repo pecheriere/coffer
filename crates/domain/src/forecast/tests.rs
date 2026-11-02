@@ -11,7 +11,9 @@ use super::{
 use crate::accounts::LiquidityClass;
 use crate::ids::{AccountId, CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
-use crate::plan::{IntervalUnit, PlanDirection, PlanSchedule, SafetyFloor};
+use crate::plan::{
+    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, SafetyFloor, spending_applies,
+};
 
 mod blockers;
 mod cautions;
@@ -82,6 +84,7 @@ fn cash(name: &str, balance: Money) -> AccountInput {
 }
 
 fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
+    let direction = PlanDirection::Outflow;
     ItemInput {
         source: LineSource::PlannedItem {
             id: PlannedItemId::new(),
@@ -89,9 +92,10 @@ fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
         name: name.to_owned(),
         category: None,
         amount,
-        direction: PlanDirection::Outflow,
+        direction,
         account_hint: None,
         schedule,
+        spending: spending_applies(direction, &schedule).then_some(PlanSpending::Bill),
         goal_spent_minor: 0,
     }
 }
@@ -141,6 +145,14 @@ fn goal(name: &str, target: Money, start_on: Date, due_on: Date, spent: i64) -> 
 fn inflow(item: ItemInput) -> ItemInput {
     ItemInput {
         direction: PlanDirection::Inflow,
+        spending: None,
+        ..item
+    }
+}
+
+fn budget(item: ItemInput) -> ItemInput {
+    ItemInput {
+        spending: Some(PlanSpending::Budget),
         ..item
     }
 }

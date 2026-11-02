@@ -11,7 +11,7 @@ use crate::accounts::LiquidityClass;
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_need};
-use reduction::Reduction;
+use reduction::{ItemAdjustment, Reduction};
 
 mod reduction;
 mod types;
@@ -46,7 +46,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         .collect();
     let mut items = Vec::new();
     let mut month_counts = vec![0; buckets.len()];
-    for (item, &reduced_by) in input.items.iter().zip(&reduction.by_item) {
+    for (item, &adjustment) in input.items.iter().zip(&reduction.by_item) {
         let line = match item.schedule {
             PlanSchedule::Goal {
                 completed: true, ..
@@ -56,7 +56,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
             } => goal_line(item, start_on, due_on, &window, &mut book)?,
             PlanSchedule::Recurring { .. } | PlanSchedule::OneOff { .. } => dated_line(
                 item,
-                reduced_by,
+                adjustment,
                 input.include_income,
                 &window,
                 &mut month_counts,
@@ -71,7 +71,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     let no_surplus = blockers
         .iter()
         .any(|blocker| !matches!(blocker, Blocker::MixedCurrencies { .. }));
-    let mut cautions = cautions(input, &accounts, &items, &reduction);
+    let mut cautions = cautions(input, &accounts, &items, &reduction, &book)?;
     let (totals, months) = settle(book, &buckets, input, no_surplus, &mut cautions)?;
 
     let surplus = match (blockers.is_empty(), totals.as_slice()) {
@@ -103,10 +103,19 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     })
 }
 
-/// `date` plus `months`, clamped to the month's end, and to the calendar's.
+/// The end, exclusive, of the `months` from `date`: the same day that many months
+/// on. A month too short to hold that day clamps to its last day, which then stays
+/// inside the window, so a bill on it is not lost. A bill anchored on a month's end
+/// may count once more for it, which is the safe direction.
 fn months_after(date: Date, months: u8) -> Date {
-    date.checked_add(Span::new().months(months))
-        .unwrap_or(Date::MAX)
+    let Ok(same_day) = date.checked_add(Span::new().months(months)) else {
+        return Date::MAX;
+    };
+    if same_day.day() == date.day() {
+        same_day
+    } else {
+        same_day.tomorrow().unwrap_or(Date::MAX)
+    }
 }
 
 fn money(minor_units: i128, currency: Currency) -> Result<Money, ForecastError> {
@@ -221,12 +230,20 @@ impl Book {
     }
 }
 
+/// A closed card's debt does not close with it, so one that still owes counts,
+/// unless the household has switched it out.
 fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
     let spendable = matches!(
         account.liquidity,
         LiquidityClass::Cash | LiquidityClass::ShortTermLiability
     );
-    if account.closed {
+    let owing = account.liquidity == LiquidityClass::ShortTermLiability
+        && account
+            .balance
+            .is_some_and(|balance| balance.minor_units < 0);
+    if account.closed && owing && account.include_in_forecast {
+        None
+    } else if account.closed {
         Some(NotCountedReason::Closed)
     } else if !spendable {
         Some(NotCountedReason::NotCash)
@@ -263,7 +280,7 @@ fn account_line(account: &AccountInput, book: &mut Book) -> AccountLine {
 /// `month_counts` is a buffer, so a daily item costs no allocation per date.
 fn dated_line(
     item: &ItemInput,
-    reduced_by: i128,
+    adjustment: ItemAdjustment,
     include_income: bool,
     window: &Window<'_>,
     month_counts: &mut [i128],
@@ -276,7 +293,8 @@ fn dated_line(
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
     let gross = amount * i128::from(occurrences);
-    if gross == 0 {
+    let ItemAdjustment { reduced_by, unpaid } = adjustment;
+    if gross == 0 && unpaid == 0 {
         return Ok(None);
     }
 
@@ -298,14 +316,15 @@ fn dated_line(
     let outflow = item.direction == PlanDirection::Outflow;
     let tally = book.tally(currency);
     if outflow {
-        tally.outflows += gross - reduced_by;
+        tally.outflows += gross - reduced_by + unpaid;
     } else {
         tally.inflows += gross;
     }
     for (index, (count, month)) in month_counts.iter().zip(&mut tally.months).enumerate() {
-        // The reduction only touches occurrences in the first bucket.
-        let reduction = if index == 0 { reduced_by } else { 0 };
-        let minor_units = count * amount - reduction;
+        // The reduction only touches occurrences in the first bucket, and a gap is
+        // still to be paid from there.
+        let adjusted = if index == 0 { unpaid - reduced_by } else { 0 };
+        let minor_units = count * amount + adjusted;
         if outflow {
             month.outflows += minor_units;
         } else {
@@ -315,7 +334,7 @@ fn dated_line(
     }
 
     let counted = if outflow {
-        gross - reduced_by
+        gross - reduced_by + unpaid
     } else if include_income {
         gross
     } else {
@@ -333,6 +352,7 @@ fn dated_line(
         last_on: dates.last().copied(),
         gross: money(gross, currency)?,
         reduced_by: money(reduced_by, currency)?,
+        unpaid: money(unpaid, currency)?,
         counted: money(counted, currency)?,
         goal: None,
     }))
@@ -389,6 +409,7 @@ fn goal_line(
         last_on: None,
         gross: counted,
         reduced_by: money(0, currency)?,
+        unpaid: money(0, currency)?,
         counted,
         goal: Some(GoalLine {
             target: item.amount,
@@ -417,9 +438,8 @@ fn add_floor(input: &ForecastInput, book: &mut Book) -> Result<(), ForecastError
                 }
                 let dates = item.schedule.occurrences(input.as_of, end_exclusive);
                 let held = i128::from(item.amount.minor_units) * i128::from(count(&dates)?);
-                // A currency whose floor is 0 is not in use, but one that holds
-                // something here is, even with nothing in the window: dropping
-                // it would hide money the household must keep.
+                // A row exists only where this holds money: an item with no
+                // occurrence in these months puts no currency in use.
                 if held != 0 {
                     book.tally(item.amount.currency).floor += held;
                 }
@@ -439,7 +459,12 @@ fn blockers(input: &ForecastInput, accounts: &[AccountLine], book: &Book) -> Vec
     if input.floor.is_none() {
         blockers.push(Blocker::FloorNotSet);
     }
-    if !accounts.iter().any(|line| line.counted) {
+    // A closed card's debt counts, but it is no cash to forecast from.
+    let open_account_counts = input
+        .accounts
+        .iter()
+        .any(|account| !account.closed && not_counted(account).is_none());
+    if !open_account_counts {
         blockers.push(Blocker::NoCountedAccounts);
     }
     for line in accounts {
@@ -528,7 +553,8 @@ fn cautions(
     accounts: &[AccountLine],
     items: &[ItemLine],
     reduction: &Reduction,
-) -> Vec<Caution> {
+    book: &Book,
+) -> Result<Vec<Caution>, ForecastError> {
     let mut cautions = Vec::new();
     if input.as_of != input.today {
         cautions.push(Caution::AsOfNotToday { today: input.today });
@@ -568,12 +594,34 @@ fn cautions(
     for line in items {
         item_cautions(line, input, &counted, &mut cautions);
     }
+    for (&(category, currency), &amount) in &reduction.not_seen {
+        cautions.push(Caution::BillNotSeen {
+            category,
+            amount: money(amount, currency)?,
+        });
+    }
+    if let Some(SafetyFloor::MonthsOfOutflows { months }) = input.floor {
+        for (&currency, tally) in &book.tallies {
+            if tally.floor == 0 {
+                cautions.push(Caution::MonthsFloorIsZero { currency, months });
+            }
+        }
+    }
     loose_end_cautions(input, reduction, &mut cautions);
-    cautions
+    Ok(cautions)
 }
 
 fn account_cautions(account: &AccountInput, input: &ForecastInput, cautions: &mut Vec<Caution>) {
     if let Some(balance) = account.balance {
+        if account.closed {
+            cautions.push(Caution::ClosedLiabilityOwing {
+                account: account.id,
+                balance: Money {
+                    minor_units: balance.minor_units,
+                    currency: account.currency,
+                },
+            });
+        }
         // At `as_of`, the day the forecast describes. A date after it has no age.
         let age_days = balance
             .on
@@ -658,12 +706,15 @@ fn item_cautions(
     }
 }
 
-/// This month's unsettled spending only matters where it could still reduce a
-/// recurring occurrence.
+/// This month's unsettled spending only matters where it could still change the
+/// number.
 fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &mut Vec<Caution>) {
     let mut possible_duplicates = 0_u32;
     for loose in &input.loose_ends {
-        if !reduction.reducible_currencies.contains(&loose.currency) {
+        if !reduction
+            .spending_sensitive_currencies
+            .contains(&loose.currency)
+        {
             continue;
         }
         possible_duplicates = possible_duplicates.saturating_add(loose.possible_duplicates);
