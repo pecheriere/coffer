@@ -57,8 +57,9 @@ const NOTHING: &[&[&str]] = &[&["hsa"], &["health", "savings"]];
 
 /// The kind `name` suggests: the one kind of a specific term, else the one kind of a generic
 /// term, else none. Two kinds at the same strength suggest nothing, a generic term doesn't
-/// settle two specific ones, and `hsa` or `health savings` means nothing is suggested. Words are maximal runs of ASCII letters and digits, so a term
-/// matches whole words only: `x5291` is not a 529.
+/// settle two specific ones, and `hsa` or `health savings` means nothing is suggested. Words are
+/// maximal runs of ASCII letters and digits, so a term matches whole words only: `x5291` is not a
+/// 529.
 #[must_use]
 pub fn suggest_kind(name: &str) -> Option<AccountKind> {
     let name = name.to_ascii_lowercase();
