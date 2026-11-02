@@ -742,7 +742,8 @@ it could block forever.
 
 **R5. The floor must be set.** An unset floor blocks the number, because a silent
 floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
-allowed.
+allowed. A floor of some months of outflows that comes to 0 keeps the number, with
+a caution.
 
 **R6. Plan versus actual** is defined by category (§6.9) and needs no transfer
 links: actuals are categorized splits, and `transfer` is a category kind.
@@ -758,14 +759,23 @@ currency must equal the transaction's, so goal arithmetic stays exact without
 FX. A purchase in another currency cannot be linked until FX exists, which
 overstates that goal's need: the safe direction.
 
-**R9. One spending pool per category and currency.** §6.8's current-month
-reduction takes the month's actual spending, minus planned outflows in that
-category dated earlier this month, floored at 0. That pool then reduces this
-month's remaining recurring occurrences in date order. Applied per item, one
-purchase would reduce every item in the category, understating the need.
+**R9. Bills and budgets.** A recurring outflow has a `spending` of `bill` or
+`budget`, which replaces §6.8's reduction of every recurring item. Only a budget is
+reduced by this month's spending. Each category and currency has one pool: the
+month's actual spending, minus planned outflows in that category dated earlier this
+month, bills first, floored at 0. It reduces this month's remaining budget
+occurrences in date order, and then in the deterministic order items load in, since
+applied per item, one purchase would reduce every item in the category. A paid bill
+therefore never eats a budget. A bill counts in full until its date passes. Past
+it, spending in its category pays recurring bills in date order, and any gap is
+still needed, with a caution naming the category and the amount. If it was paid
+under another category the forecast shows less to invest, the safe direction. A
+budget can simply underspend, so its shortfall is never a gap. Hypothetical items
+neither reduce, consume nor owe.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
-accounts. Pending charges do not lower the need, and money spent from an excluded
+accounts, on or before that account's balance date, since spending newer than the
+balance is not in it yet and would count twice in the household's favour. Pending charges do not lower the need, and money spent from an excluded
 account did not come out of counted cash.
 
 **R11. No base or display currency yet.** §6.8's "in the requester's display
@@ -793,10 +803,13 @@ cannot pay an earlier bill.
 
 **R16. A planned item hinted at an uncounted account still counts,** with a
 caution. Overstating the need is the safe direction; dropping it silently is not.
+For the same reason a closed short-term liability still owing counts against cash,
+with a caution, though on its own it is no counted account.
 
 **R17. Item model.** `category` is required on stored items and optional on
 hypothetical ones. An outflow needs an `expense` category, an inflow an `income`
-one, and `transfer` is refused. A goal must be an outflow. An item's type never
+one, and `transfer` is refused. A goal must be an outflow. `spending` is set only on a
+recurring outflow. An item's type never
 changes. Delete is real, and refused with 409 for a goal with linked splits, which
 is marked complete instead.
 
@@ -808,7 +821,9 @@ in other years. Occurrences are never after an end date, which is inclusive.
 
 **R19. `as_of`** may be any date in range, with a caution unless it is today, since
 bills between today and `as_of` fall outside the window. A balance is the latest
-on or before `as_of`.
+on or before `as_of`. When `as_of` plus the horizon clamps to a shorter month, the
+clamped day stays in the window, so a bill on it is not lost; one anchored on a
+month's end may count once more, the safe direction.
 
 **R20. Limits.** Horizon 1 to 60 months, default 3. 500 stored items, 50
 hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every`
