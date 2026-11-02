@@ -440,7 +440,10 @@ class GitRepoTest(unittest.TestCase):
     def run_main(self, *args: str) -> tuple[int, str]:
         """Run the script's entry point and return its exit status and output."""
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with (
+            contextlib.redirect_stdout(out),
+            mock.patch.object(crate_age, "current_time", return_value=NOW),
+        ):
             status = crate_age.main(list(args))
         return status, out.getvalue()
 
