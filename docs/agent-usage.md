@@ -513,8 +513,9 @@ account stays bound. coffer syncs every connection on a schedule
 
 A balance's date may honestly be old: it can be the day the balance last changed.
 A date within 31 days of the household's today is believed, and one later than today
-is dated today. For an older one on a bound account: with no balance yet, the amount
-is taken and dated 31 days back; a day after the latest balance is written; the
+is dated today. For an older one on a bound account: with no balance yet, or a latest
+balance before the reported day, the amount is taken and dated 31 days back, so the
+balance can be older than its date says, and the audit entry gives `reported_on`. The
 amount the account already holds changes nothing. Anything else is refused, the
 account's transactions still come in, and the provider account's `old_balance_note`
 says so until a newer balance arrives, from a sync or set with `PUT`. It isn't an

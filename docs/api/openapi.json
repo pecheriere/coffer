@@ -10038,7 +10038,7 @@
               "string",
               "null"
             ],
-            "description": "A fixed note that the last balance reported was older than what coffer has\nand was ignored, or `null`. Not an error: the account's balance is still its\nlatest one, and transactions still come in. A newer balance clears it."
+            "description": "A fixed note that the last balance reported was dated more than 31 days ago\nand didn't match what coffer has for that day or later, so it was ignored, or\n`null`. Not an error: the account's balance is still its latest one, and\ntransactions still come in. It reflects only the last report, and a newer\nbalance clears it."
           },
           "suggested_kind": {
             "oneOf": [

@@ -324,12 +324,15 @@ pub(super) async fn ensure_not_removed(
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
-/// the day's value or source.
+/// the day's value or source. The provider dated it `reported_on`, which the
+/// audit entry also gives when that isn't the day written, so the trail says what
+/// was reported.
 pub(super) async fn write_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     account: AccountId,
     on: Date,
+    reported_on: Date,
     balance_minor: i64,
 ) -> Result<(), SyncError> {
     let previous = tx
@@ -347,8 +350,11 @@ pub(super) async fn write_balance(
     if unchanged {
         return Ok(());
     }
-    let changes = AuditChanges::new()
-        .set("on", on)
+    let mut changes = AuditChanges::new().set("on", on);
+    if reported_on != on {
+        changes = changes.set("reported_on", reported_on);
+    }
+    let changes = changes
         .change(
             "balance_minor",
             previous.as_ref().map(|p| p.balance_minor),

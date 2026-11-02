@@ -267,11 +267,11 @@ async fn bind_in(
             .ok()
             .map(|balance_minor| (reported.on, balance_minor))
     });
-    if let Some((on, balance_minor)) = reported {
-        match judge_reported(tx, account, on, balance_minor, today).await? {
+    if let Some((reported_on, balance_minor)) = reported {
+        match judge_reported(tx, account, reported_on, balance_minor, today).await? {
             Judged::Write(on) => {
                 if tx.balance_on(account, on).await?.is_none() {
-                    write_balance(tx, now, account, on, balance_minor).await?;
+                    write_balance(tx, now, account, on, reported_on, balance_minor).await?;
                 }
             }
             Judged::Known => {}

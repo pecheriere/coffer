@@ -6,13 +6,15 @@ use super::kept_balances::{FEED, balance_of, signed_in_world};
 use super::{World, reported, txn, world};
 use axum::http::{Method, StatusCode};
 use coffer_domain::accounts::AccountKind;
+use coffer_domain::audit::AuditValue;
 use coffer_domain::identity::Scope;
 use coffer_domain::ids::AccountId;
+use coffer_store::AuditEvent;
 use jiff::SignedDuration;
 use serde_json::{Value, json};
 
-const NOTE: &str = "The bank sent a balance older than what coffer already has, so it was \
-     ignored. The balance kept is still the latest one.";
+const NOTE: &str = "The bank sent an old balance that doesn't match what coffer already has, so \
+     it was ignored. The balance kept is still the latest one.";
 
 impl World {
     /// An account bound to the feed, with a balance reported yesterday.
@@ -153,24 +155,69 @@ async fn an_account_created_for_an_old_first_report_has_that_balance() {
     );
 }
 
-// Case 2: a day after the latest snapshot rewrites nothing.
+// Or a report after an old latest snapshot: also at the edge, or one report would
+// change every day carried since that snapshot.
 
 #[tokio::test]
-async fn an_old_day_after_the_latest_snapshot_is_written() {
+async fn an_old_day_after_the_latest_snapshot_is_written_at_the_edge() {
     let world = world().await;
     let target = world.empty_bound_feed().await;
-    world.manual(target, world.day(50), 777).await;
+    world.manual(target, world.day(400), 777).await;
 
-    world.report(40, "20.00", "USD").await;
+    world.report(399, "20.00", "USD").await;
 
-    assert_eq!(
-        world.history(target).await,
-        [world.sync_row(40, 2000), world.manual_row(50, 777)]
-    );
+    let after = [world.sync_row(31, 2000), world.manual_row(400, 777)];
+    assert_eq!(world.history(target).await, after);
     assert!(!world.refused().await);
+
+    world.report(399, "20.00", "USD").await;
+
+    assert_eq!(world.history(target).await, after);
+    assert!(!world.refused().await, "a repeat stays quiet");
 }
 
-// Case 3: what the account already holds is a quiet no-op.
+/// The trail says what was reported, not only the day it was written on.
+#[tokio::test]
+async fn the_audit_entry_of_a_write_at_the_edge_gives_the_reported_day() {
+    let world = world().await;
+    let target = world.empty_bound_feed().await;
+    let reported_on = |event: &AuditEvent| {
+        event
+            .changes
+            .iter()
+            .find(|(field, _)| *field == "reported_on")
+            .map(|(_, change)| change.after.clone())
+    };
+
+    world.report(40, "20.00", "USD").await;
+    world.manual(target, world.today(), 2500).await;
+    world.report(1, "30.00", "USD").await;
+
+    let sets = world.audit_actions("balance.set").await;
+    let edge = sets
+        .iter()
+        .find(|event| {
+            event.changes.iter().any(|(field, change)| {
+                field == "on" && change.after == AuditValue::Text(world.day(31).to_string())
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        reported_on(edge),
+        Some(AuditValue::Text(world.day(40).to_string()))
+    );
+    let believed = sets
+        .iter()
+        .find(|event| {
+            event.changes.iter().any(|(field, change)| {
+                field == "on" && change.after == AuditValue::Text(world.day(1).to_string())
+            })
+        })
+        .unwrap();
+    assert_eq!(reported_on(believed), None);
+}
+
+// What the account already holds is a quiet no-op.
 
 /// A dormant account: its balance was reported in time, nothing has changed since,
 /// and the bank goes on giving the day it last changed.
@@ -227,7 +274,25 @@ async fn the_same_day_and_amount_as_an_older_snapshot_is_quiet() {
     assert!(!world.refused().await);
 }
 
-// Case 4: anything else would add or change history, and is refused.
+// Anything else would add or change history, and is refused.
+
+/// A latest snapshot on the edge day or later is never written over from before it.
+#[tokio::test]
+async fn a_latest_snapshot_on_the_edge_day_takes_no_older_report() {
+    let world = world().await;
+    let target = world.empty_bound_feed().await;
+    world.manual(target, world.day(31), 777).await;
+
+    world.report(32, "20.00", "USD").await;
+
+    assert_eq!(world.history(target).await, [world.manual_row(31, 777)]);
+    assert!(world.refused().await);
+
+    world.report(32, "7.77", "USD").await;
+
+    assert_eq!(world.history(target).await, [world.manual_row(31, 777)]);
+    assert!(!world.refused().await, "the amount it already holds");
+}
 
 #[tokio::test]
 async fn an_old_day_before_the_latest_snapshot_is_refused() {

@@ -384,22 +384,21 @@
   bound account, but it can't change a snapshot the account already has. An old
   report on a bound account can't reach behind what the account has. Within those
   32 days, through today (a later date is dated today), a date is believed, and a
-  sync replaces that day's snapshot, a member's included. Before them: an account
-  with no snapshot takes the amount on the day 31 days back, later than reported, so
-  a date in 1970 adds no history; a day after the latest snapshot is written; the
-  amount the account already holds is a quiet no-op, since an honest bank may keep
-  giving the day a balance last changed; and anything else is refused. So a provider
-  can't change or add a snapshot at or before the latest one. What it can do on an
-  account with an old latest snapshot is add later ones up to 31 days back: at most
-  one a day between the two, each audited, and the daily values carried across those
-  days change with them, as they would for a member's. Unbound accounts keep the
-  limit above unchanged, since "later than the latest" there would let a provider
-  walk a history up from 1970 for the bind to bring in. The bind judges the last
+  sync replaces that day's snapshot, a member's included. Before them, nothing older
+  than the day 31 days back is ever written: an account with no snapshot, or whose
+  latest is before the reported day, takes the amount on that day, later than
+  reported, which the audit entry records as `reported_on`; the amount the account
+  already holds is a quiet no-op, since an honest bank may keep giving the day a
+  balance last changed; and anything else is refused. So a provider gets nothing it
+  couldn't by dating a report 31 days back. Unbound accounts keep the limit above
+  unchanged, since they have no snapshot to judge a report against. The bind judges the last
   report by the bound account's rule. A refused report writes nothing and the
   account's records still apply. The provider account shows a fixed note,
   `old_balance_note`, apart from `error`, since coffer refused the date and the bank
   reported no error. It moves no forecast. A newer balance clears it, from a sync or
-  by hand. A member's own balance, by `PUT`, has no limit (its cost is issue 83).
+  by hand. The note reflects only the last report and isn't a security signal: a
+  provider can make it appear and go away. The lasting trace of a refusal is the
+  `warn` log. A member's own balance, by `PUT`, has no limit (its cost is issue 83).
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24

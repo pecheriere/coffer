@@ -45,12 +45,13 @@ pub(in crate::sync) enum Judged {
 /// Judges a balance of `balance_minor` that a provider dated `on`, for `account`
 /// as it stands. A day after `today` counts as today, or it would hide later
 /// balances. Within [`REPORTED_BALANCE_MAX_AGE_DAYS`] the date is believed. Before
-/// that:
+/// that, nothing older than the oldest believed day is ever written:
 ///
-/// - An account with no snapshot takes the amount on the oldest believed day, later
-///   than reported, so a date in 1970 adds no history and a dormant account still
-///   has a balance.
-/// - A day after the latest snapshot changes no snapshot, and is written.
+/// - An account with no snapshot, or whose latest is before the reported day, takes
+///   the amount on the oldest believed day, later than reported. A date in 1970 adds
+///   no history, a dormant account still has a balance, and the provider gets nothing
+///   it couldn't by dating the report that day. That day is empty, since the latest
+///   snapshot is older still.
 /// - The amount of the latest snapshot, or the same day and amount as any snapshot,
 ///   is known. The first is what keeps an account taken on the oldest believed day
 ///   quiet: it goes on reporting its real, earlier date.
@@ -67,12 +68,10 @@ pub(in crate::sync) async fn judge_reported(
     if on >= oldest {
         return Ok(Judged::Write(on));
     }
-    let Some(latest) = tx.latest_balance(account).await? else {
+    let latest = tx.latest_balance(account).await?;
+    let Some(latest) = latest.filter(|latest| on <= latest.on) else {
         return Ok(Judged::Write(oldest));
     };
-    if on > latest.on {
-        return Ok(Judged::Write(on));
-    }
     let same_day = tx.balance_on(account, on).await?;
     let known = latest.balance_minor == balance_minor
         || same_day.is_some_and(|snapshot| snapshot.balance_minor == balance_minor);
@@ -88,10 +87,8 @@ pub(in crate::sync) async fn judge_reported(
 /// one otherwise.
 ///
 /// While unbound, it is kept for the bind to bring in only if its date is believed.
-/// The rule for an old day doesn't apply here: "later than the latest" would let a
-/// provider walk one row a day up from 1970, and the bind would bring them all in as
-/// history. An old report that isn't kept is refused nothing, since the bind judges
-/// the last report. Keeping isn't audited: the audit log would then hold the balances
+/// There is no latest snapshot to judge it against, and nothing older is needed: the
+/// bind judges the last report. Keeping isn't audited: the audit log would then hold the balances
 /// of an account nobody has bound, and the bind's entry counts them.
 pub(super) async fn record_balance(
     tx: &mut StoreTx,
@@ -119,7 +116,9 @@ pub(super) async fn record_balance(
     };
     let judged = judge_reported(tx, account, balance.on, balance.balance_minor, today).await?;
     match judged {
-        Judged::Write(on) => write_balance(tx, now, account, on, balance.balance_minor).await?,
+        Judged::Write(on) => {
+            write_balance(tx, now, account, on, balance.on, balance.balance_minor).await?;
+        }
         Judged::Known => {}
         Judged::Refused => {
             tracing::warn!(provider_account = %provider_account, "a balance older than the account's latest was refused");
