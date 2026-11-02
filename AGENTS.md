@@ -47,15 +47,16 @@ cargo run -p coffer-server -- healthcheck               # probe GET /healthz on 
 cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the OpenAPI snapshot
 
 cargo fmt
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-features
-cargo deny check
+scripts/gate.sh                                         # the full gate
 ```
 
 While iterating, test only the crate you change with
 `cargo nextest run -p <crate> --all-features` (add `-E 'test(<name>)'` to
-filter); run the full gate above once before committing (nextest skips
-doctests, so `cargo test` stays the gate).
+filter); run `scripts/gate.sh` once before committing. It runs formatting,
+clippy, the tests and doctests, the docs, `cargo deny` and the OpenAPI check,
+and stops at the first failure. Worktrees share its lock, so gates run one at a
+time, and each worktree keeps its own log at `$(git rev-parse --git-dir)/gate.log`.
+It needs `cargo-nextest` and `cargo-deny`.
 
 ## Parallel work
 
