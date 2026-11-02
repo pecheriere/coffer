@@ -13,10 +13,13 @@ use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
     IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, spending_applies,
 };
-use coffer_domain::transactions::{CategoryGroupName, CategoryKind, CategoryName, Notes};
+use coffer_domain::transactions::{
+    CategoryGroupName, CategoryKind, CategoryName, Description, Notes, SplitInput,
+    TransactionOrigin,
+};
 use coffer_store::{
-    NewAccount, NewCategory, NewCategoryGroup, NewPlannedItem, PlannedItemChanges, Store,
-    StoreError,
+    Attribution, NewAccount, NewCategory, NewCategoryGroup, NewPlannedItem, NewTransaction,
+    PlannedItemChanges, Store, StoreError,
 };
 use jiff::Timestamp;
 use jiff::civil::date;
@@ -329,6 +332,62 @@ async fn delete_and_missing_items_answer_not_found() {
         world.store.get_planned_item(id).await,
         Err(StoreError::NotFound)
     ));
+}
+
+/// The schema by itself holds a linked goal, whatever the ledger checks first.
+#[tokio::test]
+async fn delete_refuses_a_goal_with_a_linked_split() {
+    let world = world().await;
+    let goal = world
+        .insert(world.new_item(PlanSchedule::Goal {
+            start_on: date(2027, 1, 1),
+            due_on: date(2027, 7, 1),
+            completed: false,
+        }))
+        .await;
+    let mut tx = world.store.begin().await.unwrap();
+    let transaction = tx
+        .insert_transaction(NewTransaction {
+            origin: TransactionOrigin::Manual,
+            account: world.account,
+            posted_on: date(2027, 1, 10),
+            transacted_on: None,
+            pending: false,
+            amount_minor: -500,
+            currency: Currency::parse("USD").unwrap(),
+            raw_description: Description::parse("Purchase").unwrap(),
+            imported_payee: None,
+            memo: None,
+            notes: None,
+            created_at: at(1),
+        })
+        .await
+        .unwrap();
+    tx.replace_splits(
+        transaction.id,
+        &[SplitInput {
+            category: world.category,
+            minor_units: -500,
+            goal: Some(goal),
+        }],
+        Attribution {
+            member: None,
+            agent: None,
+            system: Some("system:test".into()),
+            at: at(2),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = world.store.begin().await.unwrap();
+    let deleted = tx.delete_planned_item(goal).await;
+
+    assert!(
+        matches!(deleted, Err(StoreError::Backend(_))),
+        "the reference refuses the delete"
+    );
 }
 
 #[tokio::test]
