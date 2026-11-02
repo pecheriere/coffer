@@ -120,7 +120,10 @@ a throwaway server and seed. What holds it together:
   running side by side don't disturb each other.
 - **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
   `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
-  localhost (`cli/staging_seed.rs`). No staging flag or backdoor belongs in the image.
+  localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost
+  (`auth/staging_fixture.rs`). That is an accident guard, not a security boundary: with a
+  localhost URL, a script holding the key signs in from anywhere that can reach the server, so
+  keep the seed where only this machine can. No staging flag or backdoor belongs in the image.
 
 ## CI and supply chain
 

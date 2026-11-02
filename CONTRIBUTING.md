@@ -68,7 +68,9 @@ a brokerage, a home, a mortgage, a car loan, a card from a SimpleFin connection,
 account, bills, a budget, a goal, and accounts held for others. A second SimpleFin account
 is left unbound. The members are `alex`, an admin, and `sam`, each with a passkey whose
 private key is in `staging/fixtures/passkeys.json`. Those keys are made up and public, so
-`coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost.
+`coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost. That only guards
+against an accident: anyone who can reach such a server can sign in as its admin with a script,
+so never publish its port or put it behind a proxy. The stack binds `127.0.0.1` for this reason.
 
 Everything is dated from the day of the seed, and rebuilt on a new day, or when the
 image, the migrations, the seed or the mocks change. `scripts/staging.sh template <day>`

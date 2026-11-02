@@ -31,6 +31,17 @@ fail() {
   exit 1
 }
 
+# Names a directory under the state, which gets removed: nothing else may get that far.
+check_day() {
+  [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "a day is written YYYY-MM-DD"
+}
+
+# Names a container, and must be a port the stack publishes.
+check_port() {
+  [[ $1 =~ ^[0-9]+$ ]] && [ "$1" -ge 18080 ] && [ "$1" -le 18099 ] ||
+    fail "a port is from 18080 to 18099"
+}
+
 # A stack is one per machine: its network, ports and container names are fixed. Another
 # checkout's would be replaced under whoever is using it.
 refuse_another_checkout() {
@@ -38,7 +49,7 @@ refuse_another_checkout() {
   running=$(docker ps --filter label=com.docker.compose.project=coffer-staging \
     --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1)
   if [ -n "$running" ] && [ "$running" != "$root/staging" ]; then
-    fail "a stack is running from $running; run its 'down' first"
+    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker compose -p coffer-staging down'"
   fi
 }
 
@@ -149,6 +160,7 @@ build_template() {
 }
 
 ensure_template() {
+  check_day "$1"
   local day=$1 stamp dir="$state/templates/$1"
   stamp=$(fingerprint "$day")
   if [ ! -f "$dir/data.tar" ] || [ "$(cat "$dir/fingerprint" 2>/dev/null)" != "$stamp" ]; then
@@ -157,7 +169,9 @@ ensure_template() {
 }
 
 start_server() {
-  local port=$1 day=${2:-$(today)} name
+  local port=$1 day=${2-$(today)} name
+  check_port "$port"
+  check_day "$day"
   name=$(container "$port")
   [ -f "$state/templates/$day/data.tar" ] || fail "no template for $day: run '$0 template $day'"
   docker rm -f -v "$name" >/dev/null 2>&1 || true
@@ -168,6 +182,7 @@ start_server() {
 }
 
 stop_server() {
+  check_port "$1"
   docker rm -f -v "$(container "$1")" >/dev/null 2>&1 || true
 }
 
@@ -182,12 +197,14 @@ case "${1:-}" in
     echo "staging: http://localhost:$manual_port (scripts/staging.sh link, for a passkey of your own)"
     ;;
   reset)
+    refuse_another_checkout
     day=$(today)
     ensure_template "$day"
     start_server "$manual_port" "$day"
     echo "staging: http://localhost:$manual_port is back to the template"
     ;;
   down)
+    refuse_another_checkout
     docker ps --all --quiet --filter label=coffer.staging=server | xargs -r docker rm -f -v >/dev/null
     compose down --volumes --remove-orphans
     rm -rf "$state"
@@ -199,13 +216,18 @@ case "${1:-}" in
     jq -r .adminToken "$state/templates/$(today)/fixture.json"
     ;;
   template)
+    day=${2-$(today)}
+    check_day "$day"
+    refuse_another_checkout
     ensure_mocks
-    ensure_template "${2:-$(today)}"
+    ensure_template "$day"
     ;;
   start)
-    start_server "${2:?a port from 18081 to 18099}" "${3:-}"
+    refuse_another_checkout
+    start_server "${2:?a port from 18081 to 18099}" ${3+"$3"}
     ;;
   stop)
+    refuse_another_checkout
     stop_server "${2:?a port}"
     ;;
   *)

@@ -275,7 +275,9 @@ coffer uses:
   single-use and expires (default 30 minutes; a CLI command can mint a new
   one while no admin exists).
 - **Staging seed:** `serve` refuses a database where an admin holds the staging seed's
-  public passkey unless the public URL is on localhost.
+  public passkey unless the public URL is on localhost, and warns about it on a listen
+  address that isn't loopback. Away from localhost, registering a seeded key is refused, by
+  id or public key. This guards against an accident; it is not a security boundary.
 - **Invites:** admins create invite links: single-use, expiring after a
   configurable number of minutes (default 30), carrying the role. Opening it
   registers a passkey and creates the member. Admins can list and revoke
