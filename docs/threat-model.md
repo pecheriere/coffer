@@ -213,20 +213,20 @@
 - **A sync's fetch is bounded in time and memory.** Every provider's fetch stops
   after 10 minutes, and a Plaid pass after 64 MiB of responses, on top of 16 MiB
   and 60 seconds per response. An answer listing more than 1,000 Plaid accounts
-  fails the fetch as it is read. Any of these failures applies nothing and keeps
-  the cursor. Nothing commits until a fetch ends, so an honest first sync that
-  takes over 10 minutes, or a real history above the 64 MiB, would fail every
-  run of that connection.
+  fails the fetch as it is read, and so does a page of more than 1,000 records,
+  counted before any of them is converted. Any of these failures applies nothing
+  and keeps the cursor. Nothing commits until a fetch ends, so an honest first
+  sync that takes over 10 minutes, or a real history above the 64 MiB, would
+  fail every run of that connection.
 - **What the limits leave open.**
   - The worker runs one sync at a time, so a compromised or failing provider can
     still delay other connections by up to 10 minutes per fetch, within the
     budget above: 8 hours in 24 of fetching for one Plaid connection. Applying
     comes on top of that and has no deadline.
   - Memory in one fetch goes above the 64 MiB. Parsing adds overhead, and the
-    account list and the page being read add up to 16 MiB each. A 16 MiB page of
-    tiny malformed records expands much further while it is converted: by
-    calculation over 500 MiB, until the record limit refuses it (issue #37). A
-    SimpleFin answer has no limit on its accounts and expands the same way.
+    account list and the page being read add up to 16 MiB each. A SimpleFin
+    answer has no limit on its accounts, and a 16 MiB answer of tiny entries
+    expands much further while it is read (issue #62).
 - **Some Plaid records are passed by for good and only counted.** A record with
   an id too long to store is skipped, and longer texts are cut. A record whose
   `account_id` is too long, or that names no account, belongs to no account coffer

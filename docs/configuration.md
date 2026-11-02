@@ -134,7 +134,8 @@ manager's output. For a container, see
 Sync limits for Plaid: a requested sync at least 15 minutes after the last
 one, scheduled syncs at least an hour apart, and 48 syncs in 24 hours, per
 connection. One pass over Plaid's transaction pages accepts at most 64 MiB of
-responses, and an answer may list at most 1,000 accounts. For any provider, a
+responses and 100,000 records, a page may hold at most 1,000 records, and an
+answer may list at most 1,000 accounts. For any provider, a
 fetch that takes more than 10 minutes fails the run, and the next run starts
 from the same place. Nothing is stored until the fetch ends, so a first sync
 that needs longer fails every time. The limit covers fetching only: storing what
