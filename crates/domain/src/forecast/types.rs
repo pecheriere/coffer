@@ -288,13 +288,14 @@ pub struct ItemLine {
     pub category: Option<CategoryId>,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub account_hint: Option<AccountId>,
-    /// How many times it falls in the window: 0 for a goal.
+    /// How many times it falls in the window, and for a stored budget earlier in `as_of`'s
+    /// month too: 0 for a goal.
     pub occurrences: u32,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub first_on: Option<Date>,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub last_on: Option<Date>,
-    /// The whole amount in the window, before any reduction. 0 only with `unpaid`.
+    /// The whole amount of `occurrences`, before any reduction. 0 only with `unpaid`.
     pub gross: Money,
     /// What this month's actual spending takes off `gross`.
     pub reduced_by: Money,
@@ -407,7 +408,7 @@ pub enum Caution {
         label: String,
         status: FeedStatus,
     },
-    /// The window does not start today, so whatever falls between is left out.
+    /// The window does not start today, so what falls due before its month is left out.
     AsOfNotToday { today: Date },
     /// Recurring bills and one-offs dated earlier this month exceed the category's
     /// spending so far. The gap counts as still needed; if it was paid under another

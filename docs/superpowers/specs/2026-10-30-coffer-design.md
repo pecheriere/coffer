@@ -767,7 +767,7 @@ balance dates decide what a forecast may trust, not what happened.
 Unlike the forecast, which carries no leftovers over, the report shows a rollover per
 category and currency with a budget (R9): what was budgeted over the reported months up
 to today's, less what they spent on it. Spending pays each month's bills and one-offs
-dated before today first, floored at 0 unless the month is a net refund, which adds to
+dated up to and including today first, floored at 0 unless the month is a net refund, which adds to
 what is left. Items share a category's pool, so it isn't per item. A bill has none.
 A month's spending counts only while a budget in that category and currency is running,
 from the month of its first occurrence through the month of its end date, so a
@@ -802,22 +802,30 @@ shown.
 
 **R9. Bills and budgets.** A recurring outflow has a `spending` of `bill` or
 `budget`, which replaces §6.8's reduction of every recurring item. Only a budget is
-reduced by this month's spending. Each category and currency has one pool: the
-month's actual spending, minus planned outflows in that category dated earlier this
-month, bills first, floored at 0. It reduces this month's remaining budget
-occurrences in date order, and then in the deterministic order items load in, since
-applied per item, one purchase would reduce every item in the category. A paid bill
-therefore never eats a budget. A recurring bill or a one-off, a specific expected
-payment, counts in full until its date passes. Past it, spending in its category
-pays them in date order, and any gap is still needed, with a caution naming the
-category and the amount. If it was paid under another category the forecast shows
-less to invest, the safe direction. A budget can simply underspend, so its shortfall
-is never a gap. A known limit: the data cannot tell where the money went, so spending
-goes to these before any budget, and money spent on a budget can hide an unpaid
-bill. A second known limit: the look-back is this month only, so a bill or one-off
-from last month that is still unpaid is not counted, and an October bill posting in
-November counts as paying November's. Goals and hypothetical items never owe, and
-hypothetical items neither reduce nor consume.
+reduced by this month's spending, and it counts its whole calendar month, as a household
+reads a budget: its occurrences anywhere in `as_of`'s month, those before `as_of` too, are
+on its line and in the first month. Later months count only inside the window, and an
+occurrence before the budget's start or after its end date does not count. Each category
+and currency has one pool: the month's actual spending, minus the recurring bills and
+one-offs in that category dated this month up to and including `as_of`, floored at 0. It
+reduces the month's budget occurrences in date order, and then in the deterministic order
+items load in, since applied per item, one purchase would reduce every item in the
+category. So this month's budget amount, less the category's spending once bills and
+one-offs have taken their share, floored at 0, is still needed. A paid bill therefore
+never eats a budget. A recurring bill or a one-off, a specific expected payment, counts in
+full until its date passes, so one dated `as_of` counts in full even if paid that day,
+when a balance of that date already shows it: the forecast holds it twice for that day,
+the safe direction. Past its date, spending in its category pays them in date order, and
+any gap is still needed, with a caution naming the category and the amount. If it was paid
+under another category the forecast shows less to invest, the safe direction. A budget can
+simply underspend, so what it still needs is never a gap and raises no caution. A known
+limit: the data cannot tell where the money went, so spending goes to these before any
+budget, and money spent on a budget can hide an unpaid bill; from a bill's own date, money
+spent on a budget does not reduce it until the bill is covered. A second known limit: the
+look-back is this month only, so a bill or one-off from last month that is still unpaid is
+not counted, and an October bill posting in November counts as paying November's. Goals
+and hypothetical items never owe, and hypothetical items neither reduce nor consume, nor
+look back: an imagined budget counts only inside the window.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the
@@ -897,8 +905,10 @@ no field of their own. A yearly item anchored on February 29 falls on February 2
 in other years. Occurrences are never after an end date, which is inclusive.
 
 **R19. `as_of`** may be any date in range, with a caution unless it is today, since
-bills between today and `as_of` fall outside the window. A balance is the latest
-on or before `as_of`. When `as_of` plus the horizon clamps to a shorter month, the
+what falls due before `as_of`'s month is left out; within that month a passed bill still
+owes its gap and a budget counts its whole month (R9). A balance is the latest on or
+before `as_of`, and its age runs to the earlier of `as_of` and today, so a future `as_of`
+does not mark a balance dated today as stale. When `as_of` plus the horizon clamps to a shorter month, the
 clamped day stays in the window for outflows, so a bill on it is not lost; one
 anchored on a month's end may count once more, the safe direction. Inflows count only
 up to the unclamped end, so the clamp's extra day never adds income.
@@ -909,7 +919,7 @@ hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every
 `YYYY-MM-DD`, since a datetime's day depends on its zone. A goal's due date
 after its start date. Stale after 1 to 365 days, default 7. Floor months 1 to 60.
 "M months of outflows" sums unreduced recurring outflow occurrences in `[as_of,
-as_of + M months)`, per currency, ending on the clamped day plus one when that
+as_of + M months)`, budgets' earlier days this month not among them, per currency, ending on the clamped day plus one when that
 clamps to a shorter month. Totals past `i64` answer 422, never a wrapped
 number.
 

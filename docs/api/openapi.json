@@ -2300,13 +2300,13 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
             "name": "as_of",
             "in": "query",
-            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since bills\nbetween today and that day fall outside the window.",
+            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since what\nfalls due before that day's month is left out.",
             "required": false,
             "schema": {
               "type": "string",
@@ -3061,7 +3061,7 @@
           "plan"
         ],
         "summary": "Creates a planned item.",
-        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A recurring outflow is a `bill`, counted in full, unless `spending` makes it a `budget`, reduced by what was spent in its category so far this month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A recurring outflow is a `bill`, counted in full, unless `spending` makes it a `budget`, which counts all of this month's occurrences, those already past too, less what was spent in its category so far this month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createPlanItem",
         "parameters": [
           {
@@ -3899,7 +3899,7 @@
           "reports"
         ],
         "summary": "Plan versus actual.",
-        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated before today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getPlanVsActual",
         "parameters": [
           {
@@ -6287,7 +6287,7 @@
           },
           {
             "type": "object",
-            "description": "The window does not start today, so whatever falls between is left out.",
+            "description": "The window does not start today, so what falls due before its month is left out.",
             "required": [
               "today",
               "kind"
@@ -7231,7 +7231,7 @@
           },
           "gross": {
             "$ref": "#/components/schemas/Money",
-            "description": "The whole amount in the window, before any reduction. 0 only with `unpaid`."
+            "description": "The whole amount of `occurrences`, before any reduction. 0 only with `unpaid`."
           },
           "item_type": {
             "$ref": "#/components/schemas/PlanItemType"
@@ -7249,7 +7249,7 @@
           "occurrences": {
             "type": "integer",
             "format": "int32",
-            "description": "How many times it falls in the window: 0 for a goal.",
+            "description": "How many times it falls in the window, and for a stored budget earlier in `as_of`'s\nmonth too: 0 for a goal.",
             "minimum": 0
           },
           "reduced_by": {
@@ -7988,7 +7988,7 @@
       },
       "PlanSpending": {
         "type": "string",
-        "description": "How a recurring outflow relates to what was spent in its category so\nfar this month: a bill counts in full, a budget is reduced by it.",
+        "description": "How a recurring outflow relates to what was spent in its category so\nfar this month: a bill counts in full, a budget counts all of this\nmonth's occurrences, those already past too, less that spending.",
         "enum": [
           "bill",
           "budget"
@@ -8059,7 +8059,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlanSpending",
-                "description": "Only on a recurring outflow, where it is `bill` by default: a `budget`\nis reduced by what was spent in its category so far this month, a\n`bill` counts in full."
+                "description": "Only on a recurring outflow, where it is `bill` by default: a `budget`\ncounts all of this month's occurrences, those already past too, less\nwhat was spent in its category so far this month; a `bill` counts in\nfull."
               },
               {
                 "type": "null"
@@ -8243,7 +8243,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlanSpending",
-                "description": "A recurring outflow's kind; `null` on anything else. A `budget` is\nreduced by what was spent in its category so far this month, a `bill`\ncounts in full."
+                "description": "A recurring outflow's kind; `null` on anything else. A `budget` counts\nall of this month's occurrences, those already past too, less what was\nspent in its category so far this month; a `bill` counts in full."
               },
               {
                 "type": "null"
@@ -8484,7 +8484,7 @@
           },
           "spent": {
             "$ref": "#/components/schemas/Money",
-            "description": "What those months spent on them, while a budget was running: each month's `actual`\nonce the bills and one-offs dated before today have taken their share. A month of\nrefunds lowers it."
+            "description": "What those months spent on them, while a budget was running: each month's `actual`\nonce the bills and one-offs dated up to and including today have taken their share. A\nmonth of refunds lowers it."
           }
         }
       },

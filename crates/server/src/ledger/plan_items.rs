@@ -60,9 +60,9 @@ pub struct PlannedItemView {
     /// lists that don't ask for it.
     pub active: bool,
     pub schedule: PlanSchedule,
-    /// A recurring outflow's kind; `null` on anything else. A `budget` is
-    /// reduced by what was spent in its category so far this month, a `bill`
-    /// counts in full.
+    /// A recurring outflow's kind; `null` on anything else. A `budget` counts
+    /// all of this month's occurrences, those already past too, less what was
+    /// spent in its category so far this month; a `bill` counts in full.
     #[schema(required)]
     pub spending: Option<PlanSpending>,
     pub created_at: Timestamp,
@@ -113,8 +113,9 @@ pub struct PlannedItemInput {
     /// Its type never changes once it exists.
     pub schedule: PlanSchedule,
     /// Only on a recurring outflow, where it is `bill` by default: a `budget`
-    /// is reduced by what was spent in its category so far this month, a
-    /// `bill` counts in full.
+    /// counts all of this month's occurrences, those already past too, less
+    /// what was spent in its category so far this month; a `bill` counts in
+    /// full.
     pub spending: Option<PlanSpending>,
 }
 

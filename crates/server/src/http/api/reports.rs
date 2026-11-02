@@ -37,7 +37,7 @@ use crate::ledger::plan_report::PlanReportQuery;
                    them, without invested and illiquid accounts.\n\n\
                    `rollovers` has a line for each category and currency with a budget: what was \
                    `budgeted` over the reported months up to today's, what they `spent` on it while \
-                   a budget was running, once bills and one-offs dated before today have taken \
+                   a budget was running, once bills and one-offs dated up to today have taken \
                    their share, and the `rollover` between them, positive for unspent and negative \
                    for overspent. It is a window over those months, not a running balance, so \
                    moving `from` changes it, and today's month counts all its budget occurrences. \

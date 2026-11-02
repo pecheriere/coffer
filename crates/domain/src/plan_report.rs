@@ -174,8 +174,8 @@ pub struct RolloverRow {
     /// The occurrences of the category's budgets in those months.
     pub budgeted: Money,
     /// What those months spent on them, while a budget was running: each month's `actual`
-    /// once the bills and one-offs dated before today have taken their share. A month of
-    /// refunds lowers it.
+    /// once the bills and one-offs dated up to and including today have taken their share. A
+    /// month of refunds lowers it.
     pub spent: Money,
     /// `budgeted` minus `spent`: positive for what was left unspent, negative for
     /// overspent.

@@ -3,19 +3,20 @@
 //! owes, and a goal has spending of its own.
 //!
 //! A recurring bill or a one-off counts in full until its date passes, so one dated
-//! `as_of` counts in full even if it was paid that day. Past it,
-//! spending in its category pays them in date order, and whatever it does not cover
-//! is still needed: a gap, reported, since the money may have gone under another
-//! category. Spending goes to them before any budget, since the data cannot tell
-//! which it was for, so money spent on a budget can hide an unpaid bill.
+//! `as_of` counts in full even if it was paid that day. Past it, spending in its category
+//! pays them in date order, and whatever it does not cover is still needed: a gap,
+//! reported, since the money may have gone under another category. Spending goes to them
+//! before any budget, since the data cannot tell which it was for, so money spent on a
+//! budget can hide an unpaid bill.
 //!
 //! A budget is reduced, and it counts its whole calendar month: all its occurrences in
 //! `as_of`'s month, before `as_of` too, go into its line and the first bucket, so what it
 //! has not spent is still needed. Later months count only inside the window. Each
 //! category and currency has one pool: the month's spending less the recurring bills and
 //! one-offs dated this month up to and including `as_of`, since that spending was already
-//! planned for, floored at 0. The pool then pays for the month's budget occurrences in date order, so one
-//! purchase never reduces two items, and a paid bill never eats a budget.
+//! planned for, floored at 0. The pool then pays for the month's budget occurrences in
+//! date order, so one purchase never reduces two items, and a paid bill never eats a
+//! budget.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,7 +41,7 @@ struct Occurrence {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ItemAdjustment {
-    /// What comes off a budget in the window.
+    /// What comes off a budget's occurrences this month.
     pub(super) reduced_by: i128,
     /// What a recurring bill or one-off dated earlier this month still needs.
     pub(super) unpaid: i128,
