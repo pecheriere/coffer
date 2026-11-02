@@ -6,7 +6,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::identity::{DisplayName, Role, Username};
 use coffer_domain::ids::{AccountId, AgentTokenId, CategoryId, MemberId, TransactionId};
 use coffer_domain::money::Currency;
@@ -55,6 +55,9 @@ async fn account(store: &Store, name: &str) -> AccountRecord {
             include_in_net_worth: true,
             include_in_forecast: true,
             created_at: at(0),
+            belongs_to: BelongsTo::Household,
+            belongs_to_overridden: false,
+            beneficiary: None,
         })
         .await
         .unwrap();

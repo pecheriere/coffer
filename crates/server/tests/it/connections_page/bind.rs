@@ -233,6 +233,22 @@ async fn create_moves_held_records_to_the_new_account() {
 }
 
 #[tokio::test]
+async fn the_kind_select_says_what_the_three_newest_kinds_are() {
+    let mut world = world().await;
+    let connection = world.seeded(world.alice).await;
+    world.report(connection, "Fund", "USD", None).await;
+    let page = world.admin.get("/connections").await;
+    let select = page.between("name=\"kind\"", "</select>");
+    for option in [
+        "<option value=\"education\">Education savings (529)</option>",
+        "<option value=\"custodial\">Custodial (UTMA, UGMA)</option>",
+        "<option value=\"charitable\">Charitable (donor-advised fund)</option>",
+    ] {
+        assert!(select.contains(option), "{option}");
+    }
+}
+
+#[tokio::test]
 async fn a_blank_name_takes_the_provider_accounts_and_a_hint_picks_the_kind() {
     let mut world = world().await;
     let connection = world.seeded(world.alice).await;

@@ -180,6 +180,17 @@ async fn migration_keeps_a_populated_database_and_asks_for_a_rebuild() {
     .unwrap();
     assert_eq!(counts, (2, 1, 0));
 
+    // The store reads today's schema. A later migration may need the transaction the
+    // migrator gives it, as 0022 does.
+    for migration in migrator.iter().filter(|migration| migration.version > 21) {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(migration.sql.clone())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
     let store = Store { pool };
     let through = date(2026, 10, 4);
     let waiting = store

@@ -1,7 +1,7 @@
 //! Accounts and their daily balance snapshots.
 
 use coffer_domain::accounts::{
-    AccountKind, AccountName, BalanceSource, LiquidityClass, default_liquidity,
+    AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass, default_liquidity,
 };
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
@@ -250,6 +250,9 @@ impl Ledger {
                 include_in_net_worth: input.include_in_net_worth,
                 include_in_forecast: input.include_in_forecast,
                 created_at: now,
+                belongs_to: BelongsTo::Household,
+                belongs_to_overridden: false,
+                beneficiary: None,
             })
             .await?;
         let mut changes = AuditChanges::new()

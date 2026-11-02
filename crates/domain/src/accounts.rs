@@ -5,6 +5,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::label_type;
+use crate::transactions::string_enum;
 
 /// Why an account value was rejected. Messages never echo the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -19,6 +20,10 @@ pub enum AccountError {
     UnknownLiquidity,
     #[error("unknown balance source")]
     UnknownBalanceSource,
+    #[error("unknown value for whose money an account is")]
+    UnknownBelongsTo,
+    #[error("beneficiary must be 1 to 64 characters without control characters")]
+    InvalidBeneficiary,
 }
 
 /// What an account is.
@@ -33,6 +38,12 @@ pub enum AccountKind {
     Mortgage,
     Brokerage,
     Retirement,
+    /// A 529 and similar.
+    Education,
+    /// UTMA, UGMA.
+    Custodial,
+    /// A donor-advised fund.
+    Charitable,
     EquityComp,
     Property,
     Vehicle,
@@ -42,7 +53,7 @@ pub enum AccountKind {
 
 impl AccountKind {
     /// Every kind, in the order a form lists them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 15] = [
         Self::Checking,
         Self::Savings,
         Self::CreditCard,
@@ -50,6 +61,9 @@ impl AccountKind {
         Self::Mortgage,
         Self::Brokerage,
         Self::Retirement,
+        Self::Education,
+        Self::Custodial,
+        Self::Charitable,
         Self::EquityComp,
         Self::Property,
         Self::Vehicle,
@@ -67,6 +81,9 @@ impl AccountKind {
             Self::Mortgage => "mortgage",
             Self::Brokerage => "brokerage",
             Self::Retirement => "retirement",
+            Self::Education => "education",
+            Self::Custodial => "custodial",
+            Self::Charitable => "charitable",
             Self::EquityComp => "equity_comp",
             Self::Property => "property",
             Self::Vehicle => "vehicle",
@@ -88,6 +105,9 @@ impl FromStr for AccountKind {
             "mortgage" => Self::Mortgage,
             "brokerage" => Self::Brokerage,
             "retirement" => Self::Retirement,
+            "education" => Self::Education,
+            "custodial" => Self::Custodial,
+            "charitable" => Self::Charitable,
             "equity_comp" => Self::EquityComp,
             "property" => Self::Property,
             "vehicle" => Self::Vehicle,
@@ -172,21 +192,59 @@ impl FromStr for BalanceSource {
     }
 }
 
+string_enum!(
+    /// Whose money an account holds, apart from what kind of account it is. It says how
+    /// coffer treats the money and is not a legal statement.
+    BelongsTo, AccountError::UnknownBelongsTo,
+    {
+        /// The household's own money.
+        Household => "household",
+        /// Held for someone, or for a purpose beyond the household's own.
+        SomeoneElse => "someone_else",
+        /// No longer the household's, whatever has happened to it since.
+        GivenAway => "given_away",
+    }
+);
+
 /// The liquidity class an account of `kind` gets unless one is chosen.
 #[must_use]
 pub fn default_liquidity(kind: AccountKind) -> LiquidityClass {
     match kind {
         AccountKind::Checking | AccountKind::Savings => LiquidityClass::Cash,
         AccountKind::CreditCard => LiquidityClass::ShortTermLiability,
-        AccountKind::Brokerage | AccountKind::Retirement | AccountKind::EquityComp => {
-            LiquidityClass::Invested
-        }
+        AccountKind::Brokerage
+        | AccountKind::Retirement
+        | AccountKind::Education
+        | AccountKind::Custodial
+        | AccountKind::Charitable
+        | AccountKind::EquityComp => LiquidityClass::Invested,
         AccountKind::Property | AccountKind::Vehicle | AccountKind::OtherAsset => {
             LiquidityClass::Illiquid
         }
         AccountKind::Loan | AccountKind::Mortgage | AccountKind::OtherLiability => {
             LiquidityClass::LongTermLiability
         }
+    }
+}
+
+/// Whose money an account of `kind` holds unless that is chosen.
+#[must_use]
+pub fn default_belongs_to(kind: AccountKind) -> BelongsTo {
+    match kind {
+        AccountKind::Education | AccountKind::Custodial => BelongsTo::SomeoneElse,
+        AccountKind::Charitable => BelongsTo::GivenAway,
+        AccountKind::Checking
+        | AccountKind::Savings
+        | AccountKind::CreditCard
+        | AccountKind::Loan
+        | AccountKind::Mortgage
+        | AccountKind::Brokerage
+        | AccountKind::Retirement
+        | AccountKind::EquityComp
+        | AccountKind::Property
+        | AccountKind::Vehicle
+        | AccountKind::OtherAsset
+        | AccountKind::OtherLiability => BelongsTo::Household,
     }
 }
 
@@ -201,6 +259,12 @@ label_type!(
     ConnectionLabel,
     AccountError::InvalidConnectionLabel,
     max = 100
+);
+label_type!(
+    /// Who or what an account that isn't the household's is held for: a label, not a person.
+    Beneficiary,
+    AccountError::InvalidBeneficiary,
+    max = 64
 );
 
 #[cfg(test)]
@@ -218,6 +282,9 @@ mod tests {
             (K::CreditCard, L::ShortTermLiability),
             (K::Brokerage, L::Invested),
             (K::Retirement, L::Invested),
+            (K::Education, L::Invested),
+            (K::Custodial, L::Invested),
+            (K::Charitable, L::Invested),
             (K::EquityComp, L::Invested),
             (K::Property, L::Illiquid),
             (K::Vehicle, L::Illiquid),
@@ -276,6 +343,95 @@ mod tests {
         assert_eq!(
             "Manual".parse::<BalanceSource>(),
             Err(AccountError::UnknownBalanceSource)
+        );
+        for belongs in [
+            BelongsTo::Household,
+            BelongsTo::SomeoneElse,
+            BelongsTo::GivenAway,
+        ] {
+            assert_eq!(belongs.as_str().parse::<BelongsTo>(), Ok(belongs));
+            assert_eq!(
+                serde_json::to_string(&belongs).unwrap(),
+                format!("\"{}\"", belongs.as_str())
+            );
+        }
+        assert_eq!(BelongsTo::Household.as_str(), "household");
+        assert_eq!(BelongsTo::SomeoneElse.as_str(), "someone_else");
+        assert_eq!(BelongsTo::GivenAway.as_str(), "given_away");
+        assert_eq!(
+            "SomeoneElse".parse::<BelongsTo>(),
+            Err(AccountError::UnknownBelongsTo)
+        );
+        assert_eq!(AccountKind::Education.as_str(), "education");
+        assert_eq!(AccountKind::Custodial.as_str(), "custodial");
+        assert_eq!(AccountKind::Charitable.as_str(), "charitable");
+    }
+
+    #[test]
+    fn every_kind_is_listed_once() {
+        let listed: std::collections::HashSet<_> = AccountKind::ALL.into_iter().collect();
+        assert_eq!(listed.len(), AccountKind::ALL.len());
+        let position = |kind| AccountKind::ALL.iter().position(|k| *k == kind);
+        assert_eq!(
+            [
+                position(AccountKind::Retirement),
+                position(AccountKind::Education),
+                position(AccountKind::Custodial),
+                position(AccountKind::Charitable),
+                position(AccountKind::EquityComp),
+            ],
+            [Some(6), Some(7), Some(8), Some(9), Some(10)],
+            "the three follow retirement"
+        );
+    }
+
+    #[test]
+    fn belongs_to_defaults_from_the_kind() {
+        use AccountKind as K;
+        use BelongsTo as B;
+        for (kind, belongs) in [
+            (K::Checking, B::Household),
+            (K::Savings, B::Household),
+            (K::CreditCard, B::Household),
+            (K::Loan, B::Household),
+            (K::Mortgage, B::Household),
+            (K::Brokerage, B::Household),
+            (K::Retirement, B::Household),
+            (K::Education, B::SomeoneElse),
+            (K::Custodial, B::SomeoneElse),
+            (K::Charitable, B::GivenAway),
+            (K::EquityComp, B::Household),
+            (K::Property, B::Household),
+            (K::Vehicle, B::Household),
+            (K::OtherAsset, B::Household),
+            (K::OtherLiability, B::Household),
+        ] {
+            assert_eq!(default_belongs_to(kind), belongs, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn beneficiary_respects_its_maximum() {
+        let longest = "é".repeat(64);
+        assert_eq!(Beneficiary::parse(&longest).unwrap().as_str(), longest);
+        assert_eq!(
+            Beneficiary::parse("  Child A ").unwrap().as_str(),
+            "Child A"
+        );
+        for bad in ["", "   ", "Child\u{0007}A", &"é".repeat(65)] {
+            let refused = Beneficiary::parse(bad);
+            assert_eq!(refused, Err(AccountError::InvalidBeneficiary), "{bad:?}");
+        }
+        let message = Beneficiary::parse("Child\u{0007}A")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            message,
+            "beneficiary must be 1 to 64 characters without control characters"
+        );
+        assert!(
+            !message.contains("Child"),
+            "the error holds none of the input"
         );
     }
 

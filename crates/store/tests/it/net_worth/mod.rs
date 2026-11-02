@@ -7,7 +7,7 @@
 )]
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::fx::{FxRate, FxSource, RateObservation};
 use coffer_domain::identity::{DisplayName, Role, Username};
 use coffer_domain::ids::{AccountId, ConnectionId, MemberId, ProviderAccountId};
@@ -64,6 +64,9 @@ async fn holding_with(store: &Store, code: &str, included: bool) -> AccountId {
         include_in_net_worth: included,
         include_in_forecast: true,
         created_at: at(),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     })
     .await
     .unwrap();

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
-use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::fx::{FxCoverage, FxRate, FxSource, RateObservation};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
@@ -177,6 +177,9 @@ async fn holding(store: &Store, code: &str) -> AccountId {
         include_in_net_worth: true,
         include_in_forecast: true,
         created_at: Timestamp::from_second(1_800_000_000).unwrap(),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     })
     .await
     .unwrap();

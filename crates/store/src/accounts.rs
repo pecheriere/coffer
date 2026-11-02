@@ -1,6 +1,6 @@
 //! Accounts.
 
-use coffer_domain::accounts::{AccountKind, AccountName, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, Beneficiary, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountScope;
@@ -8,18 +8,22 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteExecutor};
 
-use crate::convert::{parsed, text, time, time_opt};
+use crate::convert::{parsed, text, text_opt, time, time_opt};
 use crate::members::expect_one;
 use crate::{Store, StoreError, StoreTx};
 
 macro_rules! columns {
     () => {
         "id, name, kind, currency, liquidity, liquidity_overridden, include_in_net_worth, \
-         include_in_forecast, closed_at, created_at"
+         include_in_forecast, closed_at, created_at, belongs_to, belongs_to_overridden, beneficiary"
     };
 }
 
 /// A stored account.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per 0/1 column of a row: four independent facts, no hidden state machine"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
     pub id: AccountId,
@@ -34,9 +38,19 @@ pub struct AccountRecord {
     /// When the account was closed; `None` while open.
     pub closed_at: Option<Timestamp>,
     pub created_at: Timestamp,
+    /// Whose money it is.
+    pub belongs_to: BelongsTo,
+    /// Whether `belongs_to` was chosen rather than defaulted from `kind`.
+    pub belongs_to_overridden: bool,
+    /// Who or what it is held for; only on an account that isn't the household's.
+    pub beneficiary: Option<Beneficiary>,
 }
 
 /// An account to create.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per 0/1 column of a row: four independent facts, no hidden state machine"
+)]
 #[derive(Debug, Clone)]
 pub struct NewAccount {
     pub id: AccountId,
@@ -48,6 +62,9 @@ pub struct NewAccount {
     pub include_in_net_worth: bool,
     pub include_in_forecast: bool,
     pub created_at: Timestamp,
+    pub belongs_to: BelongsTo,
+    pub belongs_to_overridden: bool,
+    pub beneficiary: Option<Beneficiary>,
 }
 
 /// The fields of an account to change; `None` leaves a field as it is. The
@@ -62,6 +79,10 @@ pub struct AccountChanges {
     pub include_in_forecast: Option<bool>,
     /// `Some(None)` reopens the account.
     pub closed_at: Option<Option<Timestamp>>,
+    pub belongs_to: Option<BelongsTo>,
+    pub belongs_to_overridden: Option<bool>,
+    /// `Some(None)` removes the beneficiary.
+    pub beneficiary: Option<Option<Beneficiary>>,
 }
 
 fn flag(row: &SqliteRow, column: &str) -> Result<bool, StoreError> {
@@ -87,6 +108,12 @@ pub(crate) fn account_from_row(row: &SqliteRow) -> Result<AccountRecord, StoreEr
         include_in_forecast: flag(row, "include_in_forecast")?,
         closed_at: time_opt(row, "closed_at")?,
         created_at: time(row, "created_at")?,
+        belongs_to: parsed(row, "belongs_to")?,
+        belongs_to_overridden: flag(row, "belongs_to_overridden")?,
+        beneficiary: text_opt(row, "beneficiary")?
+            .map(|label| Beneficiary::parse(&label))
+            .transpose()
+            .map_err(StoreError::backend)?,
     })
 }
 
@@ -163,8 +190,9 @@ impl StoreTx {
     pub async fn insert_account(&mut self, new: NewAccount) -> Result<AccountRecord, StoreError> {
         sqlx::query(
             "INSERT INTO accounts (id, name, kind, currency, liquidity, liquidity_overridden, \
-             include_in_net_worth, include_in_forecast, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             include_in_net_worth, include_in_forecast, created_at, belongs_to, \
+             belongs_to_overridden, beneficiary) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(new.id.to_string())
         .bind(new.name.as_str())
@@ -175,6 +203,9 @@ impl StoreTx {
         .bind(new.include_in_net_worth)
         .bind(new.include_in_forecast)
         .bind(new.created_at.as_millisecond())
+        .bind(new.belongs_to.as_str())
+        .bind(new.belongs_to_overridden)
+        .bind(new.beneficiary.as_ref().map(Beneficiary::as_str))
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
@@ -189,6 +220,9 @@ impl StoreTx {
             include_in_forecast: new.include_in_forecast,
             closed_at: None,
             created_at: new.created_at,
+            belongs_to: new.belongs_to,
+            belongs_to_overridden: new.belongs_to_overridden,
+            beneficiary: new.beneficiary,
         })
     }
 
@@ -227,6 +261,19 @@ impl StoreTx {
             query
                 .push(", closed_at = ")
                 .push_bind(closed_at.map(Timestamp::as_millisecond));
+        }
+        if let Some(belongs_to) = changes.belongs_to {
+            query.push(", belongs_to = ").push_bind(belongs_to.as_str());
+        }
+        if let Some(overridden) = changes.belongs_to_overridden {
+            query
+                .push(", belongs_to_overridden = ")
+                .push_bind(overridden);
+        }
+        if let Some(beneficiary) = &changes.beneficiary {
+            query
+                .push(", beneficiary = ")
+                .push_bind(beneficiary.as_ref().map(Beneficiary::as_str));
         }
         query.push(" WHERE id = ").push_bind(id.to_string());
         let result = query

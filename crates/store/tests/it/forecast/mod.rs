@@ -9,7 +9,7 @@
 mod goals;
 mod reads;
 
-use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::PlanSchedule;
@@ -61,6 +61,9 @@ fn cash_account(name: &str) -> NewAccount {
         include_in_net_worth: true,
         include_in_forecast: true,
         created_at: at(0),
+        belongs_to: BelongsTo::Household,
+        belongs_to_overridden: false,
+        beneficiary: None,
     }
 }
 
