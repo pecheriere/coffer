@@ -27,7 +27,7 @@ const SPECIFIC: &Terms = &[
     (&["403", "b"], AccountKind::Retirement),
     (&["457b"], AccountKind::Retirement),
     (&["457", "b"], AccountKind::Retirement),
-    (&["thrift", "savings"], AccountKind::Retirement),
+    (&["thrift", "savings", "plan"], AccountKind::Retirement),
     (&["pension"], AccountKind::Retirement),
     (&["retirement"], AccountKind::Retirement),
     (&["rsu"], AccountKind::EquityComp),
@@ -53,11 +53,11 @@ const GENERIC: &Terms = &[
 
 /// Terms that leave a name suggesting nothing, whatever else it holds: a health savings account
 /// isn't cash and isn't any of the kinds, so Plaid's `hsa` is no hint either.
-const NOTHING: &[&[&str]] = &[&["hsa"], &["health", "savings"]];
+const NOTHING: &[&[&str]] = &[&["hsa"], &["h", "s", "a"], &["health", "savings"]];
 
 /// The kind `name` suggests: the one kind of a specific term, else the one kind of a generic
 /// term, else none. Two kinds at the same strength suggest nothing, a generic term doesn't
-/// settle two specific ones, and `hsa` or `health savings` means nothing is suggested. Words are
+/// settle two specific ones, and `hsa`, `h s a` or `health savings` means nothing is suggested. Words are
 /// maximal runs of ASCII letters and digits, so a term matches whole words only: `x5291` is not a
 /// 529.
 #[must_use]
@@ -160,7 +160,7 @@ mod tests {
             ("403 b", Some(Retirement)),
             ("457b", Some(Retirement)),
             ("457 b", Some(Retirement)),
-            ("thrift savings", Some(Retirement)),
+            ("thrift savings plan", Some(Retirement)),
             ("pension", Some(Retirement)),
             ("retirement", Some(Retirement)),
             ("rsu", Some(EquityComp)),
@@ -205,6 +205,9 @@ mod tests {
             ("457(b) Savings Plan", Some(Retirement)),
             ("Thrift Savings Plan", Some(Retirement)),
             ("Thrift Checking", Some(Checking)),
+            ("Thrift Savings Account", Some(Savings)),
+            ("First Thrift Savings", Some(Savings)),
+            ("Thrift Plan Savings", Some(Savings)),
             ("403 Checking", Some(Checking)),
         ]);
     }
@@ -223,6 +226,11 @@ mod tests {
             ("529 Health Savings", None),
             ("Health-Savings Credit Card", None),
             ("Health Savings", None),
+            ("H.S.A. Checking", None),
+            ("H S A", None),
+            ("Roth h.s.a.", None),
+            ("H.S. Checking", Some(Checking)),
+            ("S.H.A. Checking", Some(Checking)),
             ("Health Checking", Some(Checking)),
             ("Health Plan Savings", Some(Savings)),
             ("Hsas Savings", Some(Savings)),

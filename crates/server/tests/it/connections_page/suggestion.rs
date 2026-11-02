@@ -19,9 +19,14 @@ use super::{World, assert_inline_free, world};
 
 const SENTENCE: &str =
     "Suggested from the account's name, so check it: the kind decides what counts as cash.";
-const SENTENCE_LEAVING_OUT: &str = "Suggested from the account's name, so check it: the kind \
-    decides what counts as cash, and this kind leaves the account out of net worth unless you say \
-    it's the household's.";
+/// The sentence under a guess that leaves the account out of net worth, naming the kind by the
+/// label the select shows, so it stays true when the member changes the select.
+fn sentence_leaving_out(label: &str) -> String {
+    format!(
+        "Suggested from the account's name, so check it: the kind decides what counts as cash, \
+         and {label} leaves the account out of net worth unless you say it's the household's."
+    )
+}
 /// Both sentences start so.
 const GUESS: &str = "Suggested from the account's name";
 const CHOOSE: &str = "<option value=\"\" selected disabled>Choose a kind</option>";
@@ -69,7 +74,8 @@ async fn the_form_preselects_a_suggestion_and_says_so() {
     assert_eq!(selected(&select), ["education"]);
     assert!(!select.contains("Choose a kind"));
     assert!(
-        page.body.contains(SENTENCE_LEAVING_OUT),
+        page.body
+            .contains(&sentence_leaving_out("Education savings (529)")),
         "the guess is called a guess"
     );
     let select_at = page.body.find("name=\"kind\"").unwrap();
@@ -92,7 +98,11 @@ async fn the_form_preselects_a_suggestion_and_says_so() {
 async fn the_sentence_says_when_the_kind_leaves_it_out_of_net_worth() {
     let world = world().await;
     let connection = world.seeded(world.alice).await;
-    let leaving_out = ["My 529 Plan", "UTMA Account", "Donor Advised Fund"];
+    let leaving_out = [
+        ("My 529 Plan", "Education savings (529)"),
+        ("UTMA Account", "Custodial (UTMA, UGMA)"),
+        ("Donor Advised Fund", "Charitable (donor-advised fund)"),
+    ];
     let staying_in = [
         "Everyday Checking",
         "High Yield Savings",
@@ -104,20 +114,20 @@ async fn the_sentence_says_when_the_kind_leaves_it_out_of_net_worth() {
         "Stock Plan",
     ];
     let mut rows = Vec::new();
-    for name in leaving_out.iter().chain(&staying_in) {
-        rows.push((*name, world.report(connection, name, "USD", None).await.id));
+    for (name, label) in leaving_out {
+        let id = world.report(connection, name, "USD", None).await.id;
+        rows.push((name, id, sentence_leaving_out(label)));
+    }
+    for name in staying_in {
+        let id = world.report(connection, name, "USD", None).await.id;
+        rows.push((name, id, SENTENCE.to_owned()));
     }
     let mut world = world;
 
     let page = world.admin.get("/connections").await;
 
-    for (name, id) in rows {
+    for (name, id, expected) in rows {
         let sentence = page.between(&format!("id=\"kind-guess-{id}\">"), "</span>");
-        let expected = if leaving_out.contains(&name) {
-            SENTENCE_LEAVING_OUT
-        } else {
-            SENTENCE
-        };
         assert_eq!(sentence, expected, "{name}");
     }
 }

@@ -35,10 +35,6 @@ const ACCOUNT_UNKNOWN: &str = "Choose the account to link to.";
 /// Under a kind preselected from the provider's name, which is only a guess.
 const SUGGESTED: &str =
     "Suggested from the account's name, so check it: the kind decides what counts as cash.";
-/// The same, under a kind that by itself leaves the account out of net worth.
-const SUGGESTED_LEAVING_OUT: &str = "Suggested from the account's name, so check it: the kind \
-    decides what counts as cash, and this kind leaves the account out of net worth unless you say \
-    it's the household's.";
 /// The longest account name, in characters; the form's `maxlength`.
 const NAME_CHARS: usize = 100;
 
@@ -173,7 +169,7 @@ impl Binding {
                                 (kind_label(kind))
                             }
                         }
-                    }, guess.map(guess_sentence)))
+                    }, guess.map(guess_sentence).as_deref()))
                     label.field {
                         "Whose money is it?"
                         select .input name="belongs_to" {
@@ -203,12 +199,19 @@ impl Binding {
     }
 }
 
-/// What a form says under the guess `kind`.
-fn guess_sentence(kind: AccountKind) -> &'static str {
+/// What a form says under the guess `kind`. A kind that by itself leaves the account out of net
+/// worth is named as the select shows it, so the words stay true when the member changes the
+/// select.
+fn guess_sentence(kind: AccountKind) -> String {
     if default_belongs_to(kind) == BelongsTo::Household {
-        SUGGESTED
+        SUGGESTED.to_owned()
     } else {
-        SUGGESTED_LEAVING_OUT
+        format!(
+            "Suggested from the account's name, so check it: the kind decides what counts as \
+             cash, and {} leaves the account out of net worth unless you say it's the \
+             household's.",
+            kind_label(kind)
+        )
     }
 }
 
