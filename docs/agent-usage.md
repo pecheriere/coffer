@@ -318,7 +318,15 @@ for a sync.
   error and nothing changes: the connection stays and removing can be retried.
   A Plaid connection also answers 409 and stays if the server can no longer
   reach Plaid for it: Plaid is not configured, or its sealed token no longer
-  opens.
+  opens. If Plaid is just not configured, configure it again and retry. If the
+  sealed token cannot be opened for good (the server key is lost), only a
+  member can forget the connection from the Connections page, signed in with a
+  passkey and typing its label: no token can, and `DELETE` stays refused.
+  Forgetting erases the sealed token without calling Plaid, so coffer can no
+  longer end billing for the Item, which needs that token; the member must
+  contact Plaid or check their Plaid dashboard. The audit log records
+  `connection.forget` rather than `connection.remove`. Tell the member this
+  instead of retrying.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and
