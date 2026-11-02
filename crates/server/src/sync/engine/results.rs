@@ -154,21 +154,34 @@ pub(super) fn failure(err: &SyncError) -> Failure {
         },
     }
 }
+/// How many times the result's length is read of each error: sanitizing only
+/// removes characters, so this leaves enough for a text full of control ones.
+const ERROR_READ_FACTOR: usize = 4;
+
 /// The connection errors, sanitized and joined; `None` when there are none.
 pub(super) fn joined_errors(errors: &[String]) -> Option<String> {
-    let sanitized: Vec<String> = errors
-        .iter()
-        .map(|error| sanitize_provider_message(error))
-        .filter(|error| !error.is_empty())
-        .collect();
-    if sanitized.is_empty() {
+    // Each error is read only as far as the result could show of it, and
+    // reading stops once the result is full, so no more is copied than that.
+    let mut joined = String::new();
+    for error in errors {
+        let head: String = error
+            .chars()
+            .take(MAX_PROVIDER_MESSAGE_CHARS * ERROR_READ_FACTOR)
+            .collect();
+        let sanitized = sanitize_provider_message(&head);
+        if sanitized.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push_str("; ");
+        }
+        joined.push_str(&sanitized);
+        if joined.chars().count() >= MAX_PROVIDER_MESSAGE_CHARS {
+            break;
+        }
+    }
+    if joined.is_empty() {
         return None;
     }
-    Some(
-        sanitized
-            .join("; ")
-            .chars()
-            .take(MAX_PROVIDER_MESSAGE_CHARS)
-            .collect(),
-    )
+    Some(joined.chars().take(MAX_PROVIDER_MESSAGE_CHARS).collect())
 }

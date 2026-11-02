@@ -49,6 +49,11 @@ const MAX_ACCOUNT_TRANSACTIONS: usize = 10_000;
 /// allows one fetch. Counted before any is converted.
 const MAX_ANSWER_TRANSACTIONS: usize = 100_000;
 
+/// The most connection errors one answer may carry; the first are kept and the
+/// rest read past. Real answers carry a handful, and they are shown joined and
+/// cut to a few hundred characters.
+const MAX_ERRORS: usize = 100;
+
 /// The longest setup token accepted, in bytes.
 const MAX_SETUP_TOKEN_BYTES: usize = 2048;
 /// The longest claim answer (the access URL) accepted, in bytes.
@@ -296,17 +301,10 @@ fn withhold_credentials(mut result: FetchResult, secrets: &[&str]) -> FetchResul
 /// others.
 #[derive(Deserialize)]
 struct RawAccountSet<'a> {
-    #[serde(default)]
-    errors: Vec<String>,
+    #[serde(default, borrow, deserialize_with = "limited_errors")]
+    errors: Vec<&'a RawValue>,
     #[serde(borrow, deserialize_with = "limited_accounts")]
     accounts: Vec<&'a RawValue>,
-}
-
-/// Only the transaction list of an account, read to count it.
-#[derive(Deserialize)]
-struct TransactionCount<'a> {
-    #[serde(default, borrow, deserialize_with = "limited_transactions")]
-    transactions: Vec<&'a RawValue>,
 }
 
 /// The entries of an account list, up to one past [`MAX_ACCOUNTS`].
@@ -322,24 +320,37 @@ fn limited_transactions<'de, D: Deserializer<'de>>(
     bounded(list, MAX_ACCOUNT_TRANSACTIONS)
 }
 
-/// Refuses an answer that lists too many accounts, or too many transactions
-/// on one account or in all, before any of it is converted. An account whose
-/// transactions cannot be read counts none here; it becomes an account error
-/// when converted.
-fn check_sizes(accounts: &[&RawValue]) -> Result<(), ProviderError> {
+/// The entries of the error list, up to one past [`MAX_ERRORS`].
+fn limited_errors<'de, D: Deserializer<'de>>(list: D) -> Result<Vec<&'de RawValue>, D::Error> {
+    bounded(list, MAX_ERRORS)
+}
+
+/// Reads each account once and refuses an answer that lists too many
+/// accounts, or too many transactions on one account or in all, before any
+/// of it is converted. The count comes from the value that is converted, so
+/// no other way of reading an account can pass what this one refuses. An
+/// account that cannot be read as a whole holds no transactions here; it
+/// becomes an account error when converted.
+fn read_accounts<'a>(
+    accounts: &[&'a RawValue],
+) -> Result<Vec<(&'a RawValue, Option<RawAccount<'a>>)>, ProviderError> {
     if accounts.len() > MAX_ACCOUNTS {
         return Err(ProviderError::Invalid(TOO_MANY_ACCOUNTS.into()));
     }
     let mut total = 0_usize;
-    for raw in accounts {
-        let held = serde_json::from_str::<TransactionCount<'_>>(raw.get())
+    let mut read = Vec::with_capacity(accounts.len());
+    for &raw in accounts {
+        let parsed = serde_json::from_str::<RawAccount<'a>>(raw.get()).ok();
+        let held = parsed
+            .as_ref()
             .map_or(0, |parsed| parsed.transactions.len());
         total = total.saturating_add(held);
         if held > MAX_ACCOUNT_TRANSACTIONS || total > MAX_ANSWER_TRANSACTIONS {
             return Err(ProviderError::Invalid(TOO_MANY_TRANSACTIONS.into()));
         }
+        read.push((raw, parsed));
     }
-    Ok(())
+    Ok(read)
 }
 
 /// An account, each transaction record kept raw so that one malformed
@@ -354,7 +365,7 @@ struct RawAccount<'a> {
     balance_date: i64,
     #[serde(default)]
     org: Option<RawOrg>,
-    #[serde(default, borrow)]
+    #[serde(default, borrow, deserialize_with = "limited_transactions")]
     transactions: Vec<&'a RawValue>,
 }
 
@@ -405,11 +416,18 @@ fn parse_account_set(
 ) -> Result<FetchResult, ProviderError> {
     let set: RawAccountSet<'_> = serde_json::from_slice(body)
         .map_err(|_| ProviderError::Invalid(ANSWER_UNREADABLE.into()))?;
-    check_sizes(&set.accounts)?;
-    let mut connection_errors = set.errors;
-    let mut accounts = Vec::with_capacity(set.accounts.len());
-    for raw in set.accounts {
-        match account(raw.get(), request, start) {
+    let read = read_accounts(&set.accounts)?;
+    // The bridge's notes are for the member to read: the first few are kept.
+    let mut connection_errors = set
+        .errors
+        .iter()
+        .take(MAX_ERRORS)
+        .map(|raw| serde_json::from_str::<String>(raw.get()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ProviderError::Invalid(ANSWER_UNREADABLE.into()))?;
+    let mut accounts = Vec::with_capacity(read.len());
+    for (raw, parsed) in read {
+        match account(raw.get(), parsed, request, start) {
             Some(account) => accounts.push(account),
             None => connection_errors.push(ACCOUNT_WITHOUT_ID.to_owned()),
         }
@@ -424,9 +442,14 @@ fn parse_account_set(
 
 /// One account; a malformed one becomes that account's error, and `None`
 /// when not even its id can be read.
-fn account(raw: &str, request: &FetchRequest<'_>, start: Date) -> Option<ProviderAccountData> {
+fn account(
+    raw: &str,
+    parsed: Option<RawAccount<'_>>,
+    request: &FetchRequest<'_>,
+    start: Date,
+) -> Option<ProviderAccountData> {
     let coverage = Coverage::Window { start };
-    if let Ok(parsed) = serde_json::from_str::<RawAccount<'_>>(raw)
+    if let Some(parsed) = parsed
         && let Some(account) = convert_account(&parsed, request, coverage)
     {
         return Some(account);

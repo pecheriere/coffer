@@ -230,8 +230,11 @@
     and 100,000 in all. Each list holds one entry past its limit, the rest
     is skipped but must still be valid JSON, and an answer over a limit fails
     the run with a fixed text before any entry is converted, so nothing is
-    stored from it. The `errors` list of an answer is not bounded beyond the
-    16 MiB.
+    stored from it. Each account is read once, and the count comes from the
+    value that is converted, so an account or answer written as a JSON array
+    is held to the same limits. The `errors` list of an answer keeps its first
+    100 entries and skips the rest, and the connection errors shown are read
+    only as far as the 500 characters kept.
 - **Some Plaid records are passed by for good and only counted.** A record with
   an id too long to store is skipped, and longer texts are cut. A record whose
   `account_id` is too long, or that names no account, belongs to no account coffer

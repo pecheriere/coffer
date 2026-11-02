@@ -137,7 +137,7 @@ connection. One pass over Plaid's transaction pages accepts at most 64 MiB of
 responses and 100,000 records, a page may hold at most 1,000 records, and an
 answer may list at most 1,000 accounts. A SimpleFin answer may list at most
 1,000 accounts, 10,000 transactions on one account and 100,000 transactions in
-all; one over any of these fails the run and stores nothing from it, and the
+all, and keeps the first 100 of its connection errors; one over any of the three counts fails the run and stores nothing from it, and the
 bridge's own limit of 90 days keeps an honest household far below them. For any provider, a
 fetch that takes more than 10 minutes fails the run, and the next run starts
 from the same place. Nothing is stored until the fetch ends, so a first sync

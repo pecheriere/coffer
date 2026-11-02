@@ -263,3 +263,18 @@ fn connection_errors_join_sanitized() {
     let long = joined_errors(&["x".repeat(400), "y".repeat(400)]).unwrap();
     assert_eq!(long.chars().count(), 500);
 }
+
+/// An error is read only so far as the result could show of it, and the
+/// reading stops once the result is full.
+#[test]
+fn joining_connection_errors_reads_a_bounded_amount() {
+    let padded = format!("{}ok", "\u{7}".repeat(100));
+    assert_eq!(joined_errors(&[padded]).as_deref(), Some("ok"));
+    let beyond = format!("{}tail-marker", "a".repeat(10_000));
+    let kept = joined_errors(&[beyond]).unwrap();
+    assert!(!kept.contains("tail-marker"));
+    let many: Vec<String> = (0..1_000).map(|n| format!("error-{n}")).collect();
+    let kept = joined_errors(&many).unwrap();
+    assert_eq!(kept.chars().count(), 500);
+    assert!(!kept.contains("error-999"));
+}

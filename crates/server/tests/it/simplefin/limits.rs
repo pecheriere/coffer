@@ -10,6 +10,7 @@
 use super::{Reply, World, account_set, world};
 use coffer_domain::accounts::AccountKind;
 use coffer_domain::sync::SyncRunStatus;
+use coffer_store::ConnectionStatus;
 use serde_json::json;
 
 const TOO_MANY_ACCOUNTS: &str = "SimpleFin listed more accounts than one sync accepts";
@@ -18,6 +19,9 @@ const UNREADABLE: &str = "SimpleFin sent an answer coffer could not read";
 const MAX_ACCOUNTS: usize = 1_000;
 const MAX_ACCOUNT_TRANSACTIONS: usize = 10_000;
 const MAX_ANSWER_TRANSACTIONS: usize = 100_000;
+const MAX_ERRORS: usize = 100;
+/// Text a refused body carries in its ids and errors; it must not come back.
+const MARKER: &str = "LEAK-MARKER";
 
 /// `count` entries too small to read, each costing a few bytes.
 fn empties(count: usize) -> String {
@@ -32,7 +36,10 @@ fn account_with(id: &str, transactions: &str) -> String {
 }
 
 fn answer(accounts: &[String]) -> String {
-    format!(r#"{{"errors":[],"accounts":[{}]}}"#, accounts.join(","))
+    format!(
+        r#"{{"errors":["{MARKER}-error"],"accounts":[{}]}}"#,
+        accounts.join(",")
+    )
 }
 
 /// A world that has synced one bound account holding one transaction.
@@ -74,6 +81,16 @@ async fn refused(body: &str, detail: &str) {
 
     assert_eq!(run.status, SyncRunStatus::Failed);
     assert_eq!(run.detail.as_deref(), Some(detail));
+    let record = world.server.store.get_connection(connection).await.unwrap();
+    assert_eq!(record.status, ConnectionStatus::Error);
+    assert_eq!(record.last_error.as_deref(), Some(detail));
+    let held = world
+        .server
+        .store
+        .list_provider_accounts(None)
+        .await
+        .unwrap();
+    assert_eq!(held.len(), 1, "a refused answer adds no provider account");
     let after = (
         world.transactions(account).await.len(),
         world
@@ -88,6 +105,10 @@ async fn refused(body: &str, detail: &str) {
         world.provider_account("ACT-0001").await.error,
         None,
         "and marks nothing stored as failed"
+    );
+    assert!(
+        !world.audit_text().await.contains(MARKER),
+        "nothing the answer held reaches the audit trail"
     );
 }
 
@@ -200,7 +221,7 @@ async fn a_large_household_over_ninety_days_is_read() {
     // the records is skipped.
     assert_ne!(run.status, SyncRunStatus::Failed, "{:?}", run.detail);
     assert!(
-        run.detail.as_deref().unwrap().ends_with("0 skipped"),
+        run.detail.as_deref().unwrap().contains(", 0 skipped"),
         "{:?}",
         run.detail
     );
@@ -211,4 +232,99 @@ async fn a_large_household_over_ninety_days_is_read() {
         .await
         .unwrap();
     assert_eq!(held.len(), 41, "the 40 accounts and the one synced before");
+}
+
+/// The same account written as a JSON array, which serde reads by position:
+/// id, name, currency, balance, balance date, org, transactions.
+fn array_account(id: &str, transactions: &str) -> String {
+    format!(r#"["{MARKER}-{id}","A","USD","1.00",1799992800,null,[{transactions}]]"#)
+}
+
+#[tokio::test]
+async fn an_account_written_as_an_array_at_the_transaction_limit_is_read() {
+    accepted(&answer(&[array_account(
+        "big",
+        &empties(MAX_ACCOUNT_TRANSACTIONS),
+    )]))
+    .await;
+}
+
+#[tokio::test]
+async fn an_account_written_as_an_array_over_the_transaction_limit_is_refused() {
+    refused(
+        &answer(&[array_account("big", &empties(MAX_ACCOUNT_TRANSACTIONS + 1))]),
+        TOO_MANY_TRANSACTIONS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn accounts_written_as_arrays_count_toward_the_total() {
+    let each = empties(MAX_ACCOUNT_TRANSACTIONS);
+    let mut accounts: Vec<String> = (0..MAX_ANSWER_TRANSACTIONS / MAX_ACCOUNT_TRANSACTIONS)
+        .map(|n| array_account(&format!("big-{n}"), &each))
+        .collect();
+    accounts.push(array_account("last", &empties(1)));
+    refused(&answer(&accounts), TOO_MANY_TRANSACTIONS).await;
+}
+
+/// The answer itself as an array: errors, then accounts.
+#[tokio::test]
+async fn an_answer_written_as_an_array_over_the_account_limit_is_refused() {
+    refused(
+        &format!(r#"[["{MARKER}-error"],[{}]]"#, empties(MAX_ACCOUNTS + 1)),
+        TOO_MANY_ACCOUNTS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_answer_written_as_an_array_at_the_account_limit_is_read() {
+    accepted(&format!(r"[[],[{}]]", empties(MAX_ACCOUNTS))).await;
+}
+
+/// The first errors are kept: the last one within the limit shows, and the
+/// next does not.
+#[tokio::test]
+async fn only_the_first_connection_errors_are_kept() {
+    let (world, connection, _) = synced().await;
+    let mut errors = vec!["\"x\"".to_owned(); MAX_ERRORS - 1];
+    errors.push(format!("\"{MARKER}-last\""));
+    errors.push(format!("\"{MARKER}-beyond\""));
+    world.script.bridge_reply(Reply::ok(&format!(
+        r#"{{"errors":[{}],"accounts":[]}}"#,
+        errors.join(",")
+    )));
+
+    world.sync(connection).await;
+
+    let kept = world
+        .server
+        .store
+        .get_connection(connection)
+        .await
+        .unwrap()
+        .last_error
+        .unwrap();
+    assert!(kept.contains(&format!("{MARKER}-last")));
+    assert!(!kept.contains(&format!("{MARKER}-beyond")));
+}
+
+/// Past the error limit the rest is still read as JSON.
+#[tokio::test]
+async fn malformed_json_after_the_error_limit_is_unreadable() {
+    refused(
+        &format!(
+            r#"{{"errors":[{},{{"id":}}],"accounts":[]}}"#,
+            vec!["\"x\""; MAX_ERRORS + 1].join(",")
+        ),
+        UNREADABLE,
+    )
+    .await;
+}
+
+/// An error that is not a string spoils the answer, as it did before.
+#[tokio::test]
+async fn an_error_that_is_not_text_is_unreadable() {
+    refused(r#"{"errors":[7],"accounts":[]}"#, UNREADABLE).await;
 }
