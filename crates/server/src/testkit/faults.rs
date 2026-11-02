@@ -1,7 +1,7 @@
 //! Faults the tests install in the store, to see how the server behaves when
 //! a write fails.
 
-use coffer_domain::ids::ConnectionId;
+use coffer_domain::ids::{ConnectionId, SyncRunId};
 use coffer_store::InjectedRunUpdate;
 
 use super::TestServer;
@@ -81,6 +81,19 @@ impl TestServer {
     pub async fn inject_sync_run_failure(&self) {
         self.store
             .inject_sync_run_failure_for_tests()
+            .await
+            .expect("install the injected failure");
+    }
+
+    /// Makes every later update that starts `run` fail with an error a retry
+    /// cannot cure, until [`Self::clear_sync_run_failures`].
+    ///
+    /// # Panics
+    ///
+    /// If the failure cannot be installed.
+    pub async fn inject_sync_run_start_failure(&self, run: SyncRunId) {
+        self.store
+            .inject_sync_run_start_failure_for_tests(run)
             .await
             .expect("install the injected failure");
     }

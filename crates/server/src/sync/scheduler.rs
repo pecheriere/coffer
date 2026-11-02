@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use coffer_domain::ids::{ConnectionId, SyncRunId};
 use coffer_domain::sync::SyncTrigger;
-use coffer_store::{ConnectionStatus, StoreError};
+use coffer_store::{ConnectionStatus, QueuedRun, StoreError};
 use jiff::{SignedDuration, Timestamp};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -295,8 +295,16 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
                 // Only this worker's run is failed, and only if it started:
                 // `InProgress` means another caller's run holds the
                 // connection.
+                // A run that cannot start for a reason other than the database
+                // is failed too, or it would be picked again forever, ahead
+                // of every other connection's.
+                let queued = if err.is_database_fault() {
+                    QueuedRun::Keep
+                } else {
+                    QueuedRun::Fail
+                };
                 if !matches!(err, SyncError::InProgress)
-                    && !fail_run(&sync, run.id, &mut stop).await
+                    && !fail_run(&sync, run.id, queued, &mut stop).await
                 {
                     return;
                 }
@@ -308,7 +316,7 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
                     panicked = err.is_panic(),
                     "a sync run ended abnormally"
                 );
-                if !fail_run(&sync, run.id, &mut stop).await {
+                if !fail_run(&sync, run.id, QueuedRun::Fail, &mut stop).await {
                     return;
                 }
                 backoff.next()
@@ -320,23 +328,32 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Marks `run`, which this worker's task has ended, failed if it is running,
+/// Marks `run`, which this worker's task has ended, failed if it is running
+/// (or queued, if `queued` says so),
 /// so that its connection is not left answering [`SyncError::InProgress`]
 /// until a restart. A database fault is retried with a backoff until the store
 /// allows it; any other error is logged once and given up, since a retry
 /// cannot cure it and the other runs must not wait for it. Only this run is
 /// touched, so no run still going can be failed by it. `false` if told to
 /// stop first; the run is then left for the next start's recovery.
-async fn fail_run(sync: &SyncService, run: SyncRunId, stop: &mut watch::Receiver<bool>) -> bool {
+async fn fail_run(
+    sync: &SyncService,
+    run: SyncRunId,
+    queued: QueuedRun,
+    stop: &mut watch::Receiver<bool>,
+) -> bool {
     let mut backoff = Backoff::default();
     loop {
         let attempt = tokio::select! {
             () = stopped(stop) => return false,
-            attempt = sync.abandon(run) => attempt,
+            attempt = sync.abandon(run, queued) => attempt,
         };
         match attempt {
-            // Marked failed now, already finished, or gone.
-            Ok(()) | Err(StoreError::Conflict(_) | StoreError::NotFound) => return true,
+            Ok(()) => return true,
+            Err(StoreError::Conflict(_) | StoreError::NotFound) => {
+                tracing::info!(run = %run, "the sync run needed no marking failed");
+                return true;
+            }
             Err(err) if err.is_database_fault() => {
                 tracing::error!(run = %run, error = ?err, "could not mark the sync run failed; trying again");
                 if !pause(stop, backoff.next()).await {

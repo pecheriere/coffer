@@ -48,7 +48,7 @@ pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
-pub use sync_runs::{NewSyncRun, RunCounts, SyncRunRecord};
+pub use sync_runs::{NewSyncRun, QueuedRun, RunCounts, SyncRunRecord};
 pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,
@@ -355,6 +355,31 @@ impl Store {
         Ok(())
     }
 
+    /// Make every later update that starts the sync run `run` fail with a
+    /// backend error that a retry cannot cure, until
+    /// [`Self::clear_sync_run_failures_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_sync_run_start_failure_for_tests(
+        &self,
+        run: coffer_domain::ids::SyncRunId,
+    ) -> Result<(), StoreError> {
+        // A run id is a UUID: it cannot alter the statement.
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS injected_sync_run_start_failure \
+             BEFORE UPDATE ON sync_runs WHEN NEW.status = 'running' AND NEW.id = '{run}' \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
     /// Make every later update that starts a sync run (`running`), or
     /// finishes one (`succeeded`, `partial` or `failed`), fail as a database
     /// fault would, until [`Self::clear_sync_run_failures_for_tests`].
@@ -394,6 +419,7 @@ impl Store {
     pub async fn clear_sync_run_failures_for_tests(&self) -> Result<(), StoreError> {
         for sql in [
             "DROP TRIGGER IF EXISTS injected_sync_run_failure",
+            "DROP TRIGGER IF EXISTS injected_sync_run_start_failure",
             "DROP TRIGGER IF EXISTS injected_sync_run_start_fault",
             "DROP TRIGGER IF EXISTS injected_sync_run_finish_fault",
         ] {
