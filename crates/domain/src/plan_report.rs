@@ -163,8 +163,9 @@ pub struct UncategorizedRow {
 }
 
 /// A category's budgets over the reported months up to today's: bills have no rollover,
-/// and a month yet to come has left nothing unspent. Only this report carries it: the
-/// forecast doesn't carry leftovers over.
+/// and a month yet to come has left nothing unspent. It covers those months only, so moving
+/// `from` changes it, and only this report carries it: the forecast doesn't carry leftovers
+/// over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RolloverRow {
@@ -172,8 +173,9 @@ pub struct RolloverRow {
     pub currency: Currency,
     /// The occurrences of the category's budgets in those months.
     pub budgeted: Money,
-    /// What those months spent on them: each month's `actual` once the bills and one-offs
-    /// dated before today have taken their share. A month of refunds lowers it.
+    /// What those months spent on them, while a budget was running: each month's `actual`
+    /// once the bills and one-offs dated before today have taken their share. A month of
+    /// refunds lowers it.
     pub spent: Money,
     /// `budgeted` minus `spent`: positive for what was left unspent, negative for
     /// overspent.
@@ -254,7 +256,7 @@ pub fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastErr
                 },
             })
             .collect(),
-        rollovers: rollover_rows(&pairs, &up_to_today, &planned, &actuals)?,
+        rollovers: rollover_rows(input, &pairs, &up_to_today, &planned, &actuals)?,
         partial_months: reported
             .iter()
             .copied()
@@ -415,21 +417,39 @@ fn goal_rows(
     Ok(rows)
 }
 
-/// A line for each of `pairs` with a budget falling in `months`.
+/// A line for each of `pairs` with a budget falling in `months`. A month's spending counts
+/// only while a budget in the pair is running, so what came before or after it isn't
+/// charged to it.
 fn rollover_rows(
+    input: &PlanReportInput,
     pairs: &BTreeSet<Pair>,
     months: &[CalendarMonth],
     planned: &BTreeMap<Key, Planned>,
     actuals: &BTreeMap<Key, Happened>,
 ) -> Result<Vec<RolloverRow>, ForecastError> {
+    let mut budgets: BTreeMap<Pair, Vec<PlanSchedule>> = BTreeMap::new();
+    for item in input
+        .items
+        .iter()
+        .filter(|item| item.active && item.spending == Some(PlanSpending::Budget))
+    {
+        budgets
+            .entry((item.category, item.amount.currency))
+            .or_default()
+            .push(item.schedule);
+    }
     let mut rows = Vec::new();
-    for &(category, currency) in pairs {
+    for &pair @ (category, currency) in pairs {
+        let schedules = budgets.get(&pair).map_or(&[][..], Vec::as_slice);
         let (mut budgeted, mut spent) = (0, 0);
         for &month in months {
             let key = (month, category, currency);
             let plan = planned.get(&key).copied().unwrap_or_default();
-            let actual = actuals.get(&key).map_or(0, |happened| happened.actual);
             budgeted += plan.budget;
+            if !schedules.iter().any(|schedule| runs_in(schedule, month)) {
+                continue;
+            }
+            let actual = actuals.get(&key).map_or(0, |happened| happened.actual);
             spent += if actual > 0 {
                 (actual - plan.due_before_today).max(0)
             } else {
@@ -447,6 +467,18 @@ fn rollover_rows(
         }
     }
     Ok(rows)
+}
+
+/// Whether a budget on `schedule` is running in `month`: from the month of its first
+/// occurrence through the month of its end date, whether or not an occurrence falls there.
+fn runs_in(schedule: &PlanSchedule, month: CalendarMonth) -> bool {
+    let first_day = month.first_day();
+    match *schedule {
+        PlanSchedule::Recurring {
+            anchor_on, end_on, ..
+        } => anchor_on.first_of_month() <= first_day && end_on.is_none_or(|end| first_day <= end),
+        PlanSchedule::OneOff { .. } | PlanSchedule::Goal { .. } => false,
+    }
 }
 
 #[cfg(test)]

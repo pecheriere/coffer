@@ -1,10 +1,13 @@
 //! A split linked to a goal counts against the goal, not as an actual of its category
 //! (spec §6.9), so planned big-ticket spending never shows up as category overspend.
 
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use super::{DUPLICATE, REMOVED, REVISED, World, goal, is_empty, row, usd, world};
+
+const KIND_IN_USE: &str =
+    "a category used by a planned item or a goal-linked split cannot change kind";
 
 impl World {
     /// The one line of `report`'s goals.
@@ -116,7 +119,8 @@ async fn a_flagged_goal_charge_is_left_out_and_reported() {
 }
 
 /// Moving money to savings for a goal isn't spending it. A split can't be linked in a
-/// `transfer` category, so this one was linked in an `expense` one that then changed.
+/// `transfer` category, and a linked split's category can't change kind, so this is
+/// planted, as a database from before that refusal could hold it.
 #[tokio::test]
 async fn a_goal_linked_transfer_is_not_goal_spending() {
     let world = world().await;
@@ -128,17 +132,58 @@ async fn a_goal_linked_transfer_is_not_goal_spending() {
         .posted_linked(checking, "2026-10-06", -500, moved, &roof)
         .await;
     world
-        .admin_send(
-            Method::PATCH,
-            &format!("/api/v1/categories/{moved}"),
-            &json!({"kind": "transfer"}),
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE categories SET kind = 'transfer' WHERE id = ?",
+            &moved.to_string(),
         )
-        .await;
+        .await
+        .unwrap();
 
     let report = world.october().await;
 
     assert_eq!(World::goal_line(&report)["spent_against"], usd(0));
     assert!(is_empty(&report, "rows"), "nor is it a category's");
+}
+
+/// Otherwise the split would count nowhere: a goal reads `expense` splits, and a category
+/// reads unlinked ones.
+#[tokio::test]
+async fn a_category_with_a_linked_split_cannot_change_kind() {
+    let world = world().await;
+    let checking = world.checking().await;
+    let moved = world.expense("Moved").await;
+    let home = world.expense("Home").await;
+    let roof = world.item(&goal("Roof", 1_000, home)).await;
+    let linked = world
+        .posted_linked(checking, "2026-10-06", -500, moved, &roof)
+        .await;
+    let uri = format!("/api/v1/categories/{moved}");
+    let change = json!({"kind": "income"});
+
+    let (status, text) = world
+        .send(Method::PATCH, &uri, &world.admin, Some(&change))
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let refusal: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(refusal["detail"], KIND_IN_USE);
+    assert_eq!(
+        World::goal_line(&world.october().await)["spent_against"],
+        usd(500),
+        "the split still counts"
+    );
+
+    // With the link gone, nothing stands in the way.
+    world
+        .admin_send(
+            Method::PATCH,
+            &format!("/api/v1/transactions/{linked}"),
+            &json!({"splits": [{"category": moved, "minor_units": -500}]}),
+        )
+        .await;
+    world.admin_send(Method::PATCH, &uri, &change).await;
 }
 
 /// Its split counts nowhere else, so the line stays though the goal plans nothing more.

@@ -7,7 +7,7 @@ use serde_json::json;
 use super::{DUPLICATE, REMOVED, REVISED, World, budget, is_empty, row, usd, world};
 
 impl World {
-    async fn food_on_checking(&self) -> (AccountId, CategoryId) {
+    pub(super) async fn food_on_checking(&self) -> (AccountId, CategoryId) {
         (self.checking().await, self.expense("Food").await)
     }
 }

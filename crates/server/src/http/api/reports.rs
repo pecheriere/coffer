@@ -25,7 +25,8 @@ use crate::ledger::plan_report::PlanReportQuery;
                    can be negative. `transfer` categories don't count. `difference` is `planned` \
                    minus `actual`, and `rolling_average` the mean of `actual` over the \
                    `average_months` calendar months ending at that month, zeros included.\n\n\
-                   Money that isn't in `actual` is still reported. A charge, or a deposit in an \
+                   Money that isn't in `actual` is still reported, at what its splits say, not the \
+                   transaction's revised amount. A charge, or a deposit in an \
                    `income` category, whose provider removed it or revised it away from its \
                    splits stays out of `actual`, with the amount in `left_out`; a refund on such \
                    a transaction keeps counting. A possible duplicate stays in `actual`, with the \
@@ -35,10 +36,12 @@ use crate::ledger::plan_report::PlanReportQuery;
                    `left_out`. Outflows with no splits are never spending: `uncategorized` lists \
                    them, without invested and illiquid accounts.\n\n\
                    `rollovers` has a line for each category and currency with a budget: what was \
-                   `budgeted` over the reported months up to today's, what they `spent` on it once \
-                   bills and one-offs dated before today have taken their share, and the \
-                   `rollover` between them, positive for unspent and negative for overspent. A \
-                   bill has none, and the forecast doesn't carry it over. `partial_months` names \
+                   `budgeted` over the reported months up to today's, what they `spent` on it while \
+                   a budget was running, once bills and one-offs dated before today have taken \
+                   their share, and the `rollover` between them, positive for unspent and negative \
+                   for overspent. It is a window over those months, not a running balance, so \
+                   moving `from` changes it, and today's month counts all its budget occurrences. \
+                   A bill has none, and the forecast doesn't carry it over. `partial_months` names \
                    the reported month holding today, whose figures aren't final. Amounts are \
                    integer minor units, and currencies are never netted.\n\n\
                    Needs `read`; a token with account grants also needs `all` at `transactions`, \

@@ -463,7 +463,8 @@ async fn unknown_field_inside_amount_is_400() {
 
 #[tokio::test]
 async fn category_kind_cannot_change_under_a_planned_item() {
-    const REFUSAL: &str = "a category used by a planned item cannot change kind";
+    const REFUSAL: &str =
+        "a category used by a planned item or a goal-linked split cannot change kind";
     let world = world().await;
     let (_, category) = world.category(CategoryKind::Expense).await;
     let uri = format!("/api/v1/categories/{category}");

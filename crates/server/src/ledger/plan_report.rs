@@ -12,7 +12,7 @@ use coffer_domain::plan::{CalendarMonth, validate_as_of};
 use coffer_domain::plan_report::{
     GoalMonth, PlanReport, PlanReportInput, ReportItem, plan_vs_actual, report_window,
 };
-use coffer_store::PlanReportData;
+use coffer_store::{PlanReportData, StoreError};
 use jiff::civil::Date;
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -68,7 +68,14 @@ impl Ledger {
         }
         let (start, end_exclusive) = report_window(query.from, months, average_months)
             .map_err(|_| LedgerError::Invalid(TOO_LARGE))?;
-        let data = self.store.plan_report_data(start, end_exclusive).await?;
+        let data = self
+            .store
+            .plan_report_data(start, end_exclusive)
+            .await
+            .map_err(|err| match err {
+                StoreError::SumTooLarge => LedgerError::Invalid(TOO_LARGE),
+                other => other.into(),
+            })?;
         plan_vs_actual(&input(
             query.from,
             months,

@@ -9,6 +9,9 @@
 mod access;
 mod flagged;
 mod goals;
+mod limits;
+mod merged;
+mod rollover;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -45,7 +48,10 @@ struct World {
 
 /// Admin "alice" on the day `TODAY` in UTC, with nothing else.
 async fn world() -> World {
-    let server = TestServer::new().await;
+    world_on(TestServer::new().await).await
+}
+
+async fn world_on(server: TestServer) -> World {
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     let alice = Actor {
@@ -199,11 +205,15 @@ impl World {
     }
 
     async fn holding(&self, name: &str, kind: &str) -> AccountId {
+        self.holding_in(name, kind, "USD").await
+    }
+
+    async fn holding_in(&self, name: &str, kind: &str, currency: &str) -> AccountId {
         let answer = self
             .admin_send(
                 Method::POST,
                 "/api/v1/accounts",
-                &json!({"name": name, "kind": kind, "currency": "USD"}),
+                &json!({"name": name, "kind": kind, "currency": currency}),
             )
             .await;
         serde_json::from_value(answer["id"].clone()).unwrap()
@@ -584,6 +594,73 @@ async fn uncategorized_months_are_the_reported_ones() {
     );
 }
 
+/// One category spent from in two currencies: the SQL keeps them apart, and so does
+/// every figure.
+#[tokio::test]
+async fn two_currencies_in_one_category_are_two_rows() {
+    let world = world().await;
+    let dollars = world.checking().await;
+    let euros = world.holding_in("Euros", "checking", "EUR").await;
+    let food = world.expense("Food").await;
+    world.posted(dollars, "2026-10-06", -500, food).await;
+    world.posted(euros, "2026-10-07", -70, food).await;
+
+    let report = world.october().await;
+
+    let rows = report["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "one row each");
+    assert_eq!(rows[0]["currency"], "EUR");
+    assert_eq!(
+        rows[0]["actual"],
+        json!({"minor_units": 70, "currency": "EUR"})
+    );
+    assert_eq!(rows[1]["currency"], "USD");
+    assert_eq!(rows[1]["actual"], usd(500));
+}
+
+#[tokio::test]
+async fn two_currencies_are_two_uncategorized_rows() {
+    let world = world().await;
+    let dollars = world.checking().await;
+    let euros = world.holding_in("Euros", "checking", "EUR").await;
+    world.manual(dollars, "2026-10-06", -500).await;
+    world.manual(euros, "2026-10-07", -70).await;
+
+    let report = world.october().await;
+
+    assert_eq!(
+        report["uncategorized"],
+        json!([
+            {
+                "month": "2026-10",
+                "currency": "EUR",
+                "count": 1,
+                "total": {"minor_units": 70, "currency": "EUR"},
+            },
+            {"month": "2026-10", "currency": "USD", "count": 1, "total": usd(500)},
+        ])
+    );
+}
+
+/// Which month holds today is the household's to say.
+#[tokio::test]
+async fn the_partial_month_follows_the_household_time_zone() {
+    for (zone, partial) in [
+        ("Pacific/Auckland", "2026-03"),
+        ("America/Los_Angeles", "2026-02"),
+    ] {
+        let world = world_on(TestServer::with_env(&[("COFFER_TIMEZONE", zone)]).await).await;
+        world
+            .server
+            .clock
+            .set("2026-03-01T02:00:00Z".parse().unwrap());
+
+        let report = world.report("from=2026-02&months=2").await;
+
+        assert_eq!(report["partial_months"], json!([partial]));
+    }
+}
+
 #[tokio::test]
 async fn the_month_holding_today_is_partial() {
     let world = world().await;
@@ -689,6 +766,15 @@ async fn from_at_the_ends_of_the_plan_years_answers() {
         let (status, _) = world.send(Method::GET, &uri, &world.admin, None).await;
         assert_eq!(status, StatusCode::OK);
     }
+}
+
+/// Too big for the query's integer type is refused by its parser, as on the forecast.
+#[tokio::test]
+async fn months_past_the_query_type_is_400() {
+    let world = world().await;
+    let uri = format!("{REPORT}?from=2026-10&months=300");
+    let (status, _) = world.send(Method::GET, &uri, &world.admin, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

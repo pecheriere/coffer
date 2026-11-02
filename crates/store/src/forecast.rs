@@ -9,8 +9,8 @@ use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
 use coffer_domain::plan_report::{GoalMonth, MonthActual, MonthUncategorized};
 use jiff::civil::Date;
-use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteRow;
+use sqlx::{Row as _, SqliteConnection};
 
 use crate::accounts::account_from_row;
 use crate::balances::snapshot_from_row;
@@ -300,6 +300,15 @@ const REPORT_UNCATEGORIZED: &str = concat!(
      ORDER BY month, t.currency"
 );
 
+/// A summed amount. `SUM` that overflows fails its statement, but negating a sum of exactly
+/// `i64::MIN` makes it a float instead, which is the same sum too large for an integer.
+fn summed(row: &SqliteRow, column: &str) -> Result<i64, StoreError> {
+    row.try_get(column).map_err(|err| match err {
+        sqlx::Error::ColumnDecode { .. } => StoreError::SumTooLarge,
+        other => StoreError::from_sqlx(other),
+    })
+}
+
 fn count(row: &SqliteRow, column: &str) -> Result<u32, StoreError> {
     u32::try_from(int(row, column)?).map_err(|_| corrupt("a count out of range"))
 }
@@ -308,7 +317,7 @@ fn category_spent_from_row(row: &SqliteRow) -> Result<CategorySpentRow, StoreErr
     Ok(CategorySpentRow {
         category: parsed(row, "category")?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
-        spent_minor: int(row, "spent_minor")?,
+        spent_minor: summed(row, "spent_minor")?,
     })
 }
 
@@ -316,7 +325,7 @@ fn loose_ends_from_row(row: &SqliteRow) -> Result<LooseEndsRow, StoreError> {
     Ok(LooseEndsRow {
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         uncategorized_count: count(row, "uncategorized_count")?,
-        uncategorized_minor: int(row, "uncategorized_minor")?,
+        uncategorized_minor: summed(row, "uncategorized_minor")?,
         possible_duplicates: count(row, "possible_duplicates")?,
     })
 }
@@ -324,8 +333,8 @@ fn loose_ends_from_row(row: &SqliteRow) -> Result<LooseEndsRow, StoreError> {
 fn newer_spending_from_row(row: &SqliteRow) -> Result<NewerSpendingRow, StoreError> {
     Ok(NewerSpendingRow {
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
-        total_minor: int(row, "total_minor")?,
-        pending_minor: int(row, "pending_minor")?,
+        total_minor: summed(row, "total_minor")?,
+        pending_minor: summed(row, "pending_minor")?,
     })
 }
 
@@ -335,9 +344,9 @@ fn month_actual_from_row(row: &SqliteRow) -> Result<MonthActual, StoreError> {
         category: parsed(row, "category")?,
         kind: parsed(row, "kind")?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
-        net_minor: int(row, "net_minor")?,
-        left_out_minor: int(row, "left_out_minor")?,
-        possible_duplicate_minor: int(row, "possible_duplicate_minor")?,
+        net_minor: summed(row, "net_minor")?,
+        left_out_minor: summed(row, "left_out_minor")?,
+        possible_duplicate_minor: summed(row, "possible_duplicate_minor")?,
     })
 }
 
@@ -346,8 +355,8 @@ fn goal_month_from_row(row: &SqliteRow) -> Result<(PlannedItemId, GoalMonth), St
         parsed(row, "goal")?,
         GoalMonth {
             month: parsed(row, "month")?,
-            spent_minor: int(row, "spent_minor")?,
-            left_out_minor: int(row, "left_out_minor")?,
+            spent_minor: summed(row, "spent_minor")?,
+            left_out_minor: summed(row, "left_out_minor")?,
         },
     ))
 }
@@ -357,7 +366,7 @@ fn month_uncategorized_from_row(row: &SqliteRow) -> Result<MonthUncategorized, S
         month: parsed(row, "month")?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         count: count(row, "uncategorized_count")?,
-        total_minor: int(row, "uncategorized_minor")?,
+        total_minor: summed(row, "uncategorized_minor")?,
     })
 }
 
@@ -408,8 +417,8 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Backend failures, including a row that no longer parses and a sum too large
-    /// for the database.
+    /// [`StoreError::SumTooLarge`] for a sum too large for the database; backend
+    /// failures, including a row that no longer parses.
     pub async fn forecast_data(&self, as_of: Date) -> Result<ForecastData, StoreError> {
         let day = as_of.to_string();
         let month_start = as_of.first_of_month().to_string();
@@ -430,7 +439,7 @@ impl Store {
             .await
             .map_err(StoreError::from_sqlx)?
             .iter()
-            .map(|row| Ok((parsed(row, "goal")?, int(row, "spent_minor")?)))
+            .map(|row| Ok((parsed(row, "goal")?, summed(row, "spent_minor")?)))
             .collect::<Result<_, StoreError>>()?;
         let category_spent = sqlx::query(CATEGORY_SPENT)
             .bind(&day)
@@ -491,8 +500,8 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Backend failures, including a row that no longer parses and a sum too large
-    /// for the database.
+    /// [`StoreError::SumTooLarge`] for a sum too large for the database; backend
+    /// failures, including a row that no longer parses.
     pub async fn plan_report_data(
         &self,
         from: Date,
