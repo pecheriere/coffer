@@ -96,6 +96,9 @@ impl Store {
     /// What is known about fetching each currency's rates, by currency. A
     /// currency never tried has no entry.
     ///
+    /// This reveals every currency an account holds: a caller must not
+    /// return it to anyone below `all` accounts at `balances`.
+    ///
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
@@ -111,6 +114,10 @@ impl Store {
 
     /// `currency`'s rates for the days in `[from, to]`, newest first, at most
     /// 1,000 of them: the newest of a longer range.
+    ///
+    /// Which currencies have rates reveals the currencies accounts hold: a
+    /// caller must not return it to anyone below `all` accounts at
+    /// `balances`.
     ///
     /// # Errors
     ///
@@ -140,6 +147,9 @@ impl Store {
 
     /// The currencies accounts hold, closed ones included, in code order.
     ///
+    /// This reveals every account's currency: a caller must not return it to
+    /// anyone below `all` accounts at `balances`.
+    ///
     /// # Errors
     ///
     /// Backend failures, including a stored code that no longer parses.
@@ -156,8 +166,10 @@ impl Store {
 
 impl StoreTx {
     /// Store `rates` of `currency`, writing only those that are new or differ
-    /// from what is stored, and mark the currency `ready`. Answers the
-    /// earliest day that changed, or `None` when nothing did.
+    /// from what is stored, and mark the currency `ready` when it has any
+    /// rate; with none stored, even after an empty answer, it is
+    /// `not_published`. Answers the earliest day that changed, or `None` when
+    /// nothing did.
     ///
     /// # Errors
     ///
@@ -199,7 +211,8 @@ impl StoreTx {
         sqlx::query(
             "INSERT INTO fx_coverage (currency, status, first_on, last_on, last_attempt_at, \
              last_success_at, last_error) \
-             SELECT ?1, 'ready', MIN(on_date), MAX(on_date), ?2, ?2, NULL \
+             SELECT ?1, IIF(COUNT(*) > 0, 'ready', 'not_published'), MIN(on_date), \
+             MAX(on_date), ?2, IIF(COUNT(*) > 0, ?2, NULL), NULL \
              FROM fx_rates WHERE quote = ?1 \
              ON CONFLICT (currency) DO UPDATE SET status = excluded.status, \
              first_on = excluded.first_on, last_on = excluded.last_on, \

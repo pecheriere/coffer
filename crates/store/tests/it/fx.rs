@@ -170,6 +170,54 @@ async fn earliest_changed_date_is_returned() {
 }
 
 #[tokio::test]
+async fn earliest_changed_date_is_returned_whatever_the_input_order() {
+    let (_dir, store) = open().await;
+    let (a, b, c) = (date(2026, 10, 28), date(2026, 10, 29), date(2026, 10, 30));
+    upsert(
+        &store,
+        "USD",
+        &[obs(a, "1.10"), obs(b, "1.11"), obs(c, "1.12")],
+        at(0),
+    )
+    .await;
+    let changed = upsert(
+        &store,
+        "USD",
+        &[obs(a, "1.10"), obs(b, "1.115"), obs(c, "1.125")],
+        at(60),
+    )
+    .await;
+    assert_eq!(changed, Some(b));
+}
+
+#[tokio::test]
+async fn the_earliest_change_may_be_in_a_later_chunk() {
+    let (_dir, store) = open().await;
+    let first = date(2024, 1, 1);
+    let day = |n: i64| first.checked_add(jiff::Span::new().days(n)).unwrap();
+    let stored: Vec<_> = (0..600).map(|n| obs(day(n), "1.1")).collect();
+    upsert(&store, "USD", &stored, at(0)).await;
+    // Newest first: the corrections of the oldest days come last, after more
+    // than one chunk of later ones.
+    let corrected: Vec<_> = (0..600).rev().map(|n| obs(day(n), "1.2")).collect();
+    let changed = upsert(&store, "USD", &corrected, at(60)).await;
+    assert_eq!(changed, Some(day(0)));
+}
+
+#[tokio::test]
+async fn a_later_chunk_does_not_forget_an_earlier_change() {
+    let (_dir, store) = open().await;
+    let first = date(2024, 1, 1);
+    let day = |n: i64| first.checked_add(jiff::Span::new().days(n)).unwrap();
+    let stored: Vec<_> = (0..600).map(|n| obs(day(n), "1.1")).collect();
+    upsert(&store, "USD", &stored, at(0)).await;
+    // Oldest first: the earliest correction is in the first chunk.
+    let corrected: Vec<_> = (0..600).map(|n| obs(day(n), "1.2")).collect();
+    let changed = upsert(&store, "USD", &corrected, at(60)).await;
+    assert_eq!(changed, Some(day(0)));
+}
+
+#[tokio::test]
 async fn coverage_tracks_first_and_last() {
     let (_dir, store) = open().await;
     assert_eq!(store.fx_coverage().await.unwrap(), Vec::new());
@@ -197,6 +245,29 @@ async fn coverage_tracks_first_and_last() {
             last_error: None,
         }
     );
+}
+
+#[tokio::test]
+async fn an_empty_answer_with_rates_stored_stays_ready() {
+    let (_dir, store) = open().await;
+    upsert(&store, "USD", &[obs(date(2026, 10, 30), "1.12")], at(0)).await;
+    assert_eq!(upsert(&store, "USD", &[], at(600)).await, None);
+    let coverage = coverage_of(&store, "USD").await;
+    assert_eq!(coverage.status, FxFetchStatus::Ready);
+    assert_eq!(coverage.last_on, Some(date(2026, 10, 30)));
+    assert_eq!(coverage.last_attempt_at, at(600));
+    assert_eq!(coverage.last_success_at, Some(at(600)));
+}
+
+#[tokio::test]
+async fn an_empty_answer_with_nothing_stored_is_not_published() {
+    let (_dir, store) = open().await;
+    assert_eq!(upsert(&store, "THB", &[], at(0)).await, None);
+    let coverage = coverage_of(&store, "THB").await;
+    assert_eq!(coverage.status, FxFetchStatus::NotPublished);
+    assert_eq!(coverage.first_on, None);
+    assert_eq!(coverage.last_on, None);
+    assert_eq!(coverage.last_success_at, None);
 }
 
 #[tokio::test]
@@ -346,6 +417,21 @@ async fn display_currency_starts_unset() {
     assert_eq!(store.display_currency().await.unwrap(), None);
     let mut tx = store.begin().await.unwrap();
     assert_eq!(tx.display_currency().await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn setting_it_answers_the_previous_value() {
+    let (_dir, store) = open().await;
+    let mut tx = store.begin().await.unwrap();
+    assert_eq!(tx.set_display_currency(cur("USD")).await.unwrap(), None);
+    assert_eq!(
+        tx.set_display_currency(cur("GBP")).await.unwrap(),
+        Some(cur("USD"))
+    );
+    assert_eq!(
+        tx.set_display_currency(cur("GBP")).await.unwrap(),
+        Some(cur("GBP"))
+    );
 }
 
 #[tokio::test]

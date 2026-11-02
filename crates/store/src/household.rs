@@ -233,13 +233,19 @@ impl StoreTx {
         fetch_display_currency(&mut *self.tx).await
     }
 
-    /// Set the display currency. With no settings row yet, the row is made
-    /// with the forecast defaults; an existing row keeps every other value.
+    /// Set the display currency and answer the one it replaced, which is the
+    /// new one again when nothing changed. With no settings row yet, the row
+    /// is made with the forecast defaults; an existing row keeps every other
+    /// value.
     ///
     /// # Errors
     ///
     /// Backend failures.
-    pub async fn set_display_currency(&mut self, currency: Currency) -> Result<(), StoreError> {
+    pub async fn set_display_currency(
+        &mut self,
+        currency: Currency,
+    ) -> Result<Option<Currency>, StoreError> {
+        let previous = fetch_display_currency(&mut *self.tx).await?;
         let defaults = ForecastSettings::default();
         let (kind, minor, floor_currency, months) = floor_columns(&defaults);
         sqlx::query(
@@ -259,6 +265,6 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
-        Ok(())
+        Ok(previous)
     }
 }

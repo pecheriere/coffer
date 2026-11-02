@@ -142,3 +142,42 @@ async fn the_coverage_table_refuses_the_euro() {
     .await;
     assert!(refused.is_err());
 }
+
+async fn refused_rate(rate: &'static str) -> bool {
+    let (_dir, store) = open().await;
+    sqlx::query(
+        "INSERT INTO fx_rates (quote, on_date, rate, source, fetched_at) \
+         VALUES ('USD', '2026-10-30', ?, 'ecb', 0)",
+    )
+    .bind(rate)
+    .execute(&store.pool)
+    .await
+    .is_err()
+}
+
+#[tokio::test]
+async fn the_rates_table_refuses_a_rate_of_zero() {
+    for zero in ["0", "0.0", "00.000"] {
+        assert!(refused_rate(zero).await);
+    }
+    assert!(!refused_rate("0.5").await);
+}
+
+#[tokio::test]
+async fn the_rates_table_refuses_a_rate_that_is_not_a_number() {
+    for bad in ["1.2.3", ".5", "5.", "."] {
+        assert!(refused_rate(bad).await);
+    }
+    assert!(!refused_rate("136").await);
+}
+
+#[tokio::test]
+async fn the_coverage_table_refuses_ready_without_rates() {
+    let (_dir, store) = open().await;
+    let refused = sqlx::query(
+        "INSERT INTO fx_coverage (currency, status, last_attempt_at) VALUES ('USD', 'ready', 0)",
+    )
+    .execute(&store.pool)
+    .await;
+    assert!(refused.is_err());
+}
