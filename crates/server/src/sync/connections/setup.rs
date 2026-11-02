@@ -26,6 +26,8 @@ impl SyncService {
     /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
     /// access to every account;
     /// [`SyncError::Invalid`] when this server does not offer `kind`;
+    /// [`SyncError::PlaidBudgetSpent`] when a public token is sent to Plaid
+    /// too often;
     /// [`SyncError::Provider`] when the provider refuses the input;
     /// [`SyncError::Vault`] when the credentials cannot be sealed; storage
     /// failures.
@@ -42,6 +44,14 @@ impl SyncService {
             .registry
             .get(kind)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
+        // Only this pair calls Plaid: `SimpleFin` shares this path, agents
+        // included, and a provider refuses another's input by itself.
+        if matches!(
+            (kind, &input),
+            (ProviderKind::Plaid, ConnectInput::PlaidPublicToken(_))
+        ) {
+            self.plaid_budget.spend(actor.member, self.clock.now())?;
+        }
         let credentials = provider.connect(input).await.map_err(SyncError::Provider)?;
         let view = match self
             .store_connection(actor, kind, label, &credentials, slot)
@@ -140,7 +150,8 @@ impl SyncService {
     ///
     /// [`SyncError::Denied`] without [`Action::ManageConnections`] or write
     /// access to every account; [`SyncError::Invalid`] when this server does
-    /// not offer Plaid; [`SyncError::Provider`] when Plaid refuses; storage
+    /// not offer Plaid; [`SyncError::PlaidBudgetSpent`] when the member asked
+    /// Plaid too often; [`SyncError::Provider`] when Plaid refuses; storage
     /// failures.
     pub async fn new_link_token(&self, actor: &Actor) -> Result<SecretString, SyncError> {
         authorize(actor, Action::ManageConnections)?;
@@ -150,6 +161,7 @@ impl SyncService {
             .registry
             .get(ProviderKind::Plaid)
             .ok_or(SyncError::Invalid(PROVIDER_NOT_OFFERED))?;
+        self.plaid_budget.spend(actor.member, self.clock.now())?;
         provider
             .link_token(actor.member, None)
             .await

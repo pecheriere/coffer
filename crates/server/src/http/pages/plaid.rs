@@ -9,7 +9,8 @@
 //! into the page and into no log; HTML is never stored by the browser's
 //! caches ([`super::security_headers`]). A public token is passed on to Plaid
 //! by the sync service and never comes back: its type hides it, and errors
-//! never quote what was sent.
+//! never quote what was sent. The sync service limits how often a member's
+//! requests here call Plaid.
 
 use axum::Json;
 use axum::Router;

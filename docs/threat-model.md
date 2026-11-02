@@ -181,8 +181,14 @@
   leaked `write` token can start at most that budget of sync runs (16 in 24
   hours for SimpleFin, 48 for Plaid) per connection. One run can make several
   provider requests: for Plaid, up to 601 when it pages and restarts as often as
-  allowed. Removals are not budgeted, and a member's Link pages call Plaid
-  without a limit (issue #24).
+  allowed. Removals are not budgeted.
+- **A member's Link pages are bounded too.** The two Link pages and the public
+  token exchange share a budget of 20 requests per member in any 10 minutes,
+  each one call to Plaid (an exchange whose result cannot be stored also gives
+  the new Item up again). Beyond it they answer 429 with `Retry-After`
+  and call nothing. A failed call counts; a request refused for any other
+  reason does not. The budget is kept in memory, so a restart resets it, and
+  agent tokens cannot reach these routes.
 - **Plaid's script runs on the Link page.** Link needs Plaid's script from
   `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
   from that one URL and changes it in place, so coffer cannot pin a version or
