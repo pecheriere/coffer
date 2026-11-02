@@ -17,6 +17,7 @@ openapi = ["dep:utoipa"]
 jiff = { workspace = true, features = ["serde"] }
 serde.workspace = true
 thiserror.workspace = true
+unicode-properties.workspace = true
 utoipa = { workspace = true, optional = true }
 uuid.workspace = true
 

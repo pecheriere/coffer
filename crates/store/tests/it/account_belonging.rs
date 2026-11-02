@@ -79,7 +79,7 @@ INSERT INTO provider_accounts (id, connection_id, provider_account_id, name, ins
         first_seen_at, last_seen_at, last_applied_at, held_syncs, hold_released,
         released_records, release_withdrawn, held_records) VALUES
     ('feed-bound', 'bank', 'ext-1', 'Bound', 'Institution', 'USD', 'savings',
-        '019a0000-0000-7000-8000-000000000001', '12.34', '2026-10-01', 'odd', 5, 6, 7, 2, 1, 3, 1, 4),
+        '019a0000-0000-7000-8000-000000000001', '12.34', '2026-10-01', 'odd', 5, 6, 7, 2, 1, 3, 0, 4),
     ('feed-free', 'bank', 'ext-2', 'Free', NULL, 'usd', NULL, NULL, NULL, NULL, NULL, 8, 9, NULL,
         0, 0, 0, 0, 0);
 INSERT INTO balance_snapshots (account_id, on_date, balance_minor, source, recorded_at) VALUES
@@ -600,6 +600,21 @@ async fn the_household_has_no_beneficiary() {
 }
 
 #[tokio::test]
+async fn belongs_to_overridden_is_a_flag() {
+    let (_dir, pool) = migrated_empty().await;
+    let with = |flag: i64| {
+        format!(
+            "INSERT INTO accounts (id, name, kind, currency, liquidity, liquidity_overridden, \
+             include_in_net_worth, include_in_forecast, belongs_to_overridden, created_at) \
+             VALUES (lower(hex(randomblob(18))), 'Name', 'checking', 'USD', 'cash', 0, 1, 1, \
+             {flag}, 0)"
+        )
+    };
+    run(&pool, &with(1)).await.unwrap();
+    assert_refused_by_check(&pool, &with(2)).await;
+}
+
+#[tokio::test]
 async fn a_stored_beneficiary_respects_its_maximum() {
     let (_dir, pool) = migrated_empty().await;
     let with = |label: &str| {
@@ -626,6 +641,28 @@ fn college_fund() -> NewAccount {
         belongs_to: BelongsTo::SomeoneElse,
         belongs_to_overridden: true,
         beneficiary: Some(Beneficiary::parse("Child A").unwrap()),
+    }
+}
+
+/// A record's or a change's `Debug` can reach a log line; a beneficiary may be a child's name.
+#[tokio::test]
+async fn debug_output_holds_no_beneficiary() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("coffer.db")).await.unwrap();
+    let new = college_fund();
+    let mut tx = store.begin().await.unwrap();
+    let inserted = tx.insert_account(new.clone()).await.unwrap();
+    let changes = AccountChanges {
+        beneficiary: Some(Some(Beneficiary::parse("Child A").unwrap())),
+        ..AccountChanges::default()
+    };
+    for shown in [
+        format!("{inserted:?}"),
+        format!("{new:?}"),
+        format!("{changes:?}"),
+    ] {
+        assert!(!shown.contains("Child A"), "the label stays out");
+        assert!(shown.contains("<redacted>"), "and says it was held back");
     }
 }
 

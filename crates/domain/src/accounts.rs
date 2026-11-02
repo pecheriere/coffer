@@ -3,8 +3,9 @@
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
 
-use crate::identity::label_type;
+use crate::identity::{label_type, parse_label};
 use crate::transactions::string_enum;
 
 /// Why an account value was rejected. Messages never echo the input.
@@ -22,7 +23,10 @@ pub enum AccountError {
     UnknownBalanceSource,
     #[error("unknown value for whose money an account is")]
     UnknownBelongsTo,
-    #[error("beneficiary must be 1 to 64 characters without control characters")]
+    #[error(
+        "beneficiary must be 1 to 64 characters with something visible and no control, format or \
+         separator characters"
+    )]
     InvalidBeneficiary,
 }
 
@@ -262,10 +266,52 @@ label_type!(
 );
 label_type!(
     /// Who or what an account that isn't the household's is held for: a label, not a person.
+    /// It names a bucket and may be a child's name, so what it holds can be seen, and its
+    /// `Debug` holds none of it.
     Beneficiary,
     AccountError::InvalidBeneficiary,
-    max = 64
+    max = 64,
+    rule = " with something visible and no control, format or separator characters",
+    check = parse_beneficiary
 );
+
+impl std::fmt::Debug for Beneficiary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Beneficiary(<redacted>)")
+    }
+}
+
+/// A format character reorders or hides text, and a separator other than the plain space
+/// makes a second spelling of a label that looks the same.
+fn is_hidden_or_separator(c: char) -> bool {
+    match c.general_category() {
+        GeneralCategory::Format
+        | GeneralCategory::LineSeparator
+        | GeneralCategory::ParagraphSeparator
+        | GeneralCategory::SpaceSeparator => c != ' ',
+        _ => false,
+    }
+}
+
+/// Whether `c` draws something by itself: a mark needs a base, an unassigned or private
+/// character says nothing, and these letters and this symbol are blank.
+fn is_visible(c: char) -> bool {
+    matches!(
+        c.general_category_group(),
+        GeneralCategoryGroup::Letter
+            | GeneralCategoryGroup::Number
+            | GeneralCategoryGroup::Punctuation
+            | GeneralCategoryGroup::Symbol
+    ) && !matches!(
+        c,
+        '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}' | '\u{2800}'
+    )
+}
+
+fn parse_beneficiary(input: &str, max: usize) -> Option<String> {
+    parse_label(input, max)
+        .filter(|label| !label.chars().any(is_hidden_or_separator) && label.chars().any(is_visible))
+}
 
 #[cfg(test)]
 mod tests {
@@ -427,12 +473,68 @@ mod tests {
             .to_string();
         assert_eq!(
             message,
-            "beneficiary must be 1 to 64 characters without control characters"
+            "beneficiary must be 1 to 64 characters with something visible and no control, \
+             format or separator characters"
         );
         assert!(
             !message.contains("Child"),
             "the error holds none of the input"
         );
+    }
+
+    #[test]
+    fn beneficiary_refuses_what_can_t_be_seen() {
+        for bad in [
+            "Child\u{202E}A",   // right-to-left override
+            "\u{202E}Child A",  // at the start, where trimming doesn't reach
+            "Child\u{2028}A",   // line separator
+            "Child\u{2029}A",   // paragraph separator
+            "Child\u{200B}A",   // zero width space
+            "Child\u{00AD}A",   // soft hyphen
+            "Child\u{FEFF}A",   // byte order mark
+            "Child\u{00A0}A",   // no-break space, a second spelling of a plain one
+            "Child\u{3000}A",   // ideographic space
+            "\u{200B}",         // nothing else
+            "\u{200B}\u{200D}", // nothing else
+            "\u{0301}",         // a mark with nothing to mark
+            "\u{FE0F}",         // a variation selector with nothing to vary
+            "\u{3164}",         // a blank letter
+            "\u{FFA0}",         // a blank letter
+            "\u{115F}\u{1160}", // blank letters
+            "\u{2800}",         // a blank symbol
+            "\u{E000}",         // private use: nothing says what it shows
+        ] {
+            assert_eq!(
+                Beneficiary::parse(bad),
+                Err(AccountError::InvalidBeneficiary),
+                "{}",
+                bad.escape_unicode()
+            );
+        }
+    }
+
+    #[test]
+    fn beneficiary_keeps_what_people_write() {
+        for good in [
+            "Child A",
+            "Family fund",
+            "Zoe\u{0308}", // a mark on a letter
+            "Zo\u{00EB} O'Neil-Smith",
+            "\u{674E}\u{96F7}",                 // a name in Han
+            "\u{0623}\u{062D}\u{0645}\u{062F}", // a name in Arabic
+            "2030",
+            "?",
+            "\u{1F393}", // a symbol alone
+        ] {
+            assert_eq!(Beneficiary::parse(good).unwrap().as_str(), good);
+        }
+    }
+
+    #[test]
+    fn a_beneficiary_s_debug_is_redacted() {
+        let label = Beneficiary::parse("Child A").unwrap();
+        assert_eq!(format!("{label:?}"), "Beneficiary(<redacted>)");
+        assert_eq!(label.to_string(), "Child A", "showing it stays deliberate");
     }
 
     #[test]
