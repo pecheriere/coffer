@@ -235,7 +235,11 @@
     sync, adding, reconnecting or removing a connection, creating or
     changing a category or group), and is refused with a 403
     that names no account otherwise.
-  - Connections list only the provider accounts the token may see.
+  - A connection's label is a member's free text and could name a child, so a
+    token lists only the connections serving an account it sees, each with only
+    the provider accounts it may see. One serving no account needs an `all`
+    grant. A connection serving both a visible and a hidden account still shows
+    its label to a token seeing the visible one.
   - Balances reported for an unbound provider account are kept apart from the
     accounts' snapshots (`kept_balances`), and no route, page, report or audit
     entry reads them. Only the bind does, which needs `all` at `write`; it

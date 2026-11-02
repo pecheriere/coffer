@@ -159,7 +159,7 @@ async fn an_actor_not_seeing_every_account_gets_no_signal() {
     world.syncs(HELD_AFTER_SYNCS).await;
     assert!(world.held_cursor().await.is_some());
 
-    let account = world.account().await;
+    let account = world.bound("acct-checking").await;
     for grants in [
         vec![TokenGrant {
             target: GrantTarget::Account(account),

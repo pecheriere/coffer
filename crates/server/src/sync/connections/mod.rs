@@ -16,7 +16,7 @@ use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
 use coffer_domain::policy::{
-    AccountAccess, AccountLevel, Action, authorize, authorize_every_account,
+    AccountAccess, AccountLevel, Action, authorize, authorize_every_account, connection_visible,
 };
 use coffer_store::{ConnectionRecord, ConnectionStatus, ProviderAccountRecord, StoreTx};
 use jiff::civil::Date;
@@ -333,8 +333,9 @@ impl SyncService {
         Ok(())
     }
 
-    /// Every connection, removed ones included, oldest first, each with the
-    /// provider accounts the actor may see. Its last error is the provider's
+    /// The connections the actor may see ([`connection_visible`]), removed ones
+    /// included, oldest first, each with the provider accounts the actor may
+    /// see. Its last error is the provider's
     /// text and could name any account it serves, so only an actor who sees
     /// every account at [`AccountLevel::Transactions`] gets it, and the same
     /// goes for the held cursor, which names provider accounts; the status
@@ -359,6 +360,9 @@ impl SyncService {
                 .filter(|account| account.connection == connection.id)
                 .cloned()
                 .collect();
+            if !connection_visible(&access, own.iter().filter_map(|account| account.account)) {
+                continue;
+            }
             let held = if sees_errors && connection.status != ConnectionStatus::Removed {
                 held_cursor(&own)
             } else {

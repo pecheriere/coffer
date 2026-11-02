@@ -117,7 +117,9 @@ token's access.
   they are a 403 whose detail says "this action needs write access to
   every account" (or `transactions`). Unbound provider accounts are listed
   (in `GET /api/v1/provider-accounts` and in connections) only with `all`
-  at `transactions`; bound ones follow their account. A connection's
+  at `transactions`; bound ones follow their account. A connection itself is
+  listed only if it serves an account the token sees, at any level; one serving
+  no account yet needs an `all` grant, at any level. A connection's
   `last_error` could name any account it serves, so without `all` at
   `transactions` it is `null`, and so is `held_cursor` (below); its `status`
   still shows the problem. Using
@@ -510,7 +512,8 @@ kept for its unbound accounts. There is no way to unbind: a bound provider
 account stays bound. coffer syncs every connection on a schedule
 (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.
 
-- `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
+- `GET /api/v1/connections` returns `{"items": [...]}`, the connections the
+  token may see: each one's
   `status` (`active`, `error`, `reauth_required` or `removed`),
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
   `next_sync_at`, `held_cursor` and the provider accounts the token may see.
