@@ -8,6 +8,7 @@ mod categories;
 pub(crate) mod connections;
 pub mod extract;
 mod forecast;
+mod fx;
 mod household;
 mod me;
 mod members;
@@ -71,6 +72,9 @@ fn routes() -> ApiRouter {
         .op(routes!(forecast::get))
         .op(routes!(forecast::what_if))
         .op(routes!(reports::plan_vs_actual))
+        .op(routes!(reports::net_worth))
+        .op(routes!(fx::coverage))
+        .op(routes!(fx::rates))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

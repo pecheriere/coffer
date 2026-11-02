@@ -138,7 +138,7 @@ async fn unset_settings_read_as_defaults() {
     assert_eq!(
         settings,
         json!({"floor": null, "include_income": false,
-               "default_horizon_months": 3, "stale_after_days": 7}),
+               "default_horizon_months": 3, "stale_after_days": 7, "display_currency": null}),
         "no row reads as the defaults, with the floor present and null"
     );
 }
@@ -159,7 +159,8 @@ async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
 
     assert_eq!(status, StatusCode::OK, "an admin token may change settings");
     let expected = json!({"floor": fixed(500_000), "include_income": true,
-                          "default_horizon_months": 6, "stale_after_days": 14});
+                          "default_horizon_months": 6, "stale_after_days": 14,
+                          "display_currency": null});
     assert_eq!(
         answer, expected,
         "the answer is the settings as they now are"
@@ -487,12 +488,10 @@ async fn account_grants_do_not_change_settings_access() {
 async fn member_session_reads_but_cannot_change() {
     let world = world().await;
 
-    let settings = world.server.ledger.forecast_settings(&world.bob).await;
-    assert_eq!(
-        settings.unwrap(),
-        coffer_domain::plan::ForecastSettings::default(),
-        "a member session reads"
-    );
+    let settings = world.server.ledger.household_settings(&world.bob).await;
+    let settings = settings.unwrap();
+    assert_eq!(settings.stale_after_days, 7, "a member session reads");
+    assert_eq!(settings.display_currency, None, "none set yet");
     let patch = ForecastSettingsPatch {
         include_income: Some(true),
         ..ForecastSettingsPatch::default()

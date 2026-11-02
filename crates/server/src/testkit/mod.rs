@@ -299,6 +299,7 @@ impl TestServer {
             clock.clone(),
             Arc::clone(&access),
             config.timezone.clone(),
+            config.fx_provider,
         ));
         let registry = registry(&config);
         let sync = Arc::new(SyncService::new(

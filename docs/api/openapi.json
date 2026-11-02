@@ -2531,13 +2531,239 @@
         ]
       }
     },
+    "/api/v1/fx/coverage": {
+      "get": {
+        "tags": [
+          "fx"
+        ],
+        "summary": "What is known of fetching each currency's rates.",
+        "description": "For each currency a fetch was tried for: `status` (`ready`, `not_published` or `failing`), the `first_on` and `last_on` of the rates held, when it was last tried and last succeeded, and `last_error`, a fixed code (`unavailable`, `malformed` or `network`). A currency never tried has no entry.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
+        "operationId": "getFxCoverage",
+        "responses": {
+          "200": {
+            "description": "What is known, by currency.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxCoverageList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fx/rates": {
+      "get": {
+        "tags": [
+          "fx"
+        ],
+        "summary": "One currency's stored rates.",
+        "description": "A currency's published rates in a range of at most 1,000 days, newest first: `rate` is units of the currency per one euro, as exact decimal text. A weekend or holiday has no entry, and a report uses the most recent earlier rate. The euro has no entries, being 1 on every day. A range too long or inverted is 422; an unknown code or a date not written `YYYY-MM-DD` is 400.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
+        "operationId": "getFxRates",
+        "parameters": [
+          {
+            "name": "currency",
+            "in": "query",
+            "description": "The currency, an ISO 4217 code.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first day, written exactly `YYYY-MM-DD`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last day, written exactly `YYYY-MM-DD`. The range covers at most 1,000 days,\nboth ends counted.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxRateList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/household/settings": {
       "get": {
         "tags": [
           "household"
         ],
-        "summary": "The household's forecast settings.",
-        "description": "The forecast settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon and when a balance counts as stale. Needs `read`. A token with account grants below `all` at `transactions` reads `floor` as `null`, the same as none set: a floor is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
+        "summary": "The household's settings.",
+        "description": "The settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon, when a balance counts as stale, and the display currency net worth is shown in (`null` until an admin sets it: it is never guessed). Needs `read`. A token with account grants below `all` at `transactions` reads `floor` as `null`, the same as none set: a floor is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
         "operationId": "getHouseholdSettings",
         "responses": {
           "200": {
@@ -2545,7 +2771,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForecastSettings"
+                  "$ref": "#/components/schemas/HouseholdSettings"
                 }
               }
             }
@@ -2631,8 +2857,8 @@
         "tags": [
           "household"
         ],
-        "summary": "Changes the household's forecast settings.",
-        "description": "Changes the settings given; a field left out stays. A floor can be replaced but never unset: `floor: null` leaves it. A patch that changes nothing writes nothing. A number out of range is 422; one outside the field's type (such as 300 months) is 400. Needs `admin`, whatever the token's account grants, but the answer shows `floor` only as `getHouseholdSettings` would to that token.",
+        "summary": "Changes the household's settings.",
+        "description": "Changes the settings given; a field left out stays. A floor or a display currency can be replaced but never unset: `floor: null` or `display_currency: null` leaves it. A patch that changes nothing writes nothing. A new display currency recomputes all net worth history before this answers, and is audited with the old and new codes. A number out of range is 422; one outside the field's type (such as 300 months) or an unknown currency code is 400. Needs `admin`, whatever the token's account grants, but the answer shows `floor` only as `getHouseholdSettings` would to that token.",
         "operationId": "updateHouseholdSettings",
         "requestBody": {
           "content": {
@@ -2650,7 +2876,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForecastSettings"
+                  "$ref": "#/components/schemas/HouseholdSettings"
                 }
               }
             }
@@ -4102,6 +4328,143 @@
           },
           "409": {
             "description": "`currency_mismatch` when the provider's currency is not a supported ISO 4217 code; `conflict` when the provider account is already bound or its connection is removed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/net-worth": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Net worth over time.",
+        "description": "What the household is worth, period by period, in the display currency.\n\nA point is the value on the last day of its period, or on the last day available when it says `partial`: `on` is that day and `period_start` the first day of the period inside the range. A week ends on Sunday. Each account's latest balance on or before `on` counts, so a balance carries forward until a newer one. A period where nothing counts is left out, and at most 1,000 periods are answered: a longer range is 422, whatever is stored. `through` is the last day with values: no later day, and no day after today, is a point.\n\n`total` is the sum of the counted accounts' amounts, each converted and rounded on its own, so every breakdown adds up to it. It is `null`, never a partial sum, when one of them has no amount: `unconverted` names the accounts, and a caution says why. A `by_liquidity` line is `null` the same way. `by_currency` is the native sum per currency, with no rate involved, so nothing is omitted; only an account with no value that day can't be in it.\n\nIn `accounts`, each account says whether it counts, its `first_on` (a jump that day is an account arriving, not money) and its `closed_on` (a closed account stops counting that day unless it still owes). Its `points` say the `balance` in its own currency, `balance_on`, the date of the snapshot that balance comes from, `balance_source`, the `amount` in the display currency and `rate_on`, the older of the dates of the rates used: a weekend reports Friday's.\n\n`status` says how far to trust it. `firm` is numbers with nothing to warn about. `provisional` is numbers with `cautions`. `unavailable` is `blockers`: `display_currency_not_set` (an admin has to choose one, and points still hold `by_currency`), `rebuilding` (no points until the values are rebuilt) or `no_counted_accounts` (not a net worth of zero).\n\nThe cautions: `rate_missing`, with a reason of `not_fetched_yet`, `not_published`, `fetch_failing`, `provider_off` or `none_that_early`; `rate_stale`, a rate more than a week older than its day, as for a discontinued currency; `amount_too_large`, a conversion that doesn't fit; `balance_stale`, an old balance on the latest point; `to_date_not_yet_filled`, later days not answered yet; `daily_value_missing`, an account with no value on a day after its first, which is a hole and not money leaving; `nothing_counted_after_last_point`, so the last point isn't the value now; `liability_balance_positive`, perhaps a wrong sign, added as it stands; and `closed_account_owing`, a debt still counting.\n\nNeeds `read`. **A token with account grants gets the sum of the accounts it can see at `balances`, and nothing marks it as partial**, since that would reveal that there are others. An agent holding such a token must not report the sum as the whole household's. Nothing in the answer depends on an account the token can't see. Amounts are integer minor units. It writes nothing.",
+        "operationId": "getNetWorth",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first day, written exactly `YYYY-MM-DD`, in the years 1970 to 2200: by default\none year before `to` or today, whichever is earlier. A `from` after today, or after\n`to`, is refused with 422.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last day, written exactly `YYYY-MM-DD`, in the years 1970 to 2200: by default\nthe household's today. No later day than today or `through` is answered.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "`day`, `week` (ending on Sunday) or `month`, the default.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NetWorthInterval"
+            }
+          },
+          {
+            "name": "account_points",
+            "in": "query",
+            "description": "Whether each account's own points are answered too, by default `true`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetWorthReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5656,6 +6019,130 @@
         },
         "additionalProperties": false
       },
+      "AccountPoint": {
+        "type": "object",
+        "description": "One account at one point.",
+        "required": [
+          "on",
+          "balance",
+          "balance_on",
+          "balance_source",
+          "counted",
+          "amount",
+          "rate_on",
+          "conversion"
+        ],
+        "properties": {
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "In the display currency."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance": {
+            "$ref": "#/components/schemas/Money",
+            "description": "In the account's own currency."
+          },
+          "balance_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The date of the snapshot this balance comes from."
+          },
+          "balance_source": {
+            "$ref": "#/components/schemas/BalanceSource"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/ConversionState"
+          },
+          "counted": {
+            "type": "boolean",
+            "description": "Whether it counts on this day: not on or after its closing day, unless it\nstill owes."
+          },
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "rate_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The older of the rate dates used."
+          }
+        }
+      },
+      "AccountSeries": {
+        "type": "object",
+        "description": "One visible account and its values.",
+        "required": [
+          "account",
+          "name",
+          "liquidity",
+          "currency",
+          "counted",
+          "not_counted",
+          "first_on",
+          "closed_on",
+          "points"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "closed_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The household's day it closed: from then it counts only while it owes, so\na drop on that day is an account closing, not money."
+          },
+          "counted": {
+            "type": "boolean",
+            "description": "Whether it is included in net worth at all. A point says whether that day\ncounted."
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "first_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Its first day with a value: a jump on that day is an account arriving,\nnot money."
+          },
+          "liquidity": {
+            "$ref": "#/components/schemas/LiquidityClass"
+          },
+          "name": {
+            "type": "string"
+          },
+          "not_counted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NetWorthNotCountedReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountPoint"
+            },
+            "description": "Its value at each point, if it had one by then. An account switched out of net\nworth (`not_counted`) has none."
+          }
+        }
+      },
       "AccountSource": {
         "type": "string",
         "description": "Where an account's data comes from.",
@@ -6938,6 +7425,17 @@
           }
         }
       },
+      "ConversionState": {
+        "type": "string",
+        "description": "How an account's balance on a day became an amount in the display\ncurrency.",
+        "enum": [
+          "same",
+          "converted",
+          "missing",
+          "too_large",
+          "no_display_currency"
+        ]
+      },
       "Currency": {
         "type": "string",
         "description": "An active ISO 4217 currency code; its exponent gives the minor unit (USD 2, JPY 0).",
@@ -7149,47 +7647,6 @@
           }
         }
       },
-      "ForecastSettings": {
-        "type": "object",
-        "description": "The household's defaults for a forecast.",
-        "required": [
-          "include_income",
-          "default_horizon_months",
-          "stale_after_days"
-        ],
-        "properties": {
-          "default_horizon_months": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The horizon of a forecast that names none: 1 to 60 months.",
-            "maximum": 60,
-            "minimum": 1
-          },
-          "floor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SafetyFloor",
-                "description": "The safety floor. Until one is set a forecast has no number: a silent\nfloor of 0 would overstate what can be invested. A token without the access a\nforecast needs reads `null` whether or not one is set."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "include_income": {
-            "type": "boolean",
-            "description": "Whether planned inflows reduce the cash needed."
-          },
-          "stale_after_days": {
-            "type": "integer",
-            "format": "int32",
-            "description": "How old a balance may be before it is flagged: 1 to 365 days.",
-            "maximum": 365,
-            "minimum": 1
-          }
-        },
-        "additionalProperties": false
-      },
       "ForecastSettingsPatch": {
         "type": "object",
         "description": "The settings to change. A field left out stays as it is. A floor can be\nreplaced but never unset: `null` leaves it.",
@@ -7203,6 +7660,17 @@
             "description": "1 to 60 months.",
             "maximum": 60,
             "minimum": 1
+          },
+          "display_currency": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Currency",
+                "description": "A new display currency, an ISO 4217 code; `null` or absent keeps the current one.\nIt can be replaced but never unset. Changing it recomputes all history in this\nrequest."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "floor": {
             "oneOf": [
@@ -7242,6 +7710,124 @@
           "provisional",
           "unavailable"
         ]
+      },
+      "FxCoverage": {
+        "type": "object",
+        "description": "What is known about fetching one currency's rates.",
+        "required": [
+          "currency",
+          "status",
+          "first_on",
+          "last_on",
+          "last_attempt_at",
+          "last_success_at",
+          "last_error"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "first_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The first day with a rate."
+          },
+          "last_attempt_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FxErrorCode",
+                "description": "Why the last attempt failed; `null` when it did not."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The last day with a rate."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FxFetchStatus"
+          }
+        }
+      },
+      "FxCoverageList": {
+        "type": "object",
+        "description": "What is known of fetching each currency's rates.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FxCoverage"
+            },
+            "description": "One per currency tried, by currency. A currency never tried has no entry."
+          }
+        }
+      },
+      "FxErrorCode": {
+        "type": "string",
+        "description": "Why a fetch failed. A fixed code, never the provider's own text.",
+        "enum": [
+          "unavailable",
+          "malformed",
+          "network"
+        ]
+      },
+      "FxFetchStatus": {
+        "type": "string",
+        "description": "How fetching a currency's rates last went.",
+        "enum": [
+          "ready",
+          "not_published",
+          "failing"
+        ]
+      },
+      "FxRate": {
+        "type": "string",
+        "description": "Units of a currency per one euro, exact, as text: at most 10 digits, 6 of them decimals, without trailing zeros. Never a JSON number.",
+        "pattern": "^[0-9]{1,10}(\\.[0-9]{1,6})?$"
+      },
+      "FxRateList": {
+        "type": "object",
+        "description": "One currency's rates, in units of it per one euro.",
+        "required": [
+          "currency",
+          "items"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RateObservation"
+            },
+            "description": "Newest first. A day with no entry had no published rate."
+          }
+        }
       },
       "GoalLine": {
         "type": "object",
@@ -7343,6 +7929,59 @@
           "text": {
             "type": "string",
             "description": "Fixed text."
+          }
+        }
+      },
+      "HouseholdSettings": {
+        "type": "object",
+        "description": "The household's settings: those of a forecast and the display currency.",
+        "required": [
+          "floor",
+          "include_income",
+          "default_horizon_months",
+          "stale_after_days",
+          "display_currency"
+        ],
+        "properties": {
+          "default_horizon_months": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The horizon of a forecast that names none: 1 to 60 months.",
+            "maximum": 60,
+            "minimum": 1
+          },
+          "display_currency": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Currency",
+                "description": "What net worth is shown in; `null` until an admin sets it, and never guessed. It\nreads the same for every token: it says how numbers are shown, not what the\nhousehold holds."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SafetyFloor",
+                "description": "The safety floor. Until one is set a forecast has no number: a silent\nfloor of 0 would overstate what can be invested. A token without the access a\nforecast needs reads `null` whether or not one is set."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_income": {
+            "type": "boolean",
+            "description": "Whether planned inflows reduce the cash needed."
+          },
+          "stale_after_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How old a balance may be before it is flagged: 1 to 365 days.",
+            "maximum": 365,
+            "minimum": 1
           }
         }
       },
@@ -7590,6 +8229,30 @@
           "long_term_liability"
         ]
       },
+      "LiquidityLine": {
+        "type": "object",
+        "description": "One liquidity class on one day.",
+        "required": [
+          "liquidity",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "`null` when a counted account in it has no amount."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "liquidity": {
+            "$ref": "#/components/schemas/LiquidityClass"
+          }
+        }
+      },
       "MeResponse": {
         "type": "object",
         "description": "The member and agent token behind the bearer token.",
@@ -7783,6 +8446,470 @@
             "$ref": "#/components/schemas/LineSource"
           }
         }
+      },
+      "NetWorthBlocker": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "display_currency_not_set"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rebuilding"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_counted_accounts"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why there is no number to trust. `display_currency_not_set`: an admin has to choose\none, and points still hold their sums per currency. `rebuilding`: the daily values are\nbeing rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in\nthis range, which is not a net worth of zero."
+      },
+      "NetWorthCaution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Between these points a currency's rate was missing, so amounts in it are\n`null`.",
+            "required": [
+              "currency",
+              "reason",
+              "first_on",
+              "last_on",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "first_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The first point lacking it."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rate_missing"
+                ]
+              },
+              "last_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The last point lacking it."
+              },
+              "reason": {
+                "$ref": "#/components/schemas/RateMissingReason"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The point at which an amount used the oldest rate, older than a week.",
+            "required": [
+              "currency",
+              "on",
+              "rate_on",
+              "age_days",
+              "kind"
+            ],
+            "properties": {
+              "age_days": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rate_stale"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              },
+              "rate_on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The last point at which this account's amount did not fit, so it is\n`null`.",
+            "required": [
+              "account",
+              "on",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "amount_too_large"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "On the latest point, this counted balance dates from `on`.",
+            "required": [
+              "account",
+              "on",
+              "age_days",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "age_days": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "balance_stale"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The last filled day is before the end of the range, or today if that is\nearlier: later dates are not answered yet.",
+            "required": [
+              "through",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "to_date_not_yet_filled"
+                ]
+              },
+              "through": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Between these points an account already holding values has none, so what\nholds it is `null`, it is in `unconverted`, and its balance is in no\n`by_currency`. A hole in the daily values, not money leaving.",
+            "required": [
+              "account",
+              "first_on",
+              "last_on",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "first_on": {
+                "type": "string",
+                "format": "date"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "daily_value_missing"
+                ]
+              },
+              "last_on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "From `from` up to `to` the range's periods hold nothing counted, so the\nlast point is older than the range's end and is not the value now: every\naccount counted by then has closed, and a closed account's `closed_on`\nsays when.",
+            "required": [
+              "from",
+              "to",
+              "kind"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "nothing_counted_after_last_point"
+                ]
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A liability shows money in hand, perhaps entered with the wrong sign. It\nwas added as it stands. `balance` is from the last point where it did.",
+            "required": [
+              "account",
+              "balance",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "liability_balance_positive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A closed account still owes money, which keeps counting. `balance` is\nfrom the last point where it did.",
+            "required": [
+              "account",
+              "balance",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "closed_account_owing"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Something that keeps the numbers but stops them being firm."
+      },
+      "NetWorthInterval": {
+        "type": "string",
+        "description": "How long a report's periods are.",
+        "enum": [
+          "day",
+          "week",
+          "month"
+        ]
+      },
+      "NetWorthNotCountedReason": {
+        "type": "string",
+        "description": "Why an account is not part of net worth.",
+        "enum": [
+          "excluded_by_flag"
+        ]
+      },
+      "NetWorthPoint": {
+        "type": "object",
+        "description": "The value at the end of one period.",
+        "required": [
+          "on",
+          "period_start",
+          "partial",
+          "total",
+          "by_liquidity",
+          "by_currency",
+          "unconverted"
+        ],
+        "properties": {
+          "by_currency": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Money"
+            },
+            "description": "Native sums of the counted balances, sorted by currency. Always present,\nand leaving out only an account in `unconverted` with no value that day."
+          },
+          "by_liquidity": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiquidityLine"
+            },
+            "description": "One line per liquidity class holding a counted account."
+          },
+          "on": {
+            "type": "string",
+            "format": "date",
+            "description": "The day valued: the last of the period, or the last available."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`on` is not the natural end of the period."
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "description": "The first day of the period inside the range: never before the range's `from`."
+          },
+          "total": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "The sum of the counted accounts' amounts; `null` when one has none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unconverted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountId"
+            },
+            "description": "Accounts this point has no amount for: counted with no conversion though\nthere is a display currency, or holding no value on this day though they\ndid earlier."
+          }
+        }
+      },
+      "NetWorthReport": {
+        "type": "object",
+        "description": "The answer: what the visible accounts come to, period by period.",
+        "required": [
+          "display_currency",
+          "interval",
+          "from",
+          "to",
+          "through",
+          "status",
+          "points",
+          "accounts",
+          "blockers",
+          "cautions"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSeries"
+            },
+            "description": "Every visible account, with whether it counts."
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthBlocker"
+            },
+            "description": "Why there is no number; not empty exactly when `status` is `unavailable`."
+          },
+          "cautions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthCaution"
+            },
+            "description": "What keeps the numbers but stops them being firm."
+          },
+          "display_currency": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Currency",
+                "description": "What `total` is in; `null` until an admin sets it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "description": "The first day of the range answered."
+          },
+          "interval": {
+            "$ref": "#/components/schemas/NetWorthInterval"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetWorthPoint"
+            },
+            "description": "One per period holding a counted balance or a missing value, oldest first."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NetWorthStatus",
+            "description": "How far to trust the numbers: `firm`, `provisional` or `unavailable`."
+          },
+          "through": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The last day with values: no later date is answered."
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "description": "The last day of the range as asked: it can be later than the last point, which is\nnever after today or `through`."
+          }
+        }
+      },
+      "NetWorthStatus": {
+        "type": "string",
+        "description": "How far to trust the numbers.",
+        "enum": [
+          "firm",
+          "provisional",
+          "unavailable"
+        ]
       },
       "NewAccountRequest": {
         "type": "object",
@@ -8696,6 +9823,34 @@
           }
         }
       },
+      "RateMissingReason": {
+        "type": "string",
+        "description": "Why a currency has no rate for a day.",
+        "enum": [
+          "not_fetched_yet",
+          "not_published",
+          "fetch_failing",
+          "provider_off",
+          "none_that_early"
+        ]
+      },
+      "RateObservation": {
+        "type": "object",
+        "description": "One day's rate of one currency.",
+        "required": [
+          "on",
+          "rate"
+        ],
+        "properties": {
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/FxRate"
+          }
+        }
+      },
       "RawBalanceView": {
         "type": "object",
         "description": "A balance as the provider reported it, unconverted.",
@@ -9586,7 +10741,7 @@
     },
     {
       "name": "household",
-      "description": "The household-wide forecast settings: safety floor, income, horizon and stale-balance threshold."
+      "description": "The household-wide settings: safety floor, income, horizon, stale-balance threshold and display currency."
     },
     {
       "name": "accounts",
@@ -9610,7 +10765,11 @@
     },
     {
       "name": "reports",
-      "description": "What happened against what was planned, by category and month. `actual` is positive for what the category's kind counts."
+      "description": "What happened against what was planned, by category and month, where `actual` is positive for what the category's kind counts; and net worth over time, in the display currency."
+    },
+    {
+      "name": "fx",
+      "description": "The exchange rates stored and what is known of fetching them: units of a currency per one euro, exact decimals written as text."
     },
     {
       "name": "connections",

@@ -23,6 +23,7 @@ mod healthcheck;
 mod household_settings;
 mod identity;
 mod matching;
+mod net_worth;
 mod openapi;
 mod pages;
 mod panics;

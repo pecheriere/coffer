@@ -25,6 +25,7 @@ fn settings_with(floor: &Value) -> Value {
         "include_income": true,
         "default_horizon_months": 6,
         "stale_after_days": 7,
+        "display_currency": null,
     })
 }
 
@@ -57,7 +58,7 @@ impl World {
         let settings = self
             .server
             .ledger
-            .forecast_settings(&self.alice)
+            .household_settings(&self.alice)
             .await
             .unwrap();
         serde_json::to_value(settings).unwrap()["floor"].clone()
