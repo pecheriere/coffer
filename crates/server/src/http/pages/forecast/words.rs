@@ -238,12 +238,8 @@ fn hint_sentence(
             "{item} is expected to be paid from {account}, which doesn't count as cash here. It \
              still counts as needed, which may overstate what counted cash has to cover."
         ),
-        HintEffect::StillIncome => format!(
-            "{item} is expected to arrive in {account}, which doesn't count as cash here. It \
-             still counts as income, which may overstate what is free to invest."
-        ),
         HintEffect::LeftOut => format!(
-            "{item} is expected to arrive in {account}, which isn't the household's money, so it \
+            "{item} is expected to arrive in {account}, which doesn't count as cash here, so it \
              stays out of the number. That is already right: don't remove the hint just to clear \
              this. If it isn't expected, mark the item inactive."
         ),

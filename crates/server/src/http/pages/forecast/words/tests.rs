@@ -92,11 +92,6 @@ fn cautions() -> Vec<Caution> {
         Caution::ItemHintNotCounted {
             item: goal,
             account,
-            effect: HintEffect::StillIncome,
-        },
-        Caution::ItemHintNotCounted {
-            item: goal,
-            account,
             effect: HintEffect::LeftOut,
         },
         Caution::UncategorizedSpending {
@@ -388,17 +383,9 @@ fn missing_names_read_well() {
             Caution::ItemHintNotCounted {
                 item: goal,
                 account,
-                effect: HintEffect::StillIncome,
-            },
-            "A planned item is expected to arrive in an account, which doesn't count",
-        ),
-        (
-            Caution::ItemHintNotCounted {
-                item: goal,
-                account,
                 effect: HintEffect::LeftOut,
             },
-            "A planned item is expected to arrive in an account, which isn't the household's",
+            "A planned item is expected to arrive in an account, which doesn't count",
         ),
         (
             Caution::BillNotSeen {
