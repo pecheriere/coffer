@@ -12,6 +12,7 @@ use coffer_server::testkit::{TEST_PUBLIC_URL, captured_log_text};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
+use super::truth::hole_today;
 use super::{PAGE, THREE_MONTHS, alice, bob, day_heading, page, written};
 use crate::net_worth::{World, world};
 use crate::pages::forecast::{row, section, text_of};
@@ -347,6 +348,7 @@ async fn a_null_bucket_total_says_why() {
         "says who"
     );
     assert_eq!(row(own, "THB"), ["500.00 THB"], "what can be said of it");
+    assert!(!said.contains("leave out"), "it has a value that day");
     assert_eq!(row(own, "Baht fund")[1], "No rate");
     assert!(own.contains("<details class=\"values\" open>"), "the gap");
     let firm = part(section(&body, HELD), "Held for Child A");
@@ -387,7 +389,10 @@ async fn no_display_currency_leaves_each_bucket_s_sums() {
     let said = text_of(own);
     assert!(said.contains("No total on 2 November 2026"));
     assert!(said.contains("Unavailable:"));
-    assert!(said.contains("No display currency is chosen"));
+    assert!(
+        said.contains("The sums below are per currency"),
+        "it has some"
+    );
     assert_eq!(row(own, "USD"), ["100.00 USD"], "the sums it speaks of");
     assert!(!own.contains("<details"), "no total to list");
     assert_eq!(row(part(held, "Held for Child B"), "USD"), ["200.00 USD"]);
@@ -411,8 +416,278 @@ async fn a_bucket_with_no_value_says_so_in_its_own_words() {
     assert!(said.contains("None of these accounts has a value in this range"));
     assert!(said.contains("not a balance of zero"));
     assert!(!said.contains("net worth"), "{said}");
-    assert_eq!(row(own, "Empty fund")[0], "No value that day");
+    assert_eq!(
+        row(own, "Empty fund")[0],
+        "No value in this range",
+        "no day is shown to refer to"
+    );
     assert!(!own.contains("<details"), "no periods");
+}
+
+/// With nothing to sum, no sums are promised.
+#[tokio::test]
+async fn no_display_currency_and_no_value_promises_no_sums() {
+    let world = world().await;
+    college(&world, "Empty fund", "USD", Some("Child A")).await;
+
+    let body = page(&world, "").await.body;
+
+    let said = text_of(part(section(&body, HELD), "Held for Child A"));
+    assert!(said.contains("No display currency is chosen, so there is no single total."));
+    assert!(!said.contains("sums"), "{said}");
+    assert!(
+        text_of(section(&body, "answer")).contains("The sums below"),
+        "the household's stays"
+    );
+}
+
+/// An account of a bucket that closed mid-range stands at the bucket's last day, not the
+/// household's, on which it has no value.
+#[tokio::test]
+async fn a_bucket_s_accounts_stand_at_its_own_latest() {
+    let world = world().await;
+    world.display("USD").await;
+    let kept = world.holding("Kept", "USD").await;
+    world.balance(kept, "2026-08-03", 100).await;
+    let gone = college(&world, "Gone", "USD", Some("Child A")).await;
+    world.balance(gone, "2026-09-01", 10_000).await;
+    world.at("2026-09-20");
+    world.patch_holding(gone, &json!({"closed": true})).await;
+    world.at(crate::net_worth::TODAY);
+
+    let body = page(&world, "?range=3m").await.body;
+
+    let own = part(section(&body, HELD), "Held for Child A");
+    assert_eq!(
+        row(own, "Gone")[..2],
+        ["100.00 USD from 1 Sep 2026", "100.00"]
+    );
+}
+
+/// As the household's sums do. The day is in the line above them, so here "that day" has one.
+#[tokio::test]
+async fn a_bucket_s_sums_say_who_they_leave_out() {
+    let world = world().await;
+    world.display("USD").await;
+    let kept = college(&world, "Kept fund", "USD", Some("Child A")).await;
+    world.balance(kept, "2026-10-01", 10_000).await;
+    let holed = college(&world, "Holed fund", "USD", Some("Child A")).await;
+    world.balance(holed, "2026-10-01", 20_000).await;
+    hole_today(&world, holed).await;
+
+    let body = page(&world, "?range=3m").await.body;
+
+    let own = part(section(&body, HELD), "Held for Child A");
+    assert!(text_of(own).starts_with("No total on 2 November 2026"));
+    assert_eq!(row(own, "USD"), ["100.00 USD"]);
+    assert!(text_of(own).contains("These sums leave out Holed fund, which has no value that day."));
+    assert_eq!(row(own, "Holed fund")[0], "No value that day");
+}
+
+/// Every account of it without a row that day: nothing to sum, so no empty table of sums.
+#[tokio::test]
+async fn a_bucket_with_nothing_to_sum_shows_no_sums() {
+    let world = world().await;
+    world.display("USD").await;
+    let holed = college(&world, "Holed fund", "USD", Some("Child A")).await;
+    world.balance(holed, "2026-10-01", 20_000).await;
+    hole_today(&world, holed).await;
+
+    let body = page(&world, "?range=3m").await.body;
+
+    let said = text_of(part(section(&body, HELD), "Held for Child A"));
+    assert!(said.starts_with("No total on 2 November 2026"), "{said}");
+    assert!(said.contains("Holed fund has no value"), "{said}");
+    assert!(!said.contains("By currency"), "{said}");
+}
+
+/// Whose words a caution is read in, and the account fields that put an account there.
+#[derive(Clone, Copy)]
+enum Whose {
+    Household,
+    Bucket,
+}
+
+impl Whose {
+    fn fields(self) -> Value {
+        match self {
+            Self::Household => json!({}),
+            Self::Bucket => json!({"belongs_to": "someone_else", "beneficiary": "Child A"}),
+        }
+    }
+
+    /// What the page says of this money's cautions, each in its own `li`.
+    fn reasons(self, body: &str) -> Vec<String> {
+        let from = match self {
+            Self::Household => section(body, "answer"),
+            Self::Bucket => part(section(body, HELD), "Held for Child A"),
+        };
+        from.split("<li>")
+            .skip(1)
+            .map(|rest| text_of(rest.split_once("</li>").unwrap().0))
+            .collect()
+    }
+}
+
+/// `Kept` holding 1,000.00 from 1 October so the range keeps its points, and a card, both
+/// `whose`.
+async fn kept_and_a_card(world: &World, whose: Whose) -> AccountId {
+    world.display("USD").await;
+    let kept = world
+        .holding_with("Kept", "checking", "USD", whose.fields())
+        .await;
+    world.balance(kept, "2026-10-01", 100_000).await;
+    let mut card = whose.fields();
+    card["liquidity"] = json!("short_term_liability");
+    world.holding_with("Card", "credit_card", "USD", card).await
+}
+
+async fn in_hand_now(world: &World, whose: Whose) {
+    let card = kept_and_a_card(world, whose).await;
+    world.balance(card, "2026-10-01", 5_000).await;
+}
+
+async fn in_hand_before(world: &World, whose: Whose) {
+    let card = kept_and_a_card(world, whose).await;
+    world.balance(card, "2026-10-01", 5_000).await;
+    world.balance(card, "2026-10-28", -30_000).await;
+}
+
+/// Closes `holder` on 20 October, and comes back to today.
+async fn closed_on_the_20th(world: &World, holder: AccountId) {
+    world.at("2026-10-20");
+    world.patch_holding(holder, &json!({"closed": true})).await;
+    world.at(crate::net_worth::TODAY);
+}
+
+async fn closed_owing(world: &World, whose: Whose) {
+    let card = kept_and_a_card(world, whose).await;
+    world.balance(card, "2026-10-01", -30_000).await;
+    closed_on_the_20th(world, card).await;
+}
+
+async fn closed_and_paid(world: &World, whose: Whose) {
+    let card = kept_and_a_card(world, whose).await;
+    world.balance(card, "2026-10-01", -30_000).await;
+    closed_on_the_20th(world, card).await;
+    world.balance(card, "2026-10-25", 0).await;
+}
+
+/// The only account closing: a 529, or the household's own.
+async fn all_closed(world: &World, whose: Whose) {
+    world.display("USD").await;
+    let kind = match whose {
+        Whose::Household => "checking",
+        Whose::Bucket => "education",
+    };
+    let only = world
+        .holding_with("Only", kind, "USD", whose.fields())
+        .await;
+    world.balance(only, "2026-10-01", 100_000).await;
+    closed_on_the_20th(world, only).await;
+}
+
+/// Each of these says the money counts, which in a bucket would contradict "None of this is in
+/// the number above". The household's sentences are pinned whole, so they can't move with them.
+macro_rules! caution_reads {
+    ($name:ident, $setup:ident, household: $household:literal, bucket: $bucket:literal $(,)?) => {
+        #[tokio::test]
+        async fn $name() {
+            for (whose, wanted) in [(Whose::Household, $household), (Whose::Bucket, $bucket)] {
+                let world = world().await;
+                $setup(&world, whose).await;
+
+                let reasons = whose.reasons(&page(&world, "?range=3m").await.body);
+
+                assert!(
+                    reasons.iter().any(|reason| reason == wanted),
+                    "{wanted} is not in {reasons:?}"
+                );
+            }
+        }
+    };
+}
+
+caution_reads!(
+    a_card_in_hand_now_reads,
+    in_hand_now,
+    household: "Card is a card or loan, but shows 50.00 USD in hand rather than owed. It may have \
+                been entered with the wrong sign, and it counts as it stands.",
+    bucket: "Card is a card or loan, but shows 50.00 USD in hand rather than owed. It may have \
+             been entered with the wrong sign, and it's in this bucket's total as it stands.",
+);
+
+caution_reads!(
+    a_card_once_in_hand_reads,
+    in_hand_before,
+    household: "Card showed 50.00 USD in hand on 27 October 2026, though it is a card or loan. It \
+                may have been entered with the wrong sign, and that counted as it stood.",
+    bucket: "Card showed 50.00 USD in hand on 27 October 2026, though it is a card or loan. It \
+             may have been entered with the wrong sign, and that was in this bucket's total as \
+             it stood.",
+);
+
+caution_reads!(
+    a_closed_card_still_owing_reads,
+    closed_owing,
+    household: "Card is closed but still owes 300.00 USD, which keeps counting.",
+    bucket: "Card is closed but still owes 300.00 USD, which stays in this bucket's total.",
+);
+
+caution_reads!(
+    a_closed_card_paid_off_reads,
+    closed_and_paid,
+    household: "Card is closed and owed 300.00 USD when last counted, on 24 October 2026.",
+    bucket: "Card is closed and owed 300.00 USD when last in this bucket's total, on 24 October \
+             2026.",
+);
+
+caution_reads!(
+    every_account_closed_reads,
+    all_closed,
+    household: "Nothing counts from 20 October 2026 to 2 November 2026, since every account \
+                counted by then has closed. The number here is from before that, not the value \
+                now.",
+    bucket: "Nothing is in this bucket from 20 October 2026 to 2 November 2026, since every \
+             account in it by then has closed. The number here is from before that, not the \
+             value now.",
+);
+
+/// No day of the household's to look at: what the bucket holds on its own latest is still said
+/// in the present.
+#[tokio::test]
+async fn the_present_tense_is_of_the_bucket_s_latest_with_no_household() {
+    let world = world().await;
+    in_hand_now(&world, Whose::Bucket).await;
+
+    let reasons = Whose::Bucket.reasons(&page(&world, "?range=3m").await.body);
+
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("but shows 50.00 USD in hand")),
+        "{reasons:?}"
+    );
+}
+
+/// The household's latest is earlier, when the card was still in hand: on the bucket's own, it
+/// no longer is.
+#[tokio::test]
+async fn the_past_tense_is_of_the_bucket_s_latest_past_the_household_s() {
+    let world = world().await;
+    in_hand_before(&world, Whose::Bucket).await;
+    let closing = world.holding("Closing", "USD").await;
+    world.balance(closing, "2026-10-01", 100).await;
+    closed_on_the_20th(&world, closing).await;
+
+    let reasons = Whose::Bucket.reasons(&page(&world, "?range=3m").await.body);
+
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("Card showed 50.00 USD in hand on 27 October 2026")),
+        "{reasons:?}"
+    );
 }
 
 /// The table runs over the bucket's own points, not the household's.

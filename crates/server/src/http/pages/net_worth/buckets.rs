@@ -6,9 +6,10 @@
 use coffer_domain::net_worth::{NetWorthBucket, NetWorthPoint, NetWorthReport, NetWorthStatus};
 use maud::{Markup, html};
 
-use super::words::{Names, bucket_blocker_sentence, bucket_heading, caution_sentence};
+use super::words::{Names, bucket_blocker_sentence, bucket_caution_sentence, bucket_heading};
 use super::{
-    NO_TOTAL, accounts_table, by_currency_table, opens_for_a_gap, periods, periods_table, status,
+    NO_TOTAL, NO_VALUE_THAT_DAY, accounts_table, by_currency_table, left_out_notes,
+    opens_for_a_gap, periods, periods_table, status,
 };
 use crate::http::pages::amounts::{day, money};
 
@@ -37,6 +38,13 @@ fn one_bucket(report: &NetWorthReport, bucket: &NetWorthBucket) -> Markup {
     let names = Names::of_accounts(&bucket.accounts, latest.map(|point| point.on));
     let has_a_total = latest.is_some_and(|point| point.total.is_some());
     let accounts_label = format!("{heading}: accounts at the latest point");
+    let sums = sums_with_no_total(latest);
+    // A day shows above to say "that day" of; with no point there is none.
+    let no_value = if latest.is_some() {
+        NO_VALUE_THAT_DAY
+    } else {
+        "No value in this range"
+    };
     html! {
         h3 { (heading) }
         (latest_total(latest))
@@ -46,19 +54,24 @@ fn one_bucket(report: &NetWorthReport, bucket: &NetWorthBucket) -> Markup {
         @if !bucket.blockers.is_empty() || !bucket.cautions.is_empty() {
             ul.reasons.held-reasons {
                 @for blocker in &bucket.blockers {
-                    li { (bucket_blocker_sentence(*blocker)) }
+                    li { (bucket_blocker_sentence(*blocker, sums.is_some())) }
                 }
                 @for caution in &bucket.cautions {
-                    li { (caution_sentence(caution, &names)) }
+                    li { (bucket_caution_sentence(caution, &names)) }
                 }
             }
         }
-        (sums_with_no_total(latest))
+        @if let Some(point) = sums {
+            p.fine { "By currency, unconverted" }
+            (by_currency_table(&point.by_currency))
+            (left_out_notes(&bucket.accounts, point, &names))
+        }
         (accounts_table(
             &bucket.accounts,
             report.display_currency,
             latest.map(|point| point.on),
             &accounts_label,
+            no_value,
         ))
         (every_value(report, bucket, &names, &heading))
     }
@@ -82,17 +95,10 @@ fn latest_total(latest: Option<&NetWorthPoint>) -> Markup {
     }
 }
 
-/// With no total, what can still be said of the money: its sums within this bucket, per
-/// currency, which the display currency's blocker promises.
-fn sums_with_no_total(latest: Option<&NetWorthPoint>) -> Markup {
-    html! {
-        @if let Some(point) = latest.filter(|point| point.total.is_none()) {
-            @if !point.by_currency.is_empty() {
-                p.fine { "By currency, unconverted" }
-                (by_currency_table(&point.by_currency))
-            }
-        }
-    }
+/// With no total, a point with sums can still say them: within this bucket, per currency, as
+/// the display currency's blocker promises.
+fn sums_with_no_total(latest: Option<&NetWorthPoint>) -> Option<&NetWorthPoint> {
+    latest.filter(|point| point.total.is_none() && !point.by_currency.is_empty())
 }
 
 /// The bucket's periods, as the household's table lists its own. With no display currency

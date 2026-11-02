@@ -36,6 +36,7 @@ use chart::{ChartPoint, ChartSize, line_chart, scale_misses_zero};
 use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount_sentence};
 
 const NO_TOTAL: &str = "No total";
+const NO_VALUE_THAT_DAY: &str = "No value that day";
 const NOTHING_COUNTED: &str = "Nothing counted";
 /// A table of this many rows opens for a gap anywhere in it.
 const SHORT_TABLE: usize = 30;
@@ -583,14 +584,6 @@ fn latest(report: &NetWorthReport, names: &Names<'_>) -> Markup {
     let Some(point) = report.points.last() else {
         return html! {};
     };
-    // An account with no row that day has no balance to sum, which must not pass unsaid.
-    let left_out = point.unconverted.iter().filter(|account| {
-        report
-            .accounts
-            .iter()
-            .find(|series| series.account == **account)
-            .is_none_or(|series| point_on(series, point.on).is_none())
-    });
     html! {
         section.card id="latest" {
             h2 { "What it's made of, on " (day(point.on)) }
@@ -616,12 +609,25 @@ fn latest(report: &NetWorthReport, names: &Names<'_>) -> Markup {
             } @else {
                 h3 { "By currency, unconverted" }
                 (by_currency_table(&point.by_currency))
-                @for account in left_out {
-                    p.fine {
-                        "These sums leave out " (names.account(*account))
-                        ", which has no value that day."
-                    }
-                }
+                (left_out_notes(&report.accounts, point, names))
+            }
+        }
+    }
+}
+
+/// An account with no row that day has no balance to sum, which must not pass unsaid.
+fn left_out_notes(accounts: &[AccountSeries], point: &NetWorthPoint, names: &Names<'_>) -> Markup {
+    let left_out = point.unconverted.iter().filter(|account| {
+        accounts
+            .iter()
+            .find(|series| series.account == **account)
+            .is_none_or(|series| point_on(series, point.on).is_none())
+    });
+    html! {
+        @for account in left_out {
+            p.fine {
+                "These sums leave out " (names.account(*account))
+                ", which has no value that day."
             }
         }
     }
@@ -671,6 +677,7 @@ fn accounts(report: &NetWorthReport) -> Markup {
                 report.display_currency,
                 report.points.last().map(|point| point.on),
                 "Accounts at the latest point",
+                NO_VALUE_THAT_DAY,
             ))
         }
     }
@@ -682,6 +689,7 @@ fn accounts_table(
     display_currency: Option<Currency>,
     latest: Option<Date>,
     label: &str,
+    no_value: &str,
 ) -> Markup {
     let in_display = display_currency.map_or_else(
         || "Converted".to_owned(),
@@ -703,7 +711,7 @@ fn accounts_table(
                     @let at = latest.and_then(|on| point_on(series, on));
                     tr role="row" {
                         th scope="row" role="rowheader" { (series.name) }
-                        @for (column, cell) in columns.iter().zip(account_cells(series, at)) {
+                        @for (column, cell) in columns.iter().zip(account_cells(series, at, no_value)) {
                             td role="cell" data-label=(column) {
                                 span.cell-stack {
                                     (cell.value)
@@ -726,7 +734,11 @@ fn short_day(date: Date) -> String {
 }
 
 /// An account's cells: balance and its date, amount and its rate's date, and first day.
-fn account_cells(series: &AccountSeries, at: Option<&AccountPoint>) -> [AccountCell; 3] {
+fn account_cells(
+    series: &AccountSeries,
+    at: Option<&AccountPoint>,
+    no_value: &str,
+) -> [AccountCell; 3] {
     const NOT_COUNTED: &str = "Not counted";
     const NOT_APPLICABLE: &str = "\u{2013}";
     if !series.counted {
@@ -739,7 +751,7 @@ fn account_cells(series: &AccountSeries, at: Option<&AccountPoint>) -> [AccountC
     );
     let Some(point) = at else {
         return [
-            AccountCell::plain("No value that day"),
+            AccountCell::plain(no_value),
             AccountCell::plain("None"),
             first_day,
         ];

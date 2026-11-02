@@ -111,11 +111,14 @@ pub(super) fn blocker_sentence(blocker: NetWorthBlocker) -> &'static str {
 }
 
 /// Why a bucket has no number. Its accounts never count towards net worth, so that blocker's
-/// usual words would say nothing about it.
-pub(super) fn bucket_blocker_sentence(blocker: NetWorthBlocker) -> &'static str {
+/// usual words would say nothing about it, and the sums are promised only if it has some.
+pub(super) fn bucket_blocker_sentence(blocker: NetWorthBlocker, has_sums: bool) -> &'static str {
     match blocker {
         NetWorthBlocker::NoCountedAccounts => {
             "None of these accounts has a value in this range, which is not a balance of zero."
+        }
+        NetWorthBlocker::DisplayCurrencyNotSet if !has_sums => {
+            "No display currency is chosen, so there is no single total."
         }
         NetWorthBlocker::DisplayCurrencyNotSet | NetWorthBlocker::Rebuilding => {
             blocker_sentence(blocker)
@@ -145,8 +148,46 @@ fn rate_reason(reason: RateMissingReason) -> &'static str {
     }
 }
 
+/// Where a caution says the money is: counted in net worth, or in a bucket's total, which
+/// counts in nothing.
+struct WhereItIs {
+    stands: &'static str,
+    stood: &'static str,
+    keeps: &'static str,
+    last: &'static str,
+    nothing: &'static str,
+    every: &'static str,
+}
+
+const IN_NET_WORTH: WhereItIs = WhereItIs {
+    stands: "it counts as it stands",
+    stood: "that counted as it stood",
+    keeps: "which keeps counting",
+    last: "when last counted",
+    nothing: "Nothing counts",
+    every: "every account counted",
+};
+
+const IN_A_BUCKET: WhereItIs = WhereItIs {
+    stands: "it's in this bucket's total as it stands",
+    stood: "that was in this bucket's total as it stood",
+    keeps: "which stays in this bucket's total",
+    last: "when last in this bucket's total",
+    nothing: "Nothing is in this bucket",
+    every: "every account in it",
+};
+
 /// What might change the numbers.
 pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> String {
+    worded_caution(caution, names, &IN_NET_WORTH)
+}
+
+/// What might change a bucket's numbers, in words true of money in no net worth.
+pub(super) fn bucket_caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> String {
+    worded_caution(caution, names, &IN_A_BUCKET)
+}
+
+fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &WhereItIs) -> String {
     match caution {
         NetWorthCaution::RateMissing {
             currency,
@@ -202,51 +243,65 @@ pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> 
             stretch(*first_on, *last_on),
         ),
         NetWorthCaution::NothingCountedAfterLastPoint { from, to } => format!(
-            "Nothing counts from {} to {}, since every account counted by then has closed. The \
-             number here is from before that, not the value now.",
+            "{} from {} to {}, since {} by then has closed. The number here is from before \
+             that, not the value now.",
+            words.nothing,
             day(*from),
             day(*to),
+            words.every,
         ),
         NetWorthCaution::LiabilityBalancePositive { account, balance } => {
-            positive_liability_sentence(*account, *balance, names)
+            positive_liability_sentence(*account, *balance, names, words)
         }
         NetWorthCaution::ClosedAccountOwing { account, balance } => {
-            closed_owing_sentence(*account, *balance, names)
+            closed_owing_sentence(*account, *balance, names, words)
         }
     }
 }
 
 /// A caution's `balance` is from the last point it held, so it's said in the present only
 /// if the latest point still shows it.
-fn positive_liability_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+fn positive_liability_sentence(
+    account: AccountId,
+    balance: Money,
+    names: &Names<'_>,
+    words: &WhereItIs,
+) -> String {
     let in_hand = |point: &AccountPoint| point.balance.minor_units > 0;
     let name = names.account_first(account);
     let amount = magnitude(balance);
     if names.holds_now(account, in_hand) {
         format!(
             "{name} is a card or loan, but shows {amount} in hand rather than owed. It may have \
-             been entered with the wrong sign, and it counts as it stands."
+             been entered with the wrong sign, and {}.",
+            words.stands,
         )
     } else {
         format!(
             "{name} showed {amount} in hand{}, though it is a card or loan. It may have been \
-             entered with the wrong sign, and that counted as it stood.",
+             entered with the wrong sign, and {}.",
             on_day(names.last_held(account, in_hand)),
+            words.stood,
         )
     }
 }
 
-fn closed_owing_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+fn closed_owing_sentence(
+    account: AccountId,
+    balance: Money,
+    names: &Names<'_>,
+    words: &WhereItIs,
+) -> String {
     let owing = |point: &AccountPoint| point.balance.minor_units < 0;
     let name = names.account_first(account);
     let amount = magnitude(balance);
     if names.holds_now(account, owing) {
-        format!("{name} is closed but still owes {amount}, which keeps counting.")
+        format!("{name} is closed but still owes {amount}, {}.", words.keeps)
     } else {
         let when = names
             .last_held(account, owing)
             .map_or_else(String::new, |date| format!(", on {}", day(date)));
-        format!("{name} is closed and owed {amount} when last counted{when}.")
+        format!("{name} is closed and owed {amount} {}{when}.", words.last)
     }
 }
 
@@ -287,7 +342,8 @@ mod tests {
     use jiff::civil::{Date, date};
 
     use super::{
-        Names, blocker_sentence, bucket_blocker_sentence, bucket_heading, caution_sentence,
+        Names, blocker_sentence, bucket_blocker_sentence, bucket_caution_sentence, bucket_heading,
+        caution_sentence,
     };
     use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
 
@@ -377,9 +433,28 @@ mod tests {
     fn each_blocker_has_words_for_a_bucket() {
         let kinds = schema_kinds::<NetWorthBlocker>();
         for blocker in blockers() {
-            assert_worded(bucket_blocker_sentence(blocker), &kinds);
+            for has_sums in [true, false] {
+                assert_worded(bucket_blocker_sentence(blocker, has_sums), &kinds);
+            }
         }
-        assert!(!bucket_blocker_sentence(NetWorthBlocker::NoCountedAccounts).contains("net worth"));
+        assert!(
+            !bucket_blocker_sentence(NetWorthBlocker::NoCountedAccounts, true)
+                .contains("net worth")
+        );
+    }
+
+    /// Whatever a bucket's caution says, it never says the money counts.
+    #[test]
+    fn no_caution_says_a_bucket_counts() {
+        let kinds = schema_kinds::<NetWorthCaution>();
+        let names = Names::of_accounts(&[], None);
+        for caution in &cautions() {
+            let sentence = bucket_caution_sentence(caution, &names);
+            assert_worded(&sentence, &kinds);
+            for word in ["counts", "counted", "counting"] {
+                assert!(!sentence.contains(word), "{sentence}");
+            }
+        }
     }
 
     #[test]
