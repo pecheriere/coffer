@@ -277,23 +277,8 @@ fn connection_card(
             @if let Some(held) = &connection.held_cursor {
                 (held_notice(connection, held, may_release, csrf))
             }
-            @if may_remove && plaid && plaid_offered && connection.status == ConnectionState::ReauthRequired {
-                h3 { "Reconnect" }
-                p { "Plaid needs a new login to this institution; its accounts stay bound." }
-                a.btn.btn-primary href={ "/connections/" (id) "/plaid/reconnect" } { "Reconnect" }
-            }
-            @if may_remove && !plaid && connection.status == ConnectionState::ReauthRequired {
-                h3 { "Reconnect" }
-                p { "SimpleFin no longer accepts this connection's access. Paste a new setup token to restore it; its accounts stay bound." }
-                form method="post" action={ "/connections/" (id) "/simplefin/reconnect" } {
-                    (csrf_field(csrf))
-                    label.field {
-                        "New setup token"
-                        input .input type="password" name="setup_token" autocomplete="off"
-                            required;
-                    }
-                    button.btn.btn-primary type="submit" { "Reconnect" }
-                }
+            @if may_remove && connection.status == ConnectionState::ReauthRequired {
+                (reconnect_section(id, plaid, plaid_offered, csrf))
             }
             @if live && plaid && !plaid_offered && !shared.forgettable.contains(&id) {
                 p.fine {
@@ -321,6 +306,32 @@ fn connection_card(
                         (account_item(connection, account, shared, waiting && index == 0))
                     }
                 }
+            }
+        }
+    }
+}
+
+/// What a connection that needs a new login asks of who may remove it. Plaid's
+/// login happens on its own page, so a server not configured for it has none
+/// to offer.
+fn reconnect_section(id: ConnectionId, plaid: bool, plaid_offered: bool, csrf: &str) -> Markup {
+    html! {
+        @if plaid && plaid_offered {
+            h3 { "Reconnect" }
+            p { "Plaid needs a new login to this institution; its accounts stay bound." }
+            a.btn.btn-primary href={ "/connections/" (id) "/plaid/reconnect" } { "Reconnect" }
+        }
+        @if !plaid {
+            h3 { "Reconnect" }
+            p { "SimpleFin no longer accepts this connection's access. Paste a new setup token to restore it; its accounts stay bound." }
+            form method="post" action={ "/connections/" (id) "/simplefin/reconnect" } {
+                (csrf_field(csrf))
+                label.field {
+                    "New setup token"
+                    input .input type="password" name="setup_token" autocomplete="off"
+                        required;
+                }
+                button.btn.btn-primary type="submit" { "Reconnect" }
             }
         }
     }
