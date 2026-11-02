@@ -181,6 +181,32 @@ macro_rules! injected_failure_record_id {
     };
 }
 
+// The literal behind `INJECTED_TRANSIENT_RECORD_ID`, for SQL text.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! injected_transient_record_id {
+    () => {
+        "injected-transient-failure"
+    };
+}
+
+// The literal behind `INJECTED_BIND_RECORD_ID`, for SQL text.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! injected_bind_record_id {
+    () => {
+        "injected-bind"
+    };
+}
+
+/// The provider record id whose insertion fails with a transient error once
+/// [`Store::inject_transient_source_insert_failure_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_TRANSIENT_RECORD_ID: &str = injected_transient_record_id!();
+
+/// The provider record id whose insertion binds its provider account once
+/// [`Store::inject_bind_on_source_insert_for_tests`] ran.
+#[cfg(any(test, feature = "testkit"))]
+pub const INJECTED_BIND_RECORD_ID: &str = injected_bind_record_id!();
+
 /// The provider record id whose insertion fails once
 /// [`Store::inject_source_insert_failure_for_tests`] ran.
 #[cfg(any(test, feature = "testkit"))]
@@ -233,6 +259,64 @@ impl Store {
              BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
             injected_failure_record_id!(),
             "' BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later insertion of a source record with the provider id
+    /// [`INJECTED_TRANSIENT_RECORD_ID`] fail as a busy database would, until
+    /// [`Self::clear_transient_source_insert_failure_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_transient_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_transient_source_insert_failure \
+             BEFORE INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
+            injected_transient_record_id!(),
+            "' BEGIN SELECT RAISE(ABORT, 'injected transient failure'); END"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Ends [`Self::inject_transient_source_insert_failure_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be dropped.
+    pub async fn clear_transient_source_insert_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query("DROP TRIGGER IF EXISTS injected_transient_source_insert_failure")
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make the insertion of a source record with the provider id
+    /// [`INJECTED_BIND_RECORD_ID`] bind its provider account to the database's
+    /// one account, in the same transaction. A sync that commits it has thus
+    /// seen a binding commit just after that record, so tests can place one
+    /// between two records of a run without timing anything.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_bind_on_source_insert_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(concat!(
+            "CREATE TRIGGER IF NOT EXISTS injected_bind_on_source_insert \
+             AFTER INSERT ON transaction_sources WHEN NEW.provider_txn_id = '",
+            injected_bind_record_id!(),
+            "' BEGIN UPDATE provider_accounts SET account_id = (SELECT id FROM accounts) \
+             WHERE id = NEW.provider_account_ref; END"
         ))
         .execute(&self.pool)
         .await

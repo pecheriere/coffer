@@ -259,9 +259,12 @@
   showed, and a release is refused if the accounts holding the cursor are no
   longer exactly those. The sync then applies those accounts' records one by
   one and gives up only the ones that fail twice; the others are stored. A
-  record given up is lost for good, only counted as skipped, so the page says
-  so plainly, with how many records the last fetch could not store. The
-  records are given up, counted and audited (`connection.cursor_passed`, under
+  failure that says nothing about the record (a busy or locked database, a
+  failing or full disk, no connection in time) or a refusal of the account
+  other than the one recorded gives up nothing: the hold and the release stay
+  for a later sync. A record given up is lost for good, only counted as
+  skipped, so the page says so plainly, with how many records the last fetch
+  could not store. The records are given up, counted and audited (`connection.cursor_passed`, under
   the sync actor, with their count) only in the transaction that really moves
   the cursor; if another account still blocks it, the release waits, and a
   completed fetch without an account ends that account's hold and release, so

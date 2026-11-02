@@ -5027,7 +5027,7 @@
           },
           "release_pending": {
             "type": "boolean",
-            "description": "Whether a member already asked for the cursor to move past those\nrecords: the next sync does."
+            "description": "Whether a member already asked for the cursor to move past those\nrecords: a sync does, as soon as no other account blocks it and the\ndatabase and the provider's answer allow trying them."
           },
           "text": {
             "type": "string",

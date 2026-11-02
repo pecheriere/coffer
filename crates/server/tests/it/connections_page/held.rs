@@ -199,7 +199,8 @@ async fn releasing_is_audited_and_waits_for_the_next_sync() {
     let after = world.admin.get("/connections").await;
     assert!(after.body.contains(CURSOR_HELD_TEXT));
     assert!(
-        after.body.contains("Release requested"),
+        after.body.contains("Release requested")
+            && after.body.contains("as soon as no other account blocks it"),
         "the page says when the cursor moves"
     );
     assert!(

@@ -43,6 +43,81 @@ fn removal_mid_run_outcomes() {
     );
 }
 
+/// A store that cannot read the connection says nothing about whether it was
+/// removed: the failure is the outcome, with or without a record to apply.
+#[tokio::test]
+async fn a_store_failure_is_no_removal_in_a_one_by_one_apply() {
+    use coffer_domain::time::Clock as _;
+    use coffer_store::ProviderAccountUpsert;
+
+    use super::released::OneByOne;
+    use crate::sync::SyncError;
+    use crate::sync::apply::NormalizedTransaction;
+    use crate::sync::provider::ProviderKind;
+    use crate::testkit::TestServer;
+
+    let server = TestServer::new().await;
+    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let member = server.authenticator().enroll(&link, "alice", "Alice").await;
+    let connection = server
+        .seed_connection(ProviderKind::Plaid, "Plaid bank", member, "{}")
+        .await;
+    let now = server.clock.now();
+    let mut tx = server.store.begin().await.unwrap();
+    let row = tx
+        .upsert_provider_account(ProviderAccountUpsert {
+            connection,
+            provider_account_id: "acct".into(),
+            name: "acct".into(),
+            institution: None,
+            currency_raw: "USD".into(),
+            kind_hint: None,
+            balance: None,
+            seen_at: now,
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE connections SET status = 'unreadable' WHERE id = ?",
+            &connection.to_string(),
+        )
+        .await
+        .unwrap();
+    let one = NormalizedTransaction {
+        provider_id: "one".into(),
+        posted_on: date(2027, 1, 10),
+        date_reported: true,
+        transacted_on: None,
+        amount_minor: -100,
+        amount_raw: "1".into(),
+        description: "SHOP".into(),
+        payee: None,
+        memo: None,
+        pending: false,
+        replaces_provider_id: None,
+    };
+
+    for transactions in [vec![one], Vec::new()] {
+        let outcome = server
+            .sync
+            .apply_one_by_one(OneByOne {
+                connection,
+                provider_account: row.id,
+                transactions,
+                removed: Vec::new(),
+                skipped: 0,
+                balance: None,
+                today: date(2027, 1, 11),
+                now,
+            })
+            .await;
+        assert!(matches!(outcome, Err(SyncError::Store(_))));
+    }
+}
+
 /// The bridge refuses a window of more than 90 days. In every time zone,
 /// at every moment of a day, the first window of `SimpleFin` starts less
 /// than 90 days before the request. The last second of a day is the worst

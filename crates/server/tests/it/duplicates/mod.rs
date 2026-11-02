@@ -41,6 +41,7 @@ use http_body_util::BodyExt as _;
 use jiff::civil::date;
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tower::ServiceExt as _;
 
@@ -184,6 +185,7 @@ async fn apply(world: &World, link: &Link, transactions: Vec<NormalizedTransacti
             account: Some(link.account.clone()),
             transactions,
             removed: Vec::new(),
+            vanishing: HashSet::new(),
             coverage: Coverage::Delta,
             unusable: Vec::new(),
         },

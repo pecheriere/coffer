@@ -71,7 +71,7 @@ pub struct ProviderAccountRecord {
     /// account's records could not be stored.
     pub held_syncs: u32,
     /// Whether a member asked for the cursor to move past this account's
-    /// failing records at the next sync.
+    /// failing records, which stands until a sync moves it.
     pub hold_released: bool,
     /// How many records the last sync that held the cursor fetched for this
     /// account and could not store.
@@ -361,8 +361,8 @@ impl StoreTx {
             .collect()
     }
 
-    /// Ask that the next sync pass the failing records of the provider
-    /// accounts `ids`.
+    /// Ask that a sync pass the failing records of the provider accounts
+    /// `ids`, as soon as one can move the cursor.
     ///
     /// # Errors
     ///

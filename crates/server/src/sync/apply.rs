@@ -113,6 +113,9 @@ pub struct AccountBatch {
     pub transactions: Vec<NormalizedTransaction>,
     /// Provider ids of records the provider says are gone.
     pub removed: Vec<String>,
+    /// Sources gone from the same fetch that another batch deletes: to
+    /// matching they already are, and this batch leaves them in place.
+    pub vanishing: HashSet<SourceRecordId>,
     pub coverage: Coverage,
     /// Records left out before this step because they could not be used,
     /// by provider id when known: counted as skipped, and a known one
@@ -308,7 +311,7 @@ pub async fn apply_account_batch(
             }
         }
     }
-    apply.vanished = vanished.keys().copied().collect();
+    apply.vanished = vanished.keys().copied().chain(batch.vanishing).collect();
 
     // 2. Match every incoming record.
     for record in records {

@@ -26,6 +26,8 @@ const BALANCE_UNREPRESENTABLE: &str =
     "the provider reported a balance too large to store, so it was left out";
 pub(super) const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
+const RECORDS_GIVEN_UP: &str =
+    "records of this account that could not be stored were given up, as a member asked";
 
 /// What an account's fetched data means for the cursor.
 #[derive(Clone, Copy)]
@@ -56,8 +58,8 @@ impl Records {
 
 /// The outcome of an account that was not applied. A cursor is held by it
 /// when `fixable` records of it wait for a later fetch; counted, so that a
-/// hold lasting for good shows. Otherwise nothing waits for it, and any hold
-/// or release it had ends.
+/// hold lasting for good shows. Otherwise nothing waits for it: any hold or
+/// release it had ends, and the cursor passes its records.
 async fn settle_failure(
     tx: &mut StoreTx,
     account: &ProviderAccountRecord,
@@ -68,7 +70,7 @@ async fn settle_failure(
         tx.clear_cursor_hold(account.id).await?;
         return Ok(AccountOutcome::Failed {
             refetch: false,
-            passed: 0,
+            passed: records.count,
         });
     }
     tx.count_cursor_hold(account.id, records.count).await?;
@@ -79,8 +81,9 @@ async fn settle_failure(
 }
 
 /// Gives up, for good, the records of the released accounts `passed`, in the
-/// transaction that moves the cursor past them: their holds end and the pass
-/// is audited with its count.
+/// transaction that moves the cursor past them: their holds end, those told
+/// to expect the records again no longer are, and the pass is audited with
+/// its count.
 async fn record_pass(
     tx: &mut StoreTx,
     now: Timestamp,
@@ -94,6 +97,10 @@ async fn record_pass(
     let accounts: Vec<String> = passed.iter().map(|(id, _)| id.to_string()).collect();
     for (id, _) in passed {
         tx.clear_cursor_hold(*id).await?;
+        if tx.get_provider_account(*id).await?.error.as_deref() == Some(ACCOUNT_NOT_STORED) {
+            tx.set_provider_account_error(*id, Some(RECORDS_GIVEN_UP.to_owned()))
+                .await?;
+        }
     }
     tx.append_audit(
         now,
@@ -324,10 +331,13 @@ impl SyncService {
         let (account, currency) = match checked {
             Ok(checked) => checked,
             Err(refusal) => {
+                let known = record.error.as_deref() == Some(refusal.text.as_str());
                 tx.set_provider_account_error(record.id, Some(refusal.text))
                     .await?;
-                if release && !refusal.lasting {
-                    // None of its records can be stored.
+                if release && known && !refusal.lasting {
+                    // What the member released is still what is wrong, and
+                    // none of its records can be stored. Any other refusal
+                    // may be gone by the next fetch, so it holds the cursor.
                     tx.commit().await?;
                     return Ok(AccountOutcome::Released {
                         account: record.id,
@@ -359,8 +369,8 @@ impl SyncService {
         if release {
             tx.commit().await?;
             let job = super::released::OneByOne {
-                record,
-                account,
+                connection,
+                provider_account: record.id,
                 transactions,
                 removed: data.removed,
                 skipped: u32::try_from(unusable.len()).unwrap_or(u32::MAX),
@@ -381,6 +391,7 @@ impl SyncService {
                 account,
                 transactions,
                 removed: data.removed,
+                vanishing: HashSet::new(),
                 coverage: data.coverage,
                 unusable,
             },

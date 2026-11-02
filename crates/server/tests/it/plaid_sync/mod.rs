@@ -14,6 +14,7 @@ mod held_cursor;
 mod limits;
 mod providers;
 mod reauthorized;
+mod released_records;
 mod removal;
 mod transactions;
 

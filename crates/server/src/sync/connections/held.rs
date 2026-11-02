@@ -37,7 +37,8 @@ pub struct HeldCursorView {
     /// not store: what a release is about.
     pub records: u32,
     /// Whether a member already asked for the cursor to move past those
-    /// records: the next sync does.
+    /// records: a sync does, as soon as no other account blocks it and the
+    /// database and the provider's answer allow trying them.
     pub release_pending: bool,
 }
 
@@ -68,8 +69,10 @@ impl SyncService {
     /// changes. The next sync then applies those accounts' records one by
     /// one and gives up only the ones that still fail, for good; they are
     /// counted as skipped and the pass is audited with its count. That
-    /// happens only if the sync moves the cursor, so a failure elsewhere
-    /// keeps the release for a later one. The records are lost to coffer, so
+    /// happens only if the sync moves the cursor, so a failure elsewhere, a
+    /// database that cannot do the work just now or a refusal of the account
+    /// other than the one recorded keeps the release for a later one. The
+    /// records are lost to coffer, so
     /// this needs a passkey session (never an agent token) of the
     /// connection's owner or an admin, with write access to every account
     /// like removing the connection. The request is audited, without any

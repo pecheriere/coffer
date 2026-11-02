@@ -66,6 +66,15 @@ pub enum SyncError {
     CurrencyMismatch,
 }
 
+impl SyncError {
+    /// Whether the database could not do the work just now: the failure says
+    /// nothing about the data, and the same work may succeed later.
+    #[must_use]
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(self, Self::Store(err) if err.is_transient())
+    }
+}
+
 /// Whole seconds until `retry_after` has passed, at least one.
 pub(crate) fn retry_seconds(retry_after: SignedDuration) -> u32 {
     let mut seconds = retry_after.as_secs();

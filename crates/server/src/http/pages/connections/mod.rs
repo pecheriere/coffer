@@ -334,7 +334,10 @@ fn held_notice(
                 }
             }
             @if held.release_pending {
-                p { "Release requested: the next sync moves the cursor on." }
+                p {
+                    "Release requested: a sync moves the cursor on as soon as no other account "
+                    "blocks it and the failing records can be tried."
+                }
             } @else if may_release {
                 p {
                     "The last fetch held " (held.records) " records of these accounts that could "

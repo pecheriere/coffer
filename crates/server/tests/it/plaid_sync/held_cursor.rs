@@ -31,7 +31,7 @@ impl World {
         );
     }
 
-    async fn syncs(&self, count: u32) {
+    pub(super) async fn syncs(&self, count: u32) {
         for _ in 0..count {
             self.sync().await;
         }
@@ -50,7 +50,7 @@ impl World {
     }
 
     /// Releases what the member sees holding the cursor now.
-    async fn release(&self) -> Result<Vec<ProviderAccountId>, SyncError> {
+    pub(super) async fn release(&self) -> Result<Vec<ProviderAccountId>, SyncError> {
         let shown = self
             .held_cursor()
             .await
@@ -62,7 +62,7 @@ impl World {
             .await
     }
 
-    async fn audits(&self, action: &str) -> Vec<coffer_store::AuditEvent> {
+    pub(super) async fn audits(&self, action: &str) -> Vec<coffer_store::AuditEvent> {
         self.audit()
             .await
             .into_iter()
@@ -70,7 +70,7 @@ impl World {
             .collect()
     }
 
-    async fn held_cursor(&self) -> Option<HeldCursorView> {
+    pub(super) async fn held_cursor(&self) -> Option<HeldCursorView> {
         self.held_cursor_as(&self.alice).await
     }
 

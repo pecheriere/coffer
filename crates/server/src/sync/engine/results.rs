@@ -14,7 +14,7 @@ pub(super) enum AccountOutcome {
     Applied(ApplyReport),
     /// Nothing of it was applied. `refetch` says the fetch held records of
     /// it that a later fetch could still store; `passed` counts the records
-    /// the cursor moves past for good because a member asked for that.
+    /// the cursor moves past because no later fetch could store them.
     Failed {
         refetch: bool,
         passed: u32,
