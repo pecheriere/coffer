@@ -183,16 +183,32 @@
   provider requests: for Plaid, up to 601 when it pages and restarts as often as
   allowed, if it fits the limits below. Removals are not budgeted, and a member's
   Link pages call Plaid without a limit (issue #24).
-- **A sync's time and memory are bounded.** Every provider's fetch stops after
-  10 minutes, and a Plaid pass after 64 MiB of responses, on top of 16 MiB and
-  60 seconds per response. Either failure applies nothing and keeps the cursor.
-  A record with an id too long to store is skipped, and longer texts are cut.
-  The worker runs one sync at a time, so a compromised or failing provider can
-  still delay other connections by up to 10 minutes per run, within the budget
-  above: at most 8 hours in 24 for one Plaid connection. Memory in one fetch
-  stays above the 64 MiB, because parsing adds overhead and a page being read
-  or the account list adds up to 16 MiB each. A real history above the cap
-  would fail every sync of that connection, since its cursor does not move.
+- **A sync's fetch is bounded in time and memory.** Every provider's fetch stops
+  after 10 minutes, and a Plaid pass after 64 MiB of responses, on top of 16 MiB
+  and 60 seconds per response. An answer listing more than 1,000 Plaid accounts
+  fails the fetch as it is read. Any of these failures applies nothing and keeps
+  the cursor. Nothing commits until a fetch ends, so an honest first sync that
+  takes over 10 minutes, or a real history above the 64 MiB, would fail every
+  run of that connection.
+- **What the limits leave open.**
+  - The worker runs one sync at a time, so a compromised or failing provider can
+    still delay other connections by up to 10 minutes per fetch, within the
+    budget above: 8 hours in 24 of fetching for one Plaid connection. Applying
+    comes on top of that and has no deadline.
+  - Memory in one fetch goes above the 64 MiB. Parsing adds overhead, and the
+    account list and the page being read add up to 16 MiB each. A 16 MiB page of
+    tiny malformed records expands much further while it is converted: by
+    calculation over 500 MiB, until the record limit refuses it (issue #37). A
+    SimpleFin answer has no limit on its accounts and expands the same way.
+- **Some Plaid records are passed by for good and only counted.** A record with
+  an id too long to store is skipped, and longer texts are cut. A record whose
+  `account_id` is too long, or that names no account, belongs to no account coffer
+  can report. If an earlier page of the same fetch named that record, its account
+  counts it as skipped. Otherwise it is only counted among the run's skipped
+  records and noted on the connection. The cursor moves past it, so it is not fetched again,
+  and if it said a stored transaction was removed or changed, that transaction
+  stays as it was. A provider can use this to hide a change from coffer, which
+  it could also do by not reporting it.
 - **Plaid's script runs on the Link page.** Link needs Plaid's script from
   `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
   from that one URL and changes it in place, so coffer cannot pin a version or

@@ -172,6 +172,7 @@ async fn removal_during_a_sync_writes_nothing() {
     world.fake.push(Ok(FetchResult {
         accounts: vec![reported("acct-1", "USD", None, vec![txn("t-1", "-4.50")])],
         connection_errors: Vec::new(),
+        skipped: 0,
         cursor: None,
     }));
     let run = world

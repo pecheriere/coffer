@@ -227,6 +227,7 @@ fn fetched(accounts: Vec<ProviderAccountData>) -> FetchResult {
     FetchResult {
         accounts,
         connection_errors: Vec::new(),
+        skipped: 0,
         cursor: None,
     }
 }

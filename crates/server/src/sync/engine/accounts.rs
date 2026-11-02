@@ -42,6 +42,7 @@ impl SyncService {
                 break;
             }
         }
+        totals.report.skipped = totals.report.skipped.saturating_add(result.skipped);
         if totals.report.skipped > 0 {
             tracing::warn!(
                 connection = %connection.id,

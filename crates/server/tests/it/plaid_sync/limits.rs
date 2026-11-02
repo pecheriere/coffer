@@ -20,6 +20,8 @@ use tokio::sync::oneshot;
 
 const TOO_MUCH_DATA: &str = "Plaid sent more data than one sync accepts";
 const TOO_SLOW: &str = "the provider did not finish within the time one sync may take";
+const TOO_MANY_ACCOUNTS: &str = "Plaid listed more accounts than one sync accepts";
+const MAX_ACCOUNTS: usize = 1_000;
 const NO_ACCOUNT: &str = "Plaid sent records coffer could not read or assign to an account";
 const NO_ACCOUNT_ID: &str = "Plaid sent an account without a usable id";
 
@@ -168,9 +170,10 @@ async fn a_restart_counts_its_bytes_from_zero() {
     );
 }
 
-/// A record with an over-long id is unusable whichever id it is; the page's
-/// other records apply, and the cursor moves on because no later fetch could
-/// store it.
+/// A record with an over-long id of its own is unusable; the page's other
+/// records apply, and the cursor moves on because no later fetch could store
+/// it. An over-long reference to a pending form can name no stored record, so
+/// the record that carries it is kept without it.
 #[tokio::test]
 async fn an_over_long_id_makes_its_record_unusable() {
     let world = world().await;
@@ -196,8 +199,8 @@ async fn an_over_long_id_makes_its_record_unusable() {
     assert!(
         run.detail
             .as_deref()
-            .is_some_and(|d| d.contains("2 created") && d.contains("4 skipped")),
-        "the two usable records apply and the four others are skipped"
+            .is_some_and(|d| d.contains("3 created") && d.contains("3 skipped")),
+        "the three usable records apply and the three others are skipped"
     );
     let mut stored: Vec<String> = world
         .transactions(checking)
@@ -206,7 +209,10 @@ async fn an_over_long_id_makes_its_record_unusable() {
         .map(|transaction| transaction.sources[0].provider_txn_id.clone())
         .collect();
     stored.sort();
-    assert_eq!(stored, ["good".to_owned(), longest]);
+    assert_eq!(
+        stored,
+        ["good".to_owned(), "long-pending".to_owned(), longest]
+    );
     let connection = world.connection().await;
     assert_eq!(connection.provider_state.as_deref(), Some("done"));
     assert_eq!(connection.status, ConnectionStatus::Active);
@@ -214,10 +220,10 @@ async fn an_over_long_id_makes_its_record_unusable() {
 }
 
 /// An over-long account id on a record names no account coffer could store:
-/// the record is unusable rather than holding the cursor for good, and the
-/// others apply.
+/// the record is unusable rather than holding the cursor for good, the others
+/// apply, and the run counts what it passed by.
 #[tokio::test]
-async fn an_over_long_account_id_on_a_record_does_not_hold_the_cursor() {
+async fn an_over_long_account_id_on_a_record_is_counted_and_does_not_hold_the_cursor() {
     let world = world().await;
     let checking = world.bound("acct-checking").await;
     let long = over_long_id();
@@ -235,12 +241,97 @@ async fn an_over_long_account_id_on_a_record_does_not_hold_the_cursor() {
     let run = world.sync().await;
 
     assert_eq!(run.status, SyncRunStatus::Partial);
+    assert!(
+        run.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("2 skipped")),
+        "both records without an account are counted"
+    );
     let stored = world.transactions(checking).await;
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].sources[0].provider_txn_id, "good");
     let connection = world.connection().await;
     assert_eq!(connection.provider_state.as_deref(), Some("done"));
     assert_eq!(connection.last_error.as_deref(), Some(NO_ACCOUNT));
+}
+
+/// A record last seen in an unusable form is not applied in the stale form of
+/// an earlier page, even when that last form names no account of its own.
+#[tokio::test]
+async fn an_unusable_last_form_beats_an_earlier_one_without_naming_an_account() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    let long = over_long_id();
+    world.script.page(page(
+        &[
+            record("stale", "acct-checking", "1"),
+            record("good", "acct-checking", "1"),
+        ],
+        &[],
+        &[],
+        "next",
+        true,
+    ));
+    world.script.page(page(
+        &[],
+        &[],
+        &[json!({ "transaction_id": "stale", "account_id": long })],
+        "done",
+        false,
+    ));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert!(
+        run.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("1 skipped")),
+        "the record is counted once"
+    );
+    let stored = world.transactions(checking).await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].sources[0].provider_txn_id, "good");
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("done")
+    );
+}
+
+/// More accounts than any Item has fail the fetch before a page is asked for,
+/// and exactly the limit does not.
+#[tokio::test]
+async fn too_many_accounts_fail_the_fetch() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    first_sync(&world).await;
+    let accounts = |count: usize| format!(r#"{{"accounts":[{}]}}"#, vec!["{}"; count].join(","));
+    world
+        .script
+        .always(GET_ACCOUNTS, StatusCode::OK, accounts(MAX_ACCOUNTS + 1));
+    let before = world.script.cursors().len();
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some(TOO_MANY_ACCOUNTS));
+    assert_eq!(world.script.cursors().len(), before, "no page is asked for");
+    let connection = world.connection().await;
+    assert_eq!(connection.provider_state.as_deref(), Some("saved"));
+    assert_eq!(connection.status, ConnectionStatus::Error);
+    assert_eq!(world.transactions(checking).await.len(), 1);
+
+    world
+        .script
+        .always(GET_ACCOUNTS, StatusCode::OK, accounts(MAX_ACCOUNTS));
+    world.script.page(page(&[], &[], &[], "done", false));
+    let run = world.sync().await;
+    assert_eq!(run.status, SyncRunStatus::Partial);
+    assert_eq!(
+        world.connection().await.last_error.as_deref(),
+        Some(NO_ACCOUNT_ID),
+        "accounts without an id are reported once, however many there are"
+    );
 }
 
 /// An account whose id is over-long is reported as having no usable id, and
@@ -336,6 +427,7 @@ async fn a_silent_upstream_fails_its_run_and_the_next_connection_runs() {
     world.fake.push(Ok(FetchResult {
         accounts: Vec::new(),
         connection_errors: Vec::new(),
+        skipped: 0,
         cursor: None,
     }));
     world.script.page(page(

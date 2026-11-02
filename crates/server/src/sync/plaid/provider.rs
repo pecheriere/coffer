@@ -126,8 +126,9 @@ struct Gathered {
     records: HashMap<String, NetRecord>,
     /// Unusable records without an id, by account.
     unnamed: BTreeMap<String, usize>,
-    /// Whether some unusable record names no account to report it on.
-    unattributed: bool,
+    /// Unusable records that name no account to report them on and no record
+    /// already seen: nothing can be done with them but count them.
+    unattributed: usize,
     /// The records read so far, counting every appearance.
     total: usize,
     next: usize,
@@ -183,7 +184,12 @@ impl Gathered {
             match (unusable.transaction_id, unusable.account_id) {
                 (Some(id), Some(account)) => self.record(id, account, NetState::Unusable),
                 (None, Some(account)) => *self.unnamed.entry(account).or_default() += 1,
-                (_, None) => self.unattributed = true,
+                // The record's last word, even without an account of its own.
+                (Some(id), None) => match self.records.get_mut(&id) {
+                    Some(known) => known.state = NetState::Unusable,
+                    None => self.unattributed += 1,
+                },
+                (None, None) => self.unattributed += 1,
             }
         }
         Ok(())
@@ -191,7 +197,7 @@ impl Gathered {
 
     /// The netted records by account, each in the order of its first
     /// appearance.
-    fn into_buckets(self) -> (BTreeMap<String, Bucket>, bool) {
+    fn into_buckets(self) -> (BTreeMap<String, Bucket>, usize) {
         let mut records: Vec<(String, NetRecord)> = self.records.into_iter().collect();
         records.sort_by_key(|(_, record)| record.first_seen);
         let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
@@ -326,12 +332,13 @@ impl Plaid {
         let cursor = storable_cursor(cursor)?;
         let (buckets, unattributed) = gathered.into_buckets();
         let (accounts, mut connection_errors) = account_data(accounts, buckets, request.today);
-        if unattributed {
+        if unattributed > 0 {
             connection_errors.push(RECORDS_WITHOUT_ACCOUNT.to_owned());
         }
         Ok(FetchResult {
             accounts,
             connection_errors,
+            skipped: u32::try_from(unattributed).unwrap_or(u32::MAX),
             cursor,
         })
     }
@@ -381,6 +388,7 @@ fn account_data(
 ) -> (Vec<ProviderAccountData>, Vec<String>) {
     let mut accounts = Vec::new();
     let mut connection_errors = Vec::new();
+    let mut without_id = false;
     for account in answer.accounts {
         let bucket = buckets.remove(&account.account_id).unwrap_or_default();
         accounts.push(readable_account(account, bucket, today));
@@ -388,7 +396,7 @@ fn account_data(
     for account in answer.unreadable {
         let UnreadableAccount { account_id, name } = account;
         let Some(id) = account_id else {
-            connection_errors.push(ACCOUNT_WITHOUT_ID.to_owned());
+            without_id = true;
             continue;
         };
         let bucket = buckets.remove(&id).unwrap_or_default();
@@ -396,6 +404,9 @@ fn account_data(
     }
     for (id, bucket) in buckets {
         accounts.push(failed_account(id, None, bucket, ACCOUNT_NOT_LISTED));
+    }
+    if without_id {
+        connection_errors.push(ACCOUNT_WITHOUT_ID.to_owned());
     }
     (accounts, connection_errors)
 }
@@ -717,7 +728,7 @@ mod tests {
 
         let (mut buckets, unattributed) = gathered.into_buckets();
 
-        assert!(unattributed, "a record of no account is noted");
+        assert_eq!(unattributed, 1, "a record of no account is counted");
         let bucket = buckets.remove("a").unwrap();
         let present: Vec<_> = bucket
             .transactions
@@ -899,6 +910,10 @@ mod tests {
                 UnreadableAccount {
                     account_id: None,
                     name: Some("no id".to_owned()),
+                },
+                UnreadableAccount {
+                    account_id: None,
+                    name: None,
                 },
             ],
         };
