@@ -616,6 +616,15 @@ impl Ledger {
             source: BalanceSource::Manual,
             recorded_at: now,
         };
+        // A balance that becomes the latest one answers a provider's old report; an
+        // older one leaves the note true.
+        if tx
+            .latest_balance(id)
+            .await?
+            .is_none_or(|latest| on >= latest.on)
+        {
+            tx.clear_old_balance_refused(id).await?;
+        }
         let previous = tx.upsert_balance(snapshot.clone()).await?;
         let changes = AuditChanges::new()
             .set("on", on)

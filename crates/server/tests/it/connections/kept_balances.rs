@@ -21,7 +21,7 @@ use jiff::civil::Date;
 use jiff::{SignedDuration, Span};
 use serde_json::json;
 
-const FEED: &str = "acct-1";
+pub(super) const FEED: &str = "acct-1";
 /// An amount reported on an older day, kept and nowhere else.
 const OLD_RAW: &str = "4242.17";
 const OLD_MINOR: &str = "424217";
@@ -31,7 +31,7 @@ const LAST_RAW: &str = "13.31";
 const TOO_LARGE: &str = "999999999999999999.00";
 
 impl World {
-    fn today(&self) -> Date {
+    pub(super) fn today(&self) -> Date {
         self.server
             .clock
             .now()
@@ -39,19 +39,19 @@ impl World {
             .date()
     }
 
-    fn day(&self, ago: i64) -> Date {
+    pub(super) fn day(&self, ago: i64) -> Date {
         self.today().checked_sub(Span::new().days(ago)).unwrap()
     }
 
     /// A sync reporting `value` for the feed, in `currency`, on the day `ago`
     /// days back.
-    async fn report(&self, ago: i64, value: &str, currency: &str) {
+    pub(super) async fn report(&self, ago: i64, value: &str, currency: &str) {
         self.sync_once(vec![balance_of(FEED, currency, self.day(ago), value)])
             .await;
     }
 
     /// The kept days, as `(day, minor units)`, oldest first.
-    async fn kept(&self, connection: ConnectionId) -> Vec<(String, i64)> {
+    pub(super) async fn kept(&self, connection: ConnectionId) -> Vec<(String, i64)> {
         self.server
             .store
             .kept_balances_for_tests(connection)
@@ -59,7 +59,7 @@ impl World {
             .unwrap()
     }
 
-    async fn bind_feed(&self, target: AccountId) {
+    pub(super) async fn bind_feed(&self, target: AccountId) {
         let feed = self.provider_account(FEED).await;
         self.server
             .sync
@@ -68,7 +68,7 @@ impl World {
             .unwrap();
     }
 
-    async fn manual(&self, target: AccountId, on: Date, minor_units: i64) {
+    pub(super) async fn manual(&self, target: AccountId, on: Date, minor_units: i64) {
         self.server
             .app_state()
             .ledger
@@ -79,7 +79,7 @@ impl World {
 
     /// The account's balances through the API, newest first, as
     /// `(day, minor units, source)`.
-    async fn history(&self, target: AccountId) -> Vec<(String, i64, String)> {
+    pub(super) async fn history(&self, target: AccountId) -> Vec<(String, i64, String)> {
         let token = self.token(Scope::Read).await;
         let (status, page) = self
             .call(
@@ -104,7 +104,7 @@ impl World {
             .collect()
     }
 
-    fn sync_row(&self, ago: i64, minor_units: i64) -> (String, i64, String) {
+    pub(super) fn sync_row(&self, ago: i64, minor_units: i64) -> (String, i64, String) {
         (self.day(ago).to_string(), minor_units, "sync".to_owned())
     }
 
@@ -128,7 +128,7 @@ impl World {
     }
 }
 
-fn balance_of(id: &str, currency: &str, on: Date, value: &str) -> ProviderAccountData {
+pub(super) fn balance_of(id: &str, currency: &str, on: Date, value: &str) -> ProviderAccountData {
     let mut data = reported(id, currency, Some(AccountKind::Checking), Vec::new());
     data.balance = Some((on, DecimalAmount::parse(value).unwrap()));
     data
@@ -394,19 +394,6 @@ async fn a_balance_past_the_age_limit_is_not_kept() {
     assert_eq!(world.kept(world.connection).await, []);
 }
 
-/// The bind's own write of the last report follows the same limit, or a date
-/// 1,000 years back would still become history.
-#[tokio::test]
-async fn the_bind_does_not_bring_a_last_report_past_the_age_limit() {
-    let world = world().await;
-    world.report(365_000, "10.00", "USD").await;
-    let target = world.account("Checking", "USD").await;
-
-    world.bind_feed(target).await;
-
-    assert_eq!(world.history(target).await, []);
-}
-
 /// Nothing dedupes ids within an answer: each entry is applied, one row per day.
 #[tokio::test]
 async fn an_id_repeated_in_one_answer_keeps_one_row_per_day() {
@@ -616,6 +603,20 @@ async fn nothing_kept_shows_through_the_api_before_binding() {
 /// Nor on a page, for the admin signed in.
 #[tokio::test]
 async fn nothing_kept_shows_on_a_page_before_binding() {
+    let (world, mut browser) = signed_in_world().await;
+    world.report(2, OLD_RAW, "USD").await;
+    assert_eq!(world.kept(world.connection).await.len(), 1);
+    world.report(0, LAST_RAW, "USD").await;
+
+    for page in ["/forecast", "/connections", "/account", "/admin/members"] {
+        let reply = browser.get(page).await;
+        assert_eq!(reply.status, StatusCode::OK, "{page}");
+        assert!(!shows_old_day(&reply.body), "{page}");
+    }
+}
+
+/// A world whose admin is also signed in to a browser.
+pub(super) async fn signed_in_world() -> (World, Browser) {
     let (mut server, signed_in, _) = with_admin().await;
     let fake = server.use_fake_provider();
     let mut browser = Browser::new(&server);
@@ -639,15 +640,7 @@ async fn nothing_kept_shows_on_a_page_before_binding() {
         alice,
         connection,
     };
-    world.report(2, OLD_RAW, "USD").await;
-    assert_eq!(world.kept(world.connection).await.len(), 1);
-    world.report(0, LAST_RAW, "USD").await;
-
-    for page in ["/forecast", "/connections", "/account", "/admin/members"] {
-        let reply = browser.get(page).await;
-        assert_eq!(reply.status, StatusCode::OK, "{page}");
-        assert!(!shows_old_day(&reply.body), "{page}");
-    }
+    (world, browser)
 }
 
 fn shows_old_day(body: &str) -> bool {

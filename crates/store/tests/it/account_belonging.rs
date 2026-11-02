@@ -378,6 +378,8 @@ async fn migration_keeps_the_shape_of_the_schema() {
     every_migration().run(&pool).await.unwrap();
 
     assert_eq!(strings(&pool, schema).await, others);
+    let mut fed = fed;
+    fed.push("old_balance_refused INTEGER 1 0 0".to_owned());
     assert_eq!(strings(&pool, &columns("provider_accounts")).await, fed);
     let mut grown = held;
     grown.extend(
