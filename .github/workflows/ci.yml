@@ -28,7 +28,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --workspace --all-features --locked
+      # The same runner and flags as scripts/gate.sh: nextest runs each test in
+      # its own process, which `cargo test` does not, so a test that depends on
+      # sharing one passes in neither place by luck. The cache keeps the
+      # installed binary between runs.
+      - run: cargo install cargo-nextest --version 0.9.150 --locked
+      - run: cargo nextest run --workspace --all-features --locked
+      # nextest does not run doctests.
+      - run: cargo test --doc --workspace --all-features --locked
       - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings

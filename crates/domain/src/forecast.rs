@@ -33,10 +33,10 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     let end_exclusive = months_after(input.as_of, input.horizon_months);
     let income_end_exclusive = same_day_after(input.as_of, input.horizon_months);
     let buckets = buckets(input.as_of, end_exclusive)?;
-    let held: BTreeSet<AccountId> = input
+    let counted: BTreeSet<AccountId> = input
         .accounts
         .iter()
-        .filter(|account| account.belongs_to != BelongsTo::Household)
+        .filter(|account| not_counted(account).is_none())
         .map(|account| account.id)
         .collect();
     let window = Window {
@@ -44,7 +44,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         end_exclusive,
         income_end_exclusive,
         buckets: &buckets,
-        held: &held,
+        counted: &counted,
     };
     let reduction = reduction::reduce(input, end_exclusive)?;
 
@@ -81,7 +81,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     let no_surplus = blockers
         .iter()
         .any(|blocker| !matches!(blocker, Blocker::MixedCurrencies { .. }));
-    let mut cautions = cautions(input, &accounts, &items, &reduction, &book, &held)?;
+    let mut cautions = cautions(input, &items, &reduction, &book, &counted)?;
     let (totals, months) = settle(book, &buckets, input, no_surplus, &mut cautions)?;
 
     let surplus = match (blockers.is_empty(), totals.as_slice()) {
@@ -154,8 +154,8 @@ struct Window<'a> {
     /// the clamped day adds no income.
     income_end_exclusive: Date,
     buckets: &'a [Bucket],
-    /// The accounts that aren't the household's: income expected in one isn't its income.
-    held: &'a BTreeSet<AccountId>,
+    /// The accounts that count as cash: income expected anywhere else may never reach them.
+    counted: &'a BTreeSet<AccountId>,
 }
 
 /// The part of the window in one calendar month.
@@ -330,12 +330,12 @@ fn dated_line(
         return Ok(None);
     }
     // Listed, and nowhere else: not even its currency is in use.
-    let held_inflow = !outflow
+    let uncounted_inflow = !outflow
         && item
             .account_hint
-            .is_some_and(|hint| window.held.contains(&hint));
+            .is_some_and(|hint| !window.counted.contains(&hint));
 
-    if !held_inflow {
+    if !uncounted_inflow {
         month_counts.fill(0);
         let mut bucket = 0;
         for &on in &dates {
@@ -373,7 +373,7 @@ fn dated_line(
 
     let counted = if outflow {
         gross - reduced_by + unpaid
-    } else if include_income && !held_inflow {
+    } else if include_income && !uncounted_inflow {
         gross
     } else {
         0
@@ -588,11 +588,10 @@ fn settle(
 
 fn cautions(
     input: &ForecastInput,
-    accounts: &[AccountLine],
     items: &[ItemLine],
     reduction: &Reduction,
     book: &Book,
-    held: &BTreeSet<AccountId>,
+    counted: &BTreeSet<AccountId>,
 ) -> Result<Vec<Caution>, ForecastError> {
     let mut cautions = Vec::new();
     if input.as_of != input.today {
@@ -625,13 +624,8 @@ fn cautions(
             }),
     );
 
-    let counted: BTreeSet<AccountId> = accounts
-        .iter()
-        .filter(|line| line.counted)
-        .map(|line| line.account)
-        .collect();
     for line in items {
-        item_cautions(line, input, &counted, held, &mut cautions);
+        item_cautions(line, input, counted, &mut cautions);
     }
     // From the items and not their lines: a goal the links have fully paid has no line, which
     // is when they may have overstated it most.
@@ -740,7 +734,6 @@ fn item_cautions(
     line: &ItemLine,
     input: &ForecastInput,
     counted: &BTreeSet<AccountId>,
-    held: &BTreeSet<AccountId>,
     cautions: &mut Vec<Caution>,
 ) {
     let in_the_number = line.direction == PlanDirection::Outflow || input.include_income;
@@ -753,10 +746,8 @@ fn item_cautions(
             account,
             effect: if line.direction == PlanDirection::Outflow {
                 HintEffect::StillNeeded
-            } else if held.contains(&account) {
-                HintEffect::LeftOut
             } else {
-                HintEffect::StillIncome
+                HintEffect::LeftOut
             },
         });
     }
