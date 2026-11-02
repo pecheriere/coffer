@@ -275,13 +275,19 @@ fn strip_comments(css: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// The index of the delimiter closing the one at `open`, skipping strings.
+/// The index of the delimiter closing the one at `open`, skipping strings
+/// (a backslash escapes the character after it).
 fn matching(text: &str, open: usize, opening: u8, closing: u8) -> Result<usize, String> {
     let mut depth = 0_usize;
     let mut quote = None;
+    let mut escaped = false;
     for (index, byte) in text.bytes().enumerate().skip(open) {
         if let Some(q) = quote {
-            if byte == q {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == q {
                 quote = None;
             }
             continue;
@@ -309,15 +315,21 @@ fn matching_paren(text: &str, open: usize) -> Result<usize, String> {
     matching(text, open, b'(', b')')
 }
 
-/// Splits at `separator` outside parentheses and strings.
+/// Splits at `separator` outside parentheses and strings (a backslash escapes
+/// the character after it).
 fn split_top_level(text: &str, separator: char) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut depth = 0_usize;
     let mut quote = None;
     let mut start = 0;
+    let mut escaped = false;
     for (index, c) in text.char_indices() {
         if let Some(q) = quote {
-            if c == q {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
                 quote = None;
             }
             continue;
@@ -435,7 +447,8 @@ pub(crate) fn oklab_distance(a: Rgb, b: Rgb) -> f64 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Declaration {
     /// The prelude of the enclosing at-rule (`@media (min-width: 40rem)`,
-    /// `@keyframes bob`), or `""` at the top level.
+    /// `@keyframes bob`), or `""` at the top level. Nested at-rules are
+    /// joined with a space, outermost first.
     pub(crate) context: String,
     /// The property, lowercased.
     pub(crate) property: String,
@@ -445,8 +458,8 @@ pub(crate) struct Declaration {
 
 /// Every declaration of a component stylesheet, in source order.
 ///
-/// Nested at-rules are not joined: a declaration's `context` is only its
-/// innermost at-rule's prelude, enough while `base.css` nests none.
+/// A declaration inside nested at-rules has their preludes joined by a space,
+/// outermost first.
 ///
 /// # Panics
 /// On an unterminated comment, unbalanced braces or text outside any rule:
@@ -472,7 +485,12 @@ fn collect_declarations(block: &str, context: &str, out: &mut Vec<Declaration>) 
         let prelude = rest[..open].trim();
         let body = &rest[open + 1..close];
         if prelude.starts_with('@') && body.contains('{') {
-            collect_declarations(body, prelude, out);
+            let nested = if context.is_empty() {
+                prelude.to_owned()
+            } else {
+                format!("{context} {prelude}")
+            };
+            collect_declarations(body, &nested, out);
         } else {
             for declaration in split_top_level(body, ';') {
                 let declaration = declaration.trim();
