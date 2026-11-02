@@ -2,12 +2,13 @@
 //! rule means for this route.
 
 use axum::http::{Method, StatusCode, header};
+use coffer_server::testkit::TEST_PUBLIC_URL;
 use coffer_server::testkit::browser::Reply;
-use coffer_server::testkit::{TEST_PUBLIC_URL, log_marker};
 use serde_json::json;
 
 use super::{
-    CSP, JSON, PATH, browser, csp_report, log_since, post, post_csp, post_script, script_report,
+    CSP, JSON, PATH, browser, csp_events, csp_on_fresh_line, csp_report, events_on, lines_with,
+    post, post_script, script_report,
 };
 
 fn assert_same_answer(reply: &Reply, reference: &Reply, what: &str) {
@@ -90,53 +91,43 @@ async fn a_report_dropped_over_the_limit_gets_the_same_answer() {
 #[tokio::test]
 async fn csp_report_with_no_origin_is_logged() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
-    let reply = post_csp(&mut browser, &csp_report("/login", "img-src", "inline")).await;
-    assert_eq!(reply.status, StatusCode::NO_CONTENT);
-    assert!(log_since(&start).contains("img-src blocked inline"));
+    let log = csp_events(&mut browser, &csp_report("/login", "img-src", "inline")).await;
+    assert!(log.contains("img-src blocked inline"), "{log}");
 }
 
 #[tokio::test]
 async fn csp_report_from_another_origin_is_dropped() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
+    let (body, line) = csp_on_fresh_line(&csp_report("/login", "img-src", "inline"));
     let headers = [
         (header::CONTENT_TYPE, CSP),
         (header::ORIGIN, "https://evil.test"),
     ];
-    let body = csp_report("/login", "img-src", "inline").to_string();
-    let reply = post(&mut browser, &headers, body).await;
+    let reply = post(&mut browser, &headers, body.to_string()).await;
     assert_eq!(reply.status, StatusCode::NO_CONTENT);
-    assert!(!log_since(&start).contains("img-src blocked"));
+    assert_eq!(events_on(line), "");
 }
 
 /// Another site's own policy can name this endpoint in its `report-uri`.
 #[tokio::test]
 async fn csp_report_about_a_document_of_another_origin_is_dropped() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = csp_report("/login", "img-src", "inline");
     body["csp-report"]["document-uri"] = json!("https://evil.test/login");
-    post_csp(&mut browser, &body).await;
-    assert!(!log_since(&start).contains("img-src blocked"));
+    assert_eq!(csp_events(&mut browser, &body).await, "");
 }
 
 #[tokio::test]
 async fn script_report_from_another_origin_is_dropped() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let headers = [
         (header::CONTENT_TYPE, JSON),
         (header::ORIGIN, "https://evil.test"),
     ];
-    let reply = post(
-        &mut browser,
-        &headers,
-        script_report("answer-foreign").to_string(),
-    )
-    .await;
+    let body = script_report("answer-foreign").to_string();
+    let reply = post(&mut browser, &headers, body).await;
     assert_eq!(reply.status, StatusCode::NO_CONTENT);
-    assert!(!log_since(&start).contains("answer-foreign"));
+    assert_eq!(lines_with("answer-foreign").len(), 0);
 }
 
 /// A script always has an origin; only a script report's origin can prove it
@@ -144,15 +135,10 @@ async fn script_report_from_another_origin_is_dropped() {
 #[tokio::test]
 async fn script_report_with_no_origin_is_dropped() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let headers = [(header::CONTENT_TYPE, JSON)];
-    post(
-        &mut browser,
-        &headers,
-        script_report("answer-no-origin").to_string(),
-    )
-    .await;
-    assert!(!log_since(&start).contains("answer-no-origin"));
+    let body = script_report("answer-no-origin").to_string();
+    post(&mut browser, &headers, body).await;
+    assert_eq!(lines_with("answer-no-origin").len(), 0);
 }
 
 /// Both accepted content types need a preflight from another site. Refusing

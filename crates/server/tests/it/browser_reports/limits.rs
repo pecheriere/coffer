@@ -1,12 +1,12 @@
 //! What is refused for its shape: size, content type, unknown fields.
 
 use axum::http::{StatusCode, header};
-use coffer_server::testkit::{TEST_PUBLIC_URL, log_marker};
+use coffer_server::testkit::TEST_PUBLIC_URL;
 use serde_json::json;
 
 use super::{
-    CSP, JSON, browser, csp_report, lines_with, log_since, post, post_csp, post_script,
-    script_report,
+    CSP, JSON, browser, csp_events, csp_on_fresh_line, csp_report, events_on, lines_with, post,
+    post_script, script_report,
 };
 
 /// The endpoint's limit on a body.
@@ -34,17 +34,15 @@ async fn a_body_at_the_limit_is_logged() {
 #[tokio::test]
 async fn a_body_past_the_limit_is_not_logged() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let body = padded(&script_report("size-past-limit"), LIMIT + 1);
     post(&mut browser, &FROM_PAGE, body).await;
-    assert!(!log_since(&start).contains("size-past-limit"));
+    assert_eq!(lines_with("size-past-limit").len(), 0);
 }
 
 /// The declared length alone refuses it, before any of the body is read.
 #[tokio::test]
 async fn a_declared_length_past_the_limit_is_refused_unread() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let length = (LIMIT + 1).to_string();
     let headers = [
         (header::CONTENT_TYPE, JSON),
@@ -57,13 +55,12 @@ async fn a_declared_length_past_the_limit_is_refused_unread() {
         script_report("size-declared").to_string(),
     )
     .await;
-    assert!(!log_since(&start).contains("size-declared"));
+    assert_eq!(lines_with("size-declared").len(), 0);
 }
 
 #[tokio::test]
 async fn only_the_exact_content_types_are_read() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     for content_type in [
         "application/json; charset=utf-8",
         "APPLICATION/JSON",
@@ -83,13 +80,13 @@ async fn only_the_exact_content_types_are_read() {
         )
         .await;
     }
-    assert!(!log_since(&start).contains("type-refused"));
+    assert_eq!(lines_with("type-refused").len(), 0);
 }
 
 #[tokio::test]
 async fn a_csp_report_under_any_other_type_is_not_read() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
+    let (body, line) = csp_on_fresh_line(&csp_report("/login", "img-src", "inline"));
     for content_type in [
         "application/csp-report; charset=utf-8",
         "text/plain",
@@ -97,16 +94,14 @@ async fn a_csp_report_under_any_other_type_is_not_read() {
         "application/reports+json",
     ] {
         let headers = [(header::CONTENT_TYPE, content_type)];
-        let body = csp_report("/login", "img-src", "inline").to_string();
-        post(&mut browser, &headers, body).await;
+        post(&mut browser, &headers, body.to_string()).await;
     }
-    assert!(!log_since(&start).contains("img-src blocked"));
+    assert_eq!(events_on(line), "");
 }
 
 #[tokio::test]
 async fn a_script_report_posted_as_a_csp_report_is_not_read() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let headers = [
         (header::CONTENT_TYPE, CSP),
         (header::ORIGIN, TEST_PUBLIC_URL),
@@ -117,18 +112,17 @@ async fn a_script_report_posted_as_a_csp_report_is_not_read() {
         script_report("type-crossed").to_string(),
     )
     .await;
-    assert!(!log_since(&start).contains("type-crossed"));
+    assert_eq!(lines_with("type-crossed").len(), 0);
 }
 
 /// First-party code sends exactly these fields, so anything else is forged.
 #[tokio::test]
 async fn a_script_report_with_an_unknown_field_is_dropped_whole() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = script_report("unknown-field");
     body["stack"] = json!("at somewhere");
     post_script(&mut browser, &body).await;
-    assert!(!log_since(&start).contains("unknown-field"));
+    assert_eq!(lines_with("unknown-field").len(), 0);
 }
 
 /// Browsers add fields of their own, so these are ignored, and none reaches
@@ -136,14 +130,12 @@ async fn a_script_report_with_an_unknown_field_is_dropped_whole() {
 #[tokio::test]
 async fn a_csp_report_keeps_only_its_known_fields() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = csp_report("/login", "script-src-elem", "inline");
     body["csp-report"]["script-sample"] = json!("sample-of-the-page");
     body["csp-report"]["referrer"] = json!("https://coffer.test/referrer-text");
     body["csp-report"]["new-browser-field"] = json!({ "nested": "new-field-text" });
-    post_csp(&mut browser, &body).await;
-    let log = log_since(&start);
-    assert!(log.contains("script-src-elem blocked inline"));
+    let log = csp_events(&mut browser, &body).await;
+    assert!(log.contains("script-src-elem blocked inline"), "{log}");
     for text in ["sample-of-the-page", "referrer-text", "new-field-text"] {
         assert!(!log.contains(text), "{text}");
     }
@@ -152,24 +144,22 @@ async fn a_csp_report_keeps_only_its_known_fields() {
 #[tokio::test]
 async fn a_kind_outside_the_enum_is_dropped() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     for kind in ["warning", "ERROR", "", "csp"] {
         let mut body = script_report("kind-refused");
         body["kind"] = json!(kind);
         let reply = post_script(&mut browser, &body).await;
         assert_eq!(reply.status, StatusCode::NO_CONTENT, "{kind}");
     }
-    assert!(!log_since(&start).contains("kind-refused"));
+    assert_eq!(lines_with("kind-refused").len(), 0);
 }
 
 #[tokio::test]
 async fn a_line_that_is_not_a_small_number_drops_the_report() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     for line in [json!(-1), json!(1.5), json!("12"), json!(u64::MAX)] {
         let mut body = script_report("line-refused");
         body["line"] = line;
         post_script(&mut browser, &body).await;
     }
-    assert!(!log_since(&start).contains("line-refused"));
+    assert_eq!(lines_with("line-refused").len(), 0);
 }

@@ -182,3 +182,32 @@ async fn hostile_text_stays_inside_one_json_line() {
         .count();
     assert_eq!(forged, 0, "{lines:#?}");
 }
+
+/// This process's whole log, shared with no other test, shows that what goes
+/// over the limit adds no line at all.
+#[tokio::test]
+async fn drops_are_not_logged_one_by_one() {
+    let serving = Serving::start(&[]);
+    let addr = listen_address(&serving.wait_for("coffer is serving").await);
+    let before = serving.lines().len();
+    let body = json!({
+        "kind": "error",
+        "message": "quiet-report",
+        "script": JS_COFFER_JS.url,
+        "page": "/login",
+    })
+    .to_string();
+    for _ in 0..12 {
+        post(addr, &body).await;
+    }
+    // After a report's own line, nothing could still be on its way but drops.
+    let last = json!({ "kind": "plaid", "message": "x" }).to_string();
+    post(addr, &last).await;
+    let started = Instant::now();
+    while serving.lines().len() < before + 5 && started.elapsed() < TIME_LIMIT {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let lines = serving.lines();
+    assert_eq!(lines.len(), before + 5, "{lines:#?}");
+}

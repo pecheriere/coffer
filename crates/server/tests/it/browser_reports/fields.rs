@@ -3,10 +3,10 @@
 
 use axum::http::{StatusCode, header};
 use coffer_server::assets::{JS_COFFER_JS, JS_PLAID_LINK_JS};
-use coffer_server::testkit::{TEST_PUBLIC_URL, log_marker};
+use coffer_server::testkit::TEST_PUBLIC_URL;
 use serde_json::{Value, json};
 
-use super::{JSON, browser, log_since, post, post_script, script_report, the_event};
+use super::{JSON, browser, post, post_script, script_events, script_report, the_event};
 
 async fn event_for(body: &Value, marker: &str) -> String {
     let (_server, mut browser) = browser().await;
@@ -66,10 +66,9 @@ async fn missing_fields_keep_the_shape() {
 #[tokio::test]
 async fn a_report_naming_no_page_logs_other() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let body = json!({ "kind": "passkey", "message": "shape-no-page" });
-    post_script(&mut browser, &body).await;
-    assert!(log_since(&start).contains("page=\"other\""));
+    let log = script_events(&mut browser, &body).await;
+    assert!(log.contains("page=\"other\""), "{log}");
 }
 
 #[tokio::test]
@@ -191,18 +190,11 @@ async fn a_message_ending_in_half_a_character_is_kept() {
 #[tokio::test]
 async fn a_message_that_is_not_text_drops_the_report() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
-    for message in [
-        json!(12),
-        json!(["not-text-marker"]),
-        json!({ "a": "not-text-marker" }),
-    ] {
+    for message in [json!(12), json!(["not-text"]), json!({ "a": "not-text" })] {
         let mut body = script_report("x");
         body["message"] = message;
-        body["kind"] = json!("plaid");
-        post_script(&mut browser, &body).await;
+        assert_eq!(script_events(&mut browser, &body).await, "");
     }
-    assert!(!log_since(&start).contains("kind=\"plaid\""));
 }
 
 /// A password manager's or other extension's script can throw text holding
@@ -210,7 +202,6 @@ async fn a_message_that_is_not_text_drops_the_report() {
 #[tokio::test]
 async fn an_error_from_a_script_not_coffer_s_withholds_its_message() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     for script in [
         Some("chrome-extension://abcdef/content.js"),
         Some("https://cdn.plaid.com/link/v2/stable/link-initialize.js"),
@@ -221,15 +212,13 @@ async fn an_error_from_a_script_not_coffer_s_withholds_its_message() {
         if let Some(script) = script {
             body["script"] = json!(script);
         }
-        post_script(&mut browser, &body).await;
+        let log = script_events(&mut browser, &body).await;
+        assert!(
+            log.contains("client_message=\"[withheld]\""),
+            "{script:?}: {log}"
+        );
+        assert!(!log.contains("page-content"), "{script:?}: {log}");
     }
-    let log = log_since(&start);
-    assert!(!log.contains("page-content"), "{log}");
-    assert_eq!(
-        log.matches("client_message=\"[withheld]\"").count(),
-        4,
-        "{log}"
-    );
 }
 
 #[tokio::test]
@@ -314,11 +303,9 @@ async fn every_page_of_coffer_has_a_template() {
 #[tokio::test]
 async fn a_path_outside_the_table_logs_other_and_withholds_the_message() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = script_report("withheld-text");
     body["page"] = json!("/somewhere/abc123tok");
-    post_script(&mut browser, &body).await;
-    let log = log_since(&start);
+    let log = script_events(&mut browser, &body).await;
     assert!(log.contains("page=\"other\""), "{log}");
     assert!(log.contains("client_message=\"[withheld]\""), "{log}");
     assert!(
@@ -332,11 +319,9 @@ async fn a_path_outside_the_table_logs_other_and_withholds_the_message() {
 #[tokio::test]
 async fn a_message_from_the_forecast_page_is_withheld() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = script_report("cannot read 1234.56");
     body["page"] = json!("/forecast");
-    post_script(&mut browser, &body).await;
-    let log = log_since(&start);
+    let log = script_events(&mut browser, &body).await;
     assert!(log.contains("client_message=\"[withheld]\""), "{log}");
     assert!(!log.contains("1234.56"), "{log}");
 }
@@ -344,7 +329,6 @@ async fn a_message_from_the_forecast_page_is_withheld() {
 #[tokio::test]
 async fn a_page_of_another_origin_is_other() {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
     let mut body = script_report("foreign-page-text");
     for page in [
         "https://evil.test/login",
@@ -352,10 +336,9 @@ async fn a_page_of_another_origin_is_other() {
         "http://coffer.test/login",
     ] {
         body["page"] = json!(page);
-        post_script(&mut browser, &body).await;
+        let log = script_events(&mut browser, &body).await;
+        assert!(log.contains("page=\"other\""), "{page}: {log}");
     }
-    let log = log_since(&start);
-    assert_eq!(log.matches("page=\"other\"").count(), 3, "{log}");
 }
 
 #[tokio::test]

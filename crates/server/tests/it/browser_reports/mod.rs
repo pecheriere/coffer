@@ -14,6 +14,8 @@ mod limits;
 mod log_formats;
 mod rates;
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use axum::body::Body;
 use axum::http::{Method, header};
 use coffer_server::assets::JS_COFFER_JS;
@@ -73,7 +75,50 @@ async fn post_csp(browser: &mut Browser, body: &Value) -> Reply {
     post(browser, &[(header::CONTENT_TYPE, CSP)], body.to_string()).await
 }
 
-/// The logged lines holding `marker`.
+/// A line number no other report in this process has. Tests may share a
+/// process and so a log, and a CSP report's text is fixed: this tells a test's
+/// own events from the rest.
+fn fresh_line() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(100_000);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The logged events for `line`, joined by newlines; empty if there are none.
+fn events_on(line: u32) -> String {
+    let wanted = format!("line={line}");
+    captured_log_text()
+        .lines()
+        .filter(|event| event.split_whitespace().any(|field| field == wanted))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Posts a script's report on a line of its own, and returns what it logged.
+async fn script_events(browser: &mut Browser, body: &Value) -> String {
+    let line = fresh_line();
+    let mut body = body.clone();
+    body["line"] = json!(line);
+    post_script(browser, &body).await;
+    events_on(line)
+}
+
+/// `body`, a CSP report, on a line of its own.
+fn csp_on_fresh_line(body: &Value) -> (Value, u32) {
+    let line = fresh_line();
+    let mut body = body.clone();
+    body["csp-report"]["line-number"] = json!(line);
+    (body, line)
+}
+
+/// Posts a CSP report on a line of its own, and returns what it logged.
+async fn csp_events(browser: &mut Browser, body: &Value) -> String {
+    let (body, line) = csp_on_fresh_line(body);
+    post_csp(browser, &body).await;
+    events_on(line)
+}
+
+/// The logged lines holding `marker`. Markers are unique among these tests,
+/// and none is the start of another.
 fn lines_with(marker: &str) -> Vec<String> {
     captured_log_text()
         .lines()
@@ -87,12 +132,4 @@ fn the_event(marker: &str) -> String {
     let mut lines = lines_with(marker);
     assert_eq!(lines.len(), 1, "one event: {lines:?}");
     lines.remove(0)
-}
-
-/// The captured log since `start` (from `log_marker`), which must still be
-/// held, so that something missing from it means something.
-fn log_since(start: &str) -> String {
-    let log = captured_log_text();
-    let (_, since) = log.split_once(start).expect("the marker is still captured");
-    since.to_owned()
 }

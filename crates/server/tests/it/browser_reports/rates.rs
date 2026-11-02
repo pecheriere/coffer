@@ -3,11 +3,11 @@
 
 use axum::http::header;
 use coffer_server::testkit::browser::Browser;
-use coffer_server::testkit::{TEST_PUBLIC_URL, log_marker};
+use coffer_server::testkit::{TEST_PUBLIC_URL, captured_log_text};
 use jiff::SignedDuration;
 use serde_json::json;
 
-use super::{CSP, JSON, browser, csp_report, lines_with, log_since, post, script_report};
+use super::{CSP, JSON, browser, csp_report, lines_with, post, script_report};
 
 const PER_CLIENT: usize = 5;
 const GLOBAL: usize = 20;
@@ -81,65 +81,64 @@ async fn the_limit_starts_again_after_a_minute() {
         from_client(&mut browser, "100.64.0.1", "rate-before").await;
     }
     server.clock.advance(SignedDuration::from_mins(1));
-    from_client(&mut browser, "100.64.0.1", "rate-after").await;
-    assert_eq!(lines_with("rate-after").len(), 1);
+    from_client(&mut browser, "100.64.0.1", "rate-new-window").await;
+    assert_eq!(lines_with("rate-new-window").len(), 1);
 }
 
-#[tokio::test]
-async fn drops_are_not_logged_one_by_one() {
-    let (_server, mut browser) = browser().await;
-    let start = log_marker();
-    for _ in 0..PER_CLIENT + 7 {
-        from_client(&mut browser, "100.64.0.1", "rate-quiet").await;
-    }
-    assert!(!log_since(&start).contains(SUMMARY));
+/// The summaries logged whose counts include `count`, such as `over_limit=7`.
+/// Each test here drops its own number of reports, as tests may share a log.
+fn summaries_with(count: &str) -> usize {
+    captured_log_text()
+        .lines()
+        .filter(|line| {
+            line.contains(SUMMARY) && line.split_whitespace().any(|field| field == count)
+        })
+        .count()
 }
 
 #[tokio::test]
 async fn the_count_of_drops_is_logged_after_five_minutes() {
     let (server, mut browser) = browser().await;
-    let start = log_marker();
     for _ in 0..PER_CLIENT + 7 {
         from_client(&mut browser, "100.64.0.1", "rate-counted").await;
     }
+    assert_eq!(summaries_with("over_limit=7"), 0, "not before its time");
     server.clock.advance(SignedDuration::from_mins(5));
     from_client(&mut browser, "100.64.0.1", "rate-counted").await;
-    let log = log_since(&start);
-    let summaries: Vec<&str> = log.lines().filter(|line| line.contains(SUMMARY)).collect();
-    assert_eq!(summaries.len(), 1, "{summaries:?}");
-    assert!(summaries[0].contains("over_limit=7"), "{}", summaries[0]);
+    assert_eq!(summaries_with("over_limit=7"), 1);
 }
 
 #[tokio::test]
 async fn the_count_of_drops_is_logged_at_most_once_per_period() {
     let (server, mut browser) = browser().await;
-    let start = log_marker();
-    for _ in 0..=PER_CLIENT {
+    for _ in 0..PER_CLIENT + 11 {
         from_client(&mut browser, "100.64.0.1", "rate-period").await;
     }
     server.clock.advance(SignedDuration::from_mins(5));
-    for _ in 0..PER_CLIENT + 3 {
+    for _ in 0..PER_CLIENT + 13 {
         from_client(&mut browser, "100.64.0.1", "rate-period").await;
     }
+    assert_eq!(summaries_with("over_limit=11"), 1);
     server.clock.advance(SignedDuration::from_mins(1));
-    for _ in 0..PER_CLIENT + 3 {
-        from_client(&mut browser, "100.64.0.1", "rate-period").await;
-    }
-    let log = log_since(&start);
-    assert_eq!(log.lines().filter(|line| line.contains(SUMMARY)).count(), 1);
+    from_client(&mut browser, "100.64.0.1", "rate-period").await;
+    assert_eq!(
+        summaries_with("over_limit=13"),
+        0,
+        "the period has not passed"
+    );
+    server.clock.advance(SignedDuration::from_mins(5));
+    from_client(&mut browser, "100.64.0.1", "rate-period").await;
+    assert_eq!(summaries_with("over_limit=13"), 1);
 }
 
 #[tokio::test]
 async fn refused_reports_are_counted_apart() {
     let (server, mut browser) = browser().await;
-    let start = log_marker();
     post(&mut browser, &[(header::CONTENT_TYPE, "text/plain")], "x").await;
     post(&mut browser, &[(header::CONTENT_TYPE, "text/plain")], "x").await;
     server.clock.advance(SignedDuration::from_mins(5));
     post(&mut browser, &[(header::CONTENT_TYPE, "text/plain")], "x").await;
-    let log = log_since(&start);
-    let summary = log.lines().find(|line| line.contains(SUMMARY)).unwrap();
-    assert!(summary.contains("refused=2"), "{summary}");
+    assert_eq!(summaries_with("refused=2"), 1);
 }
 
 /// A proxy may add its entry as a header line of its own: the last line

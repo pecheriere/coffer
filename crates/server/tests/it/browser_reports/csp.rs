@@ -1,18 +1,14 @@
 //! CSP violation reports, and the one violation Plaid's script always causes.
 
 use coffer_server::assets::JS_COFFER_JS;
-use coffer_server::testkit::browser::Browser;
-use coffer_server::testkit::log_marker;
 use serde_json::json;
 
-use super::{browser, csp_report, log_since, post_csp};
+use super::{browser, csp_events, csp_report};
 
-/// `body` is logged as a `csp` event: the log since `start`.
+/// What `body`, a CSP report, logs.
 async fn logged(body: &serde_json::Value) -> String {
     let (_server, mut browser) = browser().await;
-    let start = log_marker();
-    post_csp(&mut browser, body).await;
-    log_since(&start)
+    csp_events(&mut browser, body).await
 }
 
 #[tokio::test]
@@ -94,33 +90,26 @@ async fn the_violated_directive_stands_in_for_an_absent_effective_one() {
 async fn the_source_of_a_violation_follows_the_script_rule() {
     let mut body = csp_report("/login", "style-src", "inline");
     body["csp-report"]["source-file"] = json!(format!("https://coffer.test{}", JS_COFFER_JS.url));
-    body["csp-report"]["line-number"] = json!(7);
     body["csp-report"]["column-number"] = json!(9);
     let log = logged(&body).await;
     assert!(
         log.contains(&format!("script=\"{}\"", JS_COFFER_JS.url)),
         "{log}"
     );
-    assert!(log.contains("line=7") && log.contains("column=9"), "{log}");
-}
-
-async fn plaid_check_on(browser: &mut Browser, path: &str) {
-    post_csp(browser, &csp_report(path, "style-src-elem", "inline")).await;
+    assert!(log.contains("column=9"), "{log}");
 }
 
 /// Plaid's script checks for inline style support on every Link page, and the
 /// threat model expects exactly that violation.
 #[tokio::test]
 async fn plaid_s_expected_style_check_is_not_logged() {
-    let (_server, mut browser) = browser().await;
-    let start = log_marker();
-    plaid_check_on(&mut browser, "/connections/plaid/new").await;
-    plaid_check_on(
-        &mut browser,
+    for path in [
+        "/connections/plaid/new",
         "/connections/0190b5f0-1111-7000-8000-000000000000/plaid/reconnect",
-    )
-    .await;
-    assert!(!log_since(&start).contains("style-src-elem"));
+    ] {
+        let log = logged(&csp_report(path, "style-src-elem", "inline")).await;
+        assert_eq!(log, "", "{path}");
+    }
 }
 
 #[tokio::test]
