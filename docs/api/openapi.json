@@ -6923,7 +6923,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When the schedule syncs it next: the last attempt plus the longer of\nthe server's sync interval and the provider's minimum. `null` before\nthe first attempt and for connections the schedule skips. Not later\nthan now when the last attempt is: that came from a clock that ran\nahead, and the connection is due."
+            "description": "When the schedule syncs it next: the last attempt plus the longer of\nthe server's sync interval and the provider's minimum. `null` before\nthe first attempt and for connections the schedule skips. When the\nlast attempt is later than now, which came from a clock that ran ahead,\nthe connection is due: now, or when its limits allow a run."
           },
           "owner": {
             "$ref": "#/components/schemas/MemberId",

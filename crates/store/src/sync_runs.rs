@@ -49,9 +49,7 @@ pub struct RunCounts {
     /// Runs queued or running, plus finished runs started after the given
     /// instant.
     pub started_or_pending: u32,
-    /// When the most recent run started at or before the given `now`. A start
-    /// later than that came from a clock that ran ahead and says nothing of
-    /// when to start next; the run still counts in `started_or_pending`.
+    /// When the most recent run started.
     pub last_started_at: Option<Timestamp>,
     /// Whether a run is queued or running.
     pub in_flight: bool,
@@ -262,9 +260,34 @@ impl StoreTx {
         Ok(u32::try_from(result.rows_affected()).unwrap_or(u32::MAX))
     }
 
+    /// Moves the start of each of `connection`'s runs that started later than
+    /// `now` to `now`, and answers how many it moved. Such a start came from a
+    /// clock that ran ahead, and when the run really happened is unknowable;
+    /// the run still happened, so it keeps counting against the daily budget.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn bring_sync_run_starts_to(
+        &mut self,
+        connection: ConnectionId,
+        now: Timestamp,
+    ) -> Result<u32, StoreError> {
+        let result = sqlx::query(
+            "UPDATE sync_runs SET started_at = ? WHERE connection_id = ? AND started_at > ?",
+        )
+        .bind(now.as_millisecond())
+        .bind(connection.to_string())
+        .bind(now.as_millisecond())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(u32::try_from(result.rows_affected()).unwrap_or(u32::MAX))
+    }
+
     /// The counts rate limits use for `connection`: runs queued, running or
-    /// started after `since`, the last start at or before `now`, and whether a
-    /// run is in flight. Read inside the transaction that queues a run, so two
+    /// started after `since`, the last start, and whether a run is in
+    /// flight. Read inside the transaction that queues a run, so two
     /// requests cannot both pass a limit.
     ///
     /// # Errors
@@ -274,17 +297,15 @@ impl StoreTx {
         &mut self,
         connection: ConnectionId,
         since: Timestamp,
-        now: Timestamp,
     ) -> Result<RunCounts, StoreError> {
         let row = sqlx::query(
             "SELECT \
              COALESCE(SUM(status IN ('queued', 'running') OR started_at > ?), 0) AS counted, \
-             MAX(CASE WHEN started_at <= ? THEN started_at END) AS last_started_at, \
+             MAX(started_at) AS last_started_at, \
              COALESCE(MAX(status IN ('queued', 'running')), 0) AS in_flight \
              FROM sync_runs WHERE connection_id = ?",
         )
         .bind(since.as_millisecond())
-        .bind(now.as_millisecond())
         .bind(connection.to_string())
         .fetch_one(&mut *self.tx)
         .await
