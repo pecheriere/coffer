@@ -550,16 +550,48 @@ impl StoreTx {
     }
 
     /// Record `candidates` as transactions `transaction` may duplicate;
-    /// ones already recorded are kept.
+    /// ones already recorded are kept. A pair is always within one account.
     ///
     /// # Errors
     ///
-    /// Backend failures, including a transaction that does not exist.
+    /// [`StoreError::Invalid`] if a candidate is in another account than
+    /// `transaction`, checked before any pair is recorded. Otherwise backend
+    /// failures, including a transaction that does not exist.
     pub async fn add_duplicate_candidates(
         &mut self,
         transaction: TransactionId,
         candidates: &[TransactionId],
     ) -> Result<(), StoreError> {
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        // The paths that change the other side of a pair (dismissing,
+        // merging, dropping a stale candidate) check access to one account
+        // only, so a pair never spans two.
+        let (mismatched,): (i64,) = {
+            let mut query = QueryBuilder::<Sqlite>::new(
+                "SELECT count(*) FROM transactions AS other, transactions AS own \
+                 WHERE own.id = ",
+            );
+            query
+                .push_bind(transaction.to_string())
+                .push(" AND other.account_id != own.account_id AND other.id IN (");
+            let mut ids = query.separated(", ");
+            for candidate in candidates {
+                ids.push_bind(candidate.to_string());
+            }
+            query.push(")");
+            query
+                .build_query_as()
+                .fetch_one(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?
+        };
+        if mismatched > 0 {
+            return Err(StoreError::Invalid(
+                "duplicate candidates are within one account",
+            ));
+        }
         for candidate in candidates {
             sqlx::query(
                 "INSERT INTO duplicate_candidates (transaction_id, candidate_id) VALUES (?, ?) \

@@ -118,8 +118,8 @@
     index, never an id), merges and creates. Lists and their cursors are
     filtered in the query, so hidden rows neither appear nor shorten a page.
     As defence in depth, a transaction's duplicate candidates leave out those
-    in an account the token cannot read: the server pairs candidates and
-    merges only within one account, so none should exist.
+    in an account the token cannot read: the store refuses a candidate
+    pair across accounts, so none should exist.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to
