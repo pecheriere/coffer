@@ -144,6 +144,18 @@ fn a_theme_file_holds_only_tokens_and_fonts() {
 }
 
 #[test]
+fn a_backslash_escapes_a_quote_inside_a_string() {
+    let tokens =
+        parse_theme(r#"@font-face{font-family: "a\"}b"} :root{--q: "a\";b"; --c: #000000}"#)
+            .expect("parses");
+    assert_eq!(
+        tokens.resolve("q", Scheme::Light).as_deref(),
+        Ok(r#""a\";b""#)
+    );
+    assert_eq!(tokens.resolve("c", Scheme::Light).as_deref(), Ok("#000000"));
+}
+
+#[test]
 fn every_theme_defines_every_token_in_both_schemes() {
     for theme in THEMES {
         let tokens = tokens_of(theme);
@@ -169,14 +181,39 @@ fn every_theme_defines_every_token_in_both_schemes() {
                 );
             }
         }
-        for name in tokens.references() {
-            assert!(
-                tokens.resolve(&name, Scheme::Light).is_ok(),
-                "{}: var(--{name}) is not defined",
-                theme.name
-            );
+        let broken = broken_references(&tokens);
+        assert!(broken.is_empty(), "{}: {broken:?}", theme.name);
+    }
+}
+
+#[test]
+fn private_references_are_resolved_in_both_schemes() {
+    let tokens = parse_theme(
+        ":root{--ok: light-dark(#111111, #EEEEEE); --loop: light-dark(#111111, var(--loop2)); \
+         --loop2: var(--loop); --use: var(--ok)}",
+    )
+    .expect("parses");
+    let broken = broken_references(&tokens);
+    assert_eq!(broken.len(), 2, "{broken:?}");
+    assert!(
+        broken.iter().all(|line| line.contains("Dark")),
+        "{broken:?}"
+    );
+    let undefined = parse_theme(":root{--a: var(--b)}").expect("parses");
+    assert_eq!(broken_references(&undefined).len(), 2);
+}
+
+/// Every `var()` target that fails to resolve, per scheme.
+fn broken_references(tokens: &Tokens) -> Vec<String> {
+    let mut broken = Vec::new();
+    for name in tokens.references() {
+        for scheme in SCHEMES {
+            if let Err(err) = tokens.resolve(&name, scheme) {
+                broken.push(format!("var(--{name}) {scheme:?}: {err}"));
+            }
         }
     }
+    broken
 }
 
 #[test]
@@ -530,6 +567,17 @@ fn declarations_reader_tracks_at_rules_and_drops_important() {
             ("@media (min-width: 1px)", "animation", "none"),
             ("@media (min-width: 1px)", "top", "0"),
         ]
+    );
+}
+
+#[test]
+fn declarations_reader_joins_nested_at_rules() {
+    let found =
+        declarations("@supports (display: grid) { @media (min-width: 1px) { b { top: 0 } } }");
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0].context,
+        "@supports (display: grid) @media (min-width: 1px)"
     );
 }
 

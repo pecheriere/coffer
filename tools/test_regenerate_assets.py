@@ -1,6 +1,7 @@
 """Tests for the asset regeneration tool."""
 
 import hashlib
+import io
 import struct
 import tempfile
 import unittest
@@ -109,6 +110,23 @@ class ReservedFontNameTest(unittest.TestCase):
         licence = "Copyright 2016 The Example Project Authors\nSome other licence text."
 
         self.assertTrue(regenerate_assets.declares_reserved_font_name(licence))
+
+
+class ReadCappedTest(unittest.TestCase):
+    """A download larger than the cap is refused, one at the cap is kept."""
+
+    def test_a_body_at_the_cap_is_returned(self) -> None:
+        """Exactly DOWNLOAD_MAX_BYTES is accepted."""
+        body = b"x" * regenerate_assets.DOWNLOAD_MAX_BYTES
+
+        self.assertEqual(regenerate_assets.read_capped(io.BytesIO(body), "https://x"), body)
+
+    def test_a_body_over_the_cap_is_refused(self) -> None:
+        """One byte more than the cap stops the tool."""
+        body = b"x" * (regenerate_assets.DOWNLOAD_MAX_BYTES + 1)
+
+        with self.assertRaises(SystemExit):
+            regenerate_assets.read_capped(io.BytesIO(body), "https://x")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
 //! Content-hashed static files: `/static/<path>` serves the asset whose URL
 //! is exactly that. A URL with a stale hash is not found, never redirected
 //! to the current file.
+//!
+//! The router percent-decodes the path before the exact match against the
+//! generated list, so `css%2Fbase.<hash>.css` aliases the hashed URL, while
+//! `%2e%2e` or any other decoded path outside the list is not found; nothing
+//! is ever read from the file system.
 
 use axum::Router;
 use axum::extract::Path;
