@@ -8,9 +8,9 @@
 )]
 
 mod access;
-mod answer;
+pub(crate) mod answer;
 mod charges;
-mod unknowns;
+pub(crate) mod unknowns;
 mod what_if;
 
 use axum::body::Body;
@@ -34,19 +34,19 @@ const ITEMS: &str = "/api/v1/plan-items";
 const TRANSACTIONS: &str = "/api/v1/transactions";
 
 /// The worked example's day; `today` in every world unless a test moves the clock.
-const AS_OF: &str = "2026-11-15";
+pub(crate) const AS_OF: &str = "2026-11-15";
 /// The balance date of the worked example's accounts, the day before `AS_OF`.
-const BALANCE_ON: &str = "2026-11-14";
+pub(crate) const BALANCE_ON: &str = "2026-11-14";
 
-struct World {
-    server: TestServer,
-    alice: Actor,
+pub(crate) struct World {
+    pub(crate) server: TestServer,
+    pub(crate) alice: Actor,
     /// A token of alice's without grants, which may do anything.
-    admin: SecretToken,
+    pub(crate) admin: SecretToken,
 }
 
 /// Admin "alice" on the day `AS_OF` in UTC, with nothing else.
-async fn world() -> World {
+pub(crate) async fn world() -> World {
     world_on(TestServer::new().await).await
 }
 
@@ -95,7 +95,7 @@ fn all(level: AccountLevel) -> TokenGrant {
     }
 }
 
-fn usd(minor_units: i64) -> Value {
+pub(crate) fn usd(minor_units: i64) -> Value {
     json!({"minor_units": minor_units, "currency": "USD"})
 }
 
@@ -113,7 +113,12 @@ fn goal_schedule(start_on: &str, due_on: &str) -> Value {
 }
 
 /// An outflow named `name`, of `minor_units` USD, in `category`.
-fn outflow(name: &str, minor_units: i64, category: CategoryId, schedule: &Value) -> Value {
+pub(crate) fn outflow(
+    name: &str,
+    minor_units: i64,
+    category: CategoryId,
+    schedule: &Value,
+) -> Value {
     json!({
         "name": name,
         "category": category,
@@ -229,7 +234,7 @@ impl World {
     }
 
     /// An account, whose body takes `extra` on top of its name, kind and currency.
-    async fn account_with(
+    pub(crate) async fn account_with(
         &self,
         name: &str,
         kind: &str,
@@ -247,13 +252,13 @@ impl World {
     }
 
     /// A checking account in USD holding `minor_units` at the end of `BALANCE_ON`.
-    async fn funded(&self, name: &str, minor_units: i64) -> AccountId {
+    pub(crate) async fn funded(&self, name: &str, minor_units: i64) -> AccountId {
         let account = self.account_with(name, "checking", "USD", json!({})).await;
         self.balance(account, BALANCE_ON, minor_units).await;
         account
     }
 
-    async fn balance(&self, account: AccountId, on: &str, minor_units: i64) {
+    pub(crate) async fn balance(&self, account: AccountId, on: &str, minor_units: i64) {
         self.admin_send(
             Method::PUT,
             &format!("/api/v1/accounts/{account}/balances/{on}"),
@@ -262,7 +267,7 @@ impl World {
         .await;
     }
 
-    async fn close(&self, account: AccountId) {
+    pub(crate) async fn close(&self, account: AccountId) {
         self.admin_send(
             Method::PATCH,
             &format!("/api/v1/accounts/{account}"),
@@ -290,21 +295,21 @@ impl World {
         serde_json::from_value(answer["id"].clone()).unwrap()
     }
 
-    async fn expense(&self, name: &str) -> CategoryId {
+    pub(crate) async fn expense(&self, name: &str) -> CategoryId {
         self.category(name, "expense").await
     }
 
     /// A stored planned item; returns its id.
-    async fn item(&self, body: &Value) -> Value {
+    pub(crate) async fn item(&self, body: &Value) -> Value {
         self.admin_send(Method::POST, ITEMS, body).await["id"].clone()
     }
 
-    async fn settings(&self, patch: &Value) {
+    pub(crate) async fn settings(&self, patch: &Value) {
         self.admin_send(Method::PATCH, SETTINGS, patch).await;
     }
 
     /// Sets a fixed safety floor of `minor_units` USD.
-    async fn floor(&self, minor_units: i64) {
+    pub(crate) async fn floor(&self, minor_units: i64) {
         self.settings(&json!({"floor": {"kind": "fixed", "amount": usd(minor_units)}}))
             .await;
     }
@@ -332,7 +337,7 @@ impl World {
     }
 
     /// `minor_units` spent from `account` on `category`.
-    async fn spend(
+    pub(crate) async fn spend(
         &self,
         account: AccountId,
         posted_on: &str,
@@ -373,7 +378,7 @@ impl World {
         serde_json::from_str(&text).unwrap()
     }
 
-    async fn forecast(&self) -> Value {
+    pub(crate) async fn forecast(&self) -> Value {
         self.forecast_at("").await
     }
 

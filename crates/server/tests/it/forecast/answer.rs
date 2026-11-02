@@ -13,15 +13,15 @@ use super::{
 };
 
 /// The household of the worked example (the domain's `golden.rs`), through the API.
-struct Golden {
-    world: World,
-    checking: AccountId,
+pub(crate) struct Golden {
+    pub(crate) world: World,
+    pub(crate) checking: AccountId,
     side: AccountId,
-    utilities: CategoryId,
+    pub(crate) utilities: CategoryId,
     vacation: Value,
 }
 
-async fn golden() -> Golden {
+pub(crate) async fn golden() -> Golden {
     let world = world().await;
     let checking = world.funded("Checking", 2_000_000).await;
     world.funded("Savings", 5_000_000).await;
@@ -436,7 +436,7 @@ async fn actuals_ignore_pending_excluded_accounts_and_goal_links() {
 }
 
 /// A pending charge, which only a provider can report: the API creates none.
-pub(super) async fn insert_pending(
+pub(crate) async fn insert_pending(
     world: &World,
     account: AccountId,
     category: CategoryId,

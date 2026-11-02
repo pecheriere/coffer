@@ -20,13 +20,13 @@ const LABEL: &str = "Family bank";
 const PROVIDER_ERROR: &str = "the bank says account 4242 is frozen";
 
 /// A world with a provider connection.
-pub(super) struct Fed {
-    pub(super) world: World,
+pub(crate) struct Fed {
+    pub(crate) world: World,
     fake: Arc<FakeProvider>,
     connection: ConnectionId,
 }
 
-pub(super) async fn fed() -> Fed {
+pub(crate) async fn fed() -> Fed {
     let (server, fake) = TestServer::with_fake_provider().await;
     let world = world_on(server).await;
     let connection = world
@@ -42,7 +42,7 @@ pub(super) async fn fed() -> Fed {
     }
 }
 
-pub(super) fn reported(currency: &str) -> ProviderAccountData {
+pub(crate) fn reported(currency: &str) -> ProviderAccountData {
     ProviderAccountData {
         provider_account_id: "one".into(),
         name: "Everyday savings".into(),
@@ -59,7 +59,7 @@ pub(super) fn reported(currency: &str) -> ProviderAccountData {
 }
 
 impl Fed {
-    pub(super) async fn sync(&self, account: ProviderAccountData) {
+    pub(crate) async fn sync(&self, account: ProviderAccountData) {
         self.fake.push(Ok(FetchResult {
             accounts: vec![account],
             connection_errors: Vec::new(),
