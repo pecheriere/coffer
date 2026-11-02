@@ -224,9 +224,10 @@ async fn link_token_for_a_new_item_asks_for_transactions() {
                 "language": "en",
                 "country_codes": ["US", "CA"],
                 "products": ["transactions"],
+                "additional_consented_products": ["investments"],
                 "transactions": { "days_requested": 730 },
             }),
-        "a new Item's link request asks for transactions and 730 days"
+        "a new Item's link request asks for transactions and 730 days, and consent for investments"
     );
 }
 

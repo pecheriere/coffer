@@ -35,6 +35,10 @@ const JSON: &str = "application/json";
 const CLIENT_NAME: &str = "coffer";
 const LANGUAGE: &str = "en";
 const PRODUCTS: [&str; 1] = ["transactions"];
+/// Consent asked for when linking, so holdings can be added later without
+/// relinking. Plaid bills a product only once an endpoint of it is used, and
+/// coffer calls none of investments'.
+const ADDITIONAL_CONSENTED_PRODUCTS: [&str; 1] = ["investments"];
 const DAYS_REQUESTED: u32 = 730;
 /// The most updates `/transactions/sync` returns in one page.
 const SYNC_PAGE_SIZE: u32 = 500;
@@ -242,6 +246,8 @@ struct LinkTokenFields<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     products: Option<[&'static str; 1]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    additional_consented_products: Option<[&'static str; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     transactions: Option<LinkTransactions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_token: Option<&'a str>,
@@ -447,6 +453,7 @@ impl PlaidClient {
             language: LANGUAGE,
             country_codes: &self.config.country_codes,
             products: new_item.then_some(PRODUCTS),
+            additional_consented_products: new_item.then_some(ADDITIONAL_CONSENTED_PRODUCTS),
             transactions: new_item.then_some(LinkTransactions {
                 days_requested: DAYS_REQUESTED,
             }),
