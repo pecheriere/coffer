@@ -7,6 +7,7 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod forecast;
 pub mod plan_items;
 pub mod settings;
 pub mod transactions;
@@ -23,6 +24,8 @@ use coffer_domain::policy::{
 use coffer_domain::time::Clock;
 use coffer_store::{Store, StoreError, StoreTx};
 use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
 use crate::http::idempotency::IdempotencySlot;
@@ -33,6 +36,8 @@ pub struct Ledger {
     store: Store,
     clock: Arc<dyn Clock>,
     access: Arc<AccessResolver>,
+    /// The household's zone, which decides what day it is (spec §8.7).
+    timezone: TimeZone,
 }
 
 impl std::fmt::Debug for Ledger {
@@ -44,12 +49,23 @@ impl std::fmt::Debug for Ledger {
 impl Ledger {
     /// The service over `store`.
     #[must_use]
-    pub fn new(store: Store, clock: Arc<dyn Clock>, access: Arc<AccessResolver>) -> Self {
+    pub fn new(
+        store: Store,
+        clock: Arc<dyn Clock>,
+        access: Arc<AccessResolver>,
+        timezone: TimeZone,
+    ) -> Self {
         Self {
             store,
             clock,
             access,
+            timezone,
         }
+    }
+
+    /// The household's day.
+    fn today(&self) -> Date {
+        self.clock.now().to_zoned(self.timezone.clone()).date()
     }
 
     /// Whether `actor` may use `account` at `level`, decided before a

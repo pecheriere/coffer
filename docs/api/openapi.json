@@ -2294,6 +2294,243 @@
         ]
       }
     },
+    "/api/v1/forecast": {
+      "get": {
+        "tags": [
+          "forecast"
+        ],
+        "summary": "The cash forecast.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "operationId": "getForecast",
+        "parameters": [
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since bills\nbetween today and that day fall outside the window.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "horizon_months",
+            "in": "query",
+            "description": "How many months the window covers, by default the household's setting.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 60,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "include_income",
+            "in": "query",
+            "description": "Whether planned inflows reduce the cash needed, by default the household's\nsetting.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The forecast, even when it has no number: see `status`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forecast"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/forecast/what-if": {
+      "post": {
+        "tags": [
+          "forecast"
+        ],
+        "summary": "The cash forecast with imagined changes.",
+        "description": "The answer of `getForecast` with other settings and with items that are not in the plan, such as a new roof: `items` are checked like planned items, but a category is optional, and each answers in the breakdown as `hypothetical` with its position in the list. This month's spending neither reduces nor pays them.\n\nThis persists nothing: no item, no setting, no audit entry, no idempotency key. So it needs only `read`, though it is a `POST`, and the same access as `getForecast`.",
+        "operationId": "whatIfForecast",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatIfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The forecast, even when it has no number: see `status`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forecast"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/household/settings": {
       "get": {
         "tags": [
@@ -4918,6 +5155,60 @@
           "write"
         ]
       },
+      "AccountLine": {
+        "type": "object",
+        "description": "One account and what it contributed.",
+        "required": [
+          "account",
+          "name",
+          "liquidity",
+          "balance",
+          "balance_on",
+          "counted",
+          "not_counted"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "balance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "counted": {
+            "type": "boolean"
+          },
+          "liquidity": {
+            "$ref": "#/components/schemas/LiquidityClass"
+          },
+          "name": {
+            "type": "string"
+          },
+          "not_counted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NotCountedReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "AccountList": {
         "type": "object",
         "description": "Every account the token may see.",
@@ -5403,6 +5694,91 @@
         },
         "additionalProperties": false
       },
+      "Blocker": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "More than one currency is in use; each has its own row in `totals`.",
+            "required": [
+              "currencies",
+              "kind"
+            ],
+            "properties": {
+              "currencies": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Currency"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "mixed_currencies"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No safety floor is set. A silent floor of 0 would overstate the surplus.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "floor_not_set"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No account counts as cash.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_counted_accounts"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A counted account has no balance, so it could hold anything.",
+            "required": [
+              "account",
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "balance_missing"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Why there is no number at all."
+      },
+      "CalendarMonth": {
+        "type": "string",
+        "description": "A calendar month, written YYYY-MM.",
+        "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
+      },
       "CategoryGroupId": {
         "type": "string",
         "format": "uuid",
@@ -5649,6 +6025,402 @@
           }
         }
       },
+      "Caution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A counted balance is older than `stale_after_days` at `as_of`.",
+            "required": [
+              "account",
+              "on",
+              "age_days",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "age_days": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "balance_stale"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A provider account's money is in no account.",
+            "required": [
+              "provider_account",
+              "connection",
+              "name",
+              "institution",
+              "currency_raw",
+              "currency_supported",
+              "kind"
+            ],
+            "properties": {
+              "connection": {
+                "$ref": "#/components/schemas/ConnectionId"
+              },
+              "currency_raw": {
+                "type": "string"
+              },
+              "currency_supported": {
+                "type": "boolean"
+              },
+              "institution": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unbound_provider_account"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "provider_account": {
+                "$ref": "#/components/schemas/ProviderAccountId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A counted account's feed may not be keeping it current.",
+            "required": [
+              "account",
+              "provider_account",
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "account_feed_problem"
+                ]
+              },
+              "provider_account": {
+                "$ref": "#/components/schemas/ProviderAccountId"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/FeedProblemReason"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A connection is not syncing.",
+            "required": [
+              "connection",
+              "label",
+              "status",
+              "kind"
+            ],
+            "properties": {
+              "connection": {
+                "$ref": "#/components/schemas/ConnectionId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "connection_needs_attention"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/FeedStatus"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The window does not start today, so whatever falls between is left out.",
+            "required": [
+              "today",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "as_of_not_today"
+                ]
+              },
+              "today": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Recurring bills and one-offs dated earlier this month exceed the category's\nspending so far. The gap counts as still needed; if it was paid under another\ncategory, the number shows less to invest, which is the safe direction. The\ncategory's spending is taken to pay these before any budget, since the data\ncannot tell which it was for, so money spent on a budget can hide a gap.",
+            "required": [
+              "category",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "category": {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_not_seen"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A closed card still owes money, which counts against cash.",
+            "required": [
+              "account",
+              "balance",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "closed_liability_owing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A floor of some months of recurring outflows came to 0 in this currency:\na silent floor of 0 would overstate the surplus.",
+            "required": [
+              "currency",
+              "months",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "months_floor_is_zero"
+                ]
+              },
+              "months": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A short-term liability shows money in hand, perhaps entered with the\nwrong sign. It was added as it stands.",
+            "required": [
+              "account",
+              "balance",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "balance": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "liability_balance_positive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A goal and a one-off may describe the same expense. Neither is\nde-duplicated: each counts as it would alone, so a one-off outside the\nwindow warns without adding to the number.",
+            "required": [
+              "goal",
+              "one_off",
+              "category",
+              "kind"
+            ],
+            "properties": {
+              "category": {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              "goal": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "goal_one_off_overlap"
+                ]
+              },
+              "one_off": {
+                "$ref": "#/components/schemas/LineSource"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A goal's due date has passed with money still to find.",
+            "required": [
+              "goal",
+              "due_on",
+              "kind"
+            ],
+            "properties": {
+              "due_on": {
+                "type": "string",
+                "format": "date"
+              },
+              "goal": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "goal_overdue"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An item is hinted at an account that does not count. It is counted\nanyway, since overstating the need is the safe direction.",
+            "required": [
+              "item",
+              "account",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              "item": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "item_hint_not_counted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Uncategorized spending this month might have reduced a recurring item.",
+            "required": [
+              "currency",
+              "count",
+              "total",
+              "kind"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "uncategorized_spending"
+                ]
+              },
+              "total": {
+                "$ref": "#/components/schemas/Money"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction or hide an unpaid bill or one-off.",
+            "required": [
+              "count",
+              "kind"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "possible_duplicates"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The first month whose closing cash is below the floor: income arriving\nlater cannot pay for it.",
+            "required": [
+              "month",
+              "currency",
+              "projected_cash",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cash_dips_below_floor"
+                ]
+              },
+              "month": {
+                "$ref": "#/components/schemas/CalendarMonth"
+              },
+              "projected_cash": {
+                "$ref": "#/components/schemas/Money"
+              }
+            }
+          }
+        ],
+        "description": "Something that keeps the number but stops it being firm."
+      },
       "ConnectionId": {
         "type": "string",
         "format": "uuid",
@@ -5767,6 +6539,80 @@
         "description": "An active ISO 4217 currency code; its exponent gives the minor unit (USD 2, JPY 0).",
         "pattern": "^[A-Z]{3}$"
       },
+      "CurrencyTotals": {
+        "type": "object",
+        "description": "One currency's arithmetic. Currencies are never netted.",
+        "required": [
+          "currency",
+          "cash_available",
+          "planned_outflows",
+          "goals",
+          "floor",
+          "planned_inflows",
+          "excluded_inflows",
+          "cash_needed",
+          "surplus"
+        ],
+        "properties": {
+          "cash_available": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The signed sum of counted balances."
+          },
+          "cash_needed": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`planned_outflows + goals + floor - planned_inflows`."
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "excluded_inflows": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Planned inflows left out because `include_income` is off."
+          },
+          "floor": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "goals": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "planned_inflows": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Planned inflows counted: 0 unless `include_income`."
+          },
+          "planned_outflows": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Planned outflows in the window, after this month's reduction."
+          },
+          "surplus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "`cash_available - cash_needed`. Null when a blocker other than\n`mixed_currencies` applies."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "FeedProblemReason": {
+        "type": "string",
+        "description": "What is wrong with a bound provider account. Never the provider's own text.",
+        "enum": [
+          "provider_error",
+          "currency_unsupported",
+          "currency_differs"
+        ]
+      },
+      "FeedStatus": {
+        "type": "string",
+        "description": "Why a connection is not syncing.",
+        "enum": [
+          "error",
+          "reauth_required"
+        ]
+      },
       "FieldChange": {
         "type": "object",
         "description": "One field's value before and after a change; `null` on the side where\nthe field did not exist.",
@@ -5783,6 +6629,113 @@
           }
         },
         "additionalProperties": false
+      },
+      "Forecast": {
+        "type": "object",
+        "description": "The answer: how much cash is free over the window from `as_of` up to, and\nnot including, `end_exclusive`.",
+        "required": [
+          "as_of",
+          "end_exclusive",
+          "horizon_months",
+          "include_income",
+          "floor",
+          "stale_after_days",
+          "status",
+          "surplus",
+          "totals",
+          "accounts",
+          "items",
+          "months",
+          "blockers",
+          "cautions"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountLine"
+            },
+            "description": "Every account, with whether it counted."
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Blocker"
+            }
+          },
+          "cautions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Caution"
+            }
+          },
+          "end_exclusive": {
+            "type": "string",
+            "format": "date"
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SafetyFloor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "horizon_months": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "include_income": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemLine"
+            },
+            "description": "Every item that adds to the window, in input order."
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MonthBucket"
+            },
+            "description": "One bucket per calendar month the window touches."
+          },
+          "stale_after_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ForecastStatus"
+          },
+          "surplus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "Cash available minus cash needed; negative is a shortfall. Null exactly\nwhen `blockers` is not empty."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyTotals"
+            },
+            "description": "One row per currency in use, sorted by currency."
+          }
+        }
       },
       "ForecastSettings": {
         "type": "object",
@@ -5869,6 +6822,41 @@
         },
         "additionalProperties": false
       },
+      "ForecastStatus": {
+        "type": "string",
+        "description": "How far to trust the number.",
+        "enum": [
+          "firm",
+          "provisional",
+          "unavailable"
+        ]
+      },
+      "GoalLine": {
+        "type": "object",
+        "description": "A sinking fund's figures.",
+        "required": [
+          "target",
+          "spent",
+          "due_on",
+          "due_in_horizon"
+        ],
+        "properties": {
+          "due_in_horizon": {
+            "type": "boolean",
+            "description": "Whether `due_on` falls in the window: false when it has already passed."
+          },
+          "due_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
       "HeldCursorView": {
         "type": "object",
         "description": "A sync cursor that stays in place because records of some provider\naccounts keep failing to store.",
@@ -5907,6 +6895,67 @@
           }
         }
       },
+      "HypotheticalItem": {
+        "type": "object",
+        "description": "A planned item to imagine, checked like a stored one but for the optional category.",
+        "required": [
+          "name",
+          "amount",
+          "direction",
+          "schedule"
+        ],
+        "properties": {
+          "account_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "An open account it is expected on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "A positive magnitude, 1 to 10^15 minor units: `direction` says which way the\nmoney goes. For a goal, its target."
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "An `expense` category for an outflow, an `income` one for an inflow; not\narchived, nor in an archived group."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PlanDirection",
+            "description": "A goal must be an `outflow`."
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters, without control characters."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/PlanSchedule"
+          },
+          "spending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanSpending",
+                "description": "Only on a recurring outflow, where it is `bill` by default. This month's spending\nreduces no hypothetical item, whichever it is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "IntervalUnit": {
         "type": "string",
         "description": "The unit of a recurring schedule's interval.",
@@ -5916,6 +6965,152 @@
           "months",
           "years"
         ]
+      },
+      "ItemLine": {
+        "type": "object",
+        "description": "One item's part in the window.",
+        "required": [
+          "source",
+          "name",
+          "item_type",
+          "direction",
+          "category",
+          "account_hint",
+          "occurrences",
+          "first_on",
+          "last_on",
+          "gross",
+          "reduced_by",
+          "unpaid",
+          "counted",
+          "goal"
+        ],
+        "properties": {
+          "account_hint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counted": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow\nunless `include_income`."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/PlanDirection"
+          },
+          "first_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "goal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoalLine",
+                "description": "The sinking fund's own figures, for a goal."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gross": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The whole amount in the window, before any reduction. 0 only with `unpaid`."
+          },
+          "item_type": {
+            "$ref": "#/components/schemas/PlanItemType"
+          },
+          "last_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "name": {
+            "type": "string"
+          },
+          "occurrences": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times it falls in the window: 0 for a goal.",
+            "minimum": 0
+          },
+          "reduced_by": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What this month's actual spending takes off `gross`."
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineSource"
+          },
+          "unpaid": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What a recurring bill or one-off dated earlier this month, before the window,\nstill needs: the part its category's spending does not cover."
+          }
+        }
+      },
+      "LineSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A stored planned item.",
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/PlannedItemId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "planned_item"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The item at this position in a what-if's list.",
+            "required": [
+              "index",
+              "kind"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "hypothetical"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a line of the breakdown comes from."
       },
       "LinkedAccountView": {
         "type": "object",
@@ -6056,6 +7251,87 @@
           }
         },
         "additionalProperties": false
+      },
+      "MonthBucket": {
+        "type": "object",
+        "description": "One calendar month of the window.",
+        "required": [
+          "month",
+          "partial",
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MonthCurrency"
+            },
+            "description": "One per currency in use, sorted by currency."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The window does not cover the whole calendar month."
+          }
+        }
+      },
+      "MonthCurrency": {
+        "type": "object",
+        "description": "One currency in one month.",
+        "required": [
+          "currency",
+          "outflows",
+          "inflows",
+          "goal_accrual",
+          "projected_cash",
+          "items"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "goal_accrual": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What goals add to their need this month. The first month holds all they\nhad accrued before it."
+          },
+          "inflows": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Planned inflows, whether or not `include_income` counts them."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MonthItem"
+            },
+            "description": "What each item contributes, in input order, without zeros."
+          },
+          "outflows": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Planned outflows after this month's reduction."
+          },
+          "projected_cash": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Cash at the end of the month or the window: `cash_available` plus inflows\ncounted minus outflows so far, without goals or the floor."
+          }
+        }
+      },
+      "MonthItem": {
+        "type": "object",
+        "description": "One item's contribution to a month: a positive magnitude, whose direction and\ntype are on its [`ItemLine`].",
+        "required": [
+          "source",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineSource"
+          }
+        }
       },
       "NewAccountRequest": {
         "type": "object",
@@ -6238,6 +7514,15 @@
         },
         "additionalProperties": false
       },
+      "NotCountedReason": {
+        "type": "string",
+        "description": "Why an account's balance is not part of the cash available.",
+        "enum": [
+          "excluded_by_flag",
+          "closed",
+          "not_cash"
+        ]
+      },
       "OpenApiDocument": {
         "type": "object",
         "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
@@ -6299,6 +7584,15 @@
         "enum": [
           "outflow",
           "inflow"
+        ]
+      },
+      "PlanItemType": {
+        "type": "string",
+        "description": "The kind of a planned item, which never changes once it exists.",
+        "enum": [
+          "recurring",
+          "one_off",
+          "goal"
         ]
       },
       "PlanSchedule": {
@@ -7438,6 +8732,66 @@
           }
         },
         "additionalProperties": false
+      },
+      "WhatIfRequest": {
+        "type": "object",
+        "description": "A forecast with other settings, and with items that are not in the plan.",
+        "properties": {
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today."
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SafetyFloor",
+                "description": "The safety floor to use: by default the household's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "horizon_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 to 60 months: by default the household's.",
+            "maximum": 60,
+            "minimum": 1
+          },
+          "include_income": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether planned inflows reduce the cash needed: by default the household's\nsetting."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HypotheticalItem"
+            },
+            "description": "At most 50 items to add, each answering in the breakdown by its position here."
+          },
+          "stale_after_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 to 365 days: by default the household's.",
+            "maximum": 365,
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -7477,6 +8831,10 @@
     {
       "name": "plan",
       "description": "The household's spending plan: recurring items, one-offs and goals. Amounts are positive magnitudes with a direction."
+    },
+    {
+      "name": "forecast",
+      "description": "How much cash the household needs over the coming months, and how much above that could be invested. A planned amount is a positive magnitude with a direction; a balance, `cash_available`, `projected_cash` and `surplus` carry a sign, and a negative `surplus` is a shortfall."
     },
     {
       "name": "connections",

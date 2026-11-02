@@ -33,7 +33,7 @@ pub struct ForecastSettingsPatch {
 }
 
 /// The message for a rejected setting; never echoes the input.
-fn invalid(error: PlanError) -> LedgerError {
+pub(super) fn invalid(error: PlanError) -> LedgerError {
     LedgerError::Invalid(match error {
         PlanError::InvalidFloor => "a fixed floor must be between 0 and 10^15 minor units",
         PlanError::InvalidFloorMonths => "floor months must be 1 to 60",

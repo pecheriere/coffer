@@ -67,7 +67,7 @@ fn settings_from_row(row: &SqliteRow) -> Result<ForecastSettings, StoreError> {
     Ok(settings)
 }
 
-async fn fetch_forecast_settings<'e>(
+pub(crate) async fn fetch_forecast_settings<'e>(
     executor: impl SqliteExecutor<'e>,
 ) -> Result<ForecastSettings, StoreError> {
     sqlx::query("SELECT * FROM household_settings WHERE id = 1")

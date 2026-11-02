@@ -22,7 +22,7 @@ use jiff::Timestamp;
 use jiff::civil::date;
 use tempfile::TempDir;
 
-fn at(seconds: i64) -> Timestamp {
+pub(crate) fn at(seconds: i64) -> Timestamp {
     Timestamp::from_second(1_800_000_000 + seconds).unwrap()
 }
 
@@ -33,14 +33,14 @@ fn usd(minor_units: i64) -> Money {
     }
 }
 
-struct World {
+pub(crate) struct World {
     dir: TempDir,
-    store: Store,
-    category: CategoryId,
-    account: AccountId,
+    pub(crate) store: Store,
+    pub(crate) category: CategoryId,
+    pub(crate) account: AccountId,
 }
 
-async fn world() -> World {
+pub(crate) async fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("coffer.db")).await.unwrap();
     let mut tx = store.begin().await.unwrap();
@@ -86,7 +86,7 @@ async fn world() -> World {
 }
 
 impl World {
-    fn new_item(&self, schedule: PlanSchedule) -> NewPlannedItem {
+    pub(crate) fn new_item(&self, schedule: PlanSchedule) -> NewPlannedItem {
         NewPlannedItem {
             name: PlannedItemName::parse("Water bill").unwrap(),
             category: self.category,
@@ -102,7 +102,7 @@ impl World {
         }
     }
 
-    async fn insert(&self, new: NewPlannedItem) -> PlannedItemId {
+    pub(crate) async fn insert(&self, new: NewPlannedItem) -> PlannedItemId {
         let mut tx = self.store.begin().await.unwrap();
         let record = tx.insert_planned_item(new).await.unwrap();
         tx.commit().await.unwrap();
@@ -111,7 +111,7 @@ impl World {
 
     /// A direct connection, since no store call can write a row the types
     /// refuse.
-    async fn pool(&self) -> sqlx::SqlitePool {
+    pub(crate) async fn pool(&self) -> sqlx::SqlitePool {
         sqlx::SqlitePool::connect(&format!(
             "sqlite://{}",
             self.dir.path().join("coffer.db").display()
@@ -121,7 +121,7 @@ impl World {
     }
 }
 
-fn one_off() -> PlanSchedule {
+pub(crate) fn one_off() -> PlanSchedule {
     PlanSchedule::OneOff {
         on: date(2027, 3, 15),
     }

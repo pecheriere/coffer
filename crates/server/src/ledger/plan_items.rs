@@ -31,7 +31,7 @@ use crate::http::problem::ProblemCode;
 
 const ENTITY: &str = "planned_item";
 const HINT_INVALID: &str = "the account hint names no open account";
-const UNKNOWN_CATEGORY: &str = "the category does not exist";
+pub(super) const UNKNOWN_CATEGORY: &str = "the category does not exist";
 const ARCHIVED_CATEGORY: &str = "the category is archived";
 const OUTFLOW_CATEGORY: &str = "an outflow needs an expense category";
 const INFLOW_CATEGORY: &str = "an inflow needs an income category";
@@ -152,7 +152,7 @@ pub struct PlannedItemPatch {
 }
 
 /// The message for a rejected plan value; never echoes the input.
-fn invalid(error: PlanError) -> LedgerError {
+pub(super) fn invalid(error: PlanError) -> LedgerError {
     LedgerError::Invalid(match error {
         PlanError::InvalidName => "name must be 1 to 100 characters without control characters",
         PlanError::InvalidAmount => "amount must be between 1 and 1000000000000000 minor units",
@@ -172,7 +172,7 @@ fn schedule_text(schedule: &PlanSchedule) -> Result<String, LedgerError> {
 
 /// The kind an item ends up with: what `sent` says, or `default` when it says
 /// nothing. An item that can't have one must not be sent one.
-fn resolved_spending(
+pub(crate) fn resolved_spending(
     sent: Option<PlanSpending>,
     default: PlanSpending,
     direction: PlanDirection,

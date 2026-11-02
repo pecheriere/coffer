@@ -7,6 +7,7 @@ mod audit;
 mod categories;
 pub(crate) mod connections;
 pub mod extract;
+mod forecast;
 mod household;
 mod me;
 mod members;
@@ -65,6 +66,8 @@ fn routes() -> ApiRouter {
             plan_items::update,
             plan_items::delete
         ))
+        .op(routes!(forecast::get))
+        .op(routes!(forecast::what_if))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

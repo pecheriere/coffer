@@ -371,6 +371,7 @@ impl TestServer {
             store.clone(),
             clock.clone(),
             Arc::clone(&access),
+            config.timezone.clone(),
         ));
         let registry = registry(&config);
         let sync = Arc::new(SyncService::new(

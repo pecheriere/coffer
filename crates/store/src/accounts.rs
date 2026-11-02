@@ -75,7 +75,7 @@ fn flag(row: &SqliteRow, column: &str) -> Result<bool, StoreError> {
     }
 }
 
-fn account_from_row(row: &SqliteRow) -> Result<AccountRecord, StoreError> {
+pub(crate) fn account_from_row(row: &SqliteRow) -> Result<AccountRecord, StoreError> {
     Ok(AccountRecord {
         id: parsed(row, "id")?,
         name: AccountName::parse(&text(row, "name")?).map_err(StoreError::backend)?,

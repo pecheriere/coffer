@@ -14,6 +14,7 @@ mod connections_page;
 mod duplicates;
 mod egress;
 mod egress_relay;
+mod forecast;
 mod grants;
 mod healthcheck;
 mod household_settings;

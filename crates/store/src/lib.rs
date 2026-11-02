@@ -10,6 +10,7 @@ mod categories;
 mod connections;
 mod convert;
 mod error;
+mod forecast;
 mod household;
 mod idempotency;
 mod invites;
@@ -42,6 +43,7 @@ pub use connections::{
     UnknownConnectionStatus,
 };
 pub use error::StoreError;
+pub use forecast::{CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow};
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use members::{Member, NewMember};

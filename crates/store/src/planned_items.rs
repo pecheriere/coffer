@@ -157,7 +157,7 @@ fn schedule_from_row(row: &SqliteRow) -> Result<PlanSchedule, StoreError> {
     }
 }
 
-fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError> {
+pub(crate) fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError> {
     let amount = Money {
         minor_units: row.try_get("amount_minor").map_err(StoreError::from_sqlx)?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,

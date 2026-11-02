@@ -28,7 +28,7 @@ macro_rules! columns {
     };
 }
 
-fn snapshot_from_row(row: &SqliteRow) -> Result<BalanceSnapshot, StoreError> {
+pub(crate) fn snapshot_from_row(row: &SqliteRow) -> Result<BalanceSnapshot, StoreError> {
     Ok(BalanceSnapshot {
         account: parsed(row, "account_id")?,
         on: parsed(row, "on_date")?,
