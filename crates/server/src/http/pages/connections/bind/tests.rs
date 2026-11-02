@@ -50,6 +50,7 @@ fn drawn(binding: &Binding, bound: &AccountView) -> String {
         account: Some(bound.id),
         balance: None,
         error: None,
+        old_balance_note: None,
         last_seen_at: Timestamp::UNIX_EPOCH,
     };
     let connection = ConnectionView {

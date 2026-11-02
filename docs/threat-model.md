@@ -373,7 +373,7 @@
   holds for every URL, redirects are never followed) and it never receives
   more than the connection's own credentials. Members review imported
   transactions, and removing the connection stops further imports.
-- **A provider chooses the day of a balance it reports for an unbound account.**
+- **A provider chooses the day of a balance it reports.**
   coffer keeps one row per provider account per day, about 135 bytes, so an
   honest provider costs about 50 KB per unbound account per year, kept until the
   account is bound or its connection removed, with no retention job. A day more
@@ -385,9 +385,24 @@
   of its answer, at most 1,000 entries: 16,000 rows or about 2 MB a day through
   SimpleFin's 16 syncs, 48,000 rows or about 6.5 MB through Plaid's 48. Whatever
   it reports within those days becomes history at the bind, as it would for a
-  bound account, but it can't change a snapshot the account already has. The
-  limit applies to keeping and to the bind's use of the last report, not to a
-  bound account's balance, whose day is still the provider's to choose.
+  bound account, but it can't change a snapshot the account already has. An old
+  report on a bound account can't reach behind what the account has. Within those
+  32 days, through today (a later date is dated today), a date is believed, and a
+  sync replaces that day's snapshot, a member's included. Before them, nothing older
+  than the day 31 days back is ever written: an account with no snapshot, or whose
+  latest is before the reported day, takes the amount on that day, later than
+  reported, which the audit entry records as `reported_on`; the amount the account
+  already holds is a quiet no-op, since an honest bank may keep giving the day a
+  balance last changed; and anything else is refused. So a provider gets nothing it
+  couldn't by dating a report 31 days back. Unbound accounts keep the limit above
+  unchanged, since they have no snapshot to judge a report against. The bind judges the last
+  report by the bound account's rule. A refused report writes nothing and the
+  account's records still apply. The provider account shows a fixed note,
+  `old_balance_note`, apart from `error`, since coffer refused the date and the bank
+  reported no error. It moves no forecast. A newer balance clears it, from a sync or
+  by hand. The note reflects only the last report and isn't a security signal: a
+  provider can make it appear and go away. The lasting trace of a refusal is the
+  `warn` log. A member's own balance, by `PUT`, has no limit (its cost is issue 83).
 - **Syncs are bounded by the provider's limits.** Manual and scheduled syncs
   are refused beyond the provider's minimum interval and daily budget, so a
   leaked `write` token can start at most that budget of sync runs (16 in 24
