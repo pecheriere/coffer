@@ -19,7 +19,9 @@ use coffer_domain::money::Currency;
 use coffer_server::egress::{Egress, HostAllowList};
 use coffer_server::fx::ecb::Ecb;
 use coffer_server::fx::{RateError, RateProvider as _};
-use coffer_server::testkit::{MockUpstream, RecordedRequest, capture_logs, captured_log_text};
+use coffer_server::testkit::{
+    MockUpstream, RecordedRequest, capture_logs, captured_log_text, log_marker,
+};
 use jiff::civil::{Date, date};
 use proptest::prelude::*;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -163,6 +165,15 @@ async fn asks_for_the_series_and_nothing_else() {
         let names: BTreeSet<&str> = headers.keys().map(header::HeaderName::as_str).collect();
         assert_eq!(names, BTreeSet::from(["accept", "host", "user-agent"]));
     }
+}
+
+/// The fixture stays as the ECB sent it, whatever a checkout does to it.
+#[test]
+fn the_fixture_ends_its_lines_as_the_ecb_does() {
+    let text = std::str::from_utf8(FIXTURE).unwrap();
+    assert!(text.ends_with("\r\n"), "the last line must end in CRLF");
+    assert_eq!(text.matches('\n').count(), text.matches("\r\n").count());
+    assert_eq!(text.matches('\r').count(), text.matches("\r\n").count());
 }
 
 #[tokio::test]
@@ -392,6 +403,21 @@ async fn a_date_before_the_window_asked_for_is_refused() {
     );
 }
 
+/// A window reaching back past the floor doesn't lower it.
+#[tokio::test]
+async fn a_window_before_1990_keeps_the_floor() {
+    let since = date(1985, 6, 1);
+    let (_mock, ecb) = serve(StatusCode::OK, answer(&[row("1990-01-01", "1.1")])).await;
+    let rates = ecb.fetch(usd(), Some(since), TODAY).await.unwrap();
+    assert_eq!(days_and_rates(&rates), pairs(&[("1990-01-01", "1.1")]));
+
+    let (_mock, ecb) = serve(StatusCode::OK, answer(&[row("1989-12-31", "1.1")])).await;
+    assert_eq!(
+        ecb.fetch(usd(), Some(since), TODAY).await,
+        Err(RateError::Malformed)
+    );
+}
+
 #[tokio::test]
 async fn a_date_in_any_other_form_is_refused() {
     for on in [
@@ -482,10 +508,21 @@ async fn both_line_endings_are_read() {
     for body in [
         format!("{HEADER}\n{good}\n"),
         format!("{HEADER}\r\n{good}\r\n"),
-        format!("{HEADER}\n{good}"),
     ] {
         assert_eq!(days_and_rates(&fetched(body).await.unwrap()), expected);
     }
+}
+
+/// A real `1.1172` cut by a clean close must not read as a rate of 1.1.
+#[tokio::test]
+async fn a_row_cut_off_by_the_end_of_the_answer_is_refused() {
+    assert_refused(format!("{HEADER}\n{}", row("2026-10-30", "1.1"))).await;
+    assert_refused(format!("{HEADER}\r\n{}\r", row("2026-10-30", "1.1172"))).await;
+}
+
+#[tokio::test]
+async fn a_header_cut_off_by_the_end_of_the_answer_is_refused() {
+    assert_refused(HEADER).await;
 }
 
 #[tokio::test]
@@ -631,17 +668,17 @@ async fn a_source_that_cannot_be_reached_is_a_network_failure() {
 #[tokio::test]
 async fn no_part_of_an_answer_reaches_a_log() {
     capture_logs();
-    let marker = "ecb-answer-text-3f9a7c";
-    let bad_row = row("2026-10-30", marker);
+    let kept = log_marker();
+    let text = "ecb-answer-text-3f9a7c";
+    let bad_row = row("2026-10-30", text);
     assert_eq!(fetched(answer(&[bad_row])).await, Err(RateError::Malformed));
     assert_eq!(
-        fetched_with_status(StatusCode::BAD_GATEWAY, marker).await,
+        fetched_with_status(StatusCode::BAD_GATEWAY, text).await,
         Err(RateError::Unavailable { status: 502 })
     );
-    assert!(
-        !captured_log_text().contains(marker),
-        "the answer's text reached a log"
-    );
+    let logged = captured_log_text();
+    assert!(logged.contains(&kept), "the capture lost what it must hold");
+    assert!(!logged.contains(text), "the answer's text reached a log");
 }
 
 /// Arbitrary bytes, and real answers with bytes changed.

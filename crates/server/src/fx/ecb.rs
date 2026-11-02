@@ -132,10 +132,12 @@ fn refusal(status: StatusCode) -> RateError {
     }
 }
 
-/// Reads a 200's body. An empty one is a window with no rates. A row with an
-/// empty value is a day with no rate, as the ECB's series have on some holidays
-/// up to 2012: it says less than leaving the row out would, so it passes every
-/// other check and yields nothing.
+/// Reads a 200's body. An empty one is a window with no rates. Every line of
+/// any other must end, since a row cut short by the connection closing could
+/// still read as a rate: `1.1172` as `1.1`. A row with an empty value is a day
+/// with no rate, as the ECB's series have on some holidays up to 2012: it says
+/// less than leaving the row out would, so it passes every other check and
+/// yields nothing.
 fn parse_series(
     body: &[u8],
     currency: Currency,
@@ -143,15 +145,19 @@ fn parse_series(
     today: Date,
 ) -> Result<Vec<RateObservation>, RateError> {
     let text = std::str::from_utf8(body).map_err(|_| RateError::Malformed)?;
-    // `lines` takes off one `\n` or `\r\n`, and nothing else.
-    let mut lines = text.lines();
-    let Some(header) = lines.next() else {
+    if text.is_empty() {
         return Ok(Vec::new());
-    };
-    if header != HEADER {
+    }
+    if !text.ends_with('\n') {
         return Err(RateError::Malformed);
     }
-    // The ECB's day can be ahead of the household's, by a day at most.
+    // `lines` takes off one `\n` or `\r\n`, and nothing else.
+    let mut lines = text.lines();
+    if lines.next() != Some(HEADER) {
+        return Err(RateError::Malformed);
+    }
+    // A day's allowance for clock skew: this host's clock or the household's
+    // zone can put `today` behind the date the ECB gives a rate.
     let latest = today.tomorrow().map_err(|_| RateError::Malformed)?;
     let earliest = since.map_or(EARLIEST, |since| since.max(EARLIEST));
     let fields = format!("EXR.D.{currency}.EUR.SP00.A,D,{currency},EUR,SP00,A,");
