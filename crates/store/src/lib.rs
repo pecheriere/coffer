@@ -29,6 +29,7 @@ mod token_grants;
 mod transactions;
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -84,6 +85,8 @@ const MAX_PAGE_LIMIT: u32 = 200;
 #[derive(Debug, Clone)]
 pub struct Store {
     pub(crate) pool: SqlitePool,
+    /// The file whose lock says who is running a net worth rebuild.
+    rebuild_claim: Arc<Path>,
 }
 
 /// An open database transaction. Dropping it without [`StoreTx::commit`]
@@ -120,7 +123,12 @@ impl Store {
             .run(&pool)
             .await
             .map_err(StoreError::backend)?;
-        Ok(Self { pool })
+        let mut rebuild_claim = path.as_os_str().to_owned();
+        rebuild_claim.push(".rebuild-lock");
+        Ok(Self {
+            pool,
+            rebuild_claim: Path::new(&rebuild_claim).into(),
+        })
     }
 
     /// Whether the database answers a trivial query.

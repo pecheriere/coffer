@@ -288,7 +288,10 @@ Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 rates and the display currency, with today taken from `COFFER_TIMEZONE`. It is
 safe while the server runs: it works in short transactions, so other writes take
 turns with it, and reports say `rebuilding` until it ends if the table takes more
-than one. If it stops part way, the running server's job finishes it. Opening the database applies this version's migrations, as
+than one. One rebuild runs at a time, so it first waits for one the server has
+under way, and the server leaves it alone until it ends. If it stops part way, the
+running server's job finishes it. A file named after the database with
+`.rebuild-lock` added says who is running, and it is safe to leave or delete. Opening the database applies this version's migrations, as
 `backup` does, so run the same version as the server. It never creates a
 database: no database found, or an empty file, is exit code 1. You rarely need
 it: the first start after the upgrade that adds the table rebuilds it in the

@@ -332,7 +332,7 @@ How to read it:
   shortly after midnight in the household's time zone (`COFFER_TIMEZONE`), so
   the first minute of a day can be answered only up to yesterday, with the
   caution `to_date_not_yet_filled`. No day after `through` or after today is a
-  point.
+  point. It is `null` during the blocker `rebuilding`, when no day can be answered.
 - `first_on` is an account's first day with a value. **A jump in the total on
   that day is the account arriving, not money**, and a history that starts late
   is not a household that was poor. `closed_on` is the day an account closed:

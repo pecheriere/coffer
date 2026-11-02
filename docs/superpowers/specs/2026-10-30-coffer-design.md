@@ -1051,7 +1051,11 @@ a test holds that incremental updates match it.
 
 A full rebuild runs in batches of whole accounts in id order, at most 25,000 rows unless one
 account alone holds more, each in its own transaction, with a pause between them, so other
-writers get the lock whatever the table's size. `rebuild_needed` stays set throughout, so a
+writers get the lock whatever the table's size. One process runs it at a time, decided by an
+operating system lock on a file beside the database, so two can't fill each other's pauses and
+one that died blocks nobody. The daily fill takes as many days as fit in the same limit at a
+time, with the same pause, and the table can answer between them, with `through` saying how far
+it has come. `rebuild_needed` stays set throughout, so a
 read never sees old and new rows together. `rebuilt_up_to` records the last account done and
 the day the rebuild runs up to is held in `filled_through`, so a crash or a failure resumes
 where the last batch committed. A write between two batches rewrites its rows as usual if its account's turn

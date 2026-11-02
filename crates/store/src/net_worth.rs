@@ -12,15 +12,16 @@
 //! reads a mix of old and new rows. `rebuilt_up_to` says how far it has come: a
 //! change keeps the accounts up to there current as usual and leaves the others to
 //! the rebuild, so a write between two batches is never lost, and a crash resumes
-//! from there. A change that alters every row starts it over.
+//! from there. A change that alters every row starts it over. `runner` runs the
+//! batches, one process at a time, with a gap after each.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use coffer_domain::fx::{RateBook, RateLeg};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
 use coffer_domain::net_worth::{DailyValue, MIN_VALUE_DATE, SnapshotPoint, daily_values};
+use jiff::Span;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqliteExecutor};
@@ -28,9 +29,10 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqliteExecutor};
 use crate::convert::{corrupt, int, parsed, parsed_opt, text};
 use crate::fx::load_rate_book;
 use crate::household::fetch_display_currency;
-use crate::{Store, StoreError, StoreTx};
+use crate::{StoreError, StoreTx};
 
 mod reads;
+mod runner;
 
 pub use reads::NetWorthData;
 
@@ -41,10 +43,6 @@ const BATCH_ROWS: usize = 500;
 /// unless one account alone holds more. That is about an account's whole history from
 /// 1970, which a back-dated balance rewrites in its own transaction anyway.
 const ROWS_PER_TRANSACTION: usize = 25_000;
-
-/// The wait between two batches of a rebuild. A writer waiting for the lock sleeps up
-/// to 100 ms between tries, so a shorter gap could pass unnoticed batch after batch.
-const PAUSE_BETWEEN_BATCHES: Duration = Duration::from_millis(150);
 
 /// How far the daily table can be trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,7 +340,8 @@ impl StoreTx {
     /// running one starts over. This is how a change that alters every row says so
     /// without holding the lock for them: from its commit a report answers as rebuilding,
     /// and the daily job runs the rebuild at its next pass, within a minute. A caller
-    /// that can't wait for that calls [`Store::finish_net_worth_rebuild`] after its commit.
+    /// that can't wait for that calls [`crate::Store::finish_net_worth_rebuild`] after its
+    /// commit.
     ///
     /// # Errors
     ///
@@ -367,9 +366,11 @@ impl StoreTx {
         Ok(())
     }
 
-    /// Add the rows of `(filled_through, through]` and move `filled_through` to
-    /// `through`. It never moves back, so a changed time zone can't lose a day,
-    /// and while a rebuild is needed it does nothing. Answers the rows written.
+    /// Add the rows of the days after `filled_through`, up to `through` or as many days
+    /// as fit in one transaction's rows, and move `filled_through` to the last of them.
+    /// It never moves back, so a changed time zone can't lose a day, and while a rebuild
+    /// is needed it does nothing. Answers the rows written. [`crate::Store::fill_net_worth`]
+    /// repeats it up to `through`.
     ///
     /// # Errors
     ///
@@ -383,9 +384,28 @@ impl StoreTx {
         }
         let from = filled.tomorrow().map_err(StoreError::backend)?;
         let holdings = every_holding(&mut self.tx).await?;
-        let written = write_rows(&mut self.tx, &holdings, from, through).await?;
-        self.set_filled_through(through).await?;
+        // Each account has at most a row a day, and a day always fits, or it never ends.
+        let days = ROWS_PER_TRANSACTION / holdings.len().max(1);
+        let more = i64::try_from(days.max(1) - 1).map_err(StoreError::backend)?;
+        let end = from.saturating_add(Span::new().days(more)).min(through);
+        let written = write_rows(&mut self.tx, &holdings, from, end).await?;
+        self.set_filled_through(end).await?;
         Ok(written)
+    }
+
+    /// One batch of the rebuild that is needed, for a test to stop between two.
+    /// Anything else goes through the runner, which keeps the gap between batches.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored row that no longer parses.
+    #[cfg(any(test, feature = "testkit"))]
+    pub async fn rebuild_net_worth_batch(
+        &mut self,
+        through: Date,
+        max_rows: usize,
+    ) -> Result<RebuildBatch, StoreError> {
+        self.rebuild_batch(through, max_rows).await
     }
 
     /// One batch of the rebuild that is needed: replaces the rows of the next accounts
@@ -397,11 +417,7 @@ impl StoreTx {
     /// is how a clock that jumped ahead is undone. Later batches keep to that day,
     /// whatever `through` they are given, as the rows before them were computed for it.
     /// With no rebuild needed this does nothing.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures, including a stored row that no longer parses.
-    pub async fn rebuild_net_worth_batch(
+    async fn rebuild_batch(
         &mut self,
         through: Date,
         max_rows: usize,
@@ -584,56 +600,6 @@ impl StoreTx {
             Ok(())
         } else {
             self.ask_for_net_worth_rebuild().await
-        }
-    }
-}
-
-impl Store {
-    /// Recompute the whole table up to `through`, starting over if a rebuild is running.
-    /// A table that fits in one batch changes at one moment. A larger one answers as
-    /// rebuilding until the last batch, and other writers get their turn between batches.
-    /// Answers the rows this call wrote.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures, including a stored row that no longer parses. What committed
-    /// stays, and [`Self::finish_net_worth_rebuild`] goes on from there.
-    pub async fn rebuild_net_worth(&self, through: Date) -> Result<u64, StoreError> {
-        let mut tx = self.begin().await?;
-        tx.ask_for_net_worth_rebuild().await?;
-        let first = tx
-            .rebuild_net_worth_batch(through, ROWS_PER_TRANSACTION)
-            .await?;
-        tx.commit().await?;
-        if first.finished {
-            return Ok(first.written);
-        }
-        tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
-        Ok(first.written + self.finish_net_worth_rebuild(through).await?)
-    }
-
-    /// Run the rebuild that is needed to its end, resuming one a crash or a failure
-    /// interrupted. `through` is the day it runs up to if no batch has run yet. Dropping
-    /// the future between batches loses nothing, and several callers at once are safe:
-    /// each batch takes the write lock and goes on from where the last one committed.
-    /// Answers the rows this call wrote.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures, including a stored row that no longer parses.
-    pub async fn finish_net_worth_rebuild(&self, through: Date) -> Result<u64, StoreError> {
-        let mut written = 0;
-        loop {
-            let mut tx = self.begin().await?;
-            let batch = tx
-                .rebuild_net_worth_batch(through, ROWS_PER_TRANSACTION)
-                .await?;
-            tx.commit().await?;
-            written += batch.written;
-            if batch.finished {
-                return Ok(written);
-            }
-            tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
         }
     }
 }

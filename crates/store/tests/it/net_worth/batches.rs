@@ -6,11 +6,12 @@ use coffer_domain::ids::AccountId;
 use coffer_domain::net_worth::{DailyValue, NetWorthInterval};
 use coffer_domain::policy::AccountScope;
 use coffer_store::{RebuildBatch, Store};
+use jiff::ToSpan;
 use jiff::civil::{Date, date};
 
 use super::{
-    batch, cur, dump, flag, fx, holding, mark, oct, open, rebuild, row_on, rows_of, show_in, snap,
-    snapshot, state, written_days,
+    batch, cur, dump, fill, flag, fx, holding, mark, oct, open, rebuild, row_on, rows_of, show_in,
+    snap, snapshot, state, written_days,
 };
 
 /// Three accounts in id order, the order a rebuild takes them in.
@@ -184,7 +185,10 @@ async fn a_rebuild_resumes_after_a_crash() {
 
     let store = Store::open(&path).await.unwrap();
     assert!(state(&store).await.rebuild_needed);
-    assert_eq!(store.finish_net_worth_rebuild(oct(9)).await.unwrap(), 8);
+    assert_eq!(
+        store.finish_net_worth_rebuild(oct(9)).await.unwrap(),
+        Some(8)
+    );
 
     let after = state(&store).await;
     assert_eq!(
@@ -202,7 +206,10 @@ async fn finishing_with_no_rebuild_needed_writes_nothing() {
     let [one, ..] = current(&store).await;
     mark(&store, one).await;
 
-    assert_eq!(store.finish_net_worth_rebuild(oct(9)).await.unwrap(), 0);
+    assert_eq!(
+        store.finish_net_worth_rebuild(oct(9)).await.unwrap(),
+        Some(0)
+    );
 
     assert_eq!(written_days(&store, one).await, []);
     assert_eq!(state(&store).await.filled_through, Some(oct(5)));
@@ -292,4 +299,115 @@ async fn a_back_dated_balance_stays_in_its_own_transaction() {
 
     assert!(!state(&store).await.rebuild_needed);
     assert_eq!(row_on(&store, one, oct(5)).await.balance_minor, 7);
+}
+
+/// A rate that moves too many of the rows done so far starts the rebuild over, as they
+/// can't all be rewritten in its transaction, and it can't leave them wrong.
+#[tokio::test]
+async fn a_rate_too_big_for_one_transaction_starts_a_running_rebuild_over() {
+    let (_dir, store) = open().await;
+    let mut ids = [
+        holding(&store, "EUR").await,
+        holding(&store, "EUR").await,
+        holding(&store, "EUR").await,
+    ];
+    ids.sort_unstable();
+    for id in ids {
+        snap(&store, id, FAR_BACK, 100).await;
+    }
+    show_in(&store, "USD").await;
+    assert!(!batch(&store, oct(5), 1).await.finished);
+    assert!(!batch(&store, oct(5), 1).await.finished);
+
+    fx(&store, "USD", &[(date(1975, 1, 6), "1.1")]).await;
+
+    assert!(!batch(&store, oct(5), 1).await.finished, "the first again");
+    assert!(!batch(&store, oct(5), 1).await.finished);
+    assert!(batch(&store, oct(5), 1).await.finished);
+    let batched = dump(&store).await;
+    assert!(
+        batched
+            .iter()
+            .any(|row| row.rate_on == Some(date(1975, 1, 6)))
+    );
+    assert_eq!(from_the_sources(&store, oct(5)).await, batched);
+}
+
+/// Back to the currency the rows are still in is a change like any other: none of them
+/// has to be right by luck, and a second change on the way is no problem.
+#[tokio::test]
+async fn two_display_changes_in_a_row_end_in_the_last() {
+    let (_dir, store) = open().await;
+    long_history(&store, ["USD", "EUR"]).await;
+
+    show_in(&store, "EUR").await;
+    assert!(state(&store).await.rebuild_needed);
+    show_in(&store, "USD").await;
+    assert!(state(&store).await.rebuild_needed);
+    show_in(&store, "EUR").await;
+
+    store.finish_net_worth_rebuild(oct(5)).await.unwrap();
+    assert!(!state(&store).await.rebuild_needed);
+    assert!(
+        dump(&store)
+            .await
+            .iter()
+            .all(|row| row.display == Some(cur("EUR")))
+    );
+    assert_eq!(report_rows(&store).await, (false, 10));
+}
+
+/// The limit is on the rows counted exactly: 25,000 go in the change's own transaction,
+/// and one more doesn't.
+#[tokio::test]
+async fn the_limit_is_exactly_twenty_five_thousand_rows() {
+    let (_dir, store) = open().await;
+    let one = holding(&store, "USD").await;
+    snap(&store, one, FAR_BACK, 100).await;
+    show_in(&store, "USD").await;
+    let last = FAR_BACK.checked_add(24_999.days()).unwrap();
+    assert_eq!(rebuild(&store, last).await, 25_000);
+
+    show_in(&store, "EUR").await;
+    assert!(!state(&store).await.rebuild_needed, "25,000 rows");
+    assert_eq!(
+        row_on(&store, one, last).await.display,
+        Some(cur("EUR")),
+        "written with the change"
+    );
+
+    let past = last.tomorrow().unwrap();
+    assert_eq!(fill(&store, past).await, 1);
+    show_in(&store, "USD").await;
+    assert!(state(&store).await.rebuild_needed, "25,001 rows");
+    assert_eq!(row_on(&store, one, past).await.display, Some(cur("EUR")));
+}
+
+/// Days after a long downtime stop at the limit, and the table can answer in between,
+/// up to the day it has reached.
+#[tokio::test]
+async fn a_fill_of_many_days_takes_several_transactions() {
+    let (_dir, store) = open().await;
+    let ids = [holding(&store, "USD").await, holding(&store, "USD").await];
+    for id in ids {
+        snap(&store, id, FAR_BACK, 100).await;
+    }
+    rebuild(&store, FAR_BACK).await;
+    let reached = FAR_BACK.checked_add(12_500.days()).unwrap();
+    let wanted = FAR_BACK.checked_add(13_000.days()).unwrap();
+
+    let mut tx = store.begin().await.unwrap();
+    assert_eq!(tx.fill_net_worth(wanted).await.unwrap(), 25_000);
+    tx.commit().await.unwrap();
+
+    let after = state(&store).await;
+    assert_eq!(
+        (after.rebuild_needed, after.filled_through),
+        (false, Some(reached))
+    );
+
+    assert_eq!(fill(&store, wanted).await, 1_000);
+    assert_eq!(state(&store).await.filled_through, Some(wanted));
+    let filled = dump(&store).await;
+    assert_eq!(from_the_sources(&store, wanted).await, filled);
 }

@@ -203,7 +203,10 @@ async fn migration_keeps_a_populated_database_and_asks_for_a_rebuild() {
         tx.commit().await.unwrap();
     }
 
-    let store = Store { pool };
+    let store = Store {
+        pool,
+        rebuild_claim: dir.path().join("coffer.db.rebuild-lock").into(),
+    };
     let through = date(2026, 10, 4);
     let waiting = store
         .net_worth_data(

@@ -232,6 +232,33 @@ async fn a_rebuild_left_part_way_is_finished() {
     assert_eq!(rows_of(&server.store, two).await.len(), 41);
 }
 
+/// With `coffer rebuild-net-worth` at work the job leaves the rebuild to it, and fails
+/// nothing; if the command dies the job takes it from there.
+#[tokio::test]
+async fn the_job_leaves_a_rebuild_to_the_command() {
+    let server = TestServer::new().await;
+    server.clock.set(noon(MONDAY));
+    let usd = holding(&server.store, "USD").await;
+    snap(&server.store, usd, date(2026, 9, 23), 100).await;
+    let held = server
+        .store
+        .hold_net_worth_rebuild_for_tests()
+        .unwrap()
+        .unwrap();
+    let fx = service(&server, None);
+
+    fx.keep_table_current().await.unwrap();
+
+    assert!(server.store.net_worth_state().await.unwrap().rebuild_needed);
+    assert_eq!(rows_of(&server.store, usd).await.len(), 0);
+
+    drop(held);
+    fx.keep_table_current().await.unwrap();
+
+    assert!(!server.store.net_worth_state().await.unwrap().rebuild_needed);
+    assert_eq!(rows_of(&server.store, usd).await.len(), 41);
+}
+
 /// The table's day moves while a fetch hangs: two tasks, not one.
 #[tokio::test]
 async fn a_stalled_provider_does_not_stop_the_fill() {

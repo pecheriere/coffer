@@ -25,6 +25,7 @@ mod batches;
 mod incremental;
 mod reads;
 mod rebuild;
+mod runners;
 
 /// What `mark` leaves in a row: any other balance was written after it.
 const MARK: i64 = -999;
@@ -144,10 +145,7 @@ async fn flag(store: &Store) {
 }
 
 async fn fill(store: &Store, through: Date) -> u64 {
-    let mut tx = store.begin().await.unwrap();
-    let written = tx.fill_net_worth(through).await.unwrap();
-    tx.commit().await.unwrap();
-    written
+    store.fill_net_worth(through).await.unwrap()
 }
 
 async fn dump(store: &Store) -> Vec<DailyValue> {

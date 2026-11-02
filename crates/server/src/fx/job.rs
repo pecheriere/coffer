@@ -316,13 +316,13 @@ impl FxService {
             return Ok(());
         }
         if state.rebuild_needed {
-            let rows = self.store.finish_net_worth_rebuild(today).await?;
-            tracing::info!(rows, "the net worth table was rebuilt");
+            // With `None`, `coffer rebuild-net-worth` is running it.
+            if let Some(rows) = self.store.finish_net_worth_rebuild(today).await? {
+                tracing::info!(rows, "the net worth table was rebuilt");
+            }
             return Ok(());
         }
-        let mut tx = self.store.begin().await?;
-        tx.fill_net_worth(today).await?;
-        tx.commit().await
+        self.store.fill_net_worth(today).await.map(drop)
     }
 }
 
