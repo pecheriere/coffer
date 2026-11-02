@@ -238,6 +238,33 @@ async fn more_records_than_agreed_withdraw_the_release() {
     assert_eq!(world.transactions(checking).await.len(), 4);
 }
 
+/// Exactly the count the member agreed to is what they agreed to.
+#[tokio::test]
+async fn exactly_the_agreed_count_proceeds() {
+    let world = world().await;
+    let checking = world.bound(LINE).await;
+    world.server.inject_source_insert_failure().await;
+    let delta = page(
+        &[
+            record("a", LINE, "1"),
+            record("b", LINE, "1"),
+            record(INJECTED_FAILURE_RECORD_ID, LINE, "9"),
+        ],
+        &[],
+        &[],
+        "cursor-1",
+        false,
+    );
+    world.script.always(SYNC, StatusCode::OK, delta);
+    world.holds_then_releases().await;
+
+    let run = world.sync().await;
+
+    assert!(run.detail.unwrap().contains("1 skipped"));
+    assert_eq!(world.transactions(checking).await.len(), 2);
+    assert_eq!(world.audits("connection.release_withdrawn").await.len(), 0);
+}
+
 /// A delta no larger than what the member agreed to needs no second look.
 #[tokio::test]
 async fn no_more_records_than_agreed_proceed() {
