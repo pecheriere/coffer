@@ -154,6 +154,43 @@ often do not support popups. Tell them to open coffer in a normal browser.
 - `/api/v1/*` is the JSON API (see `agent-usage.md`); everything else is the
   web UI.
 
+## Panics
+
+A panic is a bug in coffer. The log gets one `ERROR` event with the message
+`coffer panicked`, in the configured format, with where it happened and a
+backtrace. With `COFFER_LOG_FORMAT=json`, on one line:
+
+```json
+{"timestamp":"...","level":"ERROR","fields":{"message":"coffer panicked","location":"crates/server/src/sync/engine/mod.rs:194:18","backtrace":"   0: ...\n  11: run\n             at ./src/crates/server/src/sync/engine/mod.rs:194:18\n ..."},"target":"coffer_server::cli::panic_report"}
+```
+
+To find them in JSON logs:
+
+```sh
+docker logs coffer 2>&1 | jq -Rc 'fromjson? | select(.fields.message == "coffer panicked") | .fields.location'
+```
+
+The panic's own message is left out on purpose, because it can hold anything
+and logs carry no financial data. Nothing leaves the host. `coffer`'s own
+frames name file and line; a dependency's frame may show only its function.
+
+What happens next depends on where the panic was:
+
+- **In a request:** the client gets a generic 500, a problem under `/api` and a
+  plain page elsewhere, and the server goes on. The request's open transaction
+  rolls back. An `Idempotency-Key` it had reserved answers
+  `idempotency_in_progress` until the reservation lapses, within 5 minutes.
+- **In a sync run:** the log also has `a sync run ended abnormally` with its
+  id, the run is marked failed, and the next queued run follows. If a store
+  error stops the run being marked failed, the log says so and the run stays
+  marked running until the next restart.
+- **In the sync scheduler itself:** the log also has
+  `a sync scheduler task ended abnormally; starting it again`, and the task
+  starts again after a wait of up to a minute.
+- **In a command such as `backup`, or before logging is set up:** the same
+  location and backtrace go to stderr as plain text, and the exit code is 101.
+  So do panics when `RUST_LOG` filters out the event.
+
 ## Commands
 
 ```sh

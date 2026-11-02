@@ -17,6 +17,13 @@ RUN apk add --no-cache musl-dev perl make zig=0.15.2-r0 \
 
 WORKDIR /src
 
+# What keeps the release profile's line tables (Cargo.toml) small. zig cc emits
+# full debug information for C unless told not to: tens of MB for OpenSSL,
+# SQLite and ring, whose lines a panic does not name. And the debug sections
+# are compressed, about 3 to 1; a backtrace reads them only when one is printed.
+ENV CFLAGS=-g0
+ENV RUSTFLAGS=-Clink-arg=-Wl,--compress-debug-sections=zlib
+
 # Dependencies build in their own layer, from the manifests and Cargo.lock
 # only, so the build cache reuses it until a manifest or Cargo.lock changes.
 # Each crate gets an empty stub source for this step (the coffer crates' own

@@ -32,6 +32,9 @@ use crate::sync::scheduler;
 use crate::vault::CredentialVault;
 
 mod healthcheck;
+mod panic_report;
+
+pub use panic_report::install_panic_hook;
 
 const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
@@ -55,6 +58,14 @@ enum Command {
     Healthcheck,
     /// Print the OpenAPI document of the JSON API. Reads no configuration.
     Openapi,
+    /// Panic, so a test can watch what the real binary reports.
+    #[cfg(feature = "testkit")]
+    #[command(hide = true)]
+    PanicForTests {
+        /// Set up logging first, as `serve` does.
+        #[arg(long)]
+        logging: bool,
+    },
 }
 
 /// The commands that read the whole configuration and use the data
@@ -152,6 +163,8 @@ pub async fn run(
         Command::Configured(command) => execute(command, &env, out).await,
         Command::Healthcheck => healthcheck(&env).await,
         Command::Openapi => openapi(out),
+        #[cfg(feature = "testkit")]
+        Command::PanicForTests { logging } => panic_for_tests(logging, &env),
     };
     match result {
         Ok(code) => code,
@@ -160,6 +173,18 @@ pub async fn run(
             error.exit_code()
         }
     }
+}
+
+/// Panics, after setting up logging if `logging`.
+#[cfg(feature = "testkit")]
+fn panic_for_tests(
+    logging: bool,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<ExitCode, CliError> {
+    if logging {
+        init_tracing(env)?;
+    }
+    crate::testkit::panic_with_marker()
 }
 
 /// Prints the pretty-printed OpenAPI document and a trailing newline.
@@ -384,7 +409,8 @@ async fn backup(store: &Store, dest: &Path) -> Result<(), CliError> {
 /// `RUST_LOG` filter (default `info`; empty counts as unset); JSON lines
 /// when `COFFER_LOG_FORMAT` is `json`. Logs go to stderr. A process that
 /// already installed its own global subscriber before calling [`run`] (a
-/// test harness capturing logs) keeps it, and a debug event says so.
+/// test harness capturing logs) keeps it, and a debug event says so. The
+/// panic hook ([`install_panic_hook`]) writes through what this sets up.
 ///
 /// # Errors
 ///
@@ -454,8 +480,12 @@ pub async fn serve_with(
             let _ = stop.send(true);
         })
         .await;
+    // Not the error itself: its text holds the panic's message.
     if let Err(err) = scheduler.await {
-        tracing::error!(error = %err, "the sync scheduler ended abnormally");
+        tracing::error!(
+            panicked = err.is_panic(),
+            "the sync scheduler ended abnormally"
+        );
     }
     served?;
     tracing::info!("coffer stopped");
