@@ -12,7 +12,8 @@
 1. **Tailnet or private network to coffer.** coffer is meant to be reachable
    only from the household's private network (for example a tailnet) through a
    TLS reverse proxy. It is not designed to face the public internet.
-   Anything on that network can reach the sign-in and invite pages.
+   Anything on that network can reach the sign-in and invite pages, and
+   `POST /browser-reports`, which writes to the log.
 2. **Browser to coffer.** Authenticated by a passkey (WebAuthn, user
    verification required) that yields a session cookie (`HttpOnly; Secure;
    SameSite=Strict`). State-changing page requests need the anti-forgery token
@@ -162,7 +163,40 @@
 - **Origin rule:** every state-changing request outside `/api/` must carry an
   `Origin` equal to the public origin; it is enforced once, router-wide, so
   a new page route cannot forget it. `/api/` accepts bearer tokens only,
-  which a browser never attaches on its own.
+  which a browser never attaches on its own. `/browser-reports` is exempt, and
+  applies the rule below.
+- **Browser reports only reach the log.** `POST /browser-reports` lets a browser
+  say that a script, a passkey ceremony or the content security policy failed. It
+  needs no credentials, since sign-in failures matter most, so anyone on the
+  network can call it. It stores nothing, reads no session and sends nothing on.
+  - *Every answer is the same empty 204*, so a caller cannot tell whether a report
+    was kept. Other methods get the router's 405.
+  - *Refused early.* Only the exact content types `application/json` and
+    `application/csp-report` are read. A declared or real body over 8 KiB, far
+    below the general 64 KiB, is refused before any parsing. Requests beyond 5 per
+    client or 20 in all per minute are refused before the body is read. The per
+    client limit uses the last `X-Forwarded-For` entry, which the proxy adds; the
+    global limit holds whatever a client claims.
+  - *Forged lines.* The event has a fixed shape and says it is client-reported and
+    untrusted. `kind`, `page` and `script` come from fixed lists, and a CSP report's
+    text is built from fixed values, so none of them holds client text. The only
+    client text is the message of a script report, which loses control and format
+    characters and has its whitespace reduced to single spaces, and which the log
+    formats quote or encode. A test sends CR, LF, ANSI escapes and JSON-breaking
+    text through the real binary in both formats.
+  - *Tokens in URLs.* A page is logged only as its route template, such as
+    `/invite/{token}`, and a path outside the list as `other`, so no query,
+    fragment or link token is logged. A message loses any word that looks like an
+    address, and a blocked address becomes a class, such as `other`.
+  - *Cross-site requests.* A session is not used, so there is nothing to forge
+    on a member's behalf; what a forged report could do is write to the log. Both
+    content types need a CORS preflight from another site, which this route
+    refuses, so a cross-site script cannot post them. A script report must carry
+    the public `Origin`. A CSP report may have that, `null` or none, as browsers
+    differ, but not another origin, and must be about a document of the public
+    origin, since another site's policy can name this endpoint. None of this stops
+    a program on the network: `Origin` is only a claim there, which is why the
+    limits and allow-lists do not depend on it.
 - **Referrer policy:** every response sets `Referrer-Policy: same-origin`.
   Other sites receive no referrer, so setup and invite tokens in the path
   never leave coffer. It is not `no-referrer` because under that policy
@@ -192,7 +226,8 @@
   dies when the first admin is created. Anyone able to read the logs in that
   window could claim the first admin account, so run the first start on a
   private network and register the first admin promptly. coffer never logs
-  any other request path, and proxies must not log `/setup/` or `/invite/`.
+  any other request path (a browser report logs only a route template), and
+  proxies must not log `/setup/` or `/invite/`.
 - **Host access is the root of trust.** Whoever can run `coffer` against the
   data directory can create admin re-enroll links (`coffer recover-admin`),
   read the database and key, and take backups. coffer does not defend
@@ -342,6 +377,42 @@
   `write`. A connection's last error, the provider's sanitized text, could
   name an account the token cannot see, so it needs `all` at `transactions`;
   without it the token sees only that the status says something is wrong.
-- **No rate limiting beyond ceremony caps.** Brute-forcing a 256-bit token is
-  infeasible; password-style guessing does not exist. Network access control
-  is the defense against abuse volume.
+- **No rate limiting beyond ceremony caps and browser reports.** Brute-forcing a
+  256-bit token is infeasible; password-style guessing does not exist. Network
+  access control is the defense against abuse volume.
+- **Anyone on the network can write browser reports to the log.**
+  - A report can say anything within its fixed shape, so an event is a claim, not
+    evidence. It can send an operator after a failure that never happened, and a
+    message is free text of up to 200 characters that a reader could take for
+    instructions. coffer logs nothing about who sent it.
+  - The limit bounds log growth to 20 events a minute of about 1 KB each, about
+    29 MB a day at worst, plus one count every 5 minutes. A device that can do
+    that is already on the household's network, and the log's rotation is the
+    operator's.
+  - Someone who keeps the global limit spent hides other browsers' reports, though
+    the `over_limit` count shows that it is happening. The limits are per fixed
+    minute, so up to twice the limit can arrive across the turn of a minute.
+  - Without a proxy that adds `X-Forwarded-For`, a client can choose its entry and
+    escape the per client limit, and only the global one holds. With a proxy that
+    adds none, all clients share one limit.
+- **A browser report's message can hold data from the page.** A browser's error
+  text can quote what a script was working on, and it reaches the log, up to 200
+  characters. coffer's own code must never put an amount or a name in an error's
+  message: `coffer.js` reports only a browser's text for an error and the name and
+  text of an `Error`, and for a refused request only the status, not the server's
+  text; `plaid-link.js` reports
+  fixed texts and Plaid's error code, never Plaid's message. A message is logged
+  only from a page in the list in `http/browser_reports/fields.rs`, which holds
+  only pages without financial data, as the spec has it for v1. **The forecast
+  page will show amounts, so it must stay out of that list:** a report from it, or
+  from any page not listed, has `page` `other` and its message `[withheld]`, so a
+  new page is safe until someone decides otherwise. A word without a `/`, such as a
+  bare token, is not recognized as an address. coffer's own code puts no token in
+  an error's message.
+- **The expected Plaid violation hides its twin.** A `style-src-elem` violation for
+  inline content on a Link page is taken as Plaid's start-up check and dropped,
+  uncounted. A second such violation on the page, the sign of a real change in
+  Plaid's script, looks the same to the server, so only a browser's console shows
+  it; anyone on the network can also send one, which does nothing. Link pages load
+  rarely, so the check alone would not flood the log; it is dropped to keep every
+  logged violation a finding.

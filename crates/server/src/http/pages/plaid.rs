@@ -56,7 +56,7 @@ fn plaid_link_csp(environment: PlaidEnvironment, nonce: &str) -> String {
         "default-src 'self'; script-src 'self' {LINK_SCRIPT}; \
          frame-src https://cdn.plaid.com; connect-src 'self' https://{host}; \
          style-src 'self' 'nonce-{nonce}'; img-src 'self'; frame-ancestors 'none'; \
-         form-action 'self'; base-uri 'none'"
+         form-action 'self'; base-uri 'none'; report-uri /browser-reports"
     )
 }
 
@@ -272,7 +272,7 @@ mod tests {
                  frame-src https://cdn.plaid.com; \
                  connect-src 'self' https://production.plaid.com; \
                  style-src 'self' 'nonce-{nonce}'; img-src 'self'; frame-ancestors 'none'; \
-                 form-action 'self'; base-uri 'none'"
+                 form-action 'self'; base-uri 'none'; report-uri /browser-reports"
             )
         );
         assert!(!production.contains("sandbox.plaid.com"));

@@ -6,6 +6,7 @@ mod agent_tokens;
 mod api;
 mod appearance;
 mod assets;
+mod browser_reports;
 mod categories;
 mod cli;
 mod connections;

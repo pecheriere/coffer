@@ -359,7 +359,7 @@ async fn security_headers_on_every_response() {
         assert_eq!(
             headers[header::CONTENT_SECURITY_POLICY],
             "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
-             form-action 'self'; base-uri 'none'",
+             form-action 'self'; base-uri 'none'; report-uri /browser-reports",
             "{method} {uri}"
         );
         assert_eq!(

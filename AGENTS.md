@@ -18,7 +18,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
-  with a content security policy of their own); `ledger` (accounts and balances, categories,
+  with a content security policy of their own; `browser_reports/`, the
+  unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories,
   transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
@@ -133,6 +134,9 @@ worktree when its branch has merged.
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the
   threat model's accepted risks.
+- A page showing financial data stays out of `PAGES` in
+  `http/browser_reports/fields.rs`, so a browser report's free text from it is
+  never logged. The threat model says why.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 

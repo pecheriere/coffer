@@ -7,7 +7,7 @@
 //! `X-CSRF-Token` header), and every non-safe request must come from the
 //! public origin. Setup and invite links hold their token in the path, so
 //! nothing here logs request paths, and those pages are never cached or
-//! sent as a referrer.
+//! sent as a referrer. Browser reports log a route template only.
 
 mod account;
 mod admin;
@@ -34,6 +34,7 @@ use coffer_store::Member;
 use serde::de::DeserializeOwned;
 
 use super::AppState;
+use super::browser_reports;
 use super::extract::session_cookie_value;
 use super::problem::{Problem, ProblemCode, set_retry_after};
 use crate::auth::{AuthError, session_cookie};
@@ -44,7 +45,7 @@ use layout::Frame;
 /// Content Security Policy of every response without one of its own. Only
 /// the Plaid Link pages have their own (see [`plaid`]).
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
-                   form-action 'self'; base-uri 'none'";
+                   form-action 'self'; base-uri 'none'; report-uri /browser-reports";
 
 /// Largest accepted request body; passkey responses are a few KiB.
 const BODY_LIMIT: usize = 64 * 1024;
@@ -127,7 +128,10 @@ pub(super) async fn require_same_origin(
     // An unmatched path reaches the fallback (404): nothing to protect.
     let routed = request.extensions().get::<MatchedPath>().is_some();
     let bearer_api = request.uri().path().starts_with("/api/");
-    if safe || from_public_origin || !routed || bearer_api {
+    // Uses no session, may hear from a browser that sends no `Origin`, and
+    // applies an origin rule of its own.
+    let report = request.uri().path() == browser_reports::PATH;
+    if safe || from_public_origin || !routed || bearer_api || report {
         return next.run(request).await;
     }
     let problem = Problem::new(
