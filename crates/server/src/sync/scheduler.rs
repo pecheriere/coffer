@@ -54,19 +54,28 @@ pub struct ScheduleEntry {
     pub effective_interval: SignedDuration,
 }
 
+/// Whether the entry's last attempt is later than `now`. That came from a clock
+/// that ran ahead, and says nothing of when to sync next.
+fn attempted_in_the_future(now: Timestamp, entry: &ScheduleEntry) -> bool {
+    entry.last_attempt_at.is_some_and(|at| at > now)
+}
+
 /// The connections due for a scheduled sync at `now`: those `active` or in
-/// `error` never attempted, or attempted at least `effective_interval`
-/// ago. Connections that need reconnecting or are removed are never due.
+/// `error` never attempted, attempted at least `effective_interval` ago, or
+/// attempted at a time later than now. A run records its attempt at its own
+/// time, so the last of those is due once, not on every pass. Connections that
+/// need reconnecting or are removed are never due.
 #[must_use]
 pub fn due(now: Timestamp, entries: &[ScheduleEntry]) -> Vec<ConnectionId> {
     entries
         .iter()
         .filter(|entry| match entry.status {
             ConnectionStatus::Active | ConnectionStatus::Error => {
-                entry.last_attempt_at.is_none_or(|at| {
-                    at.checked_add(entry.effective_interval)
-                        .is_ok_and(|next| next <= now)
-                })
+                attempted_in_the_future(now, entry)
+                    || entry.last_attempt_at.is_none_or(|at| {
+                        at.checked_add(entry.effective_interval)
+                            .is_ok_and(|next| next <= now)
+                    })
             }
             ConnectionStatus::ReauthRequired | ConnectionStatus::Removed => false,
         })
@@ -324,9 +333,21 @@ async fn tick(sync: &SyncService) {
             return;
         }
     };
-    for id in due(sync.clock.now(), &entries) {
+    let now = sync.clock.now();
+    for id in due(now, &entries) {
         match sync.request_sync(None, id, SyncTrigger::Schedule).await {
-            Ok(_) => {}
+            Ok(_) => {
+                if entries
+                    .iter()
+                    .any(|entry| entry.id == id && attempted_in_the_future(now, entry))
+                {
+                    tracing::warn!(
+                        connection = %id,
+                        "a connection's last sync attempt is later than now, as after a clock \
+                         that ran ahead; syncing it now"
+                    );
+                }
+            }
             Err(
                 err @ (SyncError::InProgress
                 | SyncError::RateLimited { .. }
@@ -421,11 +442,46 @@ mod tests {
             effective_interval,
         };
         let first = entry(None, SignedDuration::from_hours(1));
-        let overflowing = entry(Some(Timestamp::MAX), SignedDuration::from_hours(1));
+        let overflowing = entry(Some(Timestamp::MIN), SignedDuration::MAX);
         let second = entry(Some(Timestamp::MIN), SignedDuration::from_hours(1));
         assert_eq!(
             due(now, &[first, overflowing, second]),
             vec![first.id, second.id]
         );
+    }
+
+    /// An attempt later than now came from a clock that ran ahead. It says
+    /// nothing of when to sync next, and must not silence the connection until
+    /// that date.
+    #[test]
+    fn an_attempt_in_the_future_is_due() {
+        let now = Timestamp::from_second(1_800_000_000).unwrap();
+        for status in [ConnectionStatus::Active, ConnectionStatus::Error] {
+            for last_attempt_at in [now + SignedDuration::from_secs(1), Timestamp::MAX] {
+                let entry = ScheduleEntry {
+                    id: ConnectionId::new(),
+                    status,
+                    last_attempt_at: Some(last_attempt_at),
+                    effective_interval: SignedDuration::from_hours(6),
+                };
+                assert_eq!(due(now, &[entry]), vec![entry.id], "{status:?}");
+            }
+        }
+    }
+
+    /// A connection that needs a member's action stays out of the schedule,
+    /// whatever its dates say.
+    #[test]
+    fn an_attempt_in_the_future_does_not_wake_a_connection_that_is_not_scheduled() {
+        let now = Timestamp::from_second(1_800_000_000).unwrap();
+        for status in [ConnectionStatus::ReauthRequired, ConnectionStatus::Removed] {
+            let entry = ScheduleEntry {
+                id: ConnectionId::new(),
+                status,
+                last_attempt_at: Some(now + SignedDuration::from_hours(1)),
+                effective_interval: SignedDuration::from_hours(6),
+            };
+            assert_eq!(due(now, &[entry]), vec![], "{status:?}");
+        }
     }
 }

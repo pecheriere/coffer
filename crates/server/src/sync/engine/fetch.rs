@@ -125,7 +125,10 @@ impl SyncService {
 /// account) no longer holds every fetch at the maximum. Without any such
 /// account (the first run, or a connection reporting none), the same rule
 /// on the connection's last success. Never more than `max_days` before
-/// `today`, however long ago that was.
+/// `today`, however long ago that was. A time on a day after `today` came from
+/// a clock that ran ahead and counts as unknown, so it gives that same
+/// maximum window, which the bridge accepts, instead of one that skips records
+/// or starts in the future.
 #[must_use]
 pub(super) fn window_start(
     accounts: &[(Timestamp, Option<Timestamp>)],
@@ -139,6 +142,8 @@ pub(super) fn window_start(
     let day = |at: Timestamp| at.to_zoned(timezone.clone()).date();
     let start = |at: Option<Timestamp>| match at {
         None => earliest,
+        // A time later than today came from a clock that ran ahead: unknown.
+        Some(at) if day(at) > today => earliest,
         Some(at) => days_before(day(at), overlap_days).max(earliest),
     };
     accounts

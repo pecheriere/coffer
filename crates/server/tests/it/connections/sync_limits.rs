@@ -1,11 +1,16 @@
 //! Rate limits and the daily budget of syncs, and what the schedule queues.
 
-use super::{PLAINTEXT, RENEWED, setup_token, world};
+use super::{PLAINTEXT, RENEWED, World, setup_token, world};
 use axum::http::StatusCode;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_server::sync::SyncError;
-use coffer_store::{ConnectionStatus, ConnectionStatusChange, PageRequest};
+use coffer_server::sync::provider::FetchResult;
+use coffer_server::sync::scheduler::{ScheduleEntry, due};
+use coffer_store::{ConnectionStatus, ConnectionStatusChange, NewSyncRun, PageRequest};
 use jiff::SignedDuration;
+
+/// How far ahead the clock of these tests ran.
+const AHEAD: SignedDuration = SignedDuration::from_hours(24 * 30);
 
 #[tokio::test]
 async fn rate_limit_refuses_with_retry_after() {
@@ -258,4 +263,222 @@ async fn daily_budget_frees_exactly_after_24_hours() {
     sync.request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
         .unwrap();
+}
+
+/// Runs once on a clock 30 days ahead, then sets the clock right again, and
+/// checks that `trigger` waits its minimum interval from the correction, not
+/// from that date, and is then accepted.
+async fn assert_waits_only_its_interval_after_a_start_in_the_future(
+    trigger: SyncTrigger,
+    interval: SignedDuration,
+) {
+    let world = world().await;
+    let sync = &world.server.sync;
+    let right = world.now();
+    world.server.clock.set(right + AHEAD);
+    let run = sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    sync.run(run.id).await.unwrap();
+
+    world.server.clock.set(right);
+    let actor = (trigger == SyncTrigger::Manual).then_some(&world.alice);
+    let err = sync
+        .request_sync(actor, world.connection, trigger)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        err,
+        SyncError::RateLimited { retry_after } if retry_after == interval
+    ));
+    world.server.clock.advance(interval);
+    sync.request_sync(actor, world.connection, trigger)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_manual_sync_after_a_start_in_the_future_waits_only_its_interval() {
+    assert_waits_only_its_interval_after_a_start_in_the_future(
+        SyncTrigger::Manual,
+        SignedDuration::from_hours(1),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_scheduled_sync_after_a_start_in_the_future_waits_only_its_interval() {
+    assert_waits_only_its_interval_after_a_start_in_the_future(
+        SyncTrigger::Schedule,
+        SignedDuration::from_hours(2),
+    )
+    .await;
+}
+
+/// 24 runs, a bridge's day of requests, started over two days on a clock 30
+/// days ahead.
+async fn day_of_starts_in_the_future(world: &World) {
+    let start = world.now() + AHEAD;
+    let mut tx = world.server.store.begin().await.unwrap();
+    for i in 0..24 {
+        let at = start + SignedDuration::from_hours(2 * i);
+        let run = tx
+            .insert_sync_run(NewSyncRun {
+                connection: world.connection,
+                trigger: SyncTrigger::Schedule,
+                requested_by: None,
+                queued_at: at,
+            })
+            .await
+            .unwrap();
+        tx.start_sync_run(run.id, at).await.unwrap();
+        tx.finish_sync_run(run.id, SyncRunStatus::Succeeded, None, at)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
+
+async fn manual_refusal(world: &World) -> SyncError {
+    world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .err()
+        .unwrap()
+}
+
+/// Those requests were made: right after the correction they still use the
+/// budget, but the wait is bounded by a day, not by the date they carry.
+#[tokio::test]
+async fn starts_in_the_future_use_the_budget_for_one_day_after_the_correction() {
+    let world = world().await;
+    day_of_starts_in_the_future(&world).await;
+    let sync = &world.server.sync;
+    let day = SignedDuration::from_hours(24);
+
+    assert!(matches!(
+        manual_refusal(&world).await,
+        SyncError::RateLimited { retry_after } if retry_after == day
+    ));
+    // Moved once: the wait ages instead of starting over on each request.
+    world.server.clock.advance(SignedDuration::from_hours(1));
+    assert!(matches!(
+        manual_refusal(&world).await,
+        SyncError::RateLimited { retry_after } if retry_after == SignedDuration::from_hours(23)
+    ));
+    world.server.clock.advance(SignedDuration::from_hours(23));
+    sync.request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+}
+
+/// The date shown for the next sync is when the limits allow a run, not a date
+/// the schedule no longer waits for.
+#[tokio::test]
+async fn next_sync_is_when_the_limits_allow_it_after_a_start_in_the_future() {
+    let world = world().await;
+    let right = world.now();
+    world.server.clock.set(right + AHEAD);
+    world.sync_once(Vec::new()).await;
+
+    world.server.clock.set(right);
+    let views = world
+        .server
+        .sync
+        .list_connections(&world.alice)
+        .await
+        .unwrap();
+    // The provider's two hours between scheduled syncs, from the correction.
+    assert_eq!(
+        views[0].next_sync_at,
+        Some(right + SignedDuration::from_hours(2))
+    );
+}
+
+#[tokio::test]
+async fn next_sync_follows_the_budget_after_a_day_of_starts_in_the_future() {
+    let world = world().await;
+    let right = world.now();
+    day_of_starts_in_the_future(&world).await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.update_connection_status(
+        world.connection,
+        ConnectionStatusChange {
+            status: ConnectionStatus::Active,
+            last_error: None,
+            attempted_at: Some(right + AHEAD),
+            succeeded_at: None,
+            at: right,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let views = world
+        .server
+        .sync
+        .list_connections(&world.alice)
+        .await
+        .unwrap();
+    assert_eq!(
+        views[0].next_sync_at,
+        Some(right + SignedDuration::from_hours(24))
+    );
+}
+
+/// A run under the corrected clock records its attempt at that time, so the
+/// schedule finds the connection due once, not on every pass.
+#[tokio::test]
+async fn a_run_after_the_correction_ends_the_due_attempt_in_the_future() {
+    let world = world().await;
+    let right = world.now();
+    world.server.clock.set(right + AHEAD);
+    world.sync_once(Vec::new()).await;
+    world.server.clock.set(right);
+    let entry = || async {
+        let record = world
+            .server
+            .store
+            .get_connection(world.connection)
+            .await
+            .unwrap();
+        ScheduleEntry {
+            id: world.connection,
+            status: record.status,
+            last_attempt_at: record.last_attempt_at,
+            effective_interval: SignedDuration::from_hours(6),
+        }
+    };
+    assert_eq!(due(right, &[entry().await]), vec![world.connection]);
+
+    // The first look moves the start in the future to now; the wait is from there.
+    let err = world
+        .server
+        .sync
+        .request_sync(None, world.connection, SyncTrigger::Schedule)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, SyncError::RateLimited { .. }));
+    world.server.clock.advance(SignedDuration::from_hours(2));
+    world.fake.push(Ok(FetchResult {
+        accounts: Vec::new(),
+        connection_errors: Vec::new(),
+        skipped: 0,
+        cursor: None,
+    }));
+    let run = world
+        .server
+        .sync
+        .request_sync(None, world.connection, SyncTrigger::Schedule)
+        .await
+        .unwrap();
+    world.server.sync.run(run.id).await.unwrap();
+
+    assert_eq!(due(world.now(), &[entry().await]), vec![]);
 }

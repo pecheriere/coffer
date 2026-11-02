@@ -5,7 +5,7 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::ConnectionId;
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_domain::sync::SyncTrigger;
-use coffer_store::{ConnectionStatus, NewSyncRun, Page, PageRequest, StoreTx};
+use coffer_store::{ConnectionRecord, ConnectionStatus, NewSyncRun, Page, PageRequest, StoreTx};
 use jiff::{SignedDuration, Timestamp};
 
 use super::{audit, requester};
@@ -24,7 +24,9 @@ const BUDGET_WINDOW: SignedDuration = SignedDuration::from_hours(24);
 /// [`SyncError::InProgress`] while a run is queued or running, else
 /// [`SyncError::RateLimited`] with the wait until both the minimum interval
 /// since the last start (`min_scheduled_interval` for the schedule,
-/// `min_interval` otherwise) and the daily budget allow one.
+/// `min_interval` otherwise) and the daily budget allow one. Starts later
+/// than `now` are first brought to now by [`SyncService::bring_starts_to_now`],
+/// outside the transaction, which a refusal rolls back.
 pub(super) async fn check_limits(
     tx: &mut StoreTx,
     connection: ConnectionId,
@@ -65,6 +67,58 @@ pub(super) async fn check_limits(
 }
 
 impl SyncService {
+    /// Brings the start of each of the connection's runs that is later than
+    /// `now` to `now`, in a transaction of its own, once: the next call finds
+    /// none. A start later than now came from a clock that ran ahead, and when
+    /// it really happened is unknowable. Those requests were made, so they keep
+    /// counting against the daily budget, which then frees within a day of the
+    /// correction; left as they were, they would hold the connection back until
+    /// the clock reached them. What is lost is those runs' stored start times.
+    pub(super) async fn bring_starts_to_now(
+        &self,
+        id: ConnectionId,
+        now: Timestamp,
+    ) -> Result<(), SyncError> {
+        let mut tx = self.store.begin().await?;
+        let moved = tx.bring_sync_run_starts_to(id, now).await?;
+        if moved > 0 {
+            tx.commit().await?;
+            tracing::warn!(
+                connection = %id,
+                runs = moved,
+                "sync runs started later than now, as after a clock that ran ahead, were moved \
+                 to now; they count against the daily budget until it frees"
+            );
+        }
+        Ok(())
+    }
+
+    /// How long the schedule must wait before it may queue a run of
+    /// `connection`, for the limits alone: zero when they allow one now.
+    pub(super) async fn limits_wait(
+        &self,
+        connection: &ConnectionRecord,
+        now: Timestamp,
+    ) -> Result<SignedDuration, SyncError> {
+        let Some(provider) = self.provider_of(connection) else {
+            return Ok(SignedDuration::ZERO);
+        };
+        let mut tx = self.store.begin().await?;
+        match check_limits(
+            &mut tx,
+            connection.id,
+            SyncTrigger::Schedule,
+            provider.capabilities(),
+            now,
+        )
+        .await
+        {
+            Ok(()) | Err(SyncError::InProgress) => Ok(SignedDuration::ZERO),
+            Err(SyncError::RateLimited { retry_after }) => Ok(retry_after),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Queues a run of the connection: `manual` for an actor, `schedule`
     /// for the scheduler (no actor). A manual request is audited with its
     /// member and agent.
@@ -95,6 +149,7 @@ impl SyncService {
             _ => return Err(SyncError::Invalid(TRIGGER_INVALID)),
         }
         let now = self.clock.now();
+        self.bring_starts_to_now(id, now).await?;
         let mut tx = self.store.begin().await?;
         let connection = ensure_not_removed(&mut tx, id).await?;
         // The schedule's snapshot was read outside this transaction: a

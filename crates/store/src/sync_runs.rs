@@ -260,6 +260,31 @@ impl StoreTx {
         Ok(u32::try_from(result.rows_affected()).unwrap_or(u32::MAX))
     }
 
+    /// Moves the start of each of `connection`'s runs that started later than
+    /// `now` to `now`, and answers how many it moved. Such a start came from a
+    /// clock that ran ahead, and when the run really happened is unknowable;
+    /// the run still happened, so it keeps counting against the daily budget.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn bring_sync_run_starts_to(
+        &mut self,
+        connection: ConnectionId,
+        now: Timestamp,
+    ) -> Result<u32, StoreError> {
+        let result = sqlx::query(
+            "UPDATE sync_runs SET started_at = ? WHERE connection_id = ? AND started_at > ?",
+        )
+        .bind(now.as_millisecond())
+        .bind(connection.to_string())
+        .bind(now.as_millisecond())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(u32::try_from(result.rows_affected()).unwrap_or(u32::MAX))
+    }
+
     /// The counts rate limits use for `connection`: runs queued, running or
     /// started after `since`, the last start, and whether a run is in
     /// flight. Read inside the transaction that queues a run, so two
