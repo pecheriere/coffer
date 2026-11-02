@@ -18,7 +18,8 @@ use maud::{Markup, html};
 use serde::Deserialize;
 
 use super::belonging::{
-    BELONGS_TO_UNKNOWN, answer_options, beneficiaries, held_for_field, kind_field, parse_belongs_to,
+    BELONGS_TO_UNKNOWN, SEEN_BY, answer_options, beneficiaries, held_for_field, in_form_words,
+    kind_field, parse_belongs_to,
 };
 use super::{Notice, back, refused, render};
 use crate::http::AppState;
@@ -33,8 +34,6 @@ use super::FormKind;
 
 pub(super) const KIND_UNKNOWN: &str = "Choose one of the account kinds in the list.";
 const ACCOUNT_UNKNOWN: &str = "Choose the account to link to.";
-const HELD_FOR_FINE: &str = "A name or a purpose, shown only with this account. Leave it empty if \
-                             this is the household's money.";
 /// The longest account name, in characters; the form's `maxlength`.
 const NAME_CHARS: usize = 100;
 
@@ -171,7 +170,7 @@ impl Binding {
                             (answer_options())
                         }
                     }
-                    (held_for_field(id, None, HELD_FOR_FINE))
+                    (held_for_field(id, None, &format!("{SEEN_BY} Leave it empty if this is the household's money.")))
                     button.btn.btn-primary type="submit" { "Create account and bind" }
                 }
                 @if !candidates.is_empty() {
@@ -291,7 +290,7 @@ pub(super) async fn create_account(
     };
     match state.sync.create_account_and_bind(&actor, id, input).await {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, err, FormKind::Action).await,
+        Err(err) => refused(&state, &session, in_form_words(err), FormKind::Action).await,
     }
 }
 

@@ -1,23 +1,24 @@
 //! What a bound account is and whose money it is, from its row on the page: what the row says,
 //! the form that changes it and the labels the forms offer. The form asks
 //! [`Ledger::update_account`](crate::ledger::Ledger::update_account), which decides and audits
-//! (spec §8.11 B2, B4, B5). A label may be a child's name, and is only ever sent to the service
-//! and drawn with its account: a refusal holds fixed words, and nothing here logs a field.
+//! (spec §8.11 B2, B3, B4, B5). A label may be a child's name: it goes only to the service and
+//! to who sees its account, in the row, the form and the list of labels. A refusal holds fixed
+//! words, and nothing here logs a field. The form carries what it showed, so a form older than the
+//! account changes nothing.
 
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::Response;
 use coffer_domain::accounts::{AccountError, AccountKind, BelongsTo};
 use coffer_domain::ids::AccountId;
-use coffer_domain::policy::{AccountLevel, authorize_account};
 use maud::{Markup, html};
 use serde::Deserialize;
 
 use super::bind::{KIND_UNKNOWN, kind_label, unprocessable};
-use super::{FormKind, Shared, back, refused};
-use crate::auth::AuthError;
+use super::{FormKind, Notice, Shared, back, refused, render};
 use crate::http::AppState;
 use crate::http::pages::layout::csrf_field;
 use crate::http::pages::{PageError, PageForm, PageSession};
@@ -27,9 +28,21 @@ use crate::sync::connections::{ConnectionView, ProviderAccountView};
 
 pub(super) const BELONGS_TO_UNKNOWN: &str =
     "Choose one of the answers in the list for whose money it is.";
-const KIND_FINE: &str = "Checking and savings count as cash for planning. Education \
-    and custodial accounts are held for someone else, and charitable ones are given away: they \
-    count in neither net worth nor planning unless you say they're the household's.";
+const KIND_FINE: &str = "Checking and savings count as cash for planning. Planning counts only \
+    cash and debts due soon. Education and custodial accounts are held for someone else, and \
+    charitable ones are given away: they stay out of net worth unless you say they're the \
+    household's.";
+/// Who sees a label, for the hints of both forms.
+pub(super) const SEEN_BY: &str = "A name or a purpose. Anyone who can see this account sees it, \
+    on this page and in net worth, and it stays in the audit log.";
+const HELD_FOR_INVALID: &str =
+    "Held for takes a name or a purpose of up to 64 plain characters, on one line.";
+const HELD_FOR_ON_HOUSEHOLD: &str =
+    "Held for is only for money that isn't the household's: empty it, or choose another answer.";
+const CHANGED: &str =
+    "This account changed after the page opened, so nothing was saved. Look at it again.";
+const STOPS_FOLLOWING: &str =
+    "Picking an answer stops it following the kind for good, even the one it has now.";
 const ANSWERS: [BelongsTo; 3] = [
     BelongsTo::Household,
     BelongsTo::SomeoneElse,
@@ -85,8 +98,7 @@ pub(super) fn held_for_field(row: impl Display, value: Option<&str>, fine: &str)
         div.field {
             label for=(field) { "Held for (optional)" }
             input .input #(field) type="text" name="beneficiary" value=[value]
-                maxlength="64" list="beneficiaries" autocomplete="off"
-                aria-describedby=(hint);
+                maxlength="64" list="beneficiaries" aria-describedby=(hint);
             span.fine #(hint) { (fine) }
         }
     }
@@ -179,42 +191,44 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
             "You chose this, so it stays whatever the kind. It can't go back to following the kind."
         }
         (false, BelongsTo::Household, _) => {
-            "You haven't chosen, so this follows the kind: changing to an education, custodial or \
-             charitable kind takes it out of net worth and planning."
+            "You haven't chosen, so this follows the kind. An education, custodial or charitable \
+             kind takes it out of net worth, and out of planning if it's cash or a debt due soon."
         }
         (false, _, true) => {
-            "You haven't chosen, so this follows the kind: changing to any kind but education, \
-             custodial or charitable counts it and removes the name."
+            "You haven't chosen, so this follows the kind. An education or custodial kind makes it \
+             held for someone else and charitable makes it given away: it stays out of net worth \
+             and keeps the name. Any other kind makes it the household's and counts it in net \
+             worth, and removes the name."
         }
         (false, _, false) => {
-            "You haven't chosen, so this follows the kind: changing to any kind but education, \
-             custodial or charitable counts it."
+            "You haven't chosen, so this follows the kind. An education or custodial kind makes it \
+             held for someone else and charitable makes it given away: it stays out of net worth. \
+             Any other kind makes it the household's and counts it in net worth."
         }
     };
     let moving = match (view.belongs_to, named) {
         (BelongsTo::Household, _) => {
-            "Saying it's someone else's or given away takes it out of net worth and planning, \
-             over its whole history. If you say it's the household's again later, it counts in \
-             both again, even one you had turned off."
+            "Saying it's someone else's or given away takes it out of net worth, over its whole \
+             history, and out of planning if it's cash or a debt due soon. If you say it's the \
+             household's again later, it counts again, even where you had turned that off."
         }
         (_, true) => {
-            "Saying it's the household's counts it in net worth and planning, over its whole \
-             history, and removes the name."
+            "Saying it's the household's counts it in net worth, over its whole history, and \
+             removes the name. Planning counts it only if it's cash or a debt due soon."
         }
         (_, false) => {
-            "Saying it's the household's counts it in net worth and planning, over its whole \
-             history."
+            "Saying it's the household's counts it in net worth, over its whole history. Planning \
+             counts it only if it's cash or a debt due soon."
         }
     };
     let held_for_fine = match (view.belongs_to, named) {
         (BelongsTo::Household, _) => {
-            "A name or a purpose, only for money that isn't the household's."
+            "A name or a purpose, only for money that isn't the household's.".to_owned()
         }
-        (_, true) => {
-            "A name or a purpose, shown only with this account. Empty it to remove the name."
-        }
-        (_, false) => "A name or a purpose, shown only with this account.",
+        (_, true) => format!("{SEEN_BY} Empty it to remove the name."),
+        (_, false) => SEEN_BY.to_owned(),
     };
+    let shown_name = view.beneficiary.as_deref().unwrap_or_default();
     html! {
         details.item-detail {
             summary { "Kind and whose money it is" }
@@ -223,6 +237,9 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
             }
             form method="post" action={ "/connections/accounts/" (view.id) "/belonging" } {
                 (csrf_field(csrf))
+                input type="hidden" name="shown_kind" value=(view.kind.as_str());
+                input type="hidden" name="shown_belongs_to" value=(view.belongs_to.as_str());
+                input type="hidden" name="shown_beneficiary" value=(shown_name);
                 (kind_field(row, &html! {
                     @for kind in AccountKind::ALL {
                         option value=(kind.as_str()) selected[view.kind == kind] {
@@ -237,10 +254,14 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
                         (answer_options())
                     }
                     span.fine #(hint) {
-                        (following) " " (moving) " " (AUDITED)
+                        (following) " "
+                        @if !view.belongs_to_overridden {
+                            (STOPS_FOLLOWING) " "
+                        }
+                        (moving) " " (AUDITED)
                     }
                 }
-                (held_for_field(row, view.beneficiary.as_deref(), held_for_fine))
+                (held_for_field(row, view.beneficiary.as_deref(), &held_for_fine))
                 button.btn type="submit" { "Save" }
             }
         }
@@ -248,12 +269,19 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
 }
 
 /// `belongs_to` empty leaves it, unlike the bind form's "Follow the kind": a patch can't return
-/// a chosen answer to following the kind. Unknown fields are refused: a forged form fails whole.
+/// a chosen answer to following the kind. `shown_*` is what the page showed when it was drawn.
+/// Unknown fields are refused: a forged form fails whole.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BelongingForm {
     #[serde(default)]
     csrf: String,
+    #[serde(default)]
+    shown_kind: String,
+    #[serde(default)]
+    shown_belongs_to: String,
+    #[serde(default)]
+    shown_beneficiary: String,
     #[serde(default)]
     kind: String,
     #[serde(default)]
@@ -264,6 +292,32 @@ pub(super) struct BelongingForm {
 
 assert_no_debug!(BelongingForm);
 
+impl BelongingForm {
+    /// Whether the page this came from showed the account as it is now. Any answer sent from an
+    /// older one was chosen by someone who hadn't seen what has happened since.
+    fn showed(&self, current: &AccountView) -> bool {
+        self.shown_kind == current.kind.as_str()
+            && self.shown_belongs_to == current.belongs_to.as_str()
+            && self.shown_beneficiary == current.beneficiary.as_deref().unwrap_or_default()
+    }
+}
+
+/// `err` in the form's words, for the two refusals that are about `Held for`: the service's speak
+/// to the API, which names the field `beneficiary`.
+pub(super) fn in_form_words(err: SyncError) -> SyncError {
+    match err {
+        SyncError::Invalid(message) if message == AccountError::InvalidBeneficiary.message() => {
+            SyncError::Invalid(HELD_FOR_INVALID)
+        }
+        SyncError::Invalid(message)
+            if message == AccountError::BeneficiaryOnTheHousehold.message() =>
+        {
+            SyncError::Invalid(HELD_FOR_ON_HOUSEHOLD)
+        }
+        other => other,
+    }
+}
+
 pub(super) async fn update(
     State(state): State<AppState>,
     session: PageSession,
@@ -272,13 +326,15 @@ pub(super) async fn update(
 ) -> Result<Response, PageError> {
     let actor = session.verify(&state, &form.csrf)?;
     let id: AccountId = id.parse().map_err(|_| PageError::not_found())?;
-    // Authorized before the form is read, as `Ledger::update_account` will again.
-    let access = state.access.resolve(&actor).await?;
-    authorize_account(&actor, &access, id, AccountLevel::Write).map_err(AuthError::from)?;
+    // Hidden or unknown is decided here, before the form is read.
     let current = match state.ledger.get_account(&actor, id).await {
         Ok(current) => current,
         Err(err) => return refused(&state, &session, err.into(), FormKind::Action).await,
     };
+    if !form.showed(&current) {
+        let notice = Notice::new(StatusCode::CONFLICT, CHANGED);
+        return render(&state, &session, Some(notice)).await;
+    }
     let kind = match form.kind.as_str() {
         "" => None,
         raw => match raw.parse::<AccountKind>() {
@@ -289,11 +345,11 @@ pub(super) async fn update(
     let Ok(belongs_to) = parse_belongs_to(&form.belongs_to) else {
         return unprocessable(&state, &session, BELONGS_TO_UNKNOWN).await;
     };
-    // The box starts with the name the account has. Sent back as it was, that asks for nothing,
-    // so a move to the household's removes the name as the form said it would.
+    // The box starts with the name the page showed, which is the account's. Sent back as it was,
+    // that asks for nothing, so a move to the household's removes the name as the form said.
     let beneficiary = form
         .beneficiary
-        .filter(|asked| Some(asked.trim()) != current.beneficiary.as_deref());
+        .filter(|asked| asked.trim() != form.shown_beneficiary);
     let patch = AccountPatch {
         kind,
         belongs_to,
@@ -302,6 +358,9 @@ pub(super) async fn update(
     };
     match state.ledger.update_account(&actor, id, patch).await {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, SyncError::from(err), FormKind::Action).await,
+        Err(err) => {
+            let err = in_form_words(SyncError::from(err));
+            refused(&state, &session, err, FormKind::Action).await
+        }
     }
 }

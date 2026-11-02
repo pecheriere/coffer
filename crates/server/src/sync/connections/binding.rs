@@ -113,8 +113,7 @@ impl SyncService {
         provider_account: ProviderAccountId,
     ) -> Result<(), SyncError> {
         let access = self.authorize_creating(actor).await?;
-        let mut tx = self.store.begin().await?;
-        let current = tx.get_provider_account(provider_account).await?;
+        let current = self.store.get_provider_account(provider_account).await?;
         if visible(&access, &current) {
             Ok(())
         } else {

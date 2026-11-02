@@ -152,6 +152,20 @@ async fn fetch_provider_account<'e>(
     provider_account_from_row(&row)
 }
 
+impl Store {
+    /// A provider account, read without a transaction, so without the write lock.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if there is no such provider account.
+    pub async fn get_provider_account(
+        &self,
+        id: ProviderAccountId,
+    ) -> Result<ProviderAccountRecord, StoreError> {
+        fetch_provider_account(&self.pool, id).await
+    }
+}
+
 impl StoreTx {
     /// Fetch a provider account inside the transaction.
     ///

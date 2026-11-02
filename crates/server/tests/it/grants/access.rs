@@ -216,6 +216,36 @@ async fn write_needs_write_grant() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/// A page form relies on this: whoever may not write hears so, whatever the values say.
+#[tokio::test]
+async fn an_account_patch_is_authorized_before_its_values_are_read() {
+    let world = world().await;
+    let held = world.account("Checking").await;
+    let other = world.account("Savings").await;
+    let (_, token) = world
+        .token(Scope::Write, vec![on(held, AccountLevel::Transactions)])
+        .await;
+    let too_long = json!({"beneficiary": "x".repeat(65)});
+    let (status, _) = world
+        .call(
+            Method::PATCH,
+            &format!("/api/v1/accounts/{held}"),
+            &token,
+            Some(too_long.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = world
+        .call(
+            Method::PATCH,
+            &format!("/api/v1/accounts/{other}"),
+            &token,
+            Some(too_long),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn new_accounts_visible_only_through_all_grant() {
     let world = world().await;

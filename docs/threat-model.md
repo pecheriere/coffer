@@ -626,7 +626,8 @@
   What is left:
   - An `unhandled_rejection` names no script, so one from another script on a
     listed page keeps its message, which could hold page content. Withholding them
-    all would lose the rejections of coffer's own code.
+    all would lose the rejections of coffer's own code. `/connections` does withhold
+    them: its forms hold a beneficiary label, which may be a child's name.
   - A word without a `/`, such as a bare token, is not recognized as an address.
     coffer's own code puts no token in an error's message.
 - **A report can't be trusted to be free of what log alerts look for.** A message

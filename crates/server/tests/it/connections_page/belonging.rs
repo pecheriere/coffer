@@ -19,6 +19,10 @@ mod row;
 const CHILD: &str = "Child A";
 const MARKED_NAME: &str = "Marked Name Zq";
 const FOLLOW_THE_KIND: &str = "Follow the kind";
+const HELD_FOR_INVALID: &str =
+    "Held for takes a name or a purpose of up to 64 plain characters, on one line.";
+const HELD_FOR_ON_HOUSEHOLD: &str =
+    "Held for is only for money that isn't the household's: empty it, or choose another answer.";
 
 fn row_path(id: AccountId) -> String {
     format!("/connections/accounts/{id}/belonging")
@@ -49,8 +53,12 @@ async fn bound(world: &mut World, name: &str, fields: &[(&str, &str)]) -> Accoun
 impl World {
     /// What the provider's row is bound to.
     async fn fed(&self, id: ProviderAccountId) -> Option<AccountId> {
-        let mut tx = self.server.store.begin().await.unwrap();
-        tx.get_provider_account(id).await.unwrap().account
+        self.server
+            .store
+            .get_provider_account(id)
+            .await
+            .unwrap()
+            .account
     }
 
     async fn view(&self, id: AccountId) -> AccountView {
@@ -80,8 +88,23 @@ impl World {
             .collect()
     }
 
-    /// Posts the row's form with `fields` as the admin.
+    /// Posts the row's form with `fields` as the admin, from a page showing the row as it is.
     async fn post_row(&mut self, id: AccountId, fields: &[(&str, &str)]) -> Reply {
+        let view = self.view(id).await;
+        let mut sent = vec![
+            ("shown_kind", view.kind.as_str()),
+            ("shown_belongs_to", view.belongs_to.as_str()),
+            (
+                "shown_beneficiary",
+                view.beneficiary.as_deref().unwrap_or_default(),
+            ),
+        ];
+        sent.extend_from_slice(fields);
+        self.post_exact(id, &sent).await
+    }
+
+    /// Posts `fields` and the anti-forgery token to the row's form as the admin.
+    async fn post_exact(&mut self, id: AccountId, fields: &[(&str, &str)]) -> Reply {
         let csrf = self.admin.get("/connections").await.csrf();
         let mut sent = vec![("csrf", csrf.as_str())];
         sent.extend_from_slice(fields);
@@ -279,9 +302,13 @@ async fn the_bind_form_says_the_kind_decides_unless_told_otherwise() {
     world.report(connection, "Fund", "USD", None).await;
     let page = world.admin.get("/connections").await;
     assert!(page.body.contains(
-        "Checking and savings count as cash for planning. Education and custodial accounts are \
-         held for someone else, and charitable ones are given away: they count in neither net \
-         worth nor planning unless you say they're the household's."
+        "Checking and savings count as cash for planning. Planning counts only cash and debts \
+         due soon. Education and custodial accounts are held for someone else, and charitable \
+         ones are given away: they stay out of net worth unless you say they're the household's."
+    ));
+    assert!(page.body.contains(
+        "A name or a purpose. Anyone who can see this account sees it, on this page and in net \
+         worth, and it stays in the audit log. Leave it empty if this is the household's money."
     ));
     let select = page.between("name=\"belongs_to\"", "</select>");
     let order: Vec<usize> = [
@@ -357,7 +384,7 @@ async fn names_are_escaped() {
 }
 
 #[tokio::test]
-async fn the_datalist_holds_only_labels_of_visible_accounts() {
+async fn the_datalist_holds_each_label_once_and_nothing_else() {
     let mut world = world().await;
     bound(
         &mut world,
@@ -472,4 +499,26 @@ async fn a_name_never_reaches_the_log() {
     );
     assert!(!log.contains("Marked"));
     assert!(!log.contains("Fourth Zq"));
+}
+
+#[tokio::test]
+async fn bind_refusals_say_held_for_in_plain_words() {
+    let mut world = world().await;
+    let long = "Marked".repeat(11);
+    let (_, too_long) = post_bind(
+        &mut world,
+        "Plan",
+        &[("kind", "education"), ("beneficiary", &long)],
+    )
+    .await;
+    assert!(too_long.body.contains(HELD_FOR_INVALID));
+    assert!(!too_long.body.contains("Beneficiary"));
+    let (_, on_household) = post_bind(
+        &mut world,
+        "Everyday",
+        &[("kind", "checking"), ("beneficiary", MARKED_NAME)],
+    )
+    .await;
+    assert!(on_household.body.contains(HELD_FOR_ON_HOUSEHOLD));
+    assert!(!on_household.body.contains("Beneficiary"));
 }
