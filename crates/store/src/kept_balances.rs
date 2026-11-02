@@ -24,6 +24,26 @@ pub struct KeptBalance {
     pub recorded_at: Timestamp,
 }
 
+/// What a bind did with the balances kept for its provider account, for its
+/// audit entry. Holds no amount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BroughtIn {
+    /// How many became snapshots.
+    pub written: u32,
+    /// The earliest day of those, if any.
+    pub first_day: Option<Date>,
+    /// The latest day of those, if any.
+    pub last_day: Option<Date>,
+    /// How many were dropped because they are in another currency.
+    pub other_currency: u32,
+    /// How many were skipped because the account has a snapshot of that day.
+    pub already_there: u32,
+}
+
+fn count(rows: u64) -> u32 {
+    u32::try_from(rows).unwrap_or(u32::MAX)
+}
+
 impl StoreTx {
     /// Keep `balance`, replacing what was kept for the same provider account
     /// and day.
@@ -53,41 +73,62 @@ impl StoreTx {
 
     /// Turn what was kept for `provider_account` in `currency` into `sync`
     /// snapshots of `account`, never over a snapshot already there, and
-    /// remove everything kept for it, so nothing can apply twice. Returns how
-    /// many snapshots it wrote. What was kept in another currency has no
-    /// meaning for the account and is dropped.
+    /// remove everything kept for it, so nothing can apply twice. What was
+    /// kept in another currency has no meaning for the account and is dropped.
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// Backend failures, or a day that no longer parses.
     pub async fn bring_in_kept_balances(
         &mut self,
         provider_account: ProviderAccountId,
         account: AccountId,
         currency: Currency,
-    ) -> Result<u32, StoreError> {
+    ) -> Result<BroughtIn, StoreError> {
         let provider_account = provider_account.to_string();
-        let written = sqlx::query(
+        let matching: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM kept_balances WHERE provider_account_id = ? AND currency = ?",
+        )
+        .bind(&provider_account)
+        .bind(currency.as_str())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        let written: Vec<(String,)> = sqlx::query_as(
             "INSERT INTO balance_snapshots \
              (account_id, on_date, balance_minor, source, recorded_at) \
              SELECT ?, on_date, balance_minor, ?, recorded_at FROM kept_balances \
              WHERE provider_account_id = ? AND currency = ? \
-             ON CONFLICT (account_id, on_date) DO NOTHING",
+             ON CONFLICT (account_id, on_date) DO NOTHING RETURNING on_date",
         )
         .bind(account.to_string())
         .bind(BalanceSource::Sync.as_str())
         .bind(&provider_account)
         .bind(currency.as_str())
-        .execute(&mut *self.tx)
+        .fetch_all(&mut *self.tx)
         .await
-        .map_err(StoreError::from_sqlx)?
-        .rows_affected();
-        sqlx::query("DELETE FROM kept_balances WHERE provider_account_id = ?")
+        .map_err(StoreError::from_sqlx)?;
+        let removed = sqlx::query("DELETE FROM kept_balances WHERE provider_account_id = ?")
             .bind(&provider_account)
             .execute(&mut *self.tx)
             .await
-            .map_err(StoreError::from_sqlx)?;
-        Ok(u32::try_from(written).unwrap_or(u32::MAX))
+            .map_err(StoreError::from_sqlx)?
+            .rows_affected();
+        let matching = u64::try_from(matching).map_err(StoreError::backend)?;
+        let written_count = u64::try_from(written.len()).map_err(StoreError::backend)?;
+        let day = |day: Option<&String>| {
+            day.map(|day| day.parse::<Date>().map_err(StoreError::backend))
+                .transpose()
+        };
+        let days = written.iter().map(|(day,)| day);
+        Ok(BroughtIn {
+            written: count(written_count),
+            // ISO days sort as text.
+            first_day: day(days.clone().min())?,
+            last_day: day(days.max())?,
+            other_currency: count(removed.saturating_sub(matching)),
+            already_there: count(matching.saturating_sub(written_count)),
+        })
     }
 
     /// Remove everything kept for the provider accounts of `connection`.
@@ -132,6 +173,24 @@ impl crate::Store {
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::from_sqlx)
+    }
+
+    /// Make every later `provider_account.bind` audit entry fail to write: the
+    /// last write of a bind, for a test that all of it rolls back.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be created.
+    pub async fn inject_bind_audit_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS injected_bind_audit_failure \
+             BEFORE INSERT ON audit_events WHEN NEW.action = 'provider_account.bind' \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
     }
 }
 
@@ -212,6 +271,17 @@ mod tests {
                 .await
                 .is_err(),
             "one row per day"
+        );
+        assert!(
+            sqlx::query(
+                "INSERT INTO kept_balances \
+                 (provider_account_id, on_date, balance_minor, currency, recorded_at) \
+                 VALUES ('nobody', '2026-01-03', 100, 'USD', 0)",
+            )
+            .execute(&pool)
+            .await
+            .is_err(),
+            "only for a provider account that exists"
         );
         assert!(
             sqlx::query(INSERT)

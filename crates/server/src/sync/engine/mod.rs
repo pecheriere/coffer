@@ -25,8 +25,8 @@ use coffer_store::{
     BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
     StoreTx, SyncRunRecord,
 };
-use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -320,27 +320,50 @@ pub(super) async fn ensure_not_removed(
     Ok(record)
 }
 
+/// How many days back a balance reported for an unbound account may be dated:
+/// a bank's date can honestly lag, but nothing older is believed.
+const KEPT_BALANCE_MAX_AGE_DAYS: i64 = 31;
+
+/// The oldest day a balance of an unbound account may be taken for.
+pub(super) fn oldest_kept_day(today: Date) -> Date {
+    today.saturating_sub(Span::new().days(KEPT_BALANCE_MAX_AGE_DAYS))
+}
+
+/// A balance a provider reported, converted to minor units of its currency.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ReportedBalance {
+    pub(super) on: Date,
+    pub(super) balance_minor: i64,
+    pub(super) currency: Currency,
+}
+
 /// Records the balance a provider reported for `provider_account`: the day's
 /// snapshot of the account it is bound to or, while unbound, kept for the bind
-/// to bring in. Keeping isn't audited: the audit log would then hold the
-/// balances of an account nobody has bound, and the bind's entry counts them.
+/// to bring in, unless it is dated before [`oldest_kept_day`]. Never on a future
+/// day, which would hide later balances.
+/// Keeping isn't audited: the audit log would then hold the balances of an
+/// account nobody has bound, and the bind's entry counts them.
 pub(super) async fn record_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     provider_account: ProviderAccountId,
     account: Option<AccountId>,
-    on: Date,
-    balance_minor: i64,
-    currency: Currency,
+    balance: ReportedBalance,
+    today: Date,
 ) -> Result<(), SyncError> {
+    let on = balance.on.min(today);
     if let Some(account) = account {
-        return write_balance(tx, now, account, on, balance_minor).await;
+        return write_balance(tx, now, account, on, balance.balance_minor).await;
+    }
+    if on < oldest_kept_day(today) {
+        tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
+        return Ok(());
     }
     tx.keep_balance(KeptBalance {
         provider_account,
         on,
-        balance_minor,
-        currency,
+        balance_minor: balance.balance_minor,
+        currency: balance.currency,
         recorded_at: now,
     })
     .await?;

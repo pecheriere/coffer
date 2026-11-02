@@ -357,9 +357,15 @@ records already held, and the balances reported while it was unbound become
 the account's history, one per day with `source` `sync`, each day's last one,
 never over a balance the account already has for that day. They appear nowhere
 before the bind, so an unbound account adds nothing to a forecast. A balance
-that doesn't convert, or was reported in a currency other than the account's,
-is not brought in. The audit entry `provider_account.bind` says how many were
-(`balances_brought_in`). Removing or forgetting a connection deletes what was
+that doesn't convert, was reported in a currency other than the account's, or
+is dated more than 31 days before the day it was reported is not brought in. So
+that a bind never reads an amount in the wrong currency, a provider account's
+last balance is cleared when its currency changes without a new balance, and
+the bind ignores a last balance more than 31 days old. The audit entry
+`provider_account.bind` says what happened: `balances_brought_in`, the days
+`balances_first_day` and `balances_last_day`, `balances_other_currency` for those
+dropped, and `balances_already_there` for those skipped. It holds no amount.
+Removing or forgetting a connection deletes what was
 kept for its unbound accounts. There is no way to unbind: a bound provider
 account stays bound. coffer syncs every connection on a schedule
 (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.

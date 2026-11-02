@@ -14,7 +14,7 @@ use jiff::civil::Date;
 
 use super::convert::{Converted, check_account, convert};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
-use super::{SyncService, record_balance, same_credentials, still_current};
+use super::{ReportedBalance, SyncService, record_balance, same_credentials, still_current};
 use crate::sync::SyncError;
 use crate::sync::apply::{
     AccountBatch, ApplyReport, Coverage, apply_account_batch, sync_actor, valid_provider_id,
@@ -155,10 +155,17 @@ async fn record_pass(
 fn readable_balance(
     balance: Option<(Date, DecimalAmount)>,
     currency: Currency,
-) -> (Option<(Date, i64)>, Option<String>) {
+) -> (Option<ReportedBalance>, Option<String>) {
     match balance {
         Some((on, amount)) => match amount.to_minor_units_rounded(currency) {
-            Ok(minor) => (Some((on, minor)), None),
+            Ok(balance_minor) => (
+                Some(ReportedBalance {
+                    on,
+                    balance_minor,
+                    currency,
+                }),
+                None,
+            ),
             Err(_) => (None, Some(BALANCE_UNREPRESENTABLE.to_owned())),
         },
         None => (None, None),
@@ -452,7 +459,6 @@ impl SyncService {
                 removed: data.removed,
                 skipped: u32::try_from(unusable.len()).unwrap_or(u32::MAX),
                 balance,
-                currency,
                 today,
                 now,
             };
@@ -474,17 +480,8 @@ impl SyncService {
             },
         )
         .await?;
-        if let Some((on, balance_minor)) = balance {
-            record_balance(
-                &mut tx,
-                now,
-                provider_account,
-                bound,
-                on.min(today),
-                balance_minor,
-                currency,
-            )
-            .await?;
+        if let Some(balance) = balance {
+            record_balance(&mut tx, now, provider_account, bound, balance, today).await?;
         }
         tx.set_provider_account_applied(provider_account, now)
             .await?;

@@ -2,7 +2,7 @@
 //! brought in as history by the bind, gone with the connection, and shown
 //! nowhere before that.
 
-use super::{PLAINTEXT, World, reported, world};
+use super::{PLAINTEXT, World, reported, setup_token, world};
 use axum::http::{Method, StatusCode};
 use coffer_domain::accounts::AccountKind;
 use coffer_domain::audit::AuditValue;
@@ -15,12 +15,18 @@ use coffer_domain::time::Clock as _;
 use coffer_server::secrets::SecretToken;
 use coffer_server::sync::SyncError;
 use coffer_server::sync::provider::{FetchResult, ProviderAccountData, ProviderKind};
+use coffer_server::testkit::browser::{Browser, with_admin};
 use coffer_store::NewSyncRun;
-use jiff::Span;
 use jiff::civil::Date;
+use jiff::{SignedDuration, Span};
 use serde_json::json;
 
 const FEED: &str = "acct-1";
+/// An amount reported on an older day, kept and nowhere else.
+const OLD_RAW: &str = "4242.17";
+const OLD_MINOR: &str = "424217";
+/// The amount of the last report, which the provider account shows.
+const LAST_RAW: &str = "13.31";
 /// More than an `i64` of minor units holds.
 const TOO_LARGE: &str = "999999999999999999.00";
 
@@ -368,41 +374,282 @@ async fn removing_a_connection_clears_its_kept_balances_only() {
     assert_eq!(world.kept(other).await.len(), 1);
 }
 
-/// Whoever reads whatever, the older day's amount appears nowhere, and only a
-/// token that may see unbound provider accounts sees the last report.
+/// A bank's date can honestly lag, so 31 days back is still kept.
 #[tokio::test]
-async fn nothing_kept_shows_before_binding() {
-    const OLD_RAW: &str = "4242.17";
-    const OLD_MINOR: &str = "424217";
-    const LAST_RAW: &str = "13.31";
-    const SWEEP: [&str; 5] = [
-        "/api/v1/accounts",
-        "/api/v1/connections",
-        "/api/v1/provider-accounts",
-        "/api/v1/forecast",
-        "/api/v1/audit",
-    ];
+async fn a_balance_at_the_age_limit_is_kept() {
+    let world = world().await;
+    world.report(31, "10.00", "USD").await;
+
+    assert_eq!(
+        world.kept(world.connection).await,
+        [(world.day(31).to_string(), 1000)]
+    );
+}
+
+#[tokio::test]
+async fn a_balance_past_the_age_limit_is_not_kept() {
+    let world = world().await;
+    world.report(32, "10.00", "USD").await;
+
+    assert_eq!(world.kept(world.connection).await, []);
+}
+
+/// The bind's own write of the last report follows the same limit, or a date
+/// 1,000 years back would still become history.
+#[tokio::test]
+async fn the_bind_does_not_bring_a_last_report_past_the_age_limit() {
+    let world = world().await;
+    world.report(365_000, "10.00", "USD").await;
+    let target = world.account("Checking", "USD").await;
+
+    world.bind_feed(target).await;
+
+    assert_eq!(world.history(target).await, []);
+}
+
+/// Nothing dedupes ids within an answer: each entry is applied, one row per day.
+#[tokio::test]
+async fn an_id_repeated_in_one_answer_keeps_one_row_per_day() {
+    let world = world().await;
+
+    world
+        .sync_once(vec![
+            balance_of(FEED, "USD", world.day(3), "10.00"),
+            balance_of(FEED, "USD", world.day(2), "11.00"),
+            balance_of(FEED, "USD", world.day(2), "12.00"),
+        ])
+        .await;
+
+    assert_eq!(
+        world.kept(world.connection).await,
+        [
+            (world.day(3).to_string(), 1000),
+            (world.day(2).to_string(), 1200)
+        ]
+    );
+}
+
+/// A currency change with no balance leaves nothing the bind could read in the
+/// new currency: 1000 yen must not become 100000 cents.
+#[tokio::test]
+async fn a_currency_change_without_a_balance_clears_the_last_report() {
+    let world = world().await;
+    world.report(1, "1000", "JPY").await;
+    world
+        .sync_once(vec![reported(
+            FEED,
+            "USD",
+            Some(AccountKind::Checking),
+            Vec::new(),
+        )])
+        .await;
+    assert_eq!(world.provider_account(FEED).await.last_balance, None);
+    let target = world.account("Checking", "USD").await;
+
+    world.bind_feed(target).await;
+
+    assert_eq!(world.history(target).await, []);
+}
+
+#[tokio::test]
+async fn a_sync_without_a_balance_in_the_same_currency_keeps_the_last_report() {
+    let world = world().await;
+    world.report(1, "10.00", "USD").await;
+    world
+        .sync_once(vec![reported(
+            FEED,
+            "USD",
+            Some(AccountKind::Checking),
+            Vec::new(),
+        )])
+        .await;
+
+    let last = world.provider_account(FEED).await.last_balance.unwrap();
+
+    assert_eq!(last.amount_raw, "10.00");
+}
+
+/// What the bind wrote, told apart from what it dropped and skipped, with the
+/// days it spans and no amount.
+#[tokio::test]
+async fn the_bind_audit_gives_the_days_and_what_was_left_out() {
+    let world = world().await;
+    world.report(5, "1000", "JPY").await;
+    world.report(4, "10.00", "USD").await;
+    world.report(3, "12.00", "USD").await;
+    world.report(2, OLD_RAW, "USD").await;
+    let target = world.account("Checking", "USD").await;
+    world.manual(target, world.day(4), 777).await;
+
+    world.bind_feed(target).await;
+
+    let binds = world.audit_actions("provider_account.bind").await;
+    let field = |name: &str| {
+        binds[0]
+            .changes
+            .iter()
+            .find(|(field, _)| *field == name)
+            .map(|(_, change)| change.after.clone())
+    };
+    assert_eq!(field("balances_brought_in"), Some(AuditValue::Int(2)));
+    assert_eq!(
+        field("balances_first_day"),
+        Some(AuditValue::Text(world.day(3).to_string()))
+    );
+    assert_eq!(
+        field("balances_last_day"),
+        Some(AuditValue::Text(world.day(2).to_string()))
+    );
+    assert_eq!(field("balances_other_currency"), Some(AuditValue::Int(1)));
+    assert_eq!(field("balances_already_there"), Some(AuditValue::Int(1)));
+    let text = serde_json::to_string(&binds[0].changes).unwrap();
+    assert!(!shows_old_day(&text));
+}
+
+#[tokio::test]
+async fn the_bind_audit_has_no_days_when_nothing_was_brought_in() {
+    let world = world().await;
+    world
+        .sync_once(vec![reported(
+            FEED,
+            "USD",
+            Some(AccountKind::Checking),
+            Vec::new(),
+        )])
+        .await;
+    let target = world.account("Checking", "USD").await;
+
+    world.bind_feed(target).await;
+
+    let binds = world.audit_actions("provider_account.bind").await;
+    let first = binds[0]
+        .changes
+        .iter()
+        .find(|(field, _)| *field == "balances_first_day")
+        .map(|(_, change)| change.after.clone());
+    assert_eq!(first, Some(AuditValue::Null));
+}
+
+/// A failure after the bring-in, at the bind's last write, undoes all of it.
+#[tokio::test]
+async fn a_bind_that_fails_after_bringing_in_changes_nothing() {
+    let world = world().await;
+    world.report(2, "10.00", "USD").await;
+    world.report(1, "11.00", "USD").await;
+    let target = world.account("Checking", "USD").await;
+    let feed = world.provider_account(FEED).await;
+    world
+        .server
+        .store
+        .inject_bind_audit_failure_for_tests()
+        .await
+        .unwrap();
+
+    let failed = world.server.sync.bind(&world.alice, feed.id, target).await;
+
+    assert!(matches!(failed, Err(SyncError::Store(_))));
+    assert_eq!(world.history(target).await, []);
+    assert_eq!(world.kept(world.connection).await.len(), 2);
+    assert_eq!(world.provider_account(FEED).await.account, None);
+}
+
+/// As with held records, new credentials don't start the connection over: what
+/// the old login reported stays, and a later bind brings it in.
+#[tokio::test]
+async fn a_reconnect_keeps_what_the_old_login_reported() {
+    let world = world().await;
+    world.report(1, "10.00", "USD").await;
+    world.server.clock.advance(SignedDuration::from_hours(1));
+
+    world
+        .server
+        .sync
+        .reconnect(
+            &world.alice,
+            world.connection,
+            setup_token("https://user:RENEWED-CREDENTIAL@bridge.example/simplefin"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        world.kept(world.connection).await,
+        [(world.day(1).to_string(), 1000)]
+    );
+}
+
+/// The older day's amount appears nowhere, for anyone, through the API; a
+/// restricted token sees no unbound provider account at all, so not the last
+/// report either, and is refused what spans every account.
+#[tokio::test]
+async fn nothing_kept_shows_through_the_api_before_binding() {
     let world = world().await;
     let visible = world.account("Visible", "USD").await;
     world.report(2, OLD_RAW, "USD").await;
     world.report(0, LAST_RAW, "USD").await;
     let admin = world.token(Scope::Admin).await;
     let restricted = world.restricted_token(visible).await;
+    let sweep = [
+        ("/api/v1/accounts".to_owned(), StatusCode::OK),
+        (
+            format!("/api/v1/accounts/{visible}/balances"),
+            StatusCode::OK,
+        ),
+        ("/api/v1/connections".to_owned(), StatusCode::OK),
+        ("/api/v1/provider-accounts".to_owned(), StatusCode::OK),
+        ("/api/v1/forecast".to_owned(), StatusCode::FORBIDDEN),
+        ("/api/v1/audit".to_owned(), StatusCode::FORBIDDEN),
+    ];
 
-    for uri in SWEEP {
+    for (uri, restricted_status) in &sweep {
         let (status, body) = world.call(Method::GET, uri, &admin, None).await;
         assert_eq!(status, StatusCode::OK, "{uri}");
-        let body = body.to_string();
-        assert!(
-            !body.contains(OLD_RAW) && !body.contains(OLD_MINOR),
-            "{uri}"
-        );
+        assert!(!shows_old_day(&body.to_string()), "{uri}");
 
-        let (_, body) = world.call(Method::GET, uri, &restricted, None).await;
+        let (status, body) = world.call(Method::GET, uri, &restricted, None).await;
+        assert_eq!(status, *restricted_status, "{uri}");
         let body = body.to_string();
-        assert!(
-            !body.contains(OLD_RAW) && !body.contains(OLD_MINOR) && !body.contains(LAST_RAW),
-            "{uri}"
-        );
+        assert!(!shows_old_day(&body) && !body.contains(LAST_RAW), "{uri}");
     }
+}
+
+/// Nor on a page, for the admin signed in.
+#[tokio::test]
+async fn nothing_kept_shows_on_a_page_before_binding() {
+    let (mut server, signed_in, _) = with_admin().await;
+    let fake = server.use_fake_provider();
+    let mut browser = Browser::new(&server);
+    browser.cookie.clone_from(&signed_in.cookie);
+    let alice = server
+        .sessions
+        .resolve(browser.cookie.as_deref().unwrap())
+        .await
+        .unwrap();
+    let connection = server
+        .seed_connection(
+            ProviderKind::SimpleFin,
+            "Family bank",
+            alice.member,
+            PLAINTEXT,
+        )
+        .await;
+    let world = World {
+        server,
+        fake,
+        alice,
+        connection,
+    };
+    world.report(2, OLD_RAW, "USD").await;
+    assert_eq!(world.kept(world.connection).await.len(), 1);
+    world.report(0, LAST_RAW, "USD").await;
+
+    for page in ["/forecast", "/connections", "/account", "/admin/members"] {
+        let reply = browser.get(page).await;
+        assert_eq!(reply.status, StatusCode::OK, "{page}");
+        assert!(!shows_old_day(&reply.body), "{page}");
+    }
+}
+
+fn shows_old_day(body: &str) -> bool {
+    body.contains(OLD_RAW) || body.contains(OLD_MINOR)
 }

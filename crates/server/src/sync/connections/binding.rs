@@ -16,7 +16,7 @@ use crate::ledger::Ledger;
 use crate::ledger::accounts::{AccountView, NewAccountInput, ValidNewAccount, parse_name};
 use crate::sync::SyncError;
 use crate::sync::apply::apply_held;
-use crate::sync::engine::{SyncService, ensure_not_removed, write_balance};
+use crate::sync::engine::{SyncService, ensure_not_removed, oldest_kept_day, write_balance};
 
 const ALREADY_BOUND: &str = "the provider account is already bound";
 const ACCOUNT_CLOSED: &str = "the account is closed";
@@ -226,7 +226,8 @@ async fn bind_in(
         .await?;
     // The balance last reported, so net worth has the account before the next
     // sync, even if it was last synced before balances were kept. One that
-    // does not convert was noted on the provider account.
+    // does not convert was noted on the provider account, and one too old is
+    // not believed, as when keeping.
     let reported = bound.last_balance.as_ref().and_then(|reported| {
         DecimalAmount::parse(&reported.amount_raw)
             .and_then(|amount| amount.to_minor_units_rounded(currency))
@@ -235,6 +236,7 @@ async fn bind_in(
             .map(|balance_minor| (reported.on.min(today), balance_minor))
     });
     if let Some((on, balance_minor)) = reported
+        && on >= oldest_kept_day(today)
         && tx.balance_on(account, on).await?.is_none()
     {
         write_balance(tx, now, account, on, balance_minor).await?;
@@ -250,14 +252,24 @@ async fn bind_in(
         AuditChanges::new()
             .set("account", account.to_string())
             .set("connection", current.connection.to_string())
-            .set("balances_brought_in", i64::from(brought_in)),
+            .set("balances_brought_in", i64::from(brought_in.written))
+            .set("balances_first_day", brought_in.first_day)
+            .set("balances_last_day", brought_in.last_day)
+            .set(
+                "balances_other_currency",
+                i64::from(brought_in.other_currency),
+            )
+            .set(
+                "balances_already_there",
+                i64::from(brought_in.already_there),
+            ),
     )
     .await?;
     tracing::debug!(
         provider_account = %provider_account,
         created = report.created,
         attached = report.attached,
-        brought_in,
+        brought_in = brought_in.written,
         "held records and kept balances applied"
     );
     Ok((ProviderAccountView::from(bound), balance))

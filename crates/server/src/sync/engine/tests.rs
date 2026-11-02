@@ -110,7 +110,6 @@ async fn a_store_failure_is_no_removal_in_a_one_by_one_apply() {
                 removed: Vec::new(),
                 skipped: 0,
                 balance: None,
-                currency: coffer_domain::money::Currency::parse("USD").unwrap(),
                 today: date(2027, 1, 11),
                 now,
             })
@@ -273,4 +272,69 @@ fn user_information_is_redacted_however_late_its_at_sign() {
     let shown = joined_errors(&[error]).unwrap();
     assert!(!shown.contains("hunter2"));
     assert!(!shown.contains("user:"));
+}
+
+/// A released account's balance goes through the same day rule as any other:
+/// a future day is kept as the run's today.
+#[tokio::test]
+async fn a_released_feed_keeps_a_future_balance_as_today() {
+    use coffer_domain::money::Currency;
+    use coffer_domain::time::Clock as _;
+    use coffer_store::ProviderAccountUpsert;
+
+    use super::ReportedBalance;
+    use super::released::OneByOne;
+    use crate::sync::provider::ProviderKind;
+    use crate::testkit::TestServer;
+
+    let server = TestServer::new().await;
+    let link = server.identity.bootstrap_link().await.unwrap().unwrap();
+    let member = server.authenticator().enroll(&link, "alice", "Alice").await;
+    let connection = server
+        .seed_connection(ProviderKind::Plaid, "Plaid bank", member, "{}")
+        .await;
+    let now = server.clock.now();
+    let mut tx = server.store.begin().await.unwrap();
+    let feed = tx
+        .upsert_provider_account(ProviderAccountUpsert {
+            connection,
+            provider_account_id: "feed".into(),
+            name: "feed".into(),
+            institution: None,
+            currency_raw: "USD".into(),
+            kind_hint: None,
+            balance: None,
+            seen_at: now,
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    server
+        .sync
+        .apply_one_by_one(OneByOne {
+            connection,
+            provider_account: feed.id,
+            transactions: Vec::new(),
+            removed: Vec::new(),
+            skipped: 0,
+            balance: Some(ReportedBalance {
+                on: date(2099, 1, 1),
+                balance_minor: 500,
+                currency: Currency::parse("USD").unwrap(),
+            }),
+            today: date(2027, 1, 11),
+            now,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        server
+            .store
+            .kept_balances_for_tests(connection)
+            .await
+            .unwrap(),
+        [("2027-01-11".to_owned(), 500)]
+    );
 }
