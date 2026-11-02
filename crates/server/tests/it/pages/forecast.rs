@@ -563,7 +563,7 @@ async fn page_has_the_default_csp_and_no_inline_script_or_style() {
     assert_eq!(
         reply.header(header::CONTENT_SECURITY_POLICY),
         "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
-         form-action 'self'; base-uri 'none'"
+         form-action 'self'; base-uri 'none'; report-uri /browser-reports"
     );
     assert!(!reply.body.contains("style="), "an inline style attribute");
     assert!(!reply.body.contains("<style"), "a style element");

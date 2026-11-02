@@ -58,7 +58,7 @@ async fn security_headers_present() {
     assert_eq!(
         page.header(header::CONTENT_SECURITY_POLICY),
         "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
-         form-action 'self'; base-uri 'none'"
+         form-action 'self'; base-uri 'none'; report-uri /browser-reports"
     );
     assert_eq!(page.header(header::REFERRER_POLICY), "same-origin");
     assert_eq!(page.header(header::X_CONTENT_TYPE_OPTIONS), "nosniff");

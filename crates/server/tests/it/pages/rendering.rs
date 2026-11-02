@@ -213,7 +213,7 @@ fn assert_themed_error(reply: &Reply, status: StatusCode) {
     assert_eq!(
         reply.header(header::CONTENT_SECURITY_POLICY),
         "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
-         form-action 'self'; base-uri 'none'"
+         form-action 'self'; base-uri 'none'; report-uri /browser-reports"
     );
     assert!(
         reply
