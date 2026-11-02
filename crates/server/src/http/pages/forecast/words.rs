@@ -213,8 +213,26 @@ fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     )
 }
 
+/// A goal with spending linked on both counted cash and money that isn't the household's.
+/// `goal` starts the sentence.
+fn both_sides_sentence(goal: &str) -> String {
+    format!(
+        "{goal} has spending linked to it on both counted cash and an account that isn't the \
+         household's. If one paid for the other, the same money lowers what it still needs \
+         twice, so there may be less to invest than this shows. Link the payment or the \
+         contribution, never both."
+    )
+}
+
 /// An item hinted at an account that doesn't count, and what became of it.
-fn hint_sentence(item: &str, account: &str, effect: HintEffect) -> String {
+fn hint_sentence(
+    names: &Names<'_>,
+    item: LineSource,
+    account: AccountId,
+    effect: HintEffect,
+) -> String {
+    let item = names.item(item).unwrap_or("A planned item");
+    let account = names.account(account);
     match effect {
         HintEffect::StillNeeded => format!(
             "{item} is expected to be paid from {account}, which doesn't count as cash here. It \
@@ -346,22 +364,12 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             names.goal(*goal),
             day(*due_on),
         ),
-        Caution::GoalLinkedBothSides { goal } => format!(
-            "{} has spending linked to it on both counted cash and an account that isn't the \
-             household's. If one paid for the other, the same money lowers what it still needs \
-             twice, so there may be less to invest than this shows. Link the payment or the \
-             contribution, never both.",
-            names.goal(*goal),
-        ),
+        Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
         Caution::ItemHintNotCounted {
             item,
             account,
             effect,
-        } => hint_sentence(
-            names.item(*item).unwrap_or("A planned item"),
-            names.account(*account),
-            *effect,
-        ),
+        } => hint_sentence(names, *item, *account, *effect),
         Caution::UncategorizedSpending { count, total, .. } => format!(
             "This month has {} with no category, {} in all. Categorizing that spending could lower \
              what is still needed.",
