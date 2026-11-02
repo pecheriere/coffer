@@ -322,7 +322,7 @@ def annotation(message: str) -> str:
 
 
 def current_time() -> datetime:
-    """The time crate ages are measured from; tests replace it."""
+    """Return the time crate ages are measured from; tests replace it."""
     return datetime.now(UTC)
 
 
