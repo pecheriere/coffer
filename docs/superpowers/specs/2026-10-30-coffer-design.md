@@ -818,7 +818,9 @@ when a balance of that date already shows it: the forecast holds it twice for th
 the safe direction. Past its date, spending in its category pays them in date order, and
 any gap is still needed, with a caution naming the category and the amount. If it was paid
 under another category the forecast shows less to invest, the safe direction. A budget can
-simply underspend, so what it still needs is never a gap and raises no caution. A known
+simply underspend, so what it still needs is never a gap and raises no caution. Spending
+in a category before a budget's first occurrence this month still reduces it, since a
+budget is a month's envelope for its category. A known
 limit: the data cannot tell where the money went, so spending goes to these before any
 budget, and money spent on a budget can hide an unpaid bill; from a bill's own date, money
 spent on a budget does not reduce it until the bill is covered. A second known limit: the
@@ -906,7 +908,12 @@ in other years. Occurrences are never after an end date, which is inclusive.
 
 **R19. `as_of`** may be any date in range, with a caution unless it is today, since
 what falls due before `as_of`'s month is left out; within that month a passed bill still
-owes its gap and a budget counts its whole month (R9). A balance is the latest on or
+owes its gap and a budget counts its whole month (R9), while a hypothetical item dated
+before `as_of` is left out. Planned inflows, stored or hypothetical, count only from the
+day after `as_of`, also in what `excluded_inflows` reports: a balance dated `as_of` may
+already hold that day's money, so counting it could count it twice, and if it hasn't
+arrived the surplus reads low, the safe direction. The window's end stays where it is, so
+a monthly salary paid on `as_of`'s own day counts once less. A balance is the latest on or
 before `as_of`, and its age runs to the earlier of `as_of` and today, so a future `as_of`
 does not mark a balance dated today as stale. When `as_of` plus the horizon clamps to a shorter month, the
 clamped day stays in the window for outflows, so a bill on it is not lost; one

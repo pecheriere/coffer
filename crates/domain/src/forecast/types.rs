@@ -289,7 +289,7 @@ pub struct ItemLine {
     #[cfg_attr(feature = "openapi", schema(required))]
     pub account_hint: Option<AccountId>,
     /// How many times it falls in the window, and for a stored budget earlier in `as_of`'s
-    /// month too: 0 for a goal.
+    /// month too: 0 for a goal. An inflow counts only from the day after `as_of`.
     pub occurrences: u32,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub first_on: Option<Date>,
@@ -380,7 +380,8 @@ pub enum Blocker {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Caution {
-    /// A counted balance is older than `stale_after_days` at `as_of`.
+    /// A counted balance is older than `stale_after_days`, its age measured to the earlier
+    /// of `as_of` and today.
     BalanceStale {
         account: AccountId,
         on: Date,
@@ -408,7 +409,8 @@ pub enum Caution {
         label: String,
         status: FeedStatus,
     },
-    /// The window does not start today, so what falls due before its month is left out.
+    /// The window does not start today. What falls due before its month is left out, as is
+    /// planned income dated on or before `as_of` and any hypothetical item dated before it.
     AsOfNotToday { today: Date },
     /// Recurring bills and one-offs dated earlier this month exceed the category's
     /// spending so far. The gap counts as still needed; if it was paid under another

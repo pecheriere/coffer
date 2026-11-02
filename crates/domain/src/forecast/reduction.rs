@@ -76,9 +76,13 @@ fn is_stored_budget(item: &ItemInput) -> bool {
         && matches!(item.schedule, PlanSchedule::Recurring { .. })
 }
 
-/// The first day `item`'s occurrences count from.
+/// The first day `item`'s occurrences count from. An inflow counts from the day after
+/// `as_of`: a balance dated `as_of` may already hold that day's money, so counting it
+/// could count it twice, and if it hasn't arrived the surplus reads low, the safe direction.
 pub(super) fn counts_from(item: &ItemInput, as_of: Date) -> Date {
-    if is_stored_budget(item) {
+    if item.direction == PlanDirection::Inflow {
+        as_of.tomorrow().unwrap_or(Date::MAX)
+    } else if is_stored_budget(item) {
         as_of.first_of_month()
     } else {
         as_of

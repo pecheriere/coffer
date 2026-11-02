@@ -3,7 +3,7 @@
 use jiff::civil::{Date, date};
 
 use super::{assert_provisional, currency, inflow, line, monthly, one_off, run, usd, usd_totals};
-use super::{budget, household, spent};
+use super::{budget, has_line, household, spent};
 use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule, PlanSpending};
@@ -97,10 +97,11 @@ fn the_clamped_day_adds_no_income_in_one_month() {
         items: vec![salary(date(2026, 1, 31))],
         ..on(date(2027, 1, 31), 1)
     });
-    let line = line(&forecast, "Salary");
-    assert_eq!(line.occurrences, 1, "January 31 only");
-    assert_eq!(line.last_on, Some(date(2027, 1, 31)), "not February 28");
-    assert_eq!(forecast.surplus, Some(usd(1_800_000)), "one salary");
+    assert!(
+        !has_line(&forecast, "Salary"),
+        "January 31 is as_of, and February 28 the clamped day"
+    );
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)), "no salary");
     assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
 }
 
@@ -112,9 +113,12 @@ fn the_clamped_day_adds_no_income_in_three_months() {
         ..on(date(2026, 11, 30), 3)
     });
     let line = line(&forecast, "Salary");
-    assert_eq!(line.occurrences, 3, "November 30, December 31, January 31");
+    assert_eq!(
+        line.occurrences, 2,
+        "after November 30: December 31, January 31"
+    );
     assert_eq!(line.last_on, Some(date(2027, 1, 31)), "not February 28");
-    assert_eq!(forecast.surplus, Some(usd(3_400_000)), "three salaries");
+    assert_eq!(forecast.surplus, Some(usd(2_600_000)), "two salaries");
 }
 
 #[test]
@@ -125,7 +129,7 @@ fn income_left_out_stops_at_the_same_end() {
     });
     assert_eq!(
         usd_totals(&forecast).excluded_inflows,
-        usd(800_000),
+        usd(0),
         "the income shown is the income that would count"
     );
     let february = forecast.months.last().unwrap().lines.first().unwrap();
@@ -145,12 +149,8 @@ fn the_same_window_still_counts_rent_on_the_clamped_day() {
         ..on(date(2027, 1, 31), 1)
     });
     assert_eq!(line(&forecast, "Rent").occurrences, 1, "February 28 counts");
-    assert_eq!(line(&forecast, "Salary").occurrences, 1, "one salary");
-    assert_eq!(
-        forecast.surplus,
-        Some(usd(1_600_000)),
-        "1,000,000 + 800,000 - 200,000"
-    );
+    assert!(!has_line(&forecast, "Salary"), "no salary");
+    assert_eq!(forecast.surplus, Some(usd(800_000)), "1,000,000 - 200,000");
 
     let forecast = run(&ForecastInput {
         include_income: true,
@@ -166,11 +166,11 @@ fn the_same_window_still_counts_rent_on_the_clamped_day() {
         3,
         "through February 28"
     );
-    assert_eq!(line(&forecast, "Salary").occurrences, 3, "three salaries");
+    assert_eq!(line(&forecast, "Salary").occurrences, 2, "two salaries");
     assert_eq!(
         forecast.surplus,
-        Some(usd(2_800_000)),
-        "1,000,000 + 2,400,000 - 600,000"
+        Some(usd(2_000_000)),
+        "1,000,000 + 1,600,000 - 600,000"
     );
 }
 

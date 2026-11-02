@@ -39,6 +39,21 @@ async fn a_budget_dated_earlier_this_month_holds_back_what_is_unspent() {
     assert_eq!(forecast["status"], "firm");
 }
 
+/// A budget is a month's envelope for its category: spending before its first occurrence,
+/// here the month it starts, still reduces it.
+#[tokio::test]
+async fn spending_before_a_budgets_first_occurrence_this_month_reduces_it() {
+    let world = world().await;
+    let checking = world.funded("Checking", 2_000_000).await;
+    world.floor(0).await;
+    let food = budget(&world, "Groceries", 80_000, "2026-11-20").await;
+    world.spend(checking, "2026-11-02", 50_000, food).await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(line(&forecast, "Groceries")["reduced_by"], usd(50_000));
+}
+
 /// Rent of 200,000 paid today with a balance dated today, and 5,000 more spent: what is
 /// spent on `as_of` reaches the pool, and the rent takes its share of it.
 #[tokio::test]

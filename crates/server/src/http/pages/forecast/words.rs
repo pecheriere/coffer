@@ -305,10 +305,11 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             connection_sentence(label, *status)
         }
         Caution::AsOfNotToday { today } => format!(
-            "This forecast starts on {}, not today, {}, so anything due before {} is left out.",
-            day(as_of),
+            "This forecast starts on {start}, not today, {}. Anything due before {} is left out, \
+             and so is income expected on or before {start} and any what-if item dated before it.",
             day(*today),
             as_of.strftime("%B %Y"),
+            start = day(as_of),
         ),
         Caution::BillNotSeen { category, amount } => {
             bill_sentence(names.category(*category), *amount)
@@ -686,7 +687,9 @@ mod tests {
         );
         assert!(sentence.contains("starts on 15 November 2026"));
         assert!(sentence.contains("not today, 7 November 2026"));
-        assert!(sentence.contains("anything due before November 2026"));
+        assert!(sentence.contains("Anything due before November 2026"));
+        assert!(sentence.contains("income expected on or before 15 November 2026"));
+        assert!(sentence.contains("any what-if item dated before it"));
     }
 
     /// Several items can sum into the one amount, so it can't be worded as one bill's.

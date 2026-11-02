@@ -23,7 +23,10 @@ pub struct ForecastQuery {
     /// The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to
     /// 2200: by default the household's today. A balance is the latest on or before
     /// it. Any other day than today raises the caution `as_of_not_today`, since what
-    /// falls due before that day's month is left out.
+    /// falls due before that day's month is left out, as is planned income dated on or
+    /// before that day and any hypothetical item dated before it. Planned income counts
+    /// only from the day after it, today or not, since a balance of that day may already
+    /// hold that day's money.
     #[serde(default, deserialize_with = "strict_date::deserialize_option")]
     pub as_of: Option<Date>,
     /// How many months the window covers, by default the household's setting.

@@ -280,7 +280,12 @@ units, per currency, and currencies are never netted.
   described in [What this month's spending does](#what-this-months-spending-does).
 - `goals` is what the goals hold back at `end_exclusive`.
 - `planned_inflows` is the planned income in the window, counted only with
-  `include_income`; `excluded_inflows` shows what was left out.
+  `include_income`; `excluded_inflows` shows what was left out. Either way, income
+  counts from the day after `as_of`: a balance dated `as_of` may already hold that
+  day's money, so counting it could count it twice. If it hasn't arrived, the surplus
+  reads low, the safe direction. The window's end stays where it is, so a monthly
+  salary paid on `as_of`'s own day counts once less. The same goes for a hypothetical
+  inflow.
 
 `GET /api/v1/forecast` (`read`, and `all` at `transactions` for a token with
 grants) takes `as_of` (`YYYY-MM-DD`, default the household's today),
@@ -430,7 +435,7 @@ and the fields shown:
 | `unbound_provider_account` (`provider_account`, `connection`, `name`, `institution`, `currency_raw`, `currency_supported`) | A provider account's money is in no account, so it is not counted. | Bind it (`POST /provider-accounts/{id}/bind`, or `create-account`), or tell the owner. It cannot be dismissed yet, which is why it does not block. |
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection is not syncing. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
-| `as_of_not_today` (`today`) | The window does not start today, so what falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month. | Say the date the number is for. Use `as_of` only to ask "from that day". |
+| `as_of_not_today` (`today`) | The window does not start today. What falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
 | `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. See the limits below. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
 | `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
@@ -496,7 +501,9 @@ category pays it. Each category and currency has one pool of spending:
    `end_on`. What a budget still needs is its month's amount less the category's
    spending once bills and one-offs took their share, floored at 0; that is never
    a gap and raises no caution. So a paid bill never eats a budget, and one
-   purchase never reduces two budgets.
+   purchase never reduces two budgets. Spending in the category before a budget's
+   first occurrence this month still reduces it, since a budget is a month's
+   envelope for its category.
 4. A bill or one-off dated `as_of` counts in full even if it was paid that day and
    the balance already shows it: it is held twice for that day, the safe
    direction. A hypothetical item neither reduces nor consumes, a hypothetical

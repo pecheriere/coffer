@@ -21,6 +21,7 @@ mod budget_month;
 mod clamp_and_duplicates;
 mod goals_and_floor;
 mod golden;
+mod inflow_window;
 mod item_cautions;
 mod newer_spending;
 mod properties;

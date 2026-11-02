@@ -464,10 +464,11 @@ proptest! {
             for item in &input.items {
                 if item.direction == PlanDirection::Inflow && item.amount.currency == row.currency
                 {
-                    expected_inflows += dated(item, input.as_of, income_end).unwrap();
+                    let from = input.as_of.tomorrow().unwrap();
+                    expected_inflows += dated(item, from, income_end).unwrap();
                 }
             }
-            prop_assert_eq!(inflows, expected_inflows, "the clamped day adds no income");
+            prop_assert_eq!(inflows, expected_inflows, "income counts after as_of, and the clamped day adds none");
 
             let mut running = wide(row.cash_available);
             for line in &lines {
