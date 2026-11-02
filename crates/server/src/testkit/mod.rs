@@ -454,7 +454,7 @@ pub struct FakeFetch {
 
 /// A [`ProviderKind::SimpleFin`] provider that answers fetches from a
 /// script and records each request. Its capabilities are those of a
-/// windowed provider: 90 days at most, 14 days of overlap.
+/// windowed provider: 88 days at most, 14 days of overlap.
 pub struct FakeProvider {
     capabilities: Capabilities,
     responses: Mutex<VecDeque<Result<FetchResult, ProviderError>>>,
@@ -512,7 +512,7 @@ impl FakeProvider {
         Self::with_capabilities(Capabilities {
             pending: true,
             mode: FetchMode::Window {
-                max_days: 90,
+                max_days: 88,
                 overlap_days: 14,
             },
             min_interval: SignedDuration::from_hours(1),

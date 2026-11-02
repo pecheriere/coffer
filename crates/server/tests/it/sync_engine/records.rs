@@ -15,7 +15,7 @@ async fn unrepresentable_record_skipped_not_the_account() {
     let world = world().await;
     let account = world.account("Checking", "USD").await;
     world.bound("acct-1", "USD", account).await;
-    let start = world.days_ago(90);
+    let start = world.days_ago(88);
     let day = world.days_ago(1);
     let mut pending = txn("p-1", day, "-4.00");
     pending.pending = true;
@@ -69,7 +69,7 @@ async fn undated_records_are_dated_or_skipped() {
     let world = world().await;
     let account = world.account("Checking", "USD").await;
     world.bound("acct-1", "USD", account).await;
-    let start = world.days_ago(90);
+    let start = world.days_ago(88);
     let mut pending = txn("p-1", start, "-4.00");
     pending.posted_on = None;
     pending.pending = true;
@@ -132,7 +132,7 @@ async fn balance_snapshot_uses_provider_balance_date() {
     let account = world.account("Checking", "USD").await;
     world.bound("acct-1", "USD", account).await;
     let described = world.days_ago(2);
-    let mut data = provider_account("acct-1", "USD", world.days_ago(90), Vec::new());
+    let mut data = provider_account("acct-1", "USD", world.days_ago(88), Vec::new());
     data.balance = Some((described, amount("1234.56")));
     world.fake.push(Ok(fetched(vec![data])));
     world.sync().await;
@@ -156,7 +156,7 @@ async fn balance_snapshot_uses_provider_balance_date() {
 
     // A balance dated after the household's today is dated today.
     let tomorrow = world.today().checked_add(Span::new().days(1)).unwrap();
-    let mut data = provider_account("acct-1", "USD", world.days_ago(90), Vec::new());
+    let mut data = provider_account("acct-1", "USD", world.days_ago(88), Vec::new());
     data.balance = Some((tomorrow, amount("99")));
     world.fake.push(Ok(fetched(vec![data])));
     world.sync().await;

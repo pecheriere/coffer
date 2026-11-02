@@ -489,7 +489,8 @@ impl Provider for SimpleFin {
         Capabilities {
             pending: true,
             mode: FetchMode::Window {
-                max_days: 90,
+                // The window runs from midnight and DST lengthens days: 90 calendar days exceed the bridge's limit.
+                max_days: 88,
                 overlap_days: 14,
             },
             min_interval: jiff::SignedDuration::from_hours(1),

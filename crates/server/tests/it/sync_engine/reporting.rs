@@ -15,7 +15,7 @@ async fn credentials_never_logged() {
     world.fake.push(Ok(fetched(vec![provider_account(
         "acct-1",
         "USD",
-        world.days_ago(90),
+        world.days_ago(88),
         Vec::new(),
     )])));
     // A provider error quoting the credentials, as a careless one might.
@@ -96,7 +96,7 @@ async fn run_view_reports_attribution_and_records() {
     world.fake.push(Ok(fetched(vec![provider_account(
         "acct-1",
         "USD",
-        world.days_ago(90),
+        world.days_ago(88),
         vec![
             txn("t-1", world.days_ago(1), "-1"),
             txn("", world.days_ago(1), "-1"),
@@ -147,8 +147,8 @@ async fn run_view_reports_attribution_and_records() {
 async fn invalid_provider_account_id_leaves_a_trace() {
     let world = world().await;
     world.fake.push(Ok(fetched(vec![
-        provider_account("", "USD", world.days_ago(90), Vec::new()),
-        provider_account("acct-ok", "USD", world.days_ago(90), Vec::new()),
+        provider_account("", "USD", world.days_ago(88), Vec::new()),
+        provider_account("acct-ok", "USD", world.days_ago(88), Vec::new()),
     ])));
     let run = world.sync().await;
     assert_eq!(run.status, SyncRunStatus::Partial);
