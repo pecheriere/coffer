@@ -474,10 +474,7 @@ mod tests {
             for has_a_total in [true, false] {
                 let sentence = bucket_caution_sentence(caution, &names, has_a_total);
                 assert_worded(&sentence, &kinds);
-                assert!(
-                    !sentence.replace("account", "").contains("count"),
-                    "{sentence}"
-                );
+                assert!(!sentence.replace("account", "").contains("count"));
             }
         }
     }

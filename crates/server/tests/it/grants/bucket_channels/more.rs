@@ -496,7 +496,7 @@ async fn no_debug_holds_a_label() {
         format!("{record:?}"),
         format!("{view:?}"),
     ] {
-        assert!(!debug.contains(LABEL), "{debug}");
+        assert!(!debug.contains(LABEL));
     }
     assert_eq!(view.beneficiary.as_deref(), Some(LABEL));
 }
