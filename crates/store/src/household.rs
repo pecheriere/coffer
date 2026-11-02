@@ -50,6 +50,32 @@ fn floor_from_row(row: &SqliteRow) -> Result<Option<SafetyFloor>, StoreError> {
     }
 }
 
+/// The four floor columns of `settings`: all empty for no floor.
+fn floor_columns(
+    settings: &ForecastSettings,
+) -> (
+    Option<&'static str>,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+) {
+    match settings.floor {
+        None => (None, None, None, None),
+        Some(SafetyFloor::Fixed { amount }) => (
+            Some("fixed"),
+            Some(amount.minor_units),
+            Some(amount.currency.to_string()),
+            None,
+        ),
+        Some(SafetyFloor::MonthsOfOutflows { months }) => (
+            Some("months_of_outflows"),
+            None,
+            None,
+            Some(i64::from(months)),
+        ),
+    }
+}
+
 fn settings_from_row(row: &SqliteRow) -> Result<ForecastSettings, StoreError> {
     let settings = ForecastSettings {
         floor: floor_from_row(row)?,
@@ -80,7 +106,31 @@ pub(crate) async fn fetch_forecast_settings<'e>(
         )
 }
 
+async fn fetch_display_currency<'e>(
+    executor: impl SqliteExecutor<'e>,
+) -> Result<Option<Currency>, StoreError> {
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT display_currency FROM household_settings WHERE id = 1")
+            .fetch_optional(executor)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+    stored
+        .flatten()
+        .map(|code| Currency::parse(&code).map_err(StoreError::backend))
+        .transpose()
+}
+
 impl Store {
+    /// The currency the household's net worth is shown in, or `None` while
+    /// none was chosen.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored code that is not a currency.
+    pub async fn display_currency(&self) -> Result<Option<Currency>, StoreError> {
+        fetch_display_currency(&self.pool).await
+    }
+
     /// The household's forecast settings: the defaults while none were set.
     ///
     /// # Errors
@@ -122,21 +172,7 @@ impl StoreTx {
         &mut self,
         settings: &ForecastSettings,
     ) -> Result<(), StoreError> {
-        let (kind, minor, currency, months) = match settings.floor {
-            None => (None, None, None, None),
-            Some(SafetyFloor::Fixed { amount }) => (
-                Some("fixed"),
-                Some(amount.minor_units),
-                Some(amount.currency.to_string()),
-                None,
-            ),
-            Some(SafetyFloor::MonthsOfOutflows { months }) => (
-                Some("months_of_outflows"),
-                None,
-                None,
-                Some(i64::from(months)),
-            ),
-        };
+        let (kind, minor, currency, months) = floor_columns(settings);
         sqlx::query(
             "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
              floor_months, include_income, default_horizon_months, stale_after_days) \
@@ -181,6 +217,45 @@ impl StoreTx {
              ON CONFLICT (id) DO UPDATE SET theme = excluded.theme",
         )
         .bind(theme.as_str())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// The display currency as seen by this transaction; see
+    /// [`Store::display_currency`].
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored code that is not a currency.
+    pub async fn display_currency(&mut self) -> Result<Option<Currency>, StoreError> {
+        fetch_display_currency(&mut *self.tx).await
+    }
+
+    /// Set the display currency. With no settings row yet, the row is made
+    /// with the forecast defaults; an existing row keeps every other value.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn set_display_currency(&mut self, currency: Currency) -> Result<(), StoreError> {
+        let defaults = ForecastSettings::default();
+        let (kind, minor, floor_currency, months) = floor_columns(&defaults);
+        sqlx::query(
+            "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
+             floor_months, include_income, default_horizon_months, stale_after_days, \
+             display_currency) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (id) DO UPDATE SET display_currency = excluded.display_currency",
+        )
+        .bind(kind)
+        .bind(minor)
+        .bind(floor_currency)
+        .bind(months)
+        .bind(i64::from(defaults.include_income))
+        .bind(i64::from(defaults.default_horizon_months))
+        .bind(i64::from(defaults.stale_after_days))
+        .bind(currency.as_str())
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;

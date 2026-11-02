@@ -16,7 +16,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate. It holds
-  planned items, the household settings, and the one read transaction that
+  planned items, the household settings (with the display currency), exchange
+  rates and their coverage, and the one read transaction that
   gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request

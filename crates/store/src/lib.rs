@@ -11,6 +11,7 @@ mod connections;
 mod convert;
 mod error;
 mod forecast;
+mod fx;
 mod household;
 mod idempotency;
 mod invites;
