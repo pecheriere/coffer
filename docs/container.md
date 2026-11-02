@@ -138,7 +138,9 @@ variables as well; `healthcheck` needs neither.
 To sync provider connections the container needs outbound https (port 443)
 to the hosts in `COFFER_SIMPLEFIN_HOSTS`, and, when Plaid is configured, to
 `sandbox.plaid.com` or `production.plaid.com` (the one `COFFER_PLAID_ENV`
-selects), and nowhere else. The image
+selects). For exchange rates it needs the same to `data-api.ecb.europa.eu`,
+unless `COFFER_FX_PROVIDER` is `none`, though a household with one currency
+never contacts it. It needs nowhere else. The image
 carries a CA bundle to verify their certificates, so no host mount is
 needed. Enforce the allow-list outside the container too: route egress
 through a proxy that allows `CONNECT` to those hosts only and pass it as
