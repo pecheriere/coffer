@@ -3,20 +3,10 @@
 use jiff::civil::{Date, date};
 
 use super::{assert_provisional, currency, inflow, line, monthly, one_off, run, usd, usd_totals};
-use super::{budget, household};
-use crate::forecast::{
-    CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds,
-};
+use super::{budget, household, spent};
+use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule, PlanSpending};
-
-fn spent(category: CategoryId, minor: i64) -> CategorySpent {
-    CategorySpent {
-        category,
-        currency: currency("USD"),
-        spent_minor: minor,
-    }
-}
 
 /// A firm household of 1,000,000 with `as_of` as today and a balance fresh enough
 /// for any date these tests use.
@@ -267,7 +257,7 @@ fn a_possible_duplicate_with_no_earlier_payment_changes_nothing() {
     let home = CategoryId::new();
     let forecast = run(&ForecastInput {
         items: vec![
-            budget(monthly("Upkeep", usd(1_000), date(2026, 1, 5), home)),
+            budget(monthly("Next month", usd(1_000), date(2026, 12, 5), home)),
             one_off("Later", usd(1_000), date(2026, 11, 20), home),
         ],
         category_spent: vec![spent(home, 2_000)],

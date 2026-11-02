@@ -302,7 +302,9 @@ fn dated_line(
     } else {
         window.income_end_exclusive
     };
-    let dates = item.schedule.occurrences(window.as_of, end_exclusive);
+    let dates = item
+        .schedule
+        .occurrences(reduction::counts_from(item, window.as_of), end_exclusive);
     let amount = i128::from(item.amount.minor_units);
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
@@ -334,8 +336,8 @@ fn dated_line(
         tally.inflows += gross;
     }
     for (index, (count, month)) in month_counts.iter().zip(&mut tally.months).enumerate() {
-        // The reduction only touches occurrences in the first bucket, and a gap is
-        // still to be paid from there.
+        // The reduction only touches occurrences in the first bucket, where a budget's
+        // whole month lands, and a gap is still to be paid from there.
         let adjusted = if index == 0 { unpaid - reduced_by } else { 0 };
         let minor_units = count * amount + adjusted;
         if outflow {

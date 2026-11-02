@@ -4,19 +4,12 @@ use jiff::civil::date;
 
 use super::{
     AS_OF, budget, cash, eur, fixed_floor, household, hypothetical, line, monthly, one_off, run,
+    spent,
 };
 use super::{assert_provisional, currency, usd};
 use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule};
-
-fn spent(category: CategoryId, minor: i64) -> CategorySpent {
-    CategorySpent {
-        category,
-        currency: currency("USD"),
-        spent_minor: minor,
-    }
-}
 
 /// One month from the 15th, so the window holds only November's second half and
 /// December's first.

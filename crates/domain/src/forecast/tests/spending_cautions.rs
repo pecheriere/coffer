@@ -5,9 +5,11 @@ use jiff::civil::date;
 
 use super::{assert_provisional, cash, fixed_floor, household, inflow};
 use super::{currency, eur, monthly, one_off, run, usd};
-use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus, LooseEnds};
+use crate::forecast::{
+    CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds,
+};
 use crate::ids::CategoryId;
-use crate::plan::{CalendarMonth, SafetyFloor};
+use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, SafetyFloor};
 
 fn loose(uncategorized_count: u32, possible_duplicates: u32) -> LooseEnds {
     LooseEnds {
@@ -53,12 +55,15 @@ fn uncategorized_spending_warns_only_with_current_month_recurring() {
             date(2026, 12, 20),
             food,
         ))],
-        vec![super::budget(monthly(
-            "Already past",
-            usd(1),
-            date(2026, 1, 10),
-            food,
-        ))],
+        vec![super::budget(ItemInput {
+            schedule: PlanSchedule::Recurring {
+                every: 1,
+                unit: IntervalUnit::Months,
+                anchor_on: date(2026, 1, 10),
+                end_on: Some(date(2026, 10, 31)),
+            },
+            ..monthly("Over last month", usd(1), date(2026, 1, 10), food)
+        })],
         vec![monthly("A bill to come", usd(1), date(2026, 1, 20), food)],
         vec![one_off("One-off", usd(1), date(2026, 11, 20), food)],
         vec![inflow(monthly("Pay", usd(1), date(2026, 1, 20), food))],
@@ -75,6 +80,32 @@ fn uncategorized_spending_warns_only_with_current_month_recurring() {
         assert_eq!(forecast.cautions, [], "the number could not change");
         assert_eq!(forecast.status, ForecastStatus::Firm, "so it is firm");
     }
+}
+
+/// A budget dated earlier this month still counts what is unspent, so more spending found
+/// could lower the number.
+#[test]
+fn uncategorized_spending_warns_with_a_budget_earlier_this_month() {
+    let food = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![super::budget(monthly(
+            "Groceries",
+            usd(10_000),
+            date(2026, 1, 1),
+            food,
+        ))],
+        loose_ends: vec![loose(3, 0)],
+        ..household()
+    });
+    assert_eq!(
+        forecast.cautions,
+        [Caution::UncategorizedSpending {
+            currency: currency("USD"),
+            count: 3,
+            total: usd(7_000),
+        }],
+        "it could yet reduce this month's budget"
+    );
 }
 
 /// Categorizing that spending could close the gap, so here it can change the number.

@@ -5,8 +5,8 @@ use jiff::ToSpan;
 use jiff::civil::{Date, date};
 
 use super::{
-    AccountInput, BalanceInput, CurrencyTotals, Forecast, ForecastInput, ForecastStatus, ItemInput,
-    ItemLine, LineSource, compute_forecast,
+    AccountInput, BalanceInput, CategorySpent, CurrencyTotals, Forecast, ForecastInput,
+    ForecastStatus, ItemInput, ItemLine, LineSource, compute_forecast,
 };
 use crate::accounts::LiquidityClass;
 use crate::ids::{AccountId, CategoryId, PlannedItemId};
@@ -17,6 +17,7 @@ use crate::plan::{
 
 mod account_cautions;
 mod blockers;
+mod budget_month;
 mod clamp_and_duplicates;
 mod goals_and_floor;
 mod golden;
@@ -159,6 +160,15 @@ fn budget(item: ItemInput) -> ItemInput {
     ItemInput {
         spending: Some(PlanSpending::Budget),
         ..item
+    }
+}
+
+/// `minor` dollars spent in `category` this month.
+fn spent(category: CategoryId, minor: i64) -> CategorySpent {
+    CategorySpent {
+        category,
+        currency: currency("USD"),
+        spent_minor: minor,
     }
 }
 

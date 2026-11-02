@@ -15,6 +15,9 @@
 //! Needed: 914,000 + 1,100,000 + 1,000,000 = 3,014,000. Surplus: 3,836,000.
 //! With 12,000 spent on Utilities, as `golden_with_the_water_bill_seen` has it: no
 //! gap, outflows 902,000, needed 3,002,000, surplus 3,848,000, firm.
+//! With Groceries on the 14th, the day before `as_of`, as
+//! `golden_with_groceries_dated_before_as_of` has it: Nov, Dec, Jan, Feb = 240,000,
+//! less the 40,000, so outflows 974,000 and surplus 3,776,000.
 
 use jiff::civil::{Date, date};
 
@@ -343,6 +346,25 @@ fn golden_with_the_water_bill_seen() {
         ],
         "6,850,000 less each month's outflows"
     );
+}
+
+/// November 14 has passed, and its 60,000 less the 40,000 spent still counts. Counting
+/// only the window, Dec, Jan and Feb, would give a surplus of 3,796,000, 20,000 too high.
+#[test]
+fn golden_with_groceries_dated_before_as_of() {
+    let mut input = golden_household();
+    let food = input
+        .items
+        .iter()
+        .find(|item| item.name == "Groceries")
+        .and_then(|item| item.category)
+        .unwrap();
+    input.items[1] = budget(monthly("Groceries", usd(60_000), date(2026, 1, 14), food));
+    let forecast = run(&input);
+    let groceries = line(&forecast, "Groceries");
+    assert_eq!(groceries.gross, usd(240_000), "Nov, Dec, Jan, Feb");
+    assert_eq!(groceries.counted, usd(200_000), "less the 40,000 spent");
+    assert_eq!(forecast.surplus, Some(usd(3_776_000)), "the answer");
 }
 
 #[test]
