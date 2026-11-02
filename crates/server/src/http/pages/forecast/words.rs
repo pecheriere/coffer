@@ -262,14 +262,28 @@ fn overlap_sentence(goal: &str, one_off: &str, category: Option<&str>) -> String
     )
 }
 
-/// Money out that the balances may not show yet.
+/// Money out that the balances may not show yet. An amount of 0 is left out, so a
+/// sentence never says that 0.00 is outstanding.
 fn newer_spending_sentence(total: Money, pending: Money) -> String {
+    let which = if pending.minor_units == 0 {
+        format!("{} posted after a balance's date", magnitude(total))
+    } else if total.minor_units == 0 {
+        format!("{} not posted yet", magnitude(pending))
+    } else {
+        format!(
+            "{} posted after a balance's date, and {} not posted yet",
+            magnitude(total),
+            magnitude(pending),
+        )
+    };
     format!(
-        "Some money out may not show in the balances yet: {} posted after a balance's date, and \
-         {} not posted yet. Where a balance doesn't show it, the cash available is overstated by \
-         up to these amounts.",
-        magnitude(total),
-        magnitude(pending),
+        "Some money out may not show in the balances yet: {which}. Where a balance doesn't \
+         show it, the cash available is overstated by up to {}.",
+        if pending.minor_units == 0 || total.minor_units == 0 {
+            "this amount"
+        } else {
+            "these amounts"
+        },
     )
 }
 
@@ -391,7 +405,7 @@ mod tests {
     use serde_json::Value;
     use utoipa::PartialSchema;
 
-    use super::{Names, blocker_sentence, caution_sentence, grouped};
+    use super::{Names, blocker_sentence, caution_sentence, grouped, newer_spending_sentence};
 
     fn usd(minor_units: i64) -> Money {
         Money {
@@ -603,6 +617,25 @@ mod tests {
 
     fn said(caution: &Caution, names: &Names<'_>) -> String {
         caution_sentence(caution, date(2026, 11, 15), names)
+    }
+
+    #[test]
+    fn newer_spending_names_only_the_amounts_that_are_not_zero() {
+        let both = newer_spending_sentence(usd(4_500), usd(700));
+        assert!(
+            both.contains("45.00 USD posted after a balance's date, and 7.00 USD not posted yet")
+        );
+        assert!(both.contains("these amounts"));
+
+        let posted = newer_spending_sentence(usd(4_500), usd(0));
+        assert!(posted.contains("45.00 USD posted after a balance's date."));
+        assert!(!posted.contains("not posted"));
+        assert!(!posted.contains("0.00"));
+
+        let pending = newer_spending_sentence(usd(0), usd(700));
+        assert!(pending.contains("7.00 USD not posted yet."));
+        assert!(!pending.contains("posted after"));
+        assert!(!pending.contains("0.00 USD"));
     }
 
     #[test]

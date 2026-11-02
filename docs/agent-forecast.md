@@ -5,6 +5,40 @@ report. Read [agent-usage.md](agent-usage.md) first for tokens, scopes,
 account grants, errors and idempotency; this page assumes them. The
 operations are in the OpenAPI document (`GET /api/v1/openapi.json`).
 
+## First run
+
+A new household has nothing a forecast needs, and the pieces depend on each
+other, so set them up in this order. The token needs `admin` for step 4 and
+`write` (with `all` at `write` if it has grants) for the rest. Ids in answers are
+UUIDs; `$BASE` is the server's address.
+
+1. An account: `POST $BASE/api/v1/accounts` with
+   `{"name": "Checking", "kind": "checking", "currency": "USD"}`. A `checking`
+   or `savings` account is `cash`, and a `credit_card` a `short_term_liability`:
+   the two classes a forecast counts. The [kinds](agent-usage.md#accounts) are
+   listed with the endpoint.
+2. Its balance: `PUT $BASE/api/v1/accounts/<account>/balances/2026-11-14` with
+   `{"minor_units": 900000}`. Without one, the forecast is blocked
+   (`balance_missing`). A linked account gets its balances from syncs.
+3. A category group and an `expense` category for the plan to name:
+   `POST $BASE/api/v1/category-groups` with `{"name": "Housing"}`, then
+   `POST $BASE/api/v1/categories` with
+   `{"group": "<group>", "name": "Rent", "kind": "expense"}`. A household starts
+   with no categories, and every planned item needs one.
+4. The safety floor, which the forecast is blocked without (`floor_not_set`):
+
+   ```sh
+   curl -X PATCH -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \
+     $BASE/api/v1/household/settings \
+     -d '{"floor": {"kind": "fixed", "amount": {"minor_units": 300000, "currency": "USD"}}}'
+   ```
+
+5. Planned items: `POST $BASE/api/v1/plan-items`, as in the next section.
+6. The forecast: `GET $BASE/api/v1/forecast`. With the steps above and one
+   bill it is `firm`, as in the firm example under
+   [Status, blockers and cautions](#status-blockers-and-cautions). Date the
+   balance today or yesterday: an older one raises `balance_stale`.
+
 ## The plan
 
 The plan is what the household expects to pay and receive. Its parts are
@@ -321,7 +355,15 @@ Every number traces to its lines: `totals` has one row per currency,
 added (`gross`, `reduced_by`, `unpaid`, `counted`, how many `occurrences` and
 the goal's own figures), and `months` the same by calendar month, with the
 cash projected at each month's end. `partial` marks a month the window does
-not cover whole.
+not cover whole. Reading a month's `lines`:
+
+- `outflows` and `inflows` are the month's planned amounts. `inflows` shows
+  planned income even with `include_income` off, while `projected_cash` (the
+  cash available less outflows so far, plus inflows only with `include_income`)
+  leaves it out, so do not add `inflows` to it yourself.
+- `goal_accrual` is what goals add to their need that month, net of money
+  already spent against them, and the first month holds everything that built
+  up before it. It is not what the schedule alone would set aside.
 
 ### Status, blockers and cautions
 

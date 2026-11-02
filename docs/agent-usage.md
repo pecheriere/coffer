@@ -11,7 +11,9 @@ operation, parameter and schema.
 1. Sign in to coffer with your passkey and open `/account`.
 2. Create an agent token: give it a name (for example `claude`), choose a
    scope and, preferably, an expiry.
-3. To limit it to chosen accounts, set the levels on the same form (see
+3. To limit it to chosen accounts, set the levels on the same form. It lists
+   one level select per open account, so a household with no accounts yet has
+   only "All accounts" (see
    [Account grants](#account-grants)). Left as they are, "All accounts" at
    `write` and every account at `none`, the token has no grants: it sees
    every account at its scope's level, and `write` is capped by the scope.
@@ -21,7 +23,9 @@ operation, parameter and schema.
    the token would still reach every account. `none` everywhere is refused
    too.
 4. Copy the token now. It starts with `coffer_` and is shown exactly once;
-   coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
+   coffer keeps only a keyed hash. The form's `POST` answers with `/account/tokens`
+   showing it, so copy it from that page: reloading it loses it. Revoke it from
+   the same page if it leaks;
    an admin can also see, revoke and change the account access of every
    member's tokens from `/admin/members`.
 
@@ -40,7 +44,8 @@ session, never with another token.
 A token never exceeds its member's role: if the member is demoted or
 disabled the token loses power at the next request. Tokens can never create,
 list or revoke tokens, nor issue enrollment links; those need a passkey
-session.
+session. The API has no route for them, so a token asking for one gets a 404
+`not_found`.
 
 ## Account grants
 
@@ -123,7 +128,10 @@ curl -H "Authorization: Bearer $COFFER_TOKEN" https://coffer.example/api/v1/me
 `access.ceiling` is the most the token's scope allows, `all` its level on
 every account (`null` without an `all` grant) and `accounts` the level it
 really has on each account a grant names. A token without grants shows
-`all` equal to `ceiling` and no `accounts`.
+`all` equal to `ceiling` and no `accounts`. Account levels stop at `write`, so
+an `admin` token's `ceiling` is `write`, the same as a `write` token's: `admin`
+adds household administration (members, the forecast settings), not a higher
+level on accounts. A `read` token's is `transactions`.
 
 ## Endpoints
 
@@ -159,8 +167,11 @@ money owed or going out.
   (kept by hand) or `linked` (bound to a provider account: syncs bring its
   transactions and balances).
 - `POST /api/v1/accounts` (`write`) creates a manual account from `name`,
-  `kind`, `currency` and optionally `liquidity` (by default the kind's: a
-  credit card is a `short_term_liability`), `include_in_net_worth`,
+  `kind` (`checking`, `savings`, `credit_card`, `loan`, `mortgage`, `brokerage`,
+  `retirement`, `equity_comp`, `property`, `vehicle`, `other_asset` or
+  `other_liability`), `currency` and optionally `liquidity` (by default the kind's: a
+  credit card is a `short_term_liability`; `checking` and `savings` are `cash`;
+  the forecast counts `cash` and `short_term_liability` accounts), `include_in_net_worth`,
   `include_in_forecast` (both default `true`) and `opening_balance`
   (`{"on": "YYYY-MM-DD", "minor_units": n}`). Answers 201.
 - `GET` and `PATCH /api/v1/accounts/{account_id}` read and change an

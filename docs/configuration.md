@@ -257,6 +257,11 @@ coffer backup <dest>            # consistent copy of the database, mode 0600; re
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
 
+On first start with no admin yet, `serve` also logs the setup link. Every link
+issued this way, by `serve` at startup or by `bootstrap-link`, revokes the
+earlier unused setup links, so only the newest works: a restart of `serve`
+invalidates a link printed before it. Both stop once an admin exists.
+
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.
 
