@@ -22,8 +22,8 @@ operation, parameter and schema.
    too.
 4. Copy the token now. It starts with `coffer_` and is shown exactly once;
    coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
-   an admin can also see and revoke every member's tokens from
-   `/admin/members`.
+   an admin can also see, revoke and change the account access of every
+   member's tokens from `/admin/members`.
 
 Tokens act as you: whatever the agent does is attributed to your member and
 to that token in the audit log. You can create tokens only from a passkey

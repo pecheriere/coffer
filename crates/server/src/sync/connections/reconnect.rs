@@ -205,6 +205,7 @@ impl SyncService {
     ///
     /// The errors of [`Self::confirm_reauthorized`];
     /// [`SyncError::Vault`] when the credentials cannot be opened;
+    /// [`SyncError::PlaidBudgetSpent`] when the member asked Plaid too often;
     /// [`SyncError::Provider`] when Plaid refuses.
     pub async fn update_link_token(
         &self,
@@ -222,6 +223,7 @@ impl SyncService {
             .vault
             .open(id, &SealedCredentials::from(sealed))
             .map_err(SyncError::Vault)?;
+        self.plaid_budget.spend(actor.member, self.clock.now())?;
         provider
             .link_token(actor.member, Some(&credentials))
             .await

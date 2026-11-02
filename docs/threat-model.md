@@ -108,7 +108,7 @@
   answers like a missing one), and each change is audited with the grants
   before and after. The list can never be emptied, for the same reason: a
   token is widened only by an explicit `all` grant, which the audit log
-  shows. On `/account`, a form that selects no level at all is refused
+  shows. On `/account` and, for an admin, `/admin/members`, a form that selects no level at all is refused
   rather than read as no restriction, and so is an account set at or below
   "All accounts", which would look restricted and not be. The side channels are
   closed:
@@ -118,8 +118,8 @@
     index, never an id), merges and creates. Lists and their cursors are
     filtered in the query, so hidden rows neither appear nor shorten a page.
     As defence in depth, a transaction's duplicate candidates leave out those
-    in an account the token cannot read: the server pairs candidates and
-    merges only within one account, so none should exist.
+    in an account the token cannot read: the store refuses a candidate
+    pair across accounts, so none should exist.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to
@@ -181,8 +181,14 @@
   leaked `write` token can start at most that budget of sync runs (16 in 24
   hours for SimpleFin, 48 for Plaid) per connection. One run can make several
   provider requests: for Plaid, up to 601 when it pages and restarts as often as
-  allowed. Removals are not budgeted, and a member's Link pages call Plaid
-  without a limit (issue #24).
+  allowed. Removals are not budgeted.
+- **A member's Link pages are bounded too.** The two Link pages and the public
+  token exchange share a budget of 20 requests per member in any 10 minutes,
+  each one call to Plaid (an exchange whose result cannot be stored also gives
+  the new Item up again). Beyond it they answer 429 with `Retry-After`
+  and call nothing. A failed call counts; a request refused for any other
+  reason does not. The budget is kept in memory, so a restart resets it, and
+  agent tokens cannot reach these routes.
 - **Plaid's script runs on the Link page.** Link needs Plaid's script from
   `https://cdn.plaid.com/link/v2/stable/link-initialize.js`. Plaid serves it
   from that one URL and changes it in place, so coffer cannot pin a version or

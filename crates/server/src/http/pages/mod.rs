@@ -12,6 +12,7 @@
 mod account;
 mod admin;
 mod connections;
+mod grants;
 mod household;
 mod layout;
 mod login;
@@ -34,7 +35,7 @@ use serde::de::DeserializeOwned;
 
 use super::AppState;
 use super::extract::session_cookie_value;
-use super::problem::{Problem, ProblemCode};
+use super::problem::{Problem, ProblemCode, set_retry_after};
 use crate::auth::{AuthError, session_cookie};
 use crate::config::Config;
 use crate::themes::Look;
@@ -60,6 +61,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(setup::routes())
         .merge(login::routes())
         .merge(account::routes())
+        .merge(grants::routes())
         .merge(admin::routes())
         .merge(connections::routes())
         .merge(household::routes())
@@ -179,13 +181,18 @@ impl IntoResponse for PageError {
             status,
             title,
             detail,
+            retry_after,
             ..
         } = self.0;
         if status == StatusCode::UNAUTHORIZED {
             return Redirect::to("/login").into_response();
         }
         // The body is drawn by `render_error_pages`, which knows the look.
-        (status, Extension(ErrorPage { title, detail })).into_response()
+        let mut response = (status, Extension(ErrorPage { title, detail })).into_response();
+        if let Some(seconds) = retry_after {
+            set_retry_after(response.headers_mut(), seconds);
+        }
+        response
     }
 }
 

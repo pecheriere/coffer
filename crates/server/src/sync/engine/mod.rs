@@ -29,6 +29,7 @@ use utoipa::ToSchema;
 
 use super::SyncError;
 use super::apply::sync_actor;
+use super::connections::plaid_budget::PlaidBudget;
 use super::provider::ProviderRegistry;
 use crate::auth::AccessResolver;
 use crate::config::Config;
@@ -100,6 +101,8 @@ pub struct SyncService {
     pub(super) config: Config,
     /// Wakes the scheduler's worker when a run is queued.
     pub(super) queued: tokio::sync::Notify,
+    /// How often each member's Link pages may call Plaid.
+    pub(super) plaid_budget: PlaidBudget,
 }
 
 impl std::fmt::Debug for SyncService {
@@ -131,6 +134,7 @@ impl SyncService {
             access,
             config,
             queued: tokio::sync::Notify::new(),
+            plaid_budget: PlaidBudget::default(),
         }
     }
 

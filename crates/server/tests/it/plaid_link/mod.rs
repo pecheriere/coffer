@@ -10,6 +10,7 @@
 mod exchange;
 mod page;
 mod reconnect;
+mod throttle;
 
 use axum::Router;
 use axum::extract::State;
@@ -112,7 +113,7 @@ struct World {
     admin: Browser,
     alice: Actor,
     script: Script,
-    _mock: MockUpstream,
+    mock: MockUpstream,
 }
 
 /// Admin "alice" signed in, on a server configured for Plaid.
@@ -133,7 +134,7 @@ async fn world() -> World {
         admin,
         alice,
         script,
-        _mock: mock,
+        mock,
     }
 }
 
