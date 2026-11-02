@@ -4,7 +4,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use coffer_domain::identity::Role;
-use coffer_domain::money::{Currency, format_minor_units};
 use coffer_server::testkit::browser::{Browser, Reply};
 use coffer_store::{AuditFilter, PageRequest};
 use secrecy::ExposeSecret as _;
@@ -93,17 +92,29 @@ fn section<'a>(body: &'a str, id: &str) -> &'a str {
     &body[from..from + len]
 }
 
-fn dollars(minor_units: i64) -> String {
-    format_minor_units(minor_units, Currency::parse("USD").unwrap())
+/// A cell's amount in minor units of a two-decimal currency. Only `-1,234.56` is read:
+/// groups of three, two decimals and no currency, so a cell written otherwise fails.
+fn cents(cell: &str) -> i64 {
+    let (sign, digits) = cell.strip_prefix('-').map_or((1, cell), |rest| (-1, rest));
+    let (whole, decimals) = digits.split_once('.').unwrap();
+    let mut groups = whole.split(',');
+    let first = groups.next().unwrap();
+    assert!((1..=3).contains(&first.len()), "a leading group of 1 to 3");
+    let rest: Vec<&str> = groups.collect();
+    assert!(rest.iter().all(|group| group.len() == 3), "groups of three");
+    assert_eq!(decimals.len(), 2, "two decimals");
+    sign * format!("{first}{}{decimals}", rest.concat())
+        .parse::<i64>()
+        .unwrap()
 }
 
-/// `field` of `value`, an amount in the API's JSON, as the page writes it.
-fn formatted(value: &Value, field: &str) -> String {
-    let amount = &value[field];
-    format_minor_units(
-        amount["minor_units"].as_i64().unwrap(),
-        Currency::parse(amount["currency"].as_str().unwrap()).unwrap(),
-    )
+/// The amount of the one-cell table row whose heading starts with `heading`.
+fn amount(body: &str, heading: &str) -> i64 {
+    let cells = row(body, heading);
+    let [only] = cells.as_slice() else {
+        panic!("the row must hold one amount");
+    };
+    cents(only)
 }
 
 /// Each month's row says what the API's month says.
@@ -118,21 +129,21 @@ fn assert_months_match(body: &str, api: &Value) {
             "02" => "February",
             _ => panic!("the golden example has no such month"),
         };
-        assert_eq!(
-            row(body, &format!("{name} {year}")),
-            [
-                formatted(line, "outflows"),
-                formatted(line, "goal_accrual"),
-                formatted(line, "inflows"),
-                formatted(line, "projected_cash"),
-            ],
-        );
+        let shown: Vec<i64> = row(body, &format!("{name} {year}"))
+            .iter()
+            .map(|cell| cents(cell))
+            .collect();
+        let answered: Vec<i64> = ["outflows", "goal_accrual", "inflows", "projected_cash"]
+            .iter()
+            .map(|field| line[*field]["minor_units"].as_i64().unwrap())
+            .collect();
+        assert_eq!(shown, answered);
     }
 }
 
 fn assert_sums(body: &str, available: i64, needed: i64) {
-    assert_eq!(row(body, "Cash available"), [dollars(available)]);
-    assert_eq!(row(body, "Cash needed"), [dollars(needed)]);
+    assert_eq!(amount(body, "Cash available"), available);
+    assert_eq!(amount(body, "Cash needed"), needed);
 }
 
 #[tokio::test]
@@ -148,13 +159,14 @@ async fn page_matches_the_api_on_the_golden_example() {
     let api = world.forecast().await;
     assert_eq!(api["surplus"], usd(3_836_000), "the API's number");
     assert_sums(&before.body, 6_850_000, 3_014_000);
-    assert_eq!(row(&before.body, "Planned outflows"), [dollars(914_000)]);
-    assert_eq!(row(&before.body, "Goals"), [dollars(1_100_000)]);
-    assert_eq!(row(&before.body, "Safety floor"), [dollars(1_000_000)]);
-    assert_eq!(row(&before.body, "Surplus"), [dollars(3_836_000)]);
+    assert_eq!(amount(&before.body, "Planned outflows"), 914_000);
+    assert_eq!(amount(&before.body, "Goals"), 1_100_000);
+    assert_eq!(amount(&before.body, "Safety floor"), 1_000_000);
+    assert_eq!(amount(&before.body, "Surplus"), 3_836_000);
     assert_months_match(&before.body, &api);
+    assert_eq!(row(&before.body, "Cash available"), ["68,500.00"]);
     let answer = text_of(section(&before.body, "answer"));
-    assert!(answer.contains("Surplus 38360.00 USD"));
+    assert!(answer.contains("Surplus 38,360.00 USD"));
     assert!(answer.contains("Provisional"));
     assert!(answer.contains("Utilities"), "the category by name");
     assert!(answer.contains("120.00 USD"), "the amount not seen");
@@ -167,7 +179,7 @@ async fn page_matches_the_api_on_the_golden_example() {
     assert_sums(&after.body, 6_850_000, 3_002_000);
     assert_months_match(&after.body, &api);
     let answer = text_of(section(&after.body, "answer"));
-    assert!(answer.contains("Surplus 38480.00 USD"));
+    assert!(answer.contains("Surplus 38,480.00 USD"));
     assert!(answer.contains("Firm"));
     assert!(!answer.contains("Utilities"), "no caution is left");
 }
@@ -194,7 +206,7 @@ async fn blocked_forecast_shows_no_partial_sums() {
     let text = words(&world).await;
 
     assert!(text.contains("No safety floor is set"));
-    assert!(!text.contains("1234.56"));
+    assert!(!text.contains("1,234.56"));
     assert!(!text.contains("Cash needed"));
 }
 
@@ -233,9 +245,14 @@ async fn mixed_currencies_show_each_currency_and_no_total() {
     assert!(answer.contains("never added together"));
     let usd_part = section(&reply.body, "currency-USD");
     let eur_part = section(&reply.body, "currency-EUR");
-    assert_eq!(row(usd_part, "Surplus"), ["1000.00"]);
-    assert_eq!(row(eur_part, "Surplus"), ["500.00"]);
-    assert!(!reply.body.contains("1500.00"), "the two are never netted");
+    assert_eq!(row(usd_part, "Surplus"), ["1,000.00 USD"]);
+    assert_eq!(row(eur_part, "Surplus"), ["500.00 EUR"]);
+    assert_eq!(
+        row(usd_part, "November 2026"),
+        ["0.00 USD", "0.00 USD", "0.00 USD", "1,000.00 USD"],
+        "each cell says which currency it is in, since a phone stacks them far from the heading"
+    );
+    assert!(!reply.body.contains("1,500.00"), "the two are never netted");
 }
 
 #[tokio::test]
@@ -252,6 +269,75 @@ async fn shortfall_is_called_a_shortfall() {
         !text.to_lowercase().contains("surplus"),
         "it is not called a surplus"
     );
+}
+
+/// A household holding only `currency`, with `minor_units` in one account and no floor.
+async fn holding(currency: &str, minor_units: i64) -> World {
+    let world = crate::forecast::world().await;
+    let only = world
+        .account_with("Only", "checking", currency, json!({}))
+        .await;
+    world.balance(only, BALANCE_ON, minor_units).await;
+    world
+        .settings(&json!({"floor": {"kind": "fixed",
+            "amount": {"minor_units": 0, "currency": currency}}}))
+        .await;
+    world
+}
+
+#[tokio::test]
+async fn yen_are_grouped_without_decimals() {
+    let world = holding("JPY", 1_234_567).await;
+
+    let body = page(&world).await.body;
+
+    assert!(text_of(section(&body, "answer")).contains("Surplus 1,234,567 JPY"));
+    assert_eq!(row(&body, "Cash available"), ["1,234,567"]);
+    assert_eq!(row(&body, "November 2026")[3], "1,234,567");
+}
+
+#[tokio::test]
+async fn dinars_are_grouped_with_three_decimals() {
+    let world = holding("KWD", 1_234_567).await;
+
+    let body = page(&world).await.body;
+
+    assert!(text_of(section(&body, "answer")).contains("Surplus 1,234.567 KWD"));
+    assert_eq!(row(&body, "Cash available"), ["1,234.567"]);
+    assert_eq!(row(&body, "November 2026")[3], "1,234.567");
+}
+
+/// One currency: its heading names it, so no cell repeats it.
+#[tokio::test]
+async fn negative_cash_keeps_its_sign_and_a_shortfall_its_groups() {
+    let world = holding("USD", -123_456_789).await;
+
+    let body = page(&world).await.body;
+
+    assert!(text_of(section(&body, "answer")).contains("Shortfall 1,234,567.89 USD"));
+    assert_eq!(row(&body, "Cash available"), ["-1,234,567.89"]);
+    assert_eq!(row(&body, "Shortfall"), ["1,234,567.89"]);
+    assert_eq!(row(&body, "November 2026")[3], "-1,234,567.89");
+}
+
+/// A category that can't be read costs its name, not the page: the number is the
+/// forecast's, and the sentence reads without the name.
+#[tokio::test]
+async fn a_failed_name_lookup_leaves_the_page_and_its_number() {
+    let Golden {
+        world, utilities, ..
+    } = golden().await;
+    world
+        .server
+        .corrupt_category_name(utilities.to_string().as_str())
+        .await;
+
+    let body = page(&world).await.body;
+
+    let answer = text_of(section(&body, "answer"));
+    assert!(answer.contains("Surplus 38,360.00 USD"));
+    assert!(answer.contains("in a category"));
+    assert!(answer.contains("120.00 USD"));
 }
 
 #[tokio::test]
@@ -323,7 +409,7 @@ async fn spending_newer_than_a_balance_shows_both_amounts() {
 
     assert!(answer.contains("25.00 USD posted after"));
     assert!(answer.contains("7.00 USD not posted yet"));
-    assert!(answer.contains("Surplus 1000.00 USD"), "the number stays");
+    assert!(answer.contains("Surplus 1,000.00 USD"), "the number stays");
 }
 
 #[tokio::test]
@@ -363,11 +449,8 @@ async fn expected_income_not_counted_is_labelled() {
 
     let body = page(&world).await.body;
 
-    assert_eq!(
-        row(&body, "Expected income, not counted"),
-        [dollars(2_400_000)]
-    );
-    assert_eq!(row(&body, "Income counted, taken off"), [dollars(0)]);
+    assert_eq!(amount(&body, "Expected income, not counted"), 2_400_000);
+    assert_eq!(amount(&body, "Income counted, taken off"), 0);
     assert!(
         body.contains("Expected income (not counted)"),
         "the monthly column says so too"
@@ -381,11 +464,8 @@ async fn income_counted_lowers_the_need_and_loses_the_label() {
 
     let body = page(&world).await.body;
 
-    assert_eq!(
-        row(&body, "Income counted, taken off"),
-        [dollars(2_400_000)]
-    );
-    assert_eq!(row(&body, "Cash needed"), [dollars(614_000)]);
+    assert_eq!(amount(&body, "Income counted, taken off"), 2_400_000);
+    assert_eq!(amount(&body, "Cash needed"), 614_000);
     assert!(!body.contains("not counted"), "it is counted");
 }
 
@@ -429,7 +509,7 @@ async fn signed_out_visitor_is_sent_to_log_in() {
 
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.header(header::LOCATION), "/login");
-    assert!(!reply.body.contains("68500.00"), "no number");
+    assert!(!reply.body.contains("68,500.00"), "no number");
 }
 
 #[tokio::test]
@@ -448,7 +528,7 @@ async fn bearer_token_cannot_read_the_page() {
 
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.header(header::LOCATION), "/login");
-    assert!(!reply.body.contains("68500.00"), "no number");
+    assert!(!reply.body.contains("68,500.00"), "no number");
 }
 
 /// Six items of 10^15 every day for the 60 months the household asks for are past `i64`.
@@ -470,7 +550,7 @@ async fn totals_too_large_show_the_error_page_and_no_number() {
 
     assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(reply.body.contains("too large to represent"), "the reason");
-    assert!(!reply.body.contains("1234.56"), "no number");
+    assert!(!reply.body.contains("1,234.56"), "no number");
     assert!(!reply.body.contains("id=\"answer\""), "not the forecast");
 }
 
@@ -491,6 +571,16 @@ async fn page_has_the_default_csp_and_no_inline_script_or_style() {
         let (open, _) = script.split_once('>').unwrap();
         assert!(open.contains("src="), "an inline script");
     }
+}
+
+#[tokio::test]
+async fn page_is_never_cached_or_sent_as_a_referrer() {
+    let Golden { world, .. } = golden().await;
+
+    let reply = page(&world).await;
+
+    assert_eq!(reply.header(header::CACHE_CONTROL), "no-store");
+    assert_eq!(reply.header(header::REFERRER_POLICY), "same-origin");
 }
 
 #[tokio::test]
@@ -535,7 +625,7 @@ async fn nav_links_to_the_forecast_for_every_member() {
                 .body
                 .contains("<a href=\"/forecast\" aria-current=\"page\">Forecast</a>")
         );
-        assert_eq!(row(&forecast.body, "Cash available"), [dollars(6_850_000)]);
+        assert_eq!(amount(&forecast.body, "Cash available"), 6_850_000);
     }
 }
 
@@ -543,19 +633,28 @@ async fn nav_links_to_the_forecast_for_every_member() {
 async fn reading_the_page_writes_nothing() {
     let Golden { world, .. } = golden().await;
     let audited = || async {
-        world
+        let listed = world
             .server
             .store
-            .list_audit(&AuditFilter::default(), &PageRequest::default())
-            .await
-            .map(|page| page.items.len())
-            .ok()
+            .list_audit(
+                &AuditFilter::default(),
+                &PageRequest {
+                    after: None,
+                    limit: u32::MAX,
+                },
+            )
+            .await;
+        let Ok(listed) = listed else {
+            panic!("the audit log must answer");
+        };
+        listed.items.len()
     };
     let before = audited().await;
 
     page(&world).await;
 
-    assert!(audited().await == before, "no audit entry");
+    assert_eq!(audited().await, before, "no audit entry");
+    assert!(before > 0, "the household's setup was audited");
 }
 
 /// The page shows the household's defaults, whatever the address asks for.
@@ -568,5 +667,5 @@ async fn page_takes_no_query_of_its_own() {
         .get(&format!("{PAGE}?include_income=true"))
         .await;
 
-    assert_eq!(row(&asked.body, "Cash needed"), [dollars(3_014_000)]);
+    assert_eq!(amount(&asked.body, "Cash needed"), 3_014_000);
 }

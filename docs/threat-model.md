@@ -169,6 +169,16 @@
   browsers send `Origin: null` on plain form POSTs, which the origin rule
   refuses; `same-origin` lets them send the real origin, and the rule stays
   strict (it never accepts `null`).
+- **One page holds financial data.** `/forecast` shows the household's totals,
+  monthly figures and the names in its cautions, the only page that does (spec
+  §6.4, §8.9 R14). It takes the session cookie only, never a bearer token, calls
+  the same service as `GET /api/v1/forecast` and has no form of its own. Like every
+  page it is sent with `Cache-Control: no-store`, so neither the browser's nor an
+  intermediary's cache keeps it, and `Referrer-Policy: same-origin`, so following a
+  link off it tells another site nothing. The back button after signing out depends
+  on that `no-store`: signing out ends the session on the server but can't reach
+  into the browser, so it is `no-store` that makes the browser ask again and be sent
+  to sign in rather than redraw the figures from a stored copy.
 - Every mutation is written with its audit entry in one transaction; entries
   record the member and the agent token involved.
 

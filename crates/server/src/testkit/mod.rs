@@ -426,6 +426,20 @@ impl TestServer {
             .expect("write an unchecked theme");
     }
 
+    /// Stores a category name the schema would refuse (empty) for the category with this
+    /// id, as a database edited with constraint checks off could hold, so listing the
+    /// categories fails.
+    ///
+    /// # Panics
+    ///
+    /// If the write fails.
+    pub async fn corrupt_category_name(&self, category: &str) {
+        self.store
+            .execute_unchecked_for_tests("UPDATE categories SET name = '' WHERE id = ?", category)
+            .await
+            .expect("write an unchecked category name");
+    }
+
     /// Stores a colour scheme the schema would refuse (`purple`) for
     /// `member`, as a database edited with constraint checks off could hold.
     ///

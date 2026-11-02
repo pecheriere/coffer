@@ -32,31 +32,78 @@ impl<'a> Names<'a> {
         }
     }
 
+    /// The account's name, to go inside a sentence.
     fn account(&self, id: AccountId) -> &str {
+        self.accounts.get(&id).copied().unwrap_or("an account")
+    }
+
+    /// The account's name, to start a sentence.
+    fn account_first(&self, id: AccountId) -> &str {
         self.accounts.get(&id).copied().unwrap_or("An account")
     }
 
-    fn category(&self, id: CategoryId) -> &str {
-        self.categories
-            .get(&id)
-            .map_or("its category", String::as_str)
+    fn category(&self, id: CategoryId) -> Option<&str> {
+        self.categories.get(&id).map(String::as_str)
     }
 
-    fn item(&self, source: LineSource) -> &str {
+    /// What a planned item is called. An imagined item has no stored name, and this page
+    /// never shows one.
+    fn item(&self, source: LineSource) -> Option<&str> {
         match source {
-            LineSource::PlannedItem { id } => {
-                self.items.get(&id).map_or("A planned item", String::as_str)
-            }
-            LineSource::Hypothetical { .. } => "An imagined item",
+            LineSource::PlannedItem { id } => self.items.get(&id).map(String::as_str),
+            LineSource::Hypothetical { .. } => None,
         }
+    }
+
+    /// The goal, to start a sentence.
+    fn goal(&self, source: LineSource) -> String {
+        self.item(source)
+            .map_or_else(|| "A goal".to_owned(), |name| format!("The goal {name}"))
+    }
+
+    /// The one-off, to go inside a sentence.
+    fn one_off(&self, source: LineSource) -> String {
+        self.item(source).map_or_else(
+            || "a one-off".to_owned(),
+            |name| format!("the one-off {name}"),
+        )
     }
 }
 
-/// `amount` with its currency: `-12.34 USD`.
+/// `minor` units of `currency` as the page writes them: `-1,234.56` USD, `1,234` JPY.
+///
+/// The API's numbers stay ungrouped, as [`format_minor_units`] writes them: this only
+/// puts the separators into its text.
+pub(super) fn grouped(minor: i64, currency: Currency) -> String {
+    let plain = format_minor_units(minor, currency);
+    let (sign, unsigned) = plain
+        .strip_prefix('-')
+        .map_or(("", plain.as_str()), |rest| ("-", rest));
+    let (whole, decimals) = unsigned
+        .split_once('.')
+        .map_or((unsigned, None), |(whole, decimals)| {
+            (whole, Some(decimals))
+        });
+    let mut text = String::with_capacity(plain.len() + whole.len() / 3);
+    text.push_str(sign);
+    for (index, digit) in whole.char_indices() {
+        if index > 0 && (whole.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    if let Some(decimals) = decimals {
+        text.push('.');
+        text.push_str(decimals);
+    }
+    text
+}
+
+/// `amount` with its currency: `-1,234.56 USD`.
 pub(super) fn money(amount: Money) -> String {
     format!(
         "{} {}",
-        format_minor_units(amount.minor_units, amount.currency),
+        grouped(amount.minor_units, amount.currency),
         amount.currency.as_str()
     )
 }
@@ -183,12 +230,14 @@ fn connection_sentence(label: &str, status: FeedStatus) -> String {
     }
 }
 
-/// Bills and one-offs in `category`, dated earlier this month, that spending doesn't cover.
-fn bill_sentence(category: &str, amount: Money) -> String {
+/// Bills and one-offs in a category, dated earlier this month, that its spending doesn't
+/// cover. One amount can sum several of them.
+fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     format!(
-        "A bill or one-off in {category} was due earlier this month, and {} of it hasn't shown up \
-         in that category's spending, so it still counts as needed. If it was paid under another \
+        "Bills or one-offs in {} dated earlier this month come to {} more than that category's \
+         spending so far, so that much still counts as needed. If they were paid under another \
          category, there is more to invest than this shows.",
+        category.unwrap_or("a category"),
         magnitude(amount),
     )
 }
@@ -204,12 +253,12 @@ fn zero_floor_sentence(floor_months: u8, currency: Currency) -> String {
     )
 }
 
-/// A goal and a one-off that may describe the same expense.
-fn overlap_sentence(goal: &str, one_off: &str, category: &str) -> String {
+/// A goal and a one-off that may describe the same expense. `goal` starts the sentence.
+fn overlap_sentence(goal: &str, one_off: &str, category: Option<&str>) -> String {
     format!(
-        "The goal {goal} and the one-off {one_off} are both in {category} and close in date, so \
-         they may be the same expense. Each counts on its own, so if they are the same, less is \
-         needed than this shows."
+        "{goal} and {one_off} are both in {} and close in date, so they may be the same expense. \
+         Each counts on its own, so if they are the same, less is needed than this shows.",
+        category.unwrap_or("the same category"),
     )
 }
 
@@ -266,7 +315,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         }
         Caution::ClosedLiabilityOwing { account, balance } => format!(
             "{} is closed but still owes {}, which counts against the cash available.",
-            names.account(*account),
+            names.account_first(*account),
             magnitude(*balance),
         ),
         Caution::MonthsFloorIsZero {
@@ -276,7 +325,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         Caution::LiabilityBalancePositive { account, balance } => format!(
             "{} is a card or loan, but shows {} in hand rather than owed. It may have been \
              entered with the wrong sign, and it counts as it stands.",
-            names.account(*account),
+            names.account_first(*account),
             magnitude(*balance),
         ),
         Caution::GoalOneOffOverlap {
@@ -284,19 +333,19 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             one_off,
             category,
         } => overlap_sentence(
-            names.item(*goal),
-            names.item(*one_off),
+            &names.goal(*goal),
+            &names.one_off(*one_off),
             names.category(*category),
         ),
         Caution::GoalOverdue { goal, due_on } => format!(
-            "The goal {} was due on {} and still has money to find.",
-            names.item(*goal),
+            "{} was due on {} and still has money to find.",
+            names.goal(*goal),
             day(*due_on),
         ),
         Caution::ItemHintNotCounted { item, account } => format!(
             "{} is expected to be paid from {}, which doesn't count as cash here. It still counts \
              as needed, which may overstate what counted cash has to cover.",
-            names.item(*item),
+            names.item(*item).unwrap_or("A planned item"),
             names.account(*account),
         ),
         Caution::UncategorizedSpending { count, total, .. } => format!(
@@ -341,7 +390,7 @@ mod tests {
     use serde_json::Value;
     use utoipa::PartialSchema;
 
-    use super::{Names, blocker_sentence, caution_sentence};
+    use super::{Names, blocker_sentence, caution_sentence, grouped};
 
     fn usd(minor_units: i64) -> Money {
         Money {
@@ -523,6 +572,213 @@ mod tests {
         for blocker in &samples {
             assert_worded(&blocker_sentence(blocker), &kinds);
         }
+    }
+
+    /// Named things, for reading what a sentence says about them.
+    struct Named {
+        account: AccountId,
+        category: CategoryId,
+        goal: LineSource,
+        one_off: LineSource,
+        names: Names<'static>,
+    }
+
+    fn named() -> Named {
+        let (account, category) = (AccountId::new(), CategoryId::new());
+        let (goal_id, one_off_id) = (PlannedItemId::new(), PlannedItemId::new());
+        let mut names = Names::of_accounts(&[]);
+        names.accounts.insert(account, "Visa");
+        names.categories.insert(category, "Home".to_owned());
+        names.items.insert(goal_id, "Roof".to_owned());
+        names.items.insert(one_off_id, "Boiler".to_owned());
+        Named {
+            account,
+            category,
+            goal: LineSource::PlannedItem { id: goal_id },
+            one_off: LineSource::PlannedItem { id: one_off_id },
+            names,
+        }
+    }
+
+    fn said(caution: &Caution, names: &Names<'_>) -> String {
+        caution_sentence(caution, date(2026, 11, 15), names)
+    }
+
+    #[test]
+    fn an_overdue_goal_says_which_and_when() {
+        let Named { goal, names, .. } = named();
+        let sentence = said(&Caution::GoalOverdue { goal, due_on: ON }, &names);
+        assert!(sentence.contains("The goal Roof was due on 7 November 2026"));
+    }
+
+    #[test]
+    fn an_overlap_names_the_goal_the_one_off_and_the_category() {
+        let Named {
+            goal,
+            one_off,
+            category,
+            names,
+            ..
+        } = named();
+        let sentence = said(
+            &Caution::GoalOneOffOverlap {
+                goal,
+                one_off,
+                category,
+            },
+            &names,
+        );
+        assert!(sentence.contains("The goal Roof and the one-off Boiler are both in Home"));
+        assert!(sentence.contains("may be the same expense"));
+    }
+
+    #[test]
+    fn a_liability_in_hand_says_how_much_and_why_it_looks_wrong() {
+        let Named {
+            account: id, names, ..
+        } = named();
+        let sentence = said(
+            &Caution::LiabilityBalancePositive {
+                account: id,
+                balance: usd(500_000),
+            },
+            &names,
+        );
+        assert!(sentence.contains("Visa"));
+        assert!(sentence.contains("5,000.00 USD in hand"));
+        assert!(sentence.contains("wrong sign"));
+    }
+
+    #[test]
+    fn uncategorized_spending_says_how_many_and_how_much() {
+        let sentence = said(
+            &Caution::UncategorizedSpending {
+                currency: Currency::parse("USD").unwrap(),
+                count: 3,
+                total: usd(123_456),
+            },
+            &Names::of_accounts(&[]),
+        );
+        assert!(sentence.contains("3 transactions with no category"));
+        assert!(sentence.contains("1,234.56 USD in all"));
+    }
+
+    #[test]
+    fn a_dip_below_the_floor_says_when_and_how_low() {
+        let sentence = said(
+            &Caution::CashDipsBelowFloor {
+                month: CalendarMonth::of(ON).unwrap(),
+                currency: Currency::parse("USD").unwrap(),
+                projected_cash: usd(-123_456),
+            },
+            &Names::of_accounts(&[]),
+        );
+        assert!(sentence.contains("In November 2026"));
+        assert!(sentence.contains("fall to -1,234.56 USD"));
+        assert!(sentence.contains("below the safety floor"));
+    }
+
+    #[test]
+    fn a_window_not_starting_today_gives_both_days() {
+        let sentence = said(
+            &Caution::AsOfNotToday { today: ON },
+            &Names::of_accounts(&[]),
+        );
+        assert!(sentence.contains("starts on 15 November 2026"));
+        assert!(sentence.contains("not today, 7 November 2026"));
+    }
+
+    /// Several items can sum into the one amount, so it can't be worded as one bill's.
+    #[test]
+    fn an_unseen_bill_reads_right_for_several_items() {
+        let Named {
+            category, names, ..
+        } = named();
+        let sentence = said(
+            &Caution::BillNotSeen {
+                category,
+                amount: usd(12_000),
+            },
+            &names,
+        );
+        assert!(sentence.contains("Bills or one-offs in Home"));
+        assert!(sentence.contains("120.00 USD more than that category's spending"));
+        assert!(!sentence.contains("of it"), "no single bill is implied");
+    }
+
+    /// With no names at all, each sentence still reads as one: nothing like "The goal A
+    /// planned item".
+    #[test]
+    fn missing_names_read_well() {
+        let Named {
+            account,
+            category,
+            goal,
+            one_off,
+            ..
+        } = named();
+        let names = Names::of_accounts(&[]);
+        for (caution, expected) in [
+            (
+                Caution::GoalOverdue { goal, due_on: ON },
+                "A goal was due on",
+            ),
+            (
+                Caution::GoalOneOffOverlap {
+                    goal,
+                    one_off,
+                    category,
+                },
+                "A goal and a one-off are both in the same category",
+            ),
+            (
+                Caution::ItemHintNotCounted {
+                    item: goal,
+                    account,
+                },
+                "A planned item is expected to be paid from an account,",
+            ),
+            (
+                Caution::BillNotSeen {
+                    category,
+                    amount: usd(1),
+                },
+                "Bills or one-offs in a category",
+            ),
+            (
+                Caution::BalanceStale {
+                    account,
+                    on: ON,
+                    age_days: 1,
+                },
+                "The balance of an account is 1 day old",
+            ),
+            (
+                Caution::ClosedLiabilityOwing {
+                    account,
+                    balance: usd(-1),
+                },
+                "An account is closed",
+            ),
+        ] {
+            assert!(said(&caution, &names).contains(expected), "{expected}");
+        }
+    }
+
+    #[test]
+    fn amounts_are_grouped_in_threes_whatever_the_currency() {
+        let group = |minor, code| grouped(minor, Currency::parse(code).unwrap());
+        assert_eq!(group(0, "USD"), "0.00");
+        assert_eq!(group(5, "USD"), "0.05");
+        assert_eq!(group(99_999, "USD"), "999.99");
+        assert_eq!(group(100_000, "USD"), "1,000.00");
+        assert_eq!(group(-100_000, "USD"), "-1,000.00");
+        assert_eq!(group(100_000_000, "USD"), "1,000,000.00");
+        assert_eq!(group(i64::MIN, "USD"), "-92,233,720,368,547,758.08");
+        assert_eq!(group(999, "JPY"), "999");
+        assert_eq!(group(-1_000, "JPY"), "-1,000");
+        assert_eq!(group(1_234_567, "KWD"), "1,234.567");
+        assert_eq!(group(-1, "KWD"), "-0.001");
     }
 
     /// Reasons inside one kind say different things, so one can't be left as another's.

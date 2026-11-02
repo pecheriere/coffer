@@ -12,8 +12,9 @@ plus a safety floor), so that everything above that can be invested.
 > members with passkey sign-in, invites, sessions, agent tokens, an audit log,
 > a web UI and the container image, plus accounts, balances, categories and
 > transactions with SimpleFin and Plaid sync, and per-account limits for agent
-> tokens. The spending plan and the forecast are not built yet. The API, the database schema and the configuration will change
-> without migration paths between 0.x releases. Do not put financial data you
+> tokens. A spending plan and a cash forecast are arriving too, through the API
+> and on one read-only page. The API, the database schema and the configuration
+> will change without migration paths between 0.x releases. Do not put financial data you
 > care about in it yet.
 
 What exists and what comes next:

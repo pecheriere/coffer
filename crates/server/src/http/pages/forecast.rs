@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use coffer_domain::forecast::{CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
 use coffer_domain::identity::Actor;
-use coffer_domain::money::{Currency, Money, format_minor_units};
+use coffer_domain::money::{Currency, Money};
 use maud::{Markup, html};
 
 use super::account::viewer;
@@ -20,7 +20,9 @@ use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
-use words::{Names, blocker_sentence, caution_sentence, day, magnitude, money, month_name, months};
+use words::{
+    Names, blocker_sentence, caution_sentence, day, grouped, magnitude, money, month_name, months,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/forecast", get(forecast_page))
@@ -36,7 +38,7 @@ async fn forecast_page(
         .forecast(&actor, ForecastOptions::default())
         .await
         .map_err(refused)?;
-    let names = names(&state, &actor, &forecast).await.map_err(refused)?;
+    let names = names(&state, &actor, &forecast).await;
     let viewer = viewer(&state, &session).await;
     let frame = Frame {
         look: session.look(&state).await,
@@ -51,28 +53,31 @@ fn refused(err: LedgerError) -> PageError {
     PageError(Problem::from(err))
 }
 
-/// The names the cautions speak of. Only they need more than the forecast holds,
-/// which speaks of a category or a planned item by its id.
-async fn names<'a>(
-    state: &AppState,
-    actor: &Actor,
-    forecast: &'a Forecast,
-) -> Result<Names<'a>, LedgerError> {
+/// The names the cautions speak of. Only they need more than the forecast holds, which
+/// speaks of a category or a planned item by its id. A name is a courtesy: the numbers
+/// are already read, so a lookup that fails costs its names, and the sentences read
+/// without them.
+async fn names<'a>(state: &AppState, actor: &Actor, forecast: &'a Forecast) -> Names<'a> {
     let mut names = Names::of_accounts(&forecast.accounts);
-    if !forecast.cautions.is_empty() {
-        let categories = state.ledger.list_categories(actor).await?;
-        for category in categories
-            .items
-            .into_iter()
-            .flat_map(|group| group.categories)
-        {
-            names.categories.insert(category.id, category.name);
-        }
-        for item in state.ledger.list_planned_items(actor, false).await? {
-            names.items.insert(item.id, item.name);
-        }
+    if forecast.cautions.is_empty() {
+        return names;
     }
-    Ok(names)
+    match state.ledger.list_categories(actor).await {
+        Ok(tree) => {
+            let categories = tree.items.into_iter().flat_map(|group| group.categories);
+            names
+                .categories
+                .extend(categories.map(|category| (category.id, category.name)));
+        }
+        Err(err) => tracing::warn!(error = %err, "could not read the forecast's category names"),
+    }
+    match state.ledger.list_planned_items(actor, false).await {
+        Ok(items) => names
+            .items
+            .extend(items.into_iter().map(|item| (item.id, item.name))),
+        Err(err) => tracing::warn!(error = %err, "could not read the forecast's item names"),
+    }
+    names
 }
 
 fn content(forecast: &Forecast, names: &Names<'_>) -> Markup {
@@ -164,7 +169,8 @@ fn status(status: ForecastStatus) -> Markup {
 /// One currency's sums and months, never netted with another's.
 fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
     let code = totals.currency.as_str();
-    let bare = |amount: Money| format_minor_units(amount.minor_units, amount.currency);
+    let several = forecast.totals.len() > 1;
+    let bare = |amount: Money| cell(amount, several);
     html! {
         section.card id={ "currency-" (code) } {
             h2 { "How it adds up, in " (code) }
@@ -192,7 +198,7 @@ fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
                 p.fine { "Not firm: " a href="#reasons" { "see why" } "." }
             }
             h3 { "Month by month" }
-            (months_table(forecast.include_income, &forecast.months, totals.currency))
+            (months_table(forecast.include_income, &forecast.months, totals.currency, several))
             p.fine {
                 "Projected cash is what's left at the end of the month, or of the forecast, after "
                 "planned outflows and any income counted. It doesn't set aside goals or the safety floor. "
@@ -200,6 +206,17 @@ fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
                 "all they had built up before it."
             }
         }
+    }
+}
+
+/// An amount in a table. With one currency the section's heading says which; with
+/// several, a phone's stacked rows can sit a long way from a heading that scrolled off, and
+/// another currency's look just the same, so each cell says.
+fn cell(amount: Money, several: bool) -> String {
+    if several {
+        money(amount)
+    } else {
+        grouped(amount.minor_units, amount.currency)
     }
 }
 
@@ -215,7 +232,12 @@ fn sum_row(class: &str, label: &str, amount: &str) -> Markup {
 /// The months of `currency`. Below the phone width each row stands alone as a small
 /// block, so `data-label` repeats its column's heading and the roles keep it a table
 /// for assistive technology, which `display: block` would otherwise undo.
-fn months_table(include_income: bool, buckets: &[MonthBucket], currency: Currency) -> Markup {
+fn months_table(
+    include_income: bool,
+    buckets: &[MonthBucket],
+    currency: Currency,
+    several: bool,
+) -> Markup {
     let income = if include_income {
         "Expected income"
     } else {
@@ -249,7 +271,7 @@ fn months_table(include_income: bool, buckets: &[MonthBucket], currency: Currenc
                                 line.projected_cash,
                             ]) {
                                 td role="cell" data-label=(column) {
-                                    (format_minor_units(amount.minor_units, amount.currency))
+                                    (cell(amount, several))
                                 }
                             }
                         }
