@@ -18,7 +18,7 @@ use maud::{Markup, html};
 use serde::Deserialize;
 
 use super::bind::{KIND_UNKNOWN, kind_label, unprocessable};
-use super::{FormKind, Notice, Shared, back, refused, render};
+use super::{FormKind, Notice, Shared, back, dismiss, refused, render};
 use crate::http::AppState;
 use crate::http::pages::layout::csrf_field;
 use crate::http::pages::{PageError, PageForm, PageSession};
@@ -173,9 +173,12 @@ pub(super) fn account_item(
                     "Bound to "
                     (view.map_or("an account", |view| view.name.as_str()))
                 }
+            } @else if account.dismissed_at.is_some() {
+                span.chip.chip-quiet { "Dismissed" }
             } @else {
                 span.chip.chip-quiet { "Not bound" }
             }
+            (dismiss::forms(connection, account, shared.csrf, shared.binding.may_dismiss()))
             (shared.binding.forms(connection, account, shared.csrf, open, shared.refused_row == Some(account.id)))
             @if let Some(view) = view.filter(|view| shared.binding.may_change(view.id)) {
                 (row_form(account, view, shared.csrf))

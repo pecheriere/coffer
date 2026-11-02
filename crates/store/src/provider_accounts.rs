@@ -17,7 +17,7 @@ macro_rules! columns {
         "id, connection_id, provider_account_id, name, institution, currency_raw, kind_hint, \
          account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at, \
          last_applied_at, held_syncs, hold_released, released_records, release_withdrawn, \
-         held_records"
+         held_records, dismissed_at"
     };
 }
 
@@ -82,6 +82,9 @@ pub struct ProviderAccountRecord {
     /// How many records the last sync that held the cursor fetched for this
     /// account and could not store.
     pub held_records: u32,
+    /// When a member dismissed it, leaving it unbound on purpose; `None` while it is not
+    /// dismissed, and always for a bound one.
+    pub dismissed_at: Option<Timestamp>,
 }
 
 /// A provider account as a fetch reports it: created the first time it is
@@ -133,6 +136,7 @@ pub(crate) fn provider_account_from_row(
         release_withdrawn: int(row, "release_withdrawn")? != 0,
         held_records: u32::try_from(int(row, "held_records")?)
             .map_err(|_| corrupt("a negative record count"))?,
+        dismissed_at: time_opt(row, "dismissed_at")?,
     })
 }
 
@@ -463,7 +467,38 @@ impl StoreTx {
             .transpose()
     }
 
-    /// Bind an unbound provider account to `account`.
+    /// Dismiss (with `Some(at)`) or restore (with `None`) an unbound provider account.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist;
+    /// [`StoreError::Conflict`] if it is bound, or already in the asked state.
+    pub async fn set_provider_account_dismissed(
+        &mut self,
+        id: ProviderAccountId,
+        at: Option<Timestamp>,
+    ) -> Result<ProviderAccountRecord, StoreError> {
+        let current = fetch_provider_account(&mut *self.tx, id).await?;
+        if current.account.is_some() {
+            return Err(StoreError::Conflict("the provider account is bound"));
+        }
+        if current.dismissed_at.is_some() == at.is_some() {
+            return Err(StoreError::Conflict(if at.is_some() {
+                "the provider account is already dismissed"
+            } else {
+                "the provider account is not dismissed"
+            }));
+        }
+        sqlx::query("UPDATE provider_accounts SET dismissed_at = ? WHERE id = ?")
+            .bind(at.map(Timestamp::as_millisecond))
+            .bind(id.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        fetch_provider_account(&mut *self.tx, id).await
+    }
+
+    /// Bind an unbound provider account to `account`, which ends any dismissal.
     ///
     /// # Errors
     ///
@@ -481,19 +516,21 @@ impl StoreTx {
                 "the provider account is already bound",
             ));
         }
-        sqlx::query("UPDATE provider_accounts SET account_id = ? WHERE id = ?")
-            .bind(account.to_string())
-            .bind(id.to_string())
-            .execute(&mut *self.tx)
-            .await
-            .map_err(StoreError::from_sqlx)?;
+        sqlx::query(
+            "UPDATE provider_accounts SET account_id = ?, dismissed_at = NULL WHERE id = ?",
+        )
+        .bind(account.to_string())
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         fetch_provider_account(&mut *self.tx, id).await
     }
 }
 
 impl Store {
-    /// How many provider accounts are unbound and belong to a connection
-    /// that is not removed: the ones that wait for an account to feed.
+    /// How many provider accounts are unbound, not dismissed, and belong to a
+    /// connection that is not removed: the ones that wait for an account to feed.
     ///
     /// # Errors
     ///
@@ -502,7 +539,7 @@ impl Store {
         let count: i64 = sqlx::query_scalar(concat!(
             "SELECT COUNT(*) FROM provider_accounts p ",
             "JOIN connections c ON c.id = p.connection_id ",
-            "WHERE p.account_id IS NULL AND c.status != 'removed'"
+            "WHERE p.account_id IS NULL AND p.dismissed_at IS NULL AND c.status != 'removed'"
         ))
         .fetch_one(&self.pool)
         .await

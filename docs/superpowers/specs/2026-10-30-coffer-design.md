@@ -747,8 +747,8 @@ is an accepted risk, and hinting the item hides it.
 `floor_not_set`, `no_counted_accounts`, `balance_missing`. Everything else is a
 `caution`, which keeps the number but makes it not firm, including stale
 balances and unbound provider accounts. A counted account without any balance
-could hold anything; an unbound account cannot be dismissed yet, so blocking on
-it could block forever.
+could hold anything; an unbound account never blocks, since a member can leave it
+unbound on purpose by dismissing it (§8.11 B12a), and then it raises no caution either.
 
 **R5. The floor must be set.** An unset floor blocks the number, because a silent
 floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
@@ -1286,6 +1286,22 @@ kind, as its select shows it, when that kind leaves the account out of net worth
 refused doesn't put the guess back in its row, which may be what the member rejected: only a
 provider's own hint is preselected there. Plaid's subtypes `529`, `education savings account`,
 `utma` and `ugma` become `kind_hint`s.
+
+**B12a. A member can dismiss an unbound provider account (#75).** Someone who means to keep one
+unbound, such as a custodial or charity account, dismisses it and the forecast stops warning about
+it. `provider_accounts.dismissed_at` holds when, and a CHECK keeps it NULL on a bound one. A
+dismissed account is still an unbound one in every other way: it stays on `/connections` under its
+connection, marked as dismissed, with an undo; sync keeps tracking its last report, holds its records
+and keeps its balances exactly as for any unbound account, and writes nothing more; if the provider
+drops it, it is treated as an unbound one is. It raises no `unbound_provider_account` caution and
+isn't counted among the accounts to set up (the navigation notice), and `suggested_kind` is
+unchanged. It can still be bound, by either route, and binding clears the dismissal. Dismissing and
+restoring (`POST /provider-accounts/{id}/dismiss` and `/restore`, and forms on the page, on the same
+service) need `ManageConnections` and write access to every account, as binding does; an actor who
+doesn't see the provider account gets the answer for a missing one. Both are audited
+(`provider_account.dismiss`, `provider_account.restore`), with the agent named as ever. Asking for
+a state it is already in, or for a bound account or a removed connection, is a 409, which also
+answers a page or form older than the change.
 
 **B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.

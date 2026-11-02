@@ -12,6 +12,7 @@
 
 mod belonging;
 mod bind;
+mod dismiss;
 mod forget;
 
 use std::collections::{HashMap, HashSet};
@@ -71,6 +72,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/connections/provider-accounts/{id}/bind",
             post(bind::link_account),
+        )
+        .route(
+            "/connections/provider-accounts/{id}/dismiss",
+            post(dismiss::dismiss),
+        )
+        .route(
+            "/connections/provider-accounts/{id}/restore",
+            post(dismiss::restore),
         )
 }
 
@@ -254,14 +263,14 @@ fn connection_card(
     let plaid = connection.provider == ProviderKind::Plaid.as_str();
     let live = connection.status != ConnectionState::Removed;
     let id = connection.id;
-    // The accounts that wait for a binding come first.
+    // The accounts that wait for a binding come first, and the dismissed ones last.
     let mut accounts: Vec<&ProviderAccountView> = connection.accounts.iter().collect();
-    accounts.sort_by_key(|account| account.account.is_some());
+    accounts.sort_by_key(|account| (account.dismissed_at.is_some(), account.account.is_some()));
     let waiting = live
         && shared.binding.can_bind()
         && accounts
             .first()
-            .is_some_and(|first| first.account.is_none());
+            .is_some_and(|first| first.account.is_none() && first.dismissed_at.is_none());
     html! {
         section.card {
             h2 { (connection.label) }

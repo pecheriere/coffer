@@ -157,6 +157,31 @@ async fn unbound_provider_account_is_a_caution() {
 }
 
 #[tokio::test]
+async fn a_dismissed_unbound_account_raises_no_caution_until_restored() {
+    let fed = fed().await;
+    fed.sync(reported("USD")).await;
+    let id = fed.provider_account().await;
+    let sync = &fed.world.server.sync;
+    let alice = &fed.world.alice;
+
+    sync.dismiss_provider_account(alice, id).await.unwrap();
+    let dismissed = fed.world.forecast().await;
+    assert!(
+        !kinds(&dismissed, "cautions").contains(&"unbound_provider_account".to_owned()),
+        "dismissed: no caution"
+    );
+    assert_eq!(dismissed["surplus"], usd(1_000), "the number is the same");
+
+    sync.restore_provider_account(alice, id).await.unwrap();
+    let restored = fed.world.forecast().await;
+    assert_eq!(
+        kinds(&restored, "cautions"),
+        ["unbound_provider_account"],
+        "restored: the caution is back"
+    );
+}
+
+#[tokio::test]
 async fn unsupported_currency_on_an_unbound_account_says_so() {
     let fed = fed().await;
     fed.sync(reported("ZZZ")).await;
