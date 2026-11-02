@@ -639,7 +639,12 @@ hosts (`COFFER_SIMPLEFIN_HOSTS`, default `bridge.simplefin.org`,
 2b), and the FX source (plan 3). HTTPS on port 443 only, no redirects, and
 targets must resolve to public addresses. `HTTPS_PROXY` is honoured when set;
 then coffer does not resolve target hosts, and the public-address check is the
-proxy's job. The exact host list lives in `docs/configuration.md`.
+proxy's job. `COFFER_EGRESS_RELAY`, one IP address and refused together with
+`HTTPS_PROXY`, is for a network with no DNS and no direct internet: every
+connection goes to that operator-configured SNI relay on port 443, nothing is
+resolved, and the public-address check is the relay's job. The allow-list, HTTPS,
+no redirects and TLS verified against the real host name still apply. The exact
+host list lives in `docs/configuration.md`.
 
 ### 8.6 Plaid
 
