@@ -33,9 +33,9 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs. |
-| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts) and sync (requesting one). Removing or reconnecting another member's connection also needs the `admin` role. |
-| `admin` | Everything in `write`, plus household administration. Only admins can create `admin` tokens. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it. |
+| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
+| `admin` | Everything in `write`, plus household administration, such as changing the forecast settings. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
 disabled the token loses power at the next request. Tokens can never create,
@@ -76,15 +76,26 @@ token's access.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
   same for every token.
+- The forecast, a what-if and the plan-versus-actual report sum every account, so
+  there is no partial one: below `all` at `transactions` they are a 403 whose
+  detail is "this action needs transactions access to every account",
+  whether or not any account is hidden. Ask the member for a token with that
+  access.
+- A planned item hinted at an account the token holds below `transactions` is
+  treated as missing: left out of the list, 404 on `GET`. An item without a hint
+  is visible only to a token holding `transactions` on at least one account, so
+  a token holding only `balances` sees an empty plan, not a 403. Treat an empty
+  list as "nothing I can see", not "the household has no plan".
 - A visible account below the level needed is a 403 `forbidden` whose
   detail names the level: "this action needs transactions access to this
   account". `GET /api/v1/transactions` silently leaves out the accounts the
   token sees only at `balances`; naming one in `account=` is the 403.
 - Actions that span every account need an `all` grant: reading the audit
-  log and a connection's sync runs need `all` at `transactions`; creating
+  log, a connection's sync runs, the forecast, a what-if and the plan-versus-actual
+  report need `all` at `transactions`; creating
   an account, binding a provider account, requesting a sync, adding,
-  reconnecting or removing a connection, and creating or changing a category
-  or category group need `all` at `write`. Without it
+  reconnecting or removing a connection, creating or changing a category
+  or category group, and creating, changing or deleting a planned item need `all` at `write`. Without it
   they are a 403 whose detail says "this action needs write access to
   every account" (or `transactions`). Unbound provider accounts are listed
   (in `GET /api/v1/provider-accounts` and in connections) only with `all`
@@ -295,6 +306,36 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   purchases.
 - `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
   source record back into a transaction of its own.
+
+### Plan, forecast and report
+
+The household's main question is how much cash it needs over the next N months
+and how much is above that. The full guide, with a JSON example of every type
+of planned item, every blocker and caution and what to do about it, and a
+worked what-if (a new roof), is [agent-forecast.md](agent-forecast.md). In
+short:
+
+- `GET`, `POST`, `PATCH` and `DELETE /api/v1/plan-items` keep the plan:
+  recurring items (a `bill`, or a `budget` that this month's spending
+  reduces), one-offs and goals (sinking funds). `GET` and `PATCH
+  /api/v1/household/settings` hold the safety floor, whether income counts, the
+  default horizon and when a balance is stale (changing them needs `admin`).
+- `GET /api/v1/forecast` answers `cash_needed` (planned outflows, plus goals,
+  plus the floor, minus income when counted) against `cash_available`, as a
+  `surplus`. `POST /api/v1/forecast/what-if` answers the same for imagined
+  items and settings; it writes nothing, so `read` may call it.
+- `GET /api/v1/reports/plan-vs-actual` compares the plan with what happened per
+  category and month, with rollovers.
+- A forecast, a what-if and the report need `all` at `transactions`; there is
+  no partial answer. Changing the plan needs `write`, and `all` at `write`.
+- A split takes an optional `goal`, in the transaction's currency and an
+  `expense` category: money moved to savings for a goal is not spending.
+
+`status` says how far to trust a forecast: `firm` (a number with nothing to
+warn about), `provisional` (a number with `cautions`) or `unavailable` (no
+number: `surplus` is `null` and `blockers` say why). **Never report a
+`provisional` number without its cautions**, and never report a number for an
+`unavailable` one: say what blocks it and what to do.
 
 ### Connections and sync
 

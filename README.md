@@ -12,24 +12,28 @@ plus a safety floor), so that everything above that can be invested.
 > members with passkey sign-in, invites, sessions, agent tokens, an audit log,
 > a web UI and the container image, plus accounts, balances, categories and
 > transactions with SimpleFin and Plaid sync, and per-account limits for agent
-> tokens. A spending plan and a cash forecast are arriving too, through the API
-> and on one read-only page. The API, the database schema and the configuration
-> will change without migration paths between 0.x releases. Do not put financial data you
-> care about in it yet.
+> tokens, and a spending plan, a cash forecast with what-if, and a plan-versus-actual
+> report, through the API and on one read-only page. The API, the database schema and
+> the configuration will change without migration paths between 0.x releases. Do not
+> put financial data you care about in it yet.
 
 What exists and what comes next:
 
 - **0.1.0:** identity and access. Passkey-only members (admin and
   member roles), expiring invite links, sessions, revocable agent tokens with
   read/write/admin scopes, an append-only audit log, backups, a container image.
-- **0.2.0 (this release):** accounts (manual and linked), daily balances, categories
+- **0.2.0:** accounts (manual and linked), daily balances, categories
   and transactions with splits, review and assignment; SimpleFin and Plaid connections
   synced on a schedule and on demand, with duplicate matching and merging;
   agent tokens that can be limited to chosen accounts at a chosen level; a
   typed OpenAPI document of the JSON API.
 - **0.2.1:** bind accounts from the Connections page, a notice when new accounts need setting up, a time and memory cap on syncs, and an optional egress relay.
-- **Next:** planned items, sinking funds and the cash forecast; then reports
-  and an MCP server for agents. See the
+- **Unreleased:** a spending plan (recurring bills and budgets, one-offs and
+  sinking-fund goals, goal links on splits), the household's safety floor, a cash
+  forecast with a what-if, plan versus actual with rollovers, and a read-only
+  forecast page.
+- **Next:** FX with a base and display currency, rules, transfer links, and an
+  MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
 Configuration is in [docs/configuration.md](docs/configuration.md); to run
@@ -38,7 +42,8 @@ makes outbound requests to the SimpleFin Bridge, and to Plaid when
 configured, to sync; which hosts it
 reaches and how to restrict them is in
 [docs/configuration.md](docs/configuration.md#outbound-network). Agents use
-the API as described in [docs/agent-usage.md](docs/agent-usage.md).
+the API as described in [docs/agent-usage.md](docs/agent-usage.md), and plan
+and forecast as described in [docs/agent-forecast.md](docs/agent-forecast.md).
 
 ## Dependency age
 
