@@ -244,6 +244,8 @@ async fn connection_needing_reauth_is_a_caution() {
         (ConnectionStatus::Error, "error"),
     ] {
         let fed = fed().await;
+        let checking = fed.checking().await;
+        fed.bound(checking).await;
         fed.set_status(status).await;
 
         let (_, text) = fed
@@ -258,6 +260,29 @@ async fn connection_needing_reauth_is_a_caution() {
         assert_eq!(attention["label"], LABEL);
         assert_eq!(attention["status"], reported_as);
     }
+}
+
+/// A connection that feeds only money outside the household is failing on the connections
+/// page, and cannot change the forecast's number, so the forecast does not say so.
+#[tokio::test]
+async fn failing_connection_serving_only_a_held_account_is_not_a_caution() {
+    let fed = fed().await;
+    let held = fed
+        .world
+        .account_with(
+            "For a child",
+            "savings",
+            "USD",
+            json!({"belongs_to": "someone_else"}),
+        )
+        .await;
+    fed.bound(held).await;
+    fed.set_status(ConnectionStatus::Error).await;
+
+    let forecast = fed.world.forecast().await;
+
+    assert_eq!(forecast["status"], "firm");
+    assert_eq!(forecast["cautions"], json!([]));
 }
 
 #[tokio::test]

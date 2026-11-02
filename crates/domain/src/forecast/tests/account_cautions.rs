@@ -5,12 +5,12 @@ use jiff::civil::date;
 
 use super::{AS_OF, assert_provisional, cash, days_before, household};
 use super::{one_off, run, usd, usd_totals};
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::forecast::{
     AccountInput, BalanceInput, Caution, FeedAlert, FeedProblem, FeedProblemReason, FeedStatus,
-    ForecastInput, ForecastStatus, UnboundAccount,
+    Forecast, ForecastInput, ForecastStatus, UnboundAccount,
 };
-use crate::ids::{CategoryId, ConnectionId, ProviderAccountId};
+use crate::ids::{AccountId, CategoryId, ConnectionId, ProviderAccountId};
 
 fn aged(days: i32) -> AccountInput {
     AccountInput {
@@ -220,17 +220,38 @@ fn feed_problem_on_an_uncounted_account_changes_nothing() {
     );
 }
 
-#[test]
-fn feed_alert_reported() {
+fn alert(connection: ConnectionId, serves: Vec<AccountId>) -> FeedAlert {
+    FeedAlert {
+        connection,
+        label: "Main bank".to_owned(),
+        status: FeedStatus::ReauthRequired,
+        serves,
+    }
+}
+
+fn held(name: &str) -> AccountInput {
+    AccountInput {
+        belongs_to: BelongsTo::SomeoneElse,
+        ..cash(name, usd(1))
+    }
+}
+
+/// A forecast beside Checking, whose accounts are `accounts`, with one failing connection.
+fn with_failing(accounts: Vec<AccountInput>, serves: &[usize]) -> (Forecast, ConnectionId) {
     let connection = ConnectionId::new();
+    let serves = serves.iter().map(|&at| accounts[at].id).collect();
     let forecast = run(&ForecastInput {
-        feeds: vec![FeedAlert {
-            connection,
-            label: "Main bank".to_owned(),
-            status: FeedStatus::ReauthRequired,
-        }],
+        accounts,
+        feeds: vec![alert(connection, serves)],
         ..household()
     });
+    (forecast, connection)
+}
+
+#[test]
+fn a_failing_connection_serving_a_counted_account_cautions() {
+    let checking = cash("Checking", usd(1_000));
+    let (forecast, connection) = with_failing(vec![checking], &[0]);
     assert_eq!(
         forecast.cautions,
         [Caution::ConnectionNeedsAttention {
@@ -241,6 +262,65 @@ fn feed_alert_reported() {
         "names the connection"
     );
     assert_provisional(&forecast);
+}
+
+/// The caution alone is what makes a forecast provisional: nothing else is raised here.
+#[test]
+fn a_failing_connection_serving_a_counted_and_a_held_account_cautions() {
+    let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000)), held("Child")], &[0, 1]);
+    assert_eq!(forecast.cautions.len(), 1);
+    assert_provisional(&forecast);
+}
+
+#[test]
+fn a_failing_connection_serving_only_a_held_account_changes_nothing() {
+    let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000)), held("Child")], &[1]);
+    assert_eq!(forecast.cautions, [], "its money is not in the sum");
+    assert_eq!(forecast.status, ForecastStatus::Firm);
+}
+
+#[test]
+fn a_failing_connection_serving_only_an_excluded_account_changes_nothing() {
+    let excluded = AccountInput {
+        include_in_forecast: false,
+        ..cash("Side", usd(1))
+    };
+    let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000)), excluded], &[1]);
+    assert_eq!(forecast.cautions, []);
+    assert_eq!(forecast.status, ForecastStatus::Firm);
+}
+
+/// Nothing is bound or waiting to be: the connection cannot change the number. This is a
+/// change from reporting it, which the forecast did for every failing connection.
+#[test]
+fn a_failing_connection_with_nothing_bound_changes_nothing() {
+    let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000))], &[]);
+    assert_eq!(forecast.cautions, []);
+    assert_eq!(forecast.status, ForecastStatus::Firm);
+}
+
+/// An account a member may yet bind as counted is a reason to look at the connection.
+#[test]
+fn a_failing_connection_with_an_unbound_provider_account_cautions() {
+    let connection = ConnectionId::new();
+    let forecast = run(&ForecastInput {
+        unbound: vec![UnboundAccount {
+            provider_account: ProviderAccountId::new(),
+            connection,
+            name: "Savings".to_owned(),
+            institution: None,
+            currency_raw: "USD".to_owned(),
+        }],
+        feeds: vec![alert(connection, Vec::new())],
+        ..household()
+    });
+    assert!(
+        forecast
+            .cautions
+            .iter()
+            .any(|caution| matches!(caution, Caution::ConnectionNeedsAttention { .. })),
+        "it may yet feed a counted account"
+    );
 }
 
 #[test]

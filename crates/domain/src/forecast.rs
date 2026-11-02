@@ -613,10 +613,26 @@ fn cautions(
                 currency_supported: Currency::parse(&unbound.currency_raw).is_ok(),
             }),
     );
+    // Only a connection that could change the number: one serving an account that counts, or
+    // with provider accounts still unbound. The rest show as failing where connections are
+    // listed, and nowhere in the forecast.
+    let counted_accounts: BTreeSet<AccountId> = input
+        .accounts
+        .iter()
+        .filter(|account| not_counted(account).is_none())
+        .map(|account| account.id)
+        .collect();
     cautions.extend(
         input
             .feeds
             .iter()
+            .filter(|feed| {
+                feed.serves.iter().any(|id| counted_accounts.contains(id))
+                    || input
+                        .unbound
+                        .iter()
+                        .any(|unbound| unbound.connection == feed.connection)
+            })
             .map(|feed| Caution::ConnectionNeedsAttention {
                 connection: feed.connection,
                 label: feed.label.clone(),

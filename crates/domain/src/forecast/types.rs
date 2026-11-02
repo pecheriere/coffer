@@ -174,6 +174,10 @@ pub struct FeedAlert {
     pub connection: ConnectionId,
     pub label: String,
     pub status: FeedStatus,
+    /// The accounts its provider accounts are bound to, counted or not. It cautions the
+    /// forecast only if it could change the number: one of these counts, or it has a
+    /// provider account in [`ForecastInput::unbound`] that may yet be bound to one that does.
+    pub serves: Vec<AccountId>,
 }
 
 /// Why a connection is not syncing.

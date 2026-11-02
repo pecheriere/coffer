@@ -277,6 +277,12 @@ fn input(
         .filter(|connection| connection.status == ConnectionStatus::Removed)
         .map(|connection| connection.id)
         .collect();
+    let mut serves: BTreeMap<ConnectionId, Vec<AccountId>> = BTreeMap::new();
+    for record in &provider_accounts {
+        if let Some(account) = record.account {
+            serves.entry(record.connection).or_default().push(account);
+        }
+    }
     let (mut problems, unbound) = provider_view(provider_accounts, &currencies, &removed);
     let goal_spent: BTreeMap<PlannedItemId, i64> = goal_spent.into_iter().collect();
     let both_sides: BTreeSet<PlannedItemId> = goals_linked_both_sides.into_iter().collect();
@@ -339,7 +345,13 @@ fn input(
             })
             .collect(),
         unbound,
-        feeds: connections.into_iter().filter_map(feed_alert).collect(),
+        feeds: connections
+            .into_iter()
+            .filter_map(|connection| {
+                let serves = serves.remove(&connection.id).unwrap_or_default();
+                feed_alert(connection, serves)
+            })
+            .collect(),
     }
 }
 
@@ -377,7 +389,7 @@ fn provider_view(
 }
 
 /// The alert of a connection that isn't syncing.
-fn feed_alert(connection: ConnectionHealth) -> Option<FeedAlert> {
+fn feed_alert(connection: ConnectionHealth, serves: Vec<AccountId>) -> Option<FeedAlert> {
     let status = match connection.status {
         ConnectionStatus::Error => FeedStatus::Error,
         ConnectionStatus::ReauthRequired => FeedStatus::ReauthRequired,
@@ -387,6 +399,7 @@ fn feed_alert(connection: ConnectionHealth) -> Option<FeedAlert> {
         connection: connection.id,
         label: connection.label,
         status,
+        serves,
     })
 }
 
