@@ -724,7 +724,10 @@ any account is hidden.
 cannot see at `transactions` answers like a missing item: left out of lists, 404
 on `GET`, not 403, which would confirm it exists. A `balances` grant shows only
 the account and its balances; an item's name, amount, cadence and notes reveal
-much more. Unhinted items are household data, visible to any `read` token. Creating,
+much more. Unhinted items are household data, which need `transactions` on at
+least one account, named or through an `all` grant, for the same reason. A token
+holding only `balances` sees no planned items at all: an empty list, not a 403.
+Uniform access always qualifies. Creating,
 changing or deleting an item needs `WriteHousehold` and an `all` grant at
 `write`, like a category. An unhinted item's name can mention an account: that
 is an accepted risk, and hinting the item hides it.

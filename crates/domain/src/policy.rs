@@ -33,8 +33,9 @@
 //! A planned item whose hint names an account the actor cannot see at
 //! `Transactions` is treated as missing: left out of lists and answered like
 //! an item that does not exist ([`plan_item_visible`], spec §8.9 R3). A
-//! planned item without a hint is household data, visible to anyone who may
-//! read the household.
+//! planned item without a hint is household data, which needs `Transactions`
+//! on at least one account, named or through an `all` grant. An actor holding
+//! only `Balances` sees no planned items: an empty list, not a refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -128,6 +129,21 @@ impl AccountAccess {
                     .filter_map(|account| Some((*account, self.level_for(*account)?)))
                     .collect(),
             },
+        }
+    }
+
+    /// Whether at least one account, named or through an `all` grant, is
+    /// granted at least `at_least`. Capped by the ceiling like the rest.
+    #[must_use]
+    pub fn some_account_at(&self, at_least: AccountLevel) -> bool {
+        match self {
+            Self::Uniform(level) => *level >= at_least,
+            Self::Granted { accounts, .. } => {
+                self.sees_every_account(at_least)
+                    || accounts
+                        .keys()
+                        .any(|account| self.level_for(*account) >= Some(at_least))
+            }
         }
     }
 
@@ -490,17 +506,19 @@ pub fn authorize_every_account(
 }
 
 /// Whether an actor holding `access` may know a planned item hinting at
-/// `hint` exists. An item without a hint is household data. One with a hint is
-/// data about that account, and more than `Balances` shows: its name, amount,
-/// cadence and notes need `Transactions`. Below that the item is treated as
-/// missing, because a refusal would confirm it exists.
+/// `hint` exists. An item's name, amount, cadence and notes are more than
+/// `Balances` shows, so they need `Transactions`: on the hinted account, or
+/// without a hint on at least one account, named or through an `all` grant.
+/// Below that the item is treated as missing, because a refusal would confirm
+/// it exists: a list comes back empty, not refused.
 #[must_use]
 pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> bool {
-    hint.is_none_or(|account| {
-        access
+    match hint {
+        Some(account) => access
             .level_for(account)
-            .is_some_and(|level| level >= AccountLevel::Transactions)
-    })
+            .is_some_and(|level| level >= AccountLevel::Transactions),
+        None => access.some_account_at(AccountLevel::Transactions),
+    }
 }
 
 /// Rejects a token scope above what `role` may exercise.
