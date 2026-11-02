@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use coffer_domain::accounts::LiquidityClass;
+use coffer_domain::accounts::{BelongsTo, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
@@ -107,6 +107,31 @@ pub(super) fn blocker_sentence(blocker: NetWorthBlocker) -> &'static str {
         NetWorthBlocker::NoCountedAccounts => {
             "No account counts towards net worth in this range, which is not a net worth of zero."
         }
+    }
+}
+
+/// Why a bucket has no number. Its accounts never count towards net worth, so that blocker's
+/// usual words would say nothing about it.
+pub(super) fn bucket_blocker_sentence(blocker: NetWorthBlocker) -> &'static str {
+    match blocker {
+        NetWorthBlocker::NoCountedAccounts => {
+            "None of these accounts has a value in this range, which is not a balance of zero."
+        }
+        NetWorthBlocker::DisplayCurrencyNotSet | NetWorthBlocker::Rebuilding => {
+            blocker_sentence(blocker)
+        }
+    }
+}
+
+/// A bucket's heading. A report's type doesn't rule out `Household`, which never has a bucket,
+/// so it reads as what it is rather than panicking on a page.
+pub(super) fn bucket_heading(belongs_to: BelongsTo, beneficiary: Option<&str>) -> String {
+    match (belongs_to, beneficiary) {
+        (BelongsTo::Household, _) => "The household's".to_owned(),
+        (BelongsTo::SomeoneElse, Some(label)) => format!("Held for {label}"),
+        (BelongsTo::SomeoneElse, None) => "Held for someone else".to_owned(),
+        (BelongsTo::GivenAway, Some(label)) => format!("Given away: {label}"),
+        (BelongsTo::GivenAway, None) => "Given away".to_owned(),
     }
 }
 
@@ -255,12 +280,15 @@ pub(super) fn liquidity_name(class: LiquidityClass) -> &'static str {
 mod tests {
     use std::collections::BTreeSet;
 
+    use coffer_domain::accounts::BelongsTo;
     use coffer_domain::ids::AccountId;
     use coffer_domain::money::{Currency, Money};
     use coffer_domain::net_worth::{NetWorthBlocker, NetWorthCaution, RateMissingReason};
     use jiff::civil::{Date, date};
 
-    use super::{Names, blocker_sentence, caution_sentence};
+    use super::{
+        Names, blocker_sentence, bucket_blocker_sentence, bucket_heading, caution_sentence,
+    };
     use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
 
     const ON: Date = date(2026, 11, 2);
@@ -342,6 +370,33 @@ mod tests {
         assert_eq!(sampled_kinds(&samples), kinds);
         for blocker in &samples {
             assert_worded(blocker_sentence(*blocker), &kinds);
+        }
+    }
+
+    #[test]
+    fn each_blocker_has_words_for_a_bucket() {
+        let kinds = schema_kinds::<NetWorthBlocker>();
+        for blocker in blockers() {
+            assert_worded(bucket_blocker_sentence(blocker), &kinds);
+        }
+        assert!(!bucket_blocker_sentence(NetWorthBlocker::NoCountedAccounts).contains("net worth"));
+    }
+
+    #[test]
+    fn a_bucket_is_headed_by_whose_it_is() {
+        for (belongs_to, label, heading) in [
+            (BelongsTo::SomeoneElse, Some("Child A"), "Held for Child A"),
+            (BelongsTo::SomeoneElse, None, "Held for someone else"),
+            (BelongsTo::GivenAway, None, "Given away"),
+            (
+                BelongsTo::GivenAway,
+                Some("Family fund"),
+                "Given away: Family fund",
+            ),
+            (BelongsTo::Household, None, "The household's"),
+            (BelongsTo::Household, Some("Child A"), "The household's"),
+        ] {
+            assert_eq!(bucket_heading(belongs_to, label), heading);
         }
     }
 

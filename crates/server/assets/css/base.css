@@ -84,6 +84,7 @@ button:disabled { opacity: .6; cursor: progress; }
 .status-unavailable { color: var(--muted); }
 .reasons { margin: 0; padding-left: 1.25rem; }
 .reasons li + li { margin-top: .5rem; }
+.held-reasons { margin-bottom: 1rem; }
 .sums, .months { width: 100%; border-collapse: collapse; margin: 0 0 1rem; }
 .sums th, .sums td, .months th, .months td { padding: .5rem .25rem; border-top: 1px solid var(--border); text-align: right; font-weight: 500; }
 .sums td, .months td { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -110,7 +111,7 @@ button:disabled { opacity: .6; cursor: progress; }
 .amounts-wrap td { white-space: normal; }
 .sums.amounts-wrap td { margin-left: auto; text-align: right; }
 .no-total { font-family: var(--font-body); }
-.cell-stack { display: block; text-align: right; }
+.cell-stack { display: block; text-align: right; overflow-wrap: normal; }
 .cell-note { display: block; color: var(--muted); font: 500 .8125rem/1.3 var(--font-body); }
 .chart { display: block; width: 100%; height: auto; margin: 0 0 .75rem; }
 .chart-wide { display: none; }

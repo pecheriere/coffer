@@ -12,6 +12,7 @@ use coffer_store::{AuditFilter, PageRequest};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
+mod buckets;
 mod form;
 mod truth;
 

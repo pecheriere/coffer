@@ -2,6 +2,7 @@
 //! answers for a range, in words, a chart and a table of the same numbers. It calls the
 //! same service and adds nothing up, so the two cannot differ, and it has no form.
 
+mod buckets;
 mod chart;
 mod words;
 
@@ -161,6 +162,7 @@ fn content(report: &NetWorthReport, range: Range, may_choose: bool) -> Markup {
         }
         (latest(report, &names))
         (accounts(report))
+        (buckets::section(report))
     }
 }
 
@@ -345,19 +347,16 @@ impl Period<'_> {
 }
 
 /// The report's points, oldest first, with the periods left out between them.
-fn periods(report: &NetWorthReport) -> Vec<Period<'_>> {
-    let (Some(first), Some(last)) = (report.points.first(), report.points.last()) else {
+fn periods(points: &[NetWorthPoint], from: Date, interval: NetWorthInterval) -> Vec<Period<'_>> {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
         return Vec::new();
     };
-    let by_day: BTreeMap<Date, &NetWorthPoint> = report
-        .points
-        .iter()
-        .map(|point| (point.on, point))
-        .collect();
+    let by_day: BTreeMap<Date, &NetWorthPoint> =
+        points.iter().map(|point| (point.on, point)).collect();
     // The report was answered for these dates, so they can't be refused now; if they
     // were, its own points are still all true.
-    let Ok(ends) = period_ends(report.from, last.on, report.interval) else {
-        return report.points.iter().map(Period::Point).collect();
+    let Ok(ends) = period_ends(from, last.on, interval) else {
+        return points.iter().map(Period::Point).collect();
     };
     ends.into_iter()
         .filter(|end| end.on >= first.on)
@@ -403,7 +402,7 @@ fn chart_points(periods: &[Period<'_>], interval: NetWorthInterval) -> Vec<Chart
 
 /// The chart and the table of the same numbers.
 fn history(report: &NetWorthReport, currency: Currency, names: &Names<'_>) -> Markup {
-    let periods = periods(report);
+    let periods = periods(&report.points, report.from, report.interval);
     if periods.is_empty() {
         return html! {};
     }
@@ -427,7 +426,14 @@ fn history(report: &NetWorthReport, currency: Currency, names: &Names<'_>) -> Ma
             (jumps(report, names))
             details.values open[opens_for_a_gap(&periods)] {
                 summary { "Every value, as a table" }
-                (periods_table(report, &periods, code, names))
+                (periods_table(
+                    &report.accounts,
+                    report.interval,
+                    &periods,
+                    code,
+                    names,
+                    "Net worth by period",
+                ))
             }
         }
     }
@@ -476,14 +482,15 @@ type NoAmount = (AccountId, Option<ConversionState>);
 
 /// Newest first, so the numbers nearest now are nearest the chart.
 fn periods_table(
-    report: &NetWorthReport,
+    accounts: &[AccountSeries],
+    interval: NetWorthInterval,
     periods: &[Period<'_>],
     code: &str,
     names: &Names<'_>,
+    label: &str,
 ) -> Markup {
     let total_heading = format!("Total, {code}");
-    let conversions: BTreeMap<(AccountId, Date), ConversionState> = report
-        .accounts
+    let conversions: BTreeMap<(AccountId, Date), ConversionState> = accounts
         .iter()
         .flat_map(|series| {
             series
@@ -496,7 +503,7 @@ fn periods_table(
     // What the row above, the next period, already said.
     let mut said: Vec<NoAmount> = Vec::new();
     html! {
-        table.months.amounts-wrap role="table" aria-label="Net worth by period" {
+        table.months.amounts-wrap role="table" aria-label=(label) {
             thead role="rowgroup" {
                 tr role="row" {
                     th scope="col" role="columnheader" { "Period" }
@@ -507,9 +514,9 @@ fn periods_table(
                 @for period in periods.iter().rev() {
                     tr role="row" {
                         th scope="row" role="rowheader" {
-                            (period_name(period.on(), report.interval))
+                            (period_name(period.on(), interval))
                             @if period.partial() {
-                                " " span.chip.chip-quiet { (partial_mark(period.on(), report.interval)) }
+                                " " span.chip.chip-quiet { (partial_mark(period.on(), interval)) }
                             }
                         }
                         td role="cell" data-label=(total_heading) {
@@ -608,20 +615,27 @@ fn latest(report: &NetWorthReport, names: &Names<'_>) -> Markup {
                 p.fine { "No account has a value that day." }
             } @else {
                 h3 { "By currency, unconverted" }
-                table.sums.amounts-wrap {
-                    tbody {
-                        @for sum in &point.by_currency {
-                            tr {
-                                th scope="row" { (sum.currency.as_str()) }
-                                td { (money(*sum)) }
-                            }
-                        }
-                    }
-                }
+                (by_currency_table(&point.by_currency))
                 @for account in left_out {
                     p.fine {
                         "These sums leave out " (names.account(*account))
                         ", which has no value that day."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sums per currency, never added together.
+fn by_currency_table(sums: &[Money]) -> Markup {
+    html! {
+        table.sums.amounts-wrap {
+            tbody {
+                @for sum in sums {
+                    tr {
+                        th scope="row" { (sum.currency.as_str()) }
+                        td { (money(*sum)) }
                     }
                 }
             }
@@ -649,36 +663,52 @@ fn accounts(report: &NetWorthReport) -> Markup {
     if report.accounts.is_empty() {
         return html! {};
     }
-    let in_display = report.display_currency.map_or_else(
+    html! {
+        section.card id="accounts" {
+            h2 { "Accounts" }
+            (accounts_table(
+                &report.accounts,
+                report.display_currency,
+                report.points.last().map(|point| point.on),
+                "Accounts at the latest point",
+            ))
+        }
+    }
+}
+
+/// One row per account, as it stood on `latest`.
+fn accounts_table(
+    accounts: &[AccountSeries],
+    display_currency: Option<Currency>,
+    latest: Option<Date>,
+    label: &str,
+) -> Markup {
+    let in_display = display_currency.map_or_else(
         || "Converted".to_owned(),
         |currency| format!("In {}", currency.as_str()),
     );
     let columns = ["Balance", in_display.as_str(), "First day"];
-    let latest = report.points.last().map(|point| point.on);
     html! {
-        section.card id="accounts" {
-            h2 { "Accounts" }
-            table.months.amounts-wrap role="table" aria-label="Accounts at the latest point" {
-                thead role="rowgroup" {
-                    tr role="row" {
-                        th scope="col" role="columnheader" { "Account" }
-                        @for column in columns {
-                            th scope="col" role="columnheader" { (column) }
-                        }
+        table.months.amounts-wrap role="table" aria-label=(label) {
+            thead role="rowgroup" {
+                tr role="row" {
+                    th scope="col" role="columnheader" { "Account" }
+                    @for column in columns {
+                        th scope="col" role="columnheader" { (column) }
                     }
                 }
-                tbody role="rowgroup" {
-                    @for series in &report.accounts {
-                        @let at = latest.and_then(|on| point_on(series, on));
-                        tr role="row" {
-                            th scope="row" role="rowheader" { (series.name) }
-                            @for (column, cell) in columns.iter().zip(account_cells(series, at)) {
-                                td role="cell" data-label=(column) {
-                                    span.cell-stack {
-                                        (cell.value)
-                                        @if let Some(note) = &cell.note {
-                                            span.cell-note { (note) }
-                                        }
+            }
+            tbody role="rowgroup" {
+                @for series in accounts {
+                    @let at = latest.and_then(|on| point_on(series, on));
+                    tr role="row" {
+                        th scope="row" role="rowheader" { (series.name) }
+                        @for (column, cell) in columns.iter().zip(account_cells(series, at)) {
+                            td role="cell" data-label=(column) {
+                                span.cell-stack {
+                                    (cell.value)
+                                    @if let Some(note) = &cell.note {
+                                        span.cell-note { (note) }
                                     }
                                 }
                             }
