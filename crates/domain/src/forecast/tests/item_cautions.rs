@@ -214,7 +214,7 @@ fn hints_that_change_nothing_do_not_warn() {
             },
             inflow(ItemInput {
                 account_hint: Some(elsewhere),
-                ..one_off("Excluded", usd(1), date(2026, 12, 1), CategoryId::new())
+                ..one_off("Income off", usd(1), date(2026, 12, 1), CategoryId::new())
             }),
         ],
         ..household()
@@ -222,7 +222,7 @@ fn hints_that_change_nothing_do_not_warn() {
     assert_eq!(
         forecast.cautions,
         [],
-        "a counted hint, an item outside the window, income left out"
+        "a counted hint, an item outside the window, income off"
     );
 }
 
@@ -369,6 +369,53 @@ fn a_hint_at_an_excluded_account_leaves_the_surplus_unchanged_with_income_on() {
     let hinted = hinted_at(side, gift(usd(10_000)));
 
     assert_eq!(hinted.surplus, without.surplus);
+}
+
+/// Whatever the reason an account doesn't count, income hinted at it stays out with income on.
+#[test]
+fn an_inflow_hinted_at_any_uncounted_account_is_left_out() {
+    let uncounted = [
+        AccountInput {
+            closed: true,
+            ..cash("Closed", usd(0))
+        },
+        AccountInput {
+            liquidity: crate::accounts::LiquidityClass::Invested,
+            ..cash("Brokerage", usd(0))
+        },
+    ];
+    for account in uncounted {
+        let forecast = hinted_at(account, gift(usd(10_000)));
+        assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+        assert!(matches!(
+            forecast.cautions.as_slice(),
+            [Caution::ItemHintNotCounted {
+                effect: HintEffect::LeftOut,
+                ..
+            }]
+        ));
+    }
+}
+
+#[test]
+fn an_inflow_hinted_at_an_unlisted_account_is_left_out() {
+    let forecast = run(&ForecastInput {
+        include_income: true,
+        items: vec![ItemInput {
+            account_hint: Some(AccountId::new()),
+            ..gift(usd(10_000))
+        }],
+        ..household()
+    });
+
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::ItemHintNotCounted {
+            effect: HintEffect::LeftOut,
+            ..
+        }]
+    ));
 }
 
 #[test]

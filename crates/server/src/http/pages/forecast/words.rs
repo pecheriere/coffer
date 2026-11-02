@@ -240,8 +240,8 @@ fn hint_sentence(
         ),
         HintEffect::LeftOut => format!(
             "{item} is expected to arrive in {account}, which doesn't count as cash here, so it \
-             stays out of the number. That is already right: don't remove the hint just to clear \
-             this. If it isn't expected, mark the item inactive."
+             stays out of the number: the money may not reach counted cash. If it will, hint the \
+             item at a counted account instead. If it isn't expected, mark the item inactive."
         ),
     }
 }

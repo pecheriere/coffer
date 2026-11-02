@@ -216,9 +216,10 @@ fn an_unseen_bill_says_to_settle_one_paid_from_a_held_account() {
     assert!(sentence.contains("settle that bill for the month"));
 }
 
-/// Removing the hint would clear the caution and add the money to the number.
+/// Removing the hint would clear the caution and add the money to the number, so the way to
+/// count it is a counted account.
 #[test]
-fn income_left_out_says_not_to_remove_the_hint() {
+fn income_left_out_says_to_hint_a_counted_account_if_it_will_arrive() {
     let Named {
         goal,
         account,
@@ -233,7 +234,7 @@ fn income_left_out_says_not_to_remove_the_hint() {
         },
         &names,
     );
-    assert!(sentence.contains("don't remove the hint"));
+    assert!(sentence.contains("hint the item at a counted account"));
     assert!(sentence.contains("mark the item inactive"));
 }
 
