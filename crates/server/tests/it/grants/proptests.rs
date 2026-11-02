@@ -5,14 +5,15 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
-use super::{LEVELS, grant, ids, on, s, world};
+use super::{LEVELS, World, grant, ids, on, s, world};
 use axum::http::{Method, StatusCode};
 use coffer_domain::identity::{Actor, Role, Scope, Via};
-use coffer_domain::ids::{AccountId, ConnectionId, TransactionId};
+use coffer_domain::ids::{AccountId, ConnectionId, PlannedItemId, TransactionId};
 use coffer_domain::policy::{
     AccountLevel, AccountScope, DenyReason, GrantTarget, TokenGrant, authorize_account,
     grant_ceiling,
 };
+use coffer_server::secrets::SecretToken;
 use proptest::strategy::Strategy as _;
 use proptest::test_runner::TestCaseError;
 use std::collections::BTreeMap;
@@ -117,6 +118,14 @@ fn capped(scope: Scope, level: AccountLevel) -> AccountLevel {
     level.min(grant_ceiling(scope))
 }
 
+/// The level the token ends up with on an account named at `level`.
+fn capped_best(household: &Household, level: Option<AccountLevel>) -> Option<AccountLevel> {
+    household
+        .all
+        .max(level)
+        .map(|best| capped(household.scope, best))
+}
+
 /// No `all` grant, at least one visible account and at least one hidden.
 fn household_with_hidden_accounts() -> impl proptest::strategy::Strategy<Value = Household> {
     (
@@ -153,11 +162,12 @@ fn household_with_all_grant() -> impl proptest::strategy::Strategy<Value = House
         })
 }
 
-/// Every read endpoint, for these accounts and transactions.
+/// Every read endpoint, for these accounts, transactions and planned items.
 fn read_uris(
     connection: ConnectionId,
     accounts: &[AccountId],
     transactions: &[TransactionId],
+    items: &[PlannedItemId],
 ) -> Vec<String> {
     let mut uris = vec![
         "/api/v1/accounts".to_owned(),
@@ -170,6 +180,11 @@ fn read_uris(
         format!("/api/v1/connections/{connection}/sync-runs"),
         "/api/v1/audit".to_owned(),
         "/api/v1/me".to_owned(),
+        "/api/v1/plan-items".to_owned(),
+        "/api/v1/plan-items?include_inactive=true".to_owned(),
+        "/api/v1/forecast".to_owned(),
+        "/api/v1/reports/plan-vs-actual?from=2026-10".to_owned(),
+        "/api/v1/household/settings".to_owned(),
     ];
     for account in accounts {
         uris.push(format!("/api/v1/accounts/{account}"));
@@ -179,14 +194,71 @@ fn read_uris(
     for transaction in transactions {
         uris.push(format!("/api/v1/transactions/{transaction}"));
     }
+    for item in items {
+        uris.push(format!("/api/v1/plan-items/{item}"));
+    }
     uris
+}
+
+/// A goal hinted at each account, named after it, on its first transaction and on
+/// the second of the account before, so a visible split links to a goal that may be
+/// hidden; and one without a hint. What the token may not see of them goes in `hidden`.
+async fn seed_goals(
+    world: &World,
+    household: &Household,
+    accounts: &[AccountId],
+    transactions: &[TransactionId],
+    marker: &str,
+    hidden: &mut Vec<String>,
+) -> Vec<PlannedItemId> {
+    let category = world.expense_category().await;
+    let mut goals = Vec::new();
+    for (n, (account, level)) in accounts.iter().zip(&household.accounts).enumerate() {
+        let goal_name = format!("goal{n}{marker}");
+        let goal_minor = 7_346_195_000 + i64::try_from(n).unwrap();
+        let goal = world
+            .planned_item(&goal_name, Some(*account), category, goal_minor)
+            .await;
+        world
+            .link_split(transactions[2 * n], category, -1000, goal)
+            .await;
+        if capped_best(household, *level) < Some(AccountLevel::Transactions) {
+            hidden.push(s(goal));
+            hidden.push(goal_name);
+            hidden.push(goal_minor.to_string());
+        }
+        goals.push(goal);
+    }
+    for n in 0..accounts.len() {
+        let next = goals[(n + 1) % accounts.len()];
+        world
+            .link_split(transactions[2 * n + 1], category, -1000, next)
+            .await;
+    }
+    let unhinted_name = format!("unhinted{marker}");
+    let unhinted = world
+        .planned_item(&unhinted_name, None, category, 7_346_199_000)
+        .await;
+    goals.push(unhinted);
+    let holds_transactions = household
+        .accounts
+        .iter()
+        .any(|level| capped_best(household, *level) >= Some(AccountLevel::Transactions));
+    if !holds_transactions {
+        hidden.push(s(unhinted));
+        hidden.push(unhinted_name);
+    }
+    goals
 }
 
 /// Every read endpoint, called with a token holding `household`'s grants:
 /// `/accounts` lists exactly the visible accounts, and no body holds a
 /// hidden account's id, name, provider account name, transaction id or
-/// description, or source id. Without an `all` grant at `transactions` no
-/// body holds an unbound provider account or a connection's last error.
+/// description, or source id. No body holds the id, name or amount of a goal
+/// hinted at an account the token holds below `transactions`, though another
+/// account's split links to it, and none holds an unhinted item when it holds
+/// `transactions` on nothing. Without an `all` grant at `transactions` no body
+/// holds an unbound provider account or a connection's last error.
 async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseError> {
     let world = world().await;
     let marker = uuid_marker();
@@ -228,6 +300,15 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
         accounts.push(account);
         transactions.extend(own);
     }
+    let goals = seed_goals(
+        &world,
+        household,
+        &accounts,
+        &transactions,
+        &marker,
+        &mut hidden,
+    )
+    .await;
     let unbound = format!("unbound{marker}");
     let last_error = format!("lasterror{marker}");
     if household
@@ -276,13 +357,23 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
     visible.sort();
     proptest::prop_assert_eq!(listed, visible, "every visible account is listed");
 
-    let uris = read_uris(connection, &accounts, &transactions);
-    for uri in &uris {
-        let (status, body) = world.send(Method::GET, uri, &token, None, None).await;
+    let uris = read_uris(connection, &accounts, &transactions, &goals);
+    check_no_body_reveals(&world, &token, &uris, &hidden).await
+}
+
+/// Every one of `uris` answers without a server error and holds nothing of `hidden`.
+async fn check_no_body_reveals(
+    world: &World,
+    token: &SecretToken,
+    uris: &[String],
+    hidden: &[String],
+) -> Result<(), TestCaseError> {
+    for uri in uris {
+        let (status, body) = world.send(Method::GET, uri, token, None, None).await;
         proptest::prop_assert!(status != StatusCode::INTERNAL_SERVER_ERROR);
-        for secret in &hidden {
+        for held_back in hidden {
             proptest::prop_assert!(
-                !body.contains(secret.as_str()),
+                !body.contains(held_back.as_str()),
                 "a response reveals something hidden"
             );
         }
