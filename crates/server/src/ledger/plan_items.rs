@@ -38,6 +38,8 @@ const INFLOW_CATEGORY: &str = "an inflow needs an income category";
 const TYPE_CHANGED: &str = "a planned item's type never changes";
 const SPENDING_REFUSED: &str = "only a recurring outflow has a spending kind";
 const TOO_MANY: &str = "a household holds at most 500 planned items";
+const GOAL_LINKED: &str = "the goal has linked splits; mark it complete instead";
+const GOAL_LINKED_CURRENCY: &str = "the goal has linked splits, which hold it to its currency";
 const SCHEDULE_TEXT_FAILED: &str = "schedule serialization failed";
 
 /// A planned item.
@@ -125,7 +127,8 @@ pub struct PlannedItemPatch {
     /// An `expense` category for an outflow, an `income` one for an inflow;
     /// not archived, nor in an archived group.
     pub category: Option<CategoryId>,
-    /// A positive magnitude, 1 to 10^15 minor units.
+    /// A positive magnitude, 1 to 10^15 minor units. A goal with linked splits
+    /// keeps its currency.
     pub amount: Option<Money>,
     /// A goal must be an `outflow`.
     pub direction: Option<PlanDirection>,
@@ -237,6 +240,17 @@ async fn check_category(
     check_item_category(&category, group.archived_at.is_some(), direction)
 }
 
+/// `audited` with what differs between the amounts `from` and `to`.
+fn amount_audited(mut audited: AuditChanges, from: Money, to: Money) -> AuditChanges {
+    if to.minor_units != from.minor_units {
+        audited = audited.change("amount_minor", from.minor_units, to.minor_units);
+    }
+    if to.currency != from.currency {
+        audited = audited.change("currency", from.currency.as_str(), to.currency.as_str());
+    }
+    audited
+}
+
 /// A patch's text and amount, validated before the write lock is taken.
 struct CheckedPatch {
     name: Option<PlannedItemName>,
@@ -321,20 +335,14 @@ impl CheckedPatch {
             changes.category = Some(category);
         }
         if let Some(amount) = self.amount.filter(|amount| *amount != current.amount) {
-            if amount.minor_units != current.amount.minor_units {
-                audited = audited.change(
-                    "amount_minor",
-                    current.amount.minor_units,
-                    amount.minor_units,
-                );
+            // A link promises the goal's currency is the transaction's.
+            if amount.currency != current.amount.currency && tx.goal_has_links(current.id).await? {
+                return Err(LedgerError::Conflict(
+                    ProblemCode::Conflict,
+                    GOAL_LINKED_CURRENCY,
+                ));
             }
-            if amount.currency != current.amount.currency {
-                audited = audited.change(
-                    "currency",
-                    current.amount.currency.as_str(),
-                    amount.currency.as_str(),
-                );
-            }
+            audited = amount_audited(audited, current.amount, amount);
             changes.amount = Some(amount);
         }
         if direction_changed {
@@ -488,7 +496,8 @@ impl Ledger {
     /// [`LedgerError::Denied`] unless [`Self::authorize_plan_write`] allows
     /// it, whether or not the item exists; [`LedgerError::NotFound`] for an
     /// unknown item; [`LedgerError::Invalid`] for a value the item may not
-    /// hold; storage failures.
+    /// hold; [`LedgerError::Conflict`] for a new currency on a goal with
+    /// linked splits; storage failures.
     pub async fn update_planned_item(
         &self,
         actor: &Actor,
@@ -525,7 +534,8 @@ impl Ledger {
     ///
     /// [`LedgerError::Denied`] unless [`Self::authorize_plan_write`] allows
     /// it, whether or not the item exists; [`LedgerError::NotFound`] for an
-    /// unknown item; storage failures.
+    /// unknown item; [`LedgerError::Conflict`] for a goal with linked splits;
+    /// storage failures.
     pub async fn delete_planned_item(
         &self,
         actor: &Actor,
@@ -535,6 +545,9 @@ impl Ledger {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_planned_item(id).await?;
+        if tx.goal_has_links(id).await? {
+            return Err(LedgerError::Conflict(ProblemCode::Conflict, GOAL_LINKED));
+        }
         tx.delete_planned_item(id).await?;
         let changes = AuditChanges::new()
             .unset("name", current.name.as_str())

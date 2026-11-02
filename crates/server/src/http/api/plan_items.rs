@@ -167,6 +167,8 @@ pub(super) async fn get(
     request_body = PlannedItemPatch,
     responses(
         (status = 200, description = "The planned item as it now is.", body = PlannedItemView),
+        (status = 409, description = "A new currency on a goal with linked splits.",
+         body = ProblemBody, content_type = "application/problem+json"),
         CommonProblems,
     ),
 )]
@@ -190,12 +192,15 @@ pub(super) async fn update(
     path = "/api/v1/plan-items/{item_id}",
     operation_id = "deletePlanItem",
     tag = tags::PLAN,
-    description = "Deletes a planned item; the audit log keeps what it held. Needs `write`; a \
-                   token with account grants also needs `all` at `write`.",
+    description = "Deletes a planned item; the audit log keeps what it held. A goal with linked \
+                   splits can't be deleted: mark it complete instead. Needs `write`; a token \
+                   with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(PlannedItemPath),
     responses(
         (status = 204, description = "The planned item is deleted."),
+        (status = 409, description = "The goal has linked splits.",
+         body = ProblemBody, content_type = "application/problem+json"),
         CommonProblems,
     ),
 )]

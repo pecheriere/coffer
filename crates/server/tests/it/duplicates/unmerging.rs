@@ -30,6 +30,7 @@ async fn unmerge_restores_separate_transaction() {
             splits: Some(vec![SplitInput {
                 category: tools,
                 minor_units: -2_999,
+                goal: None,
             }]),
             review: Some(coffer_domain::transactions::ReviewStatus::Reviewed),
             ..TransactionPatch::default()
@@ -103,6 +104,7 @@ async fn unmerge_recomputes_the_kept_transactions_fields() {
             splits: Some(vec![SplitInput {
                 category: dining,
                 minor_units: -4_600,
+                goal: None,
             }]),
             ..TransactionPatch::default()
         },

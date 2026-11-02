@@ -391,6 +391,21 @@ impl StoreTx {
         Ok(exists)
     }
 
+    /// Whether any split links to `goal`, as seen by this transaction.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn goal_has_links(&mut self, goal: PlannedItemId) -> Result<bool, StoreError> {
+        let (exists,): (bool,) =
+            sqlx::query_as("SELECT EXISTS (SELECT 1 FROM transaction_splits WHERE goal_id = ?)")
+                .bind(goal.to_string())
+                .fetch_one(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        Ok(exists)
+    }
+
     /// How many planned items exist, inactive ones included, as seen by this
     /// transaction.
     ///

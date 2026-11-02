@@ -8,6 +8,7 @@
 )]
 
 mod crud;
+mod goal_links;
 mod grants;
 mod validation;
 

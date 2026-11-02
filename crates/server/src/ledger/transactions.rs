@@ -7,11 +7,12 @@ use std::collections::{HashMap, HashSet};
 use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{
-    AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, ProviderAccountId, SourceRecordId,
-    SplitId, TransactionId,
+    AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, PlannedItemId, ProviderAccountId,
+    SourceRecordId, SplitId, TransactionId,
 };
-use coffer_domain::money::Money;
-use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account};
+use coffer_domain::money::{Currency, Money};
+use coffer_domain::plan::PlanItemType;
+use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account, plan_item_visible};
 use coffer_domain::transactions::{
     Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput, TransactionFlag,
     TransactionOrigin, validate_splits,
@@ -38,6 +39,9 @@ const NOTES_INVALID: &str =
 const ASSIGNEE_INVALID: &str = "the assignee must be an active member";
 const UNKNOWN_CATEGORY: &str = "a split names a category that does not exist";
 const ARCHIVED_CATEGORY: &str = "a split names an archived category";
+const UNKNOWN_GOAL: &str = "a split names a goal that does not exist";
+const NOT_A_GOAL: &str = "a split names a planned item that is not a goal";
+const GOAL_CURRENCY: &str = "a split's goal must be in the transaction's currency";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NOT_MANUAL: &str = "only manual transactions can be deleted";
 const ACCOUNT_LINKED: &str =
@@ -93,7 +97,8 @@ pub struct TransactionPatch {
     pub assignee: Patch<MemberId>,
     /// Replaces every split and records who categorized it: `[]`
     /// uncategorizes, otherwise 1 to 50 non-zero splits on categories that
-    /// are not archived, summing exactly to the amount.
+    /// are not archived, summing exactly to the amount. A split sent without
+    /// a `goal` loses any link it had.
     pub splits: Option<Vec<SplitInput>>,
 }
 
@@ -129,6 +134,10 @@ pub struct SplitView {
     pub id: SplitId,
     pub category: CategoryId,
     pub amount: Money,
+    /// The goal this part counts towards; `null` for none. The token may not
+    /// be able to see that goal: the id then answers 404, like any other.
+    #[schema(required)]
+    pub goal: Option<PlannedItemId>,
 }
 
 /// A provider record a transaction was imported from.
@@ -229,6 +238,7 @@ impl TransactionView {
                     id: split.id,
                     category: split.category,
                     amount: money(split.minor_units),
+                    goal: split.goal,
                 })
                 .collect(),
             flags: record.flags.clone(),
@@ -345,6 +355,7 @@ pub(super) fn current_splits(record: &TransactionRecord) -> Vec<SplitInput> {
         .map(|split| SplitInput {
             category: split.category,
             minor_units: split.minor_units,
+            goal: split.goal,
         })
         .collect()
 }
@@ -370,6 +381,33 @@ async fn check_categories(tx: &mut StoreTx, splits: &[SplitInput]) -> Result<(),
         let group = tx.get_category_group(category.group).await?;
         if category.archived_at.is_some() || group.archived_at.is_some() {
             return Err(LedgerError::Invalid(ARCHIVED_CATEGORY));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a split whose goal `access` may not see or that does not exist, in
+/// the same words, because a difference would confirm a hidden item exists
+/// (R3). That is decided first, so nothing else about a hidden item shows
+/// through. Then the item must be a goal, in `currency`; a completed or
+/// inactive one may still take late receipts.
+async fn check_goals(
+    tx: &mut StoreTx,
+    access: &AccountAccess,
+    currency: Currency,
+    splits: &[SplitInput],
+) -> Result<(), LedgerError> {
+    for goal in splits.iter().filter_map(|split| split.goal) {
+        let item = match tx.get_planned_item(goal).await {
+            Ok(item) if plan_item_visible(access, item.account_hint) => item,
+            Ok(_) | Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
+            Err(other) => return Err(other.into()),
+        };
+        if item.schedule.item_type() != PlanItemType::Goal {
+            return Err(LedgerError::Invalid(NOT_A_GOAL));
+        }
+        if item.amount.currency != currency {
+            return Err(LedgerError::Invalid(GOAL_CURRENCY));
         }
     }
     Ok(())
@@ -479,6 +517,7 @@ async fn apply_patch(
         let before = current_splits(&current);
         if splits != before {
             check_categories(tx, &splits).await?;
+            check_goals(tx, access, current.currency, &splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
             if current.flags.contains(&TransactionFlag::SplitMismatch) {
                 audited = audited.change("split_mismatch", true, false);
@@ -621,8 +660,9 @@ impl Ledger {
     /// [`LedgerError::NotFound`] for an unknown transaction or one in a
     /// hidden account; [`LedgerError::Denied`] without write access to its
     /// account; [`LedgerError::Invalid`] for an invalid value (text, an
-    /// assignee who is not an active member, splits that do not fit, or an
-    /// unknown or archived category); storage failures.
+    /// assignee who is not an active member, splits that do not fit, an
+    /// unknown or archived category, or a goal that can't be linked); storage
+    /// failures.
     pub async fn update_transaction(
         &self,
         actor: &Actor,

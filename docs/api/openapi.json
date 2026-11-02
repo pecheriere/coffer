@@ -3061,7 +3061,7 @@
           "plan"
         ],
         "summary": "Deletes a planned item.",
-        "description": "Deletes a planned item; the audit log keeps what it held. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Deletes a planned item; the audit log keeps what it held. A goal with linked splits can't be deleted: mark it complete instead. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "deletePlanItem",
         "parameters": [
           {
@@ -3120,6 +3120,16 @@
           },
           "405": {
             "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The goal has linked splits.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3236,6 +3246,16 @@
           },
           "405": {
             "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A new currency on a goal with linked splits.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6449,7 +6469,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Money",
-                "description": "A positive magnitude, 1 to 10^15 minor units."
+                "description": "A positive magnitude, 1 to 10^15 minor units. A goal with linked splits\nkeeps its currency."
               },
               {
                 "type": "null"
@@ -6928,6 +6948,17 @@
           "category": {
             "$ref": "#/components/schemas/CategoryId"
           },
+          "goal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlannedItemId",
+                "description": "The goal this part counts towards, which must exist and be in the\ntransaction's currency; a completed or inactive goal may be named.\nLeft out, the part counts towards none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "minor_units": {
             "type": "integer",
             "format": "int64",
@@ -6942,7 +6973,8 @@
         "required": [
           "id",
           "category",
-          "amount"
+          "amount",
+          "goal"
         ],
         "properties": {
           "amount": {
@@ -6950,6 +6982,17 @@
           },
           "category": {
             "$ref": "#/components/schemas/CategoryId"
+          },
+          "goal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlannedItemId",
+                "description": "The goal this part counts towards; `null` for none. The token may not\nbe able to see that goal: the id then answers 404, like any other."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "$ref": "#/components/schemas/SplitId"
@@ -7177,7 +7220,7 @@
             "items": {
               "$ref": "#/components/schemas/SplitInput"
             },
-            "description": "Replaces every split and records who categorized it: `[]`\nuncategorizes, otherwise 1 to 50 non-zero splits on categories that\nare not archived, summing exactly to the amount."
+            "description": "Replaces every split and records who categorized it: `[]`\nuncategorizes, otherwise 1 to 50 non-zero splits on categories that\nare not archived, summing exactly to the amount. A split sent without\na `goal` loses any link it had."
           }
         },
         "additionalProperties": false
