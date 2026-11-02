@@ -28,8 +28,8 @@ use crate::sync::connections::{ConnectionView, ProviderAccountView};
 
 pub(super) const BELONGS_TO_UNKNOWN: &str =
     "Choose one of the answers in the list for whose money it is.";
-const KIND_FINE: &str = "Checking and savings count as cash for planning. Planning counts only \
-    cash and debts due soon. Education and custodial accounts are held for someone else, and \
+const KIND_FINE: &str = "Checking and savings count as cash in the forecast. The forecast counts \
+    only cash and debts due soon. Education and custodial accounts are held for someone else, and \
     charitable ones are given away: they stay out of net worth unless you say they're the \
     household's.";
 /// Who sees a label, for the hints of both forms.
@@ -40,7 +40,7 @@ const HELD_FOR_INVALID: &str =
 const HELD_FOR_ON_HOUSEHOLD: &str =
     "Held for is only for money that isn't the household's: empty it, or choose another answer.";
 const CHANGED: &str =
-    "This account changed after the page opened, so nothing was saved. Look at it again.";
+    "This account changed after the page opened, so this save wasn't applied. Look at it again.";
 const STOPS_FOLLOWING: &str =
     "Picking an answer stops it following the kind for good, even the one it has now.";
 const ANSWERS: [BelongsTo; 3] = [
@@ -192,7 +192,8 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
         }
         (false, BelongsTo::Household, _) => {
             "You haven't chosen, so this follows the kind. An education, custodial or charitable \
-             kind takes it out of net worth, and out of planning if it's cash or a debt due soon."
+             kind takes it out of net worth, and out of the forecast if it's cash or a debt due \
+             soon."
         }
         (false, _, true) => {
             "You haven't chosen, so this follows the kind. An education or custodial kind makes it \
@@ -209,16 +210,16 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
     let moving = match (view.belongs_to, named) {
         (BelongsTo::Household, _) => {
             "Saying it's someone else's or given away takes it out of net worth, over its whole \
-             history, and out of planning if it's cash or a debt due soon. If you say it's the \
-             household's again later, it counts again, even where you had turned that off."
+             history, and out of the forecast if it's cash or a debt due soon. If you say it's \
+             the household's again later, it counts again, even where you had turned that off."
         }
         (_, true) => {
             "Saying it's the household's counts it in net worth, over its whole history, and \
-             removes the name. Planning counts it only if it's cash or a debt due soon."
+             removes the name. The forecast counts it only if it's cash or a debt due soon."
         }
         (_, false) => {
-            "Saying it's the household's counts it in net worth, over its whole history. Planning \
-             counts it only if it's cash or a debt due soon."
+            "Saying it's the household's counts it in net worth, over its whole history. The \
+             forecast counts it only if it's cash or a debt due soon."
         }
     };
     let held_for_fine = match (view.belongs_to, named) {
@@ -239,6 +240,7 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
                 (csrf_field(csrf))
                 input type="hidden" name="shown_kind" value=(view.kind.as_str());
                 input type="hidden" name="shown_belongs_to" value=(view.belongs_to.as_str());
+                input type="hidden" name="shown_chosen" value=(view.belongs_to_overridden);
                 input type="hidden" name="shown_beneficiary" value=(shown_name);
                 (kind_field(row, &html! {
                     @for kind in AccountKind::ALL {
@@ -281,6 +283,8 @@ pub(super) struct BelongingForm {
     #[serde(default)]
     shown_belongs_to: String,
     #[serde(default)]
+    shown_chosen: String,
+    #[serde(default)]
     shown_beneficiary: String,
     #[serde(default)]
     kind: String,
@@ -294,10 +298,12 @@ assert_no_debug!(BelongingForm);
 
 impl BelongingForm {
     /// Whether the page this came from showed the account as it is now. Any answer sent from an
-    /// older one was chosen by someone who hadn't seen what has happened since.
+    /// older one was chosen by someone who hadn't seen what has happened since, and whether the
+    /// answer was chosen decides what the form's words said a change of kind would do.
     fn showed(&self, current: &AccountView) -> bool {
         self.shown_kind == current.kind.as_str()
             && self.shown_belongs_to == current.belongs_to.as_str()
+            && self.shown_chosen == current.belongs_to_overridden.to_string()
             && self.shown_beneficiary == current.beneficiary.as_deref().unwrap_or_default()
     }
 }

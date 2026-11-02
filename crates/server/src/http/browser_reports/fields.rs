@@ -44,8 +44,10 @@ const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 /// pages do, and a report from it says only that something failed.
 ///
 /// A rejection names no script, so nothing shows it is coffer's. Its text is kept, except from
-/// [`CONNECTIONS`], whose forms hold a label that may be a child's name, which another script on
-/// the page, a browser extension's say, could quote.
+/// [`CONNECTIONS`], whose forms hold a label that may be a child's name. That stops another script
+/// on the page, a browser extension's say, quoting one by accident. It can't stop one that means
+/// to forge a report, which anyone can post with any kind and text: every report is logged as
+/// `trust="untrusted"`.
 const PAGES: [&str; 10] = [
     "/login",
     "/setup/{token}",

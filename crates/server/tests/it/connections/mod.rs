@@ -9,6 +9,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod authorize_create;
 mod binding;
 mod credentials;
 mod kept_balances;

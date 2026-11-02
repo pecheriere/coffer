@@ -15,6 +15,7 @@ use super::bind::create_path;
 use super::{World, assert_inline_free, world};
 
 mod row;
+mod stale;
 
 const CHILD: &str = "Child A";
 const MARKED_NAME: &str = "Marked Name Zq";
@@ -94,6 +95,14 @@ impl World {
         let mut sent = vec![
             ("shown_kind", view.kind.as_str()),
             ("shown_belongs_to", view.belongs_to.as_str()),
+            (
+                "shown_chosen",
+                if view.belongs_to_overridden {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
             (
                 "shown_beneficiary",
                 view.beneficiary.as_deref().unwrap_or_default(),
@@ -302,8 +311,8 @@ async fn the_bind_form_says_the_kind_decides_unless_told_otherwise() {
     world.report(connection, "Fund", "USD", None).await;
     let page = world.admin.get("/connections").await;
     assert!(page.body.contains(
-        "Checking and savings count as cash for planning. Planning counts only cash and debts \
-         due soon. Education and custodial accounts are held for someone else, and charitable \
+        "Checking and savings count as cash in the forecast. The forecast counts only cash and \
+         debts due soon. Education and custodial accounts are held for someone else, and charitable \
          ones are given away: they stay out of net worth unless you say they're the household's."
     ));
     assert!(page.body.contains(

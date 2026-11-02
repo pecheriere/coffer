@@ -7,25 +7,23 @@ use coffer_domain::ids::AccountId;
 use coffer_server::testkit::browser::Browser;
 use serde_json::json;
 
-use super::super::{World, world};
+use super::super::world;
 use super::{CHILD, FOLLOW_THE_KIND, MARKED_NAME, assert_counted, bound, changes, row_path};
 
 const STOPS_FOLLOWING: &str =
     "Picking an answer stops it following the kind for good, even the one it has now.";
-const PLANNING_ONLY: &str = "Planning counts it only if it's cash or a debt due soon.";
+const FORECAST_ONLY: &str = "The forecast counts it only if it's cash or a debt due soon.";
 const KEEPS_THE_NAME: &str = "it stays out of net worth and keeps the name.";
 const SEEN_BY: &str = "Anyone who can see this account sees it, on this page and in net worth, and it stays in the audit log.";
-const CHANGED: &str =
-    "This account changed after the page opened, so nothing was saved. Look at it again.";
 const LEAVE_IT_FOLLOWING: &str = "Leave it, following the kind";
 const LEAVE_IT_CHOSEN: &str = "Leave it as you chose";
 const COUNTS_IT_AGAIN: &str = "If you say it's the household's again later, it counts again, even where you had turned that off.";
 const COUNTS_IT: &str =
     "Saying it's the household's counts it in net worth, over its whole history";
-const TAKES_IT_OUT: &str = "Saying it's someone else's or given away takes it out of net worth, over its whole history, and out of planning if it's cash or a debt due soon.";
+const TAKES_IT_OUT: &str = "Saying it's someone else's or given away takes it out of net worth, over its whole history, and out of the forecast if it's cash or a debt due soon.";
 const STAYS: &str =
     "You chose this, so it stays whatever the kind. It can't go back to following the kind.";
-const HOUSEHOLD_FOLLOWS: &str = "An education, custodial or charitable kind takes it out of net worth, and out of planning if it's cash or a debt due soon.";
+const HOUSEHOLD_FOLLOWS: &str = "An education, custodial or charitable kind takes it out of net worth, and out of the forecast if it's cash or a debt due soon.";
 const HELD_FOLLOWS: &str = "Any other kind makes it the household's and counts it in net worth";
 
 #[tokio::test]
@@ -229,7 +227,7 @@ async fn a_held_row_says_first_that_moving_it_back_counts_it() {
     let page = world.admin.get("/connections").await;
     let details = page.between("Kind and whose money it is", "</details>");
     assert!(details.contains(&format!("{COUNTS_IT}.")));
-    assert!(details.contains(PLANNING_ONLY));
+    assert!(details.contains(FORECAST_ONLY));
     assert!(!details.contains(TAKES_IT_OUT));
     assert!(details.contains("audit log"));
 }
@@ -466,6 +464,7 @@ async fn the_row_form_is_only_for_who_may_write() {
                 ("csrf", "AAAA"),
                 ("shown_kind", "education"),
                 ("shown_belongs_to", "someone_else"),
+                ("shown_chosen", "false"),
                 ("shown_beneficiary", ""),
                 ("kind", "education"),
                 ("belongs_to", "household"),
@@ -490,6 +489,7 @@ async fn the_row_form_is_only_for_who_may_write() {
                 ("csrf", &page.csrf()),
                 ("shown_kind", "education"),
                 ("shown_belongs_to", "someone_else"),
+                ("shown_chosen", "false"),
                 ("shown_beneficiary", ""),
                 ("kind", "education"),
                 ("beneficiary", CHILD),
@@ -498,181 +498,6 @@ async fn the_row_form_is_only_for_who_may_write() {
         .await;
     assert_eq!(done.status, StatusCode::SEE_OTHER);
     assert_eq!(world.view(fund).await.beneficiary.as_deref(), Some(CHILD));
-}
-
-// --- a form that is out of date ------------------------------------------------------------------
-
-/// A form as the page drew it when the row held these.
-fn shown<'a>(kind: &'a str, belongs_to: &'a str, name: &'a str) -> [(&'a str, &'a str); 3] {
-    [
-        ("shown_kind", kind),
-        ("shown_belongs_to", belongs_to),
-        ("shown_beneficiary", name),
-    ]
-}
-
-/// Asserts that `sent` was refused as out of date, and changed nothing of `fund`.
-async fn assert_refused_as_stale(world: &mut World, fund: AccountId, sent: &[(&str, &str)]) {
-    let before = world.view(fund).await;
-    let audited = world.updates(fund).await.len();
-    let reply = world.post_exact(fund, sent).await;
-    assert_eq!(reply.status, StatusCode::CONFLICT);
-    assert!(reply.body.contains("role=\"alert\""));
-    assert!(reply.body.contains(CHANGED));
-    let after = world.view(fund).await;
-    assert_eq!(after.kind, before.kind);
-    assert_eq!(after.belongs_to, before.belongs_to);
-    assert_eq!(after.belongs_to_overridden, before.belongs_to_overridden);
-    assert_eq!(after.beneficiary, before.beneficiary);
-    assert_eq!(after.include_in_net_worth, before.include_in_net_worth);
-    assert_eq!(after.include_in_forecast, before.include_in_forecast);
-    assert_eq!(world.updates(fund).await.len(), audited);
-}
-
-#[tokio::test]
-async fn an_untouched_stale_form_does_not_undo_another_move() {
-    let mut world = world().await;
-    let fund = bound(&mut world, "Shares", &[("kind", "brokerage")]).await;
-    let moved = world
-        .post_row(
-            fund,
-            &[
-                ("kind", "custodial"),
-                ("belongs_to", ""),
-                ("beneficiary", CHILD),
-            ],
-        )
-        .await;
-    assert_eq!(moved.status, StatusCode::SEE_OTHER);
-    let mut sent = shown("brokerage", "household", "").to_vec();
-    sent.extend([
-        ("kind", "brokerage"),
-        ("belongs_to", ""),
-        ("beneficiary", ""),
-    ]);
-    assert_refused_as_stale(&mut world, fund, &sent).await;
-    assert_counted(&world.view(fund).await, false);
-}
-
-#[tokio::test]
-async fn a_stale_name_does_not_come_back() {
-    let mut world = world().await;
-    let fund = bound(
-        &mut world,
-        "Plan",
-        &[("kind", "education"), ("beneficiary", "Child B")],
-    )
-    .await;
-    let mut sent = shown("education", "someone_else", CHILD).to_vec();
-    sent.extend([
-        ("kind", "education"),
-        ("belongs_to", ""),
-        ("beneficiary", CHILD),
-    ]);
-    assert_refused_as_stale(&mut world, fund, &sent).await;
-    assert_eq!(
-        world.view(fund).await.beneficiary.as_deref(),
-        Some("Child B")
-    );
-}
-
-#[tokio::test]
-async fn a_stale_empty_box_does_not_remove_a_name_added_since() {
-    let mut world = world().await;
-    let fund = bound(
-        &mut world,
-        "Plan",
-        &[("kind", "education"), ("beneficiary", CHILD)],
-    )
-    .await;
-    let mut sent = shown("education", "someone_else", "").to_vec();
-    sent.extend([
-        ("kind", "education"),
-        ("belongs_to", ""),
-        ("beneficiary", ""),
-    ]);
-    assert_refused_as_stale(&mut world, fund, &sent).await;
-    assert_eq!(world.view(fund).await.beneficiary.as_deref(), Some(CHILD));
-}
-
-#[tokio::test]
-async fn a_stale_kind_alone_is_refused() {
-    let mut world = world().await;
-    let fund = bound(&mut world, "Shares", &[("kind", "retirement")]).await;
-    let mut sent = shown("brokerage", "household", "").to_vec();
-    sent.extend([
-        ("kind", "brokerage"),
-        ("belongs_to", ""),
-        ("beneficiary", ""),
-    ]);
-    assert_refused_as_stale(&mut world, fund, &sent).await;
-}
-
-#[tokio::test]
-async fn a_stale_answer_alone_is_refused() {
-    let mut world = world().await;
-    let fund = bound(
-        &mut world,
-        "Shares",
-        &[("kind", "brokerage"), ("belongs_to", "given_away")],
-    )
-    .await;
-    let mut sent = shown("brokerage", "household", "").to_vec();
-    sent.extend([
-        ("kind", "brokerage"),
-        ("belongs_to", ""),
-        ("beneficiary", ""),
-    ]);
-    assert_refused_as_stale(&mut world, fund, &sent).await;
-}
-
-#[tokio::test]
-async fn a_form_saying_nothing_of_what_it_showed_is_refused_as_stale() {
-    let mut world = world().await;
-    let fund = bound(&mut world, "Plan", &[("kind", "education")]).await;
-    assert_refused_as_stale(
-        &mut world,
-        fund,
-        &[
-            ("kind", "brokerage"),
-            ("belongs_to", ""),
-            ("beneficiary", ""),
-        ],
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn a_stale_refusal_echoes_no_name() {
-    let mut world = world().await;
-    let fund = bound(&mut world, "Plan", &[("kind", "education")]).await;
-    let mut sent = shown("education", "someone_else", MARKED_NAME).to_vec();
-    sent.extend([("beneficiary", "Marked Box Zq")]);
-    let reply = world.post_exact(fund, &sent).await;
-    assert_eq!(reply.status, StatusCode::CONFLICT);
-    assert!(!reply.body.contains(MARKED_NAME));
-    assert!(!reply.body.contains("Marked Box Zq"));
-}
-
-/// What the page draws is what the check compares: the row's kind, answer and name, as sent back.
-#[tokio::test]
-async fn the_row_form_carries_what_it_showed() {
-    let mut world = world().await;
-    bound(
-        &mut world,
-        "Plan",
-        &[("kind", "education"), ("beneficiary", "<b>Child</b> & co")],
-    )
-    .await;
-    let page = world.admin.get("/connections").await;
-    let details = page.between("Kind and whose money it is", "</details>");
-    for field in [
-        r#"name="shown_kind" value="education""#,
-        r#"name="shown_belongs_to" value="someone_else""#,
-        r#"name="shown_beneficiary" value="&lt;b&gt;Child&lt;/b&gt; &amp; co""#,
-    ] {
-        assert!(details.contains(field), "{field}");
-    }
 }
 
 #[tokio::test]

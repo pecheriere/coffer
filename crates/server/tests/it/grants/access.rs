@@ -216,7 +216,9 @@ async fn write_needs_write_grant() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
-/// A page form relies on this: whoever may not write hears so, whatever the values say.
+/// A page form relies on this: whoever may not write hears so, whatever `name` or `beneficiary`
+/// say. It holds for those two only: a `kind` that won't parse answers 400 for everyone, since the
+/// body is read before the handler runs.
 #[tokio::test]
 async fn an_account_patch_is_authorized_before_its_values_are_read() {
     let world = world().await;
