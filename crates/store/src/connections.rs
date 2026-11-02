@@ -15,7 +15,7 @@ use crate::{Store, StoreError, StoreTx};
 macro_rules! columns {
     () => {
         "id, provider, label, owner_id, credentials, provider_state, status, last_error, \
-         last_attempt_at, last_success_at, created_at, removed_at"
+         last_attempt_at, last_success_at, created_at, removed_at, reauth_generation"
     };
 }
 
@@ -86,6 +86,9 @@ pub struct ConnectionRecord {
     pub last_success_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub removed_at: Option<Timestamp>,
+    /// How many provider-side reauthorizations were confirmed; moves on
+    /// though the credentials stay the same.
+    pub reauth_generation: i64,
 }
 
 impl std::fmt::Debug for ConnectionRecord {
@@ -172,6 +175,9 @@ fn connection_from_row(row: &SqliteRow) -> Result<ConnectionRecord, StoreError> 
         last_success_at: time_opt(row, "last_success_at")?,
         created_at: time(row, "created_at")?,
         removed_at: time_opt(row, "removed_at")?,
+        reauth_generation: row
+            .try_get("reauth_generation")
+            .map_err(StoreError::from_sqlx)?,
     })
 }
 
@@ -279,6 +285,23 @@ impl StoreTx {
             .execute(&mut *self.tx)
             .await
             .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// Record that a provider-side reauthorization of a connection was
+    /// confirmed: its `reauth_generation` moves on.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the connection does not exist.
+    pub async fn bump_reauth_generation(&mut self, id: ConnectionId) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE connections SET reauth_generation = reauth_generation + 1 WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         expect_one(result.rows_affected())
     }
 

@@ -363,6 +363,7 @@ fn parse_account_set(
     Ok(FetchResult {
         accounts,
         connection_errors,
+        skipped: 0,
         cursor: None,
     })
 }
@@ -488,7 +489,8 @@ impl Provider for SimpleFin {
         Capabilities {
             pending: true,
             mode: FetchMode::Window {
-                max_days: 90,
+                // The window runs from midnight and DST lengthens days: 90 calendar days exceed the bridge's limit.
+                max_days: 88,
                 overlap_days: 14,
             },
             min_interval: jiff::SignedDuration::from_hours(1),
@@ -697,6 +699,7 @@ mod tests {
                 "password pw-2 rejected".to_owned(),
                 "kept".to_owned(),
             ],
+            skipped: 0,
             cursor: None,
         };
         let withheld = withhold_credentials(result, &["user-1", "pw-2", ""]);

@@ -289,8 +289,8 @@ async fn unusable_records_never_fail_the_account() {
 
     assert_eq!(run.status, SyncRunStatus::Partial);
     assert!(
-        run.detail.unwrap().contains("2 skipped"),
-        "both are counted"
+        run.detail.unwrap().contains("3 skipped"),
+        "all three are counted, the one of no account too"
     );
     assert_eq!(world.provider_account("acct-checking").await.error, None);
     assert_eq!(world.transactions(checking).await.len(), 1);
