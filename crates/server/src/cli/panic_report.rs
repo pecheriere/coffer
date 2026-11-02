@@ -27,8 +27,10 @@ fn report(location: Option<&Location<'_>>) {
     let backtrace = Backtrace::force_capture();
     let location = location.map_or_else(|| "unknown".to_owned(), ToString::to_string);
     // False with no subscriber yet (the commands other than `serve` set up
-    // none), with logs filtered out, and when the panic is inside the
-    // subscriber, where tracing refuses to re-enter it.
+    // none) and with logs filtered out. A panic inside the global subscriber
+    // is not one of these: tracing has no re-entry guard for a global
+    // dispatcher, so this event goes back into it, and a second panic there
+    // aborts the process.
     if tracing::enabled!(Level::ERROR) {
         tracing::error!(%location, %backtrace, "coffer panicked");
     } else {

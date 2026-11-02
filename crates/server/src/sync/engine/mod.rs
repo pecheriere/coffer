@@ -112,6 +112,9 @@ pub struct SyncService {
     pub(super) queued: tokio::sync::Notify,
     /// How often each member's Link pages may call Plaid.
     pub(super) plaid_budget: PlaidBudget,
+    /// Whether the worker panics the next time it looks for a queued run.
+    #[cfg(feature = "testkit")]
+    pub(super) worker_panics: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for SyncService {
@@ -145,7 +148,18 @@ impl SyncService {
             fetch_deadline: FETCH_DEADLINE,
             queued: tokio::sync::Notify::new(),
             plaid_budget: PlaidBudget::default(),
+            #[cfg(feature = "testkit")]
+            worker_panics: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Makes the scheduler's worker panic, outside any run, the next time it
+    /// looks for a queued run, and wakes it to do so.
+    #[cfg(feature = "testkit")]
+    pub fn panic_worker_next_pass(&self) {
+        self.worker_panics
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.queued.notify_one();
     }
 
     /// This service with fetches limited to `deadline`, so a test can reach

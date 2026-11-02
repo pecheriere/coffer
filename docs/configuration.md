@@ -180,8 +180,10 @@ What happens next depends on where the panic was:
   plain page elsewhere, and the server goes on. The request's open transaction
   rolls back. An `Idempotency-Key` it had reserved answers
   `idempotency_in_progress` until the reservation lapses, within 5 minutes.
-- **In a sync run:** the run is marked failed, and the log also has
-  `a sync run ended abnormally` with its id. The next queued run follows.
+- **In a sync run:** the log also has `a sync run ended abnormally` with its
+  id, the run is marked failed, and the next queued run follows. If a store
+  error stops the run being marked failed, the log says so and the run stays
+  marked running until the next restart.
 - **In the sync scheduler itself:** the log also has
   `a sync scheduler task ended abnormally; starting it again`, and the task
   starts again after a wait of up to a minute.

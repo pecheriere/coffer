@@ -243,6 +243,14 @@ async fn recover(sync: &SyncService, stop: &mut watch::Receiver<bool>) -> bool {
 async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
     let mut backoff = Backoff::default();
     loop {
+        #[cfg(feature = "testkit")]
+        assert!(
+            !sync
+                .worker_panics
+                .swap(false, std::sync::atomic::Ordering::SeqCst),
+            "{}",
+            crate::testkit::SCRIPTED_PANIC
+        );
         let next = match sync.store.next_queued_run().await {
             Ok(next) => next,
             Err(err) => {

@@ -36,7 +36,10 @@
   so the panic log has only the source location and a backtrace of code
   locations, and a client gets a fixed 500. No crash reports leave the host.
   The release binary keeps its symbols and line tables for those backtraces,
-  which reveals nothing the public source does not.
+  which reveals nothing the public source does not. Accepted risk: panic events
+  are not rate limited, at about 8 KB each, so a client that could cause a panic
+  could fill the logs; that needs a client-reachable panic, and a review of this
+  code found none.
 - **Provider credentials are stored only sealed.** They are encrypted with
   XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
   the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider

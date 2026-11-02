@@ -38,6 +38,7 @@ use coffer_store::{
     TransactionFilter,
 };
 use http_body_util::BodyExt as _;
+use jiff::SignedDuration;
 use jiff::civil::date;
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
@@ -192,6 +193,27 @@ impl World {
             loop {
                 let run = self.run_record(id).await;
                 if run.finished_at.is_some() {
+                    return run;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The first run of the connection to finish, once one has.
+    async fn first_finished_run(&self) -> SyncRunRecord {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let runs = self
+                    .server
+                    .store
+                    .list_sync_runs(self.connection, &PageRequest::default())
+                    .await
+                    .unwrap()
+                    .items;
+                if let Some(run) = runs.into_iter().find(|run| run.finished_at.is_some()) {
                     return run;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -540,23 +562,7 @@ async fn scheduler_queues_due_connections_and_drains_them() {
 
     // Never attempted: due at once.
     let running = world.spawn_scheduler();
-    let run = tokio::time::timeout(WAIT, async {
-        loop {
-            let runs = world
-                .server
-                .store
-                .list_sync_runs(world.connection, &PageRequest::default())
-                .await
-                .unwrap()
-                .items;
-            if let Some(run) = runs.into_iter().find(|run| run.finished_at.is_some()) {
-                return run;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let run = world.first_finished_run().await;
     running.stop().await;
 
     assert_eq!(run.trigger, SyncTrigger::Schedule);
@@ -637,29 +643,103 @@ async fn panic_in_the_ticker_leaves_scheduled_syncs_running() {
     let world = world().await;
     world.script_one_account();
     world.fake.panic_next_capabilities();
+    let start = log_marker();
 
     let running = world.spawn_scheduler();
-    let run = tokio::time::timeout(WAIT, async {
-        loop {
-            let runs = world
-                .server
-                .store
-                .list_sync_runs(world.connection, &PageRequest::default())
-                .await
-                .unwrap()
-                .items;
-            if let Some(run) = runs.into_iter().find(|run| run.finished_at.is_some()) {
-                return run;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let run = world.first_finished_run().await;
     running.stop().await;
 
     assert_eq!(run.trigger, SyncTrigger::Schedule);
     assert_eq!(run.status, SyncRunStatus::Succeeded);
+    assert_restart_logged_without_panic_text(&start, "ticker");
+}
+
+/// Checks the log since `start` says `task` restarted and holds nothing of
+/// the panic's message.
+fn assert_restart_logged_without_panic_text(start: &str, task: &str) {
+    let log = captured_log_text();
+    let (_, since_start) = log.split_once(start).unwrap();
+    assert!(
+        since_start
+            .lines()
+            .any(|line| line.contains("starting it again") && line.contains(task)),
+        "the restart of {task} is logged"
+    );
+    assert!(
+        !since_start.contains(SCRIPTED_PANIC),
+        "the panic's message stays out of the log"
+    );
+}
+
+/// A running scheduler whose recovery at start is over, with a run left marked
+/// running and the worker told to panic outside any run. The panic is scripted
+/// after a scheduled run finished, so only the restart can recover that run.
+async fn worker_panicked_with_a_run_left_running(world: &World) -> (Running, SyncRunId) {
+    world.script_one_account();
+    let running = world.spawn_scheduler();
+    world.first_finished_run().await;
+    // In one transaction, so the worker never sees it queued.
+    let mut tx = world.server.store.begin().await.unwrap();
+    let left = tx
+        .insert_sync_run(NewSyncRun {
+            connection: world.connection,
+            trigger: SyncTrigger::Manual,
+            requested_by: Some((world.alice.member, None)),
+            queued_at: world.server.clock.now(),
+        })
+        .await
+        .unwrap();
+    tx.start_sync_run(left.id, world.server.clock.now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    world.server.sync.panic_worker_next_pass();
+    (running, left.id)
+}
+
+#[tokio::test]
+async fn worker_restart_fails_a_run_left_running() {
+    let world = world().await;
+    let (running, left) = worker_panicked_with_a_run_left_running(&world).await;
+
+    let run = world.finished(left).await;
+    running.stop().await;
+
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some("interrupted"));
+}
+
+#[tokio::test]
+async fn connection_syncs_again_after_a_worker_restart() {
+    let world = world().await;
+    let (running, left) = worker_panicked_with_a_run_left_running(&world).await;
+    world.finished(left).await;
+
+    // Past the fake provider's minimum interval between syncs.
+    world.server.clock.advance(SignedDuration::from_hours(2));
+    world.script_one_account();
+    let again = world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    let run = world.finished(again.id).await;
+    running.stop().await;
+
+    assert_eq!(run.status, SyncRunStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn worker_restart_log_holds_nothing_of_the_panic() {
+    let world = world().await;
+    let start = log_marker();
+    let (running, left) = worker_panicked_with_a_run_left_running(&world).await;
+
+    world.finished(left).await;
+    running.stop().await;
+
+    assert_restart_logged_without_panic_text(&start, "worker");
 }
 
 /// Runs already queued when the scheduler starts are performed.
