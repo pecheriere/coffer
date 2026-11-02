@@ -15,8 +15,10 @@ acquire_lock() {
   until mkdir "$lock" 2>/dev/null; do
     holder=$(cat "$lock/pid" 2>/dev/null || true)
     # A holder that died can't release: remove its lock. An empty pid means
-    # the holder is between mkdir and writing it, so that one is left alone.
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    # the holder is between mkdir and writing it, which takes moments, so an
+    # empty lock older than a minute was left by a gate killed while releasing.
+    if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } ||
+      { [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1)" ]; }; then
       rm -f "$lock/pid"
       rmdir "$lock" 2>/dev/null || true
       continue
@@ -25,6 +27,8 @@ acquire_lock() {
   done
   echo $$ >"$lock/pid"
   trap 'rm -f "$lock/pid"; rmdir "$lock"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 step() {
