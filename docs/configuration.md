@@ -184,11 +184,13 @@ What happens next depends on where the panic was:
   rolls back. An `Idempotency-Key` it had reserved answers
   `idempotency_in_progress` until the reservation lapses, within 5 minutes.
 - **In a sync run:** the log also has `a sync run ended abnormally` with its
-  id, the run is marked failed, and the next queued run follows. If a store
-  error stops the run being marked failed, the log says so and the worker
-  tries again, waiting up to a minute between attempts, until the store takes
-  it. Until then the connection answers that a sync is in progress; if the
-  server stops first, the next start marks the run failed.
+  id, the run is marked failed, and the next queued run follows. If the
+  database is unavailable when the run is marked failed, the log says so and
+  the worker tries again, waiting up to a minute between attempts, until it
+  works; until then the connection answers that a sync is in progress, and if
+  the server stops first the next start marks the run failed. Any other error
+  is logged once, the worker goes on, and that run stays marked running until
+  the next restart.
 - **In the sync scheduler itself:** the log also has
   `a sync scheduler task ended abnormally; starting it again`, and the task
   starts again after a wait of up to a minute.

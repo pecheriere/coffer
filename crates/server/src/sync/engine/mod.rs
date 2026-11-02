@@ -226,17 +226,19 @@ impl SyncService {
         }
     }
 
-    /// Marks `run` failed after a storage error or a panic, whether it is
-    /// still queued or running. A run that already finished is left as it is,
-    /// and says so with [`StoreError::Conflict`].
+    /// Marks `run` failed after a storage error or a panic, if it is
+    /// running. A run still queued stays queued, to be performed again, and
+    /// a run that already finished is left as it is, which says so with
+    /// [`StoreError::Conflict`].
     ///
     /// # Errors
     ///
-    /// [`StoreError::Conflict`] for a finished run; any other error means the
-    /// store did not allow it, and the run is as it was.
+    /// [`StoreError::Conflict`] for a finished run; [`StoreError::NotFound`]
+    /// for an unknown one; any other error means the store did not allow it,
+    /// and the run is as it was.
     pub(super) async fn abandon(&self, run: SyncRunId) -> Result<(), StoreError> {
         let mut tx = self.store.begin().await?;
-        tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
+        tx.fail_running_sync_run(run, INTERNAL_FAILURE, self.clock.now())
             .await?;
         tx.commit().await
     }

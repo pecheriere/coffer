@@ -292,12 +292,12 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
             // The engine logged it and marked the run failed when it could.
             Ok(Err(err)) => {
                 tracing::warn!(run = %run.id, error = %err, "a queued sync run could not be performed");
-                // Not these: the run is not this worker's to fail.
-                let ours = !matches!(
-                    err,
-                    SyncError::InProgress | SyncError::Invalid(_) | SyncError::NotFound
-                );
-                if ours && !fail_run(&sync, run.id, &mut stop).await {
+                // Only this worker's run is failed, and only if it started:
+                // `InProgress` means another caller's run holds the
+                // connection.
+                if !matches!(err, SyncError::InProgress)
+                    && !fail_run(&sync, run.id, &mut stop).await
+                {
                     return;
                 }
                 backoff.next()
@@ -320,9 +320,11 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Marks `run`, which this worker's task has ended, failed, retrying with a
-/// backoff until the store allows it, so that the connection is never left
-/// answering [`SyncError::InProgress`] until a restart. Only this run is
+/// Marks `run`, which this worker's task has ended, failed if it is running,
+/// so that its connection is not left answering [`SyncError::InProgress`]
+/// until a restart. A database fault is retried with a backoff until the store
+/// allows it; any other error is logged once and given up, since a retry
+/// cannot cure it and the other runs must not wait for it. Only this run is
 /// touched, so no run still going can be failed by it. `false` if told to
 /// stop first; the run is then left for the next start's recovery.
 async fn fail_run(sync: &SyncService, run: SyncRunId, stop: &mut watch::Receiver<bool>) -> bool {
@@ -333,13 +335,17 @@ async fn fail_run(sync: &SyncService, run: SyncRunId, stop: &mut watch::Receiver
             attempt = sync.abandon(run) => attempt,
         };
         match attempt {
-            // Marked failed now, or already finished.
-            Ok(()) | Err(StoreError::Conflict(_)) => return true,
-            Err(err) => {
+            // Marked failed now, already finished, or gone.
+            Ok(()) | Err(StoreError::Conflict(_) | StoreError::NotFound) => return true,
+            Err(err) if err.is_database_fault() => {
                 tracing::error!(run = %run, error = ?err, "could not mark the sync run failed; trying again");
                 if !pause(stop, backoff.next()).await {
                     return false;
                 }
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "could not mark a sync run failed; leaving it");
+                return true;
             }
         }
     }

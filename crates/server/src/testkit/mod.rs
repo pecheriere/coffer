@@ -26,7 +26,7 @@ use coffer_domain::ids::{ConnectionId, MemberId};
 use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
 pub use coffer_store::{
     INJECTED_BIND_RECORD_ID, INJECTED_FAILURE_LABEL, INJECTED_FAILURE_RECORD_ID,
-    INJECTED_FAULT_RECORD_ID,
+    INJECTED_FAULT_RECORD_ID, InjectedRunUpdate,
 };
 use coffer_store::{NewConnection, Store};
 use jiff::civil::Date;
