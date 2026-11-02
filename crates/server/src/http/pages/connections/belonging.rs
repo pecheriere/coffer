@@ -76,14 +76,24 @@ pub(super) fn parse_belongs_to(raw: &str) -> Result<Option<BelongsTo>, AccountEr
     }
 }
 
-/// The select of kinds, for the form of the row `row`, offering `options`.
-pub(super) fn kind_field(row: impl Display, options: &Markup) -> Markup {
+/// The select of kinds, for the form of the row `row`, offering `options`. `guess` is the sentence
+/// to put right under it when its choice is only a guess.
+pub(super) fn kind_field(row: impl Display, options: &Markup, guess: Option<&str>) -> Markup {
     let field = format!("kind-{row}");
     let hint = format!("kind-fine-{row}");
+    let guess_hint = format!("kind-guess-{row}");
+    let described_by = if guess.is_some() {
+        format!("{guess_hint} {hint}")
+    } else {
+        hint.clone()
+    };
     html! {
         div.field {
             label for=(field) { "Kind" }
-            select .input #(field) name="kind" required aria-describedby=(hint) { (options) }
+            select .input #(field) name="kind" required aria-describedby=(described_by) { (options) }
+            @if let Some(guess) = guess {
+                span.fine #(guess_hint) { (guess) }
+            }
             span.fine #(hint) { (KIND_FINE) }
         }
     }
@@ -166,7 +176,7 @@ pub(super) fn account_item(
             } @else {
                 span.chip.chip-quiet { "Not bound" }
             }
-            (shared.binding.forms(connection, account, shared.csrf, open))
+            (shared.binding.forms(connection, account, shared.csrf, open, shared.refused_row == Some(account.id)))
             @if let Some(view) = view.filter(|view| shared.binding.may_change(view.id)) {
                 (row_form(account, view, shared.csrf))
             }
@@ -248,7 +258,7 @@ fn row_form(account: &ProviderAccountView, view: &AccountView, csrf: &str) -> Ma
                             (kind_label(kind))
                         }
                     }
-                }))
+                }, None))
                 div.field {
                     label for=(answer) { "Whose money is it?" }
                     select .input #(answer) name="belongs_to" aria-describedby=(hint) {

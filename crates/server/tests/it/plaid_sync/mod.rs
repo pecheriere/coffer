@@ -11,6 +11,7 @@ mod account_ids;
 mod credentials;
 mod failures;
 mod held_cursor;
+mod kinds;
 mod limits;
 mod providers;
 mod reauthorized;

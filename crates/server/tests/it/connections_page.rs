@@ -11,6 +11,7 @@ mod belonging;
 mod bind;
 mod held;
 mod setup;
+mod suggestion;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

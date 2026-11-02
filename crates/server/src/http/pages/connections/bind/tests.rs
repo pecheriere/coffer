@@ -46,6 +46,7 @@ fn drawn(binding: &Binding, bound: &AccountView) -> String {
         institution: None,
         currency: "USD".to_owned(),
         kind_hint: None,
+        suggested_kind: None,
         account: Some(bound.id),
         balance: None,
         error: None,
@@ -73,6 +74,7 @@ fn drawn(binding: &Binding, bound: &AccountView) -> String {
         can_manage: false,
         plaid_offered: false,
         forgettable: &HashSet::new(),
+        refused_row: None,
     };
     belonging::account_item(&connection, &row, &shared, false).into_string()
 }

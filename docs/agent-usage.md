@@ -481,7 +481,14 @@ account stays bound. coffer syncs every connection on a schedule
   `{"account": "<id>"}` (an open account in the same currency), and
   `POST /api/v1/provider-accounts/{provider_account_id}/create-account`
   (creates a linked account and binds it) attach what a provider reports to
-  the household's accounts.
+  the household's accounts. A provider account's `kind_hint` is what the
+  provider reports, and a create with no `kind` falls back on it.
+  `suggested_kind` is a guess from the provider's name, there only while the
+  account is unbound with no `kind_hint`, and it is never applied: with neither
+  a `kind` nor a `kind_hint` the create is a 422. The kind decides what counts
+  as cash and whether the account counts in net worth, and a provider's name
+  is its own text. So ask a member first before using `suggested_kind`, then
+  send what they chose as `kind`.
 
 Sync limits are the provider's: for SimpleFin, at most one requested sync
 per hour per connection, scheduled syncs at least two hours apart, and 16
