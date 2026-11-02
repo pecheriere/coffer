@@ -1,0 +1,363 @@
+# coffer plan 3 — Spending plan and forecast Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Answer coffer's reason to exist: over the next N months, how much cash does the household need (recurring bills, known big expenses, money set aside, a fixed safety floor), and how much above that can be invested, with every number traceable and everything unknown reported.
+
+**Architecture:** Schedules, goal accrual, the forecast and the plan-versus-actual report are pure functions in `coffer-domain`, per spec §6.14. `coffer-store` adds planned items, settings, a goal link on splits, and one read transaction that gathers a forecast's data. `Ledger` gains the services, each authorizing through `coffer_domain::policy`, and `http/api` exposes them through `ApiRouter::op`, fully typed.
+
+**Tech Stack:** Rust 2024, axum, sqlx (SQLite), jiff, utoipa, proptest. No new crates. One feature change: `coffer-domain` turns on jiff's `serde` feature (already on in `coffer-server`), because the forecast types serialize dates.
+
+**Spec:** `docs/superpowers/specs/2026-10-30-coffer-design.md`: §1, §2 goals 6–8, §3, §6.1, §6.5–§6.9, §6.11, §8.2, §8.7, §8.8. Task 1 records this plan's rulings in the spec as §8.9.
+
+**Depends on:** `main` at `0cf0872` or later. The highest migration there is `0011_connection_reauth_generation.sql`, so this plan owns `0012`–`0014`. Open PR #41 adds no migration and touches none of the new files. If anything has taken `0012` when a task starts, renumber and say so in its PR.
+
+## Global Constraints
+
+- Money is exact: integer minor units in `i64`, intermediates in `i128`, never a float. Rounding is half-even, once, at the end of a calculation (goal accrual, rolling averages).
+- Sign: `Money` on accounts and splits is negative for money out. A planned item's amount is a positive magnitude with a `direction`, as §6.7 models it.
+- Every "today" is the household's day: `clock.now().to_zoned(config.timezone.clone()).date()`. Never `Timestamp::now()`, never UTC by accident. All stored dates are `jiff::civil::Date`.
+- Every handler authorizes through `coffer_domain::policy`; `AccountAccess` comes only from `AccessResolver`. A `Denied` becomes a problem only through `impl From<Denied> for Problem`. Hidden answers exactly like missing.
+- Every mutation goes through a `StoreTx` with its audit entry in the same transaction. Reads and what-ifs write nothing.
+- API routes only through `ApiRouter::op` with `#[utoipa::path]`. Request, query, path and response types derive `ToSchema` or `IntoParams`; no `serde_json::Value`. Extract with `TypedJson`, `TypedJsonBytes`, `TypedQuery`, `TypedPath`. After any API change run `cargo run -p coffer-server -- openapi > docs/api/openapi.json`. On a rebase regenerate that file; never hand-merge it.
+- Files stay under about 800 lines of code. `crates/server/src/testkit/mod.rs` is at 792, so helpers for this plan live in the test modules, not there.
+- Integration tests go under `crates/*/tests/it/<area>` with a `mod <area>;` line in `tests/it/main.rs`, never directly under `tests/`.
+- Migrations are STRICT tables whose CHECKs mirror the domain types, numbered as assigned here. The store parses every value it reads.
+- Never set `CARGO_TARGET_DIR`. While iterating: `cargo nextest run -p <crate> --all-features`. Full gate before each commit: `cargo fmt`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features`, `cargo deny check`.
+- Lints are strict; no `#[allow]`/`#[expect]` without `reason = "..."`. No `unwrap`/`expect` outside tests. No dead code: a field or type no task reads does not get added.
+- Commits and PRs carry no `Co-Authored-By`, `Claude-Session` or "Generated with" lines: this is a public repo. Never push without the owner's confirmation.
+- Security review (the `security-review` skill or equivalent, findings in the PR) is required on every task marked **[security]**: AGENTS.md requires it for policy changes, and the leak rules here depend on it.
+
+## Review Focus
+
+1. **A credit card balance entered with the wrong sign** (a member types `+1500` for what they owe): the positive balance adds to cash and inflates the answer. The forecast takes the sum as stored and raises a caution naming the account. → Task 2 test `positive_liability_balance_is_a_caution`.
+2. **Two recurring items in one category** (two bills under "Utilities"), with spending already this month: the same dollars must not reduce both. → Task 2 test `one_spending_pool_per_category`.
+3. **A forecast for a future vest day** (`as_of` next month): bills between today and `as_of` fall outside the window, so the number looks better than it is. It answers, with a caution. → Task 2 test `as_of_other_than_today_is_a_caution`.
+4. **A new household** with no accounts and no floor set: it must not answer "surplus 0" or a shortfall. → Task 6 test `empty_household_has_no_number`.
+5. **A sync changing an imported amount** on a transaction whose one split is linked to a goal: `canonical.rs` rewrites the split, and the goal link must survive. → Task 5 test `imported_amount_change_keeps_goal_link`.
+
+## Rulings for the owner to review
+
+Most consequential first. Each was decided without asking; review them before Task 1, which writes them into the spec. "If wrong" is the cost of reversing it later.
+
+| # | Ruling | Why | If wrong |
+|---|---|---|---|
+| R1 | **FX is not built; a forecast with several currencies reports, it does not refuse.** It answers 200 with `surplus: null`, status `unavailable`, blocker `mixed_currencies`, and full per-currency totals, each with its own surplus. Currencies are never netted. | Multi-currency is a §2 goal; a refusal leaves such a household with nothing. A per-currency surplus is true and conservative. FX is its own subsystem (provider, backfill, egress, security review). The cash a household can actually invest is per currency anyway. | Additive: when FX arrives `surplus` fills in and the blocker goes. If you prefer refusal, that is one branch in the service and one test. |
+| R2 | **A forecast, a what-if or a plan-versus-actual report needs `all` at `transactions`.** Otherwise 403 "this action needs transactions access to every account". No partial forecast. | It sums every account's balances and category spending, so it is the §8.2 rule table's "touches more than one account". A partial number over visible accounts would be a confident wrong answer, and marking it partial would reveal that hidden accounts exist. The refusal is identical whether or not any account is hidden. | A token with `all` at `balances` gets no forecast, because the spending reduction reads transactions. Loosening later is one table row; tightening after a leak is not. |
+| R3 | **A planned item hinting at an account the token cannot see answers like a missing item:** left out of lists, 404 on `GET`. Unhinted items are household data, visible to any `read` token. Creating, changing or deleting an item needs `WriteHousehold` and `all` at `write`, like a category. | §8.2: no list or error reveals a hidden account. An item hinted at a hidden account is data about it; nulling the hint would still show "Payment on the card you can't see". The plan is shared by every account, as categories are. | A restricted token can't edit even items on its own account. An unhinted item's *name* can mention an account; documented as accepted risk (hint it to hide it). |
+| R4 | **Status is `firm`, `provisional` or `unavailable`,** and severity is in the type: `blockers` (no number at all) and `cautions` (number, not firm). Blockers: `mixed_currencies`, `floor_not_set`, `no_counted_accounts`, `balance_missing`. Everything else is a caution, including stale balances and unbound provider accounts. | "Don't silently produce a confident number." A counted account without any balance could hold anything, so no number is honest. A stale balance or an unbound account still leaves a useful number, and there is no way yet to dismiss an unbound account, so blocking on it could block forever. | If an unbound account should block, it moves between two enums, with a test. |
+| R5 | **An unset floor blocks the number; an explicit fixed floor of 0 is allowed.** | A silent floor of 0 overstates what to invest, the failure §1 fears most. | One `PATCH` of settings for every household, once. |
+| R6 | **Plan versus actual is in (Task 8).** It needs no transfer links: actuals are categorized splits, and `transfer` is a category kind. Uncategorized money is never spending and is reported separately. | §6.9 defines it by category. Its store query and month type are nearly free given the forecast. #43's "trades are never spending" is covered because trades are uncategorized; uncategorized totals exclude invested and illiquid accounts so sweeps don't drown them. | Spending categorized as an expense that is really a transfer shows as spending, until transfer links exist. Dropping Task 8 touches nothing else. |
+| R7 | **`COFFER_TIMEZONE` stays an environment variable.** This departs from §8.7 and plan 2a's ruling O5 (move it to `/admin/household` in plan 3). Task 1 amends §8.7. | Everything reads one zone today, including sync windows and page times. Making it editable at runtime means deciding what a change does to days already assigned, which has nothing to do with this question. The forecast reads the same `config.timezone`. | A small later change: one more field and a sweep of `config.timezone` readers. |
+| R8 | **Goal links on splits are in (Task 5).** `SplitInput` gains an optional `goal`; the goal's currency must equal the transaction's. | §6.7's remaining target and §6.9's goal lines need them, and they don't depend on transfer links. Same-currency keeps goal arithmetic exact without FX. | A purchase in another currency can't be linked to a goal until FX, so that goal's need stays overstated: the safe direction. |
+| R9 | **The current-month reduction uses one pool per category and currency.** Pool = actual spending this month, minus planned outflows in that category dated earlier this month (spending that was already planned for), floored at 0. It then reduces this month's remaining recurring occurrences in date order. Spec §6.8 says only "reduced by actual spending in its category". | Applied per item, one purchase reduces every item in the category, and rent paid on the 1st wipes out a maintenance item on the 20th. Both understate the need. | Slightly more code than the literal reading. Numbers differ from the literal reading only for shared categories. |
+| R10 | **Actuals count only posted, non-goal-linked `expense` splits on counted accounts.** Pending is excluded; so are accounts out of the forecast. | Conservative: a pending charge doesn't lower the need. Money spent from an excluded account didn't come out of counted cash. | Surplus is slightly low while charges are pending. |
+| R11 | **No `base_currency` or member display currency yet;** §6.8's "in the requester's display currency" waits for FX. A fixed floor carries its own currency. | Nothing would read them: dead code by the repo's rule. | A migration later, whose default can be the floor's currency. |
+| R12 | **What-if is `POST /api/v1/forecast/what-if` and a `read` token may call it.** This qualifies §6.3's "`read` (GET only)": scope is decided by the action, and this one persists nothing. | Hypothetical items don't fit a query string, and it is "the agent's main planning tool" (§6.8). | A read-only agent loses what-if if you'd rather hold the GET rule; one line in the service. |
+| R13 | **Per-call floor override only through what-if.** `GET /forecast` takes `as_of`, `horizon_months` and `include_income`; what-if with no items takes those plus `floor` and `stale_after_days`. | §6.8's override stays typed instead of flattening a tagged floor into query parameters. | Small: a few query parameters. |
+| R14 | **No page.** §3 and §6.4 say no financial data pages in v1, and settings are API-only. | The spec doesn't ask for one. | A form on `/admin/household` later. |
+| R15 | **Income is off by default.** With it on, a caution fires when projected cash at a month's end, before an inflow arrives, is below the floor. | A bonus in month 3 can't pay a bill in month 1, and this is what selling investments to cover a commitment looks like. | Setting `include_income` is one call. |
+| R16 | **A planned item hinted at an uncounted account still counts, with a caution.** | Overstating the need is the safe direction; dropping it silently is not. | A household using a side account for a bill sees the need high until it deactivates the item. |
+| R17 | **Item model:** `category` required on stored items (optional on hypothetical ones), outflow needs an `expense` category, inflow an `income` one, `transfer` refused. Goals must be outflows. An item's type never changes. Delete is real, refused with 409 for a goal with linked splits (mark it complete instead). | The reduction and the report key on category. A transfer isn't a need. Immutable type keeps goal links sound. | Create-a-category-first friction for agents; loosening is easy. |
+| R18 | **Schedules clamp to month end and never drift:** the k-th occurrence is `anchor + k × every`, always from the anchor. Anchoring on the 31st is how to say "last day of month", so §6.7's optional day-of-month semantics get no field of their own. A Feb 29 yearly item falls on Feb 28. | Fewer fields, one rule. | "Last business day" needs a future field. |
+| R19 | **`as_of` may be any date in range, with a caution unless it is today.** A balance is the latest on or before `as_of`. | §6.8 wants "from vest day"; hiding that gap would be silent. | Refusing instead is one check. |
+| R20 | **Limits:** horizon 1–60 months (default 3), 500 stored items, 50 hypothetical items, amounts up to 10^15 minor units, schedule dates in years 1970–2200, stale after 7 days by default (1–365), floor months 1–60. "M months of outflows" sums unreduced recurring outflow occurrences in `[as_of, as_of + M months)`, per currency. | Bounds response size and arithmetic. Totals past `i64` answer 422, never a wrapped number. | Each is one constant. |
+| R21 | **The plan has no history.** Plan versus actual applies today's active items to past months, and "normalized into months" means occurrences bucketed where they fall, not amortized. | No plan-history table is in scope. | A plan edit rewrites past months' "planned". Amortizing is a report option later. |
+| R22 | **MCP (§6.12), rules, transfer links, a starter category set, FX and unbinding are not in this plan.** Task 1 amends §8.5 and §8.8, which said plan 3. MCP isn't on `main` yet, so "agent docs" means `docs/agent-usage.md`. | The owner's scope. | None: each is additive. |
+
+**Designed to fit later:** `blockers`, `cautions` and `NotCountedReason` are open enums, so #38's buckets add a reason and FX removes a blocker. Transfer links change nothing here: actuals key on category kind. RSU schedules (#44) can generate planned inflow items, and holdings and trades (#42, #43) never enter cash, which only reads `cash` and `short_term_liability` accounts.
+
+## Task order and parallelism
+
+| Wave | Tasks | Run how | Separate reviewer focuses on |
+|---|---|---|---|
+| 0 | 1 | Alone, merged first: everything consumes its types and spec text. | Schedule edge cases; policy table against §8.2 **[security]** |
+| 1 | 2, 3, 4 | **In parallel**, one worktree and branch each (`git worktree add -b <branch> ../coffer-<task> origin/main`). Overlap is only registration lines (`lib.rs`, `api/mod.rs`, `openapi.rs`) and `openapi.json`. | 2: recompute the golden example by hand from the spec, without reading the code. 3: admin rule, audit. 4: hint leaks **[security]** |
+| 2 | 5 | After 4 (the FK needs `planned_items`). May overlap 2 and 3. | Link preservation through sync, merge and batch **[security]** |
+| 3 | 6 | **Alone**, after 2, 3, 4, 5. | Traceability; refusal behaviour **[security]** |
+| 4 | 7, 8 | **In parallel**, after 6. | 7 is itself adversarial: a fresh agent given only §8.2 and the rule table **[security]**. 8: report math |
+| 5 | 9 | **Alone**, last. Not parallel: it reads everything and reviews the whole branch. | Docs against behaviour **[security]** |
+
+Each task is one PR, in wave order. Migrations are pre-assigned, so parallel branches don't collide, but merge `0013` before `0014`.
+
+---
+
+### Task 1: Plan domain types, schedules, goal math, policy rules, spec **[security]**
+
+**Files:**
+- Create: `crates/domain/src/plan.rs`, `crates/domain/src/plan/{schedule,goal,month,settings}.rs`
+- Modify: `crates/domain/src/lib.rs`, `crates/domain/src/ids.rs`, `crates/domain/src/transactions.rs` (`pub(crate) use string_enum;`), `crates/domain/src/policy.rs`, `crates/domain/src/policy/tests.rs`, `crates/domain/Cargo.toml` (jiff `features = ["serde"]`), `docs/superpowers/specs/2026-10-30-coffer-design.md`
+- Test: unit and property tests beside each module
+
+**Interfaces:**
+- Consumes: `id_type!`, `label_type!` (`crate::identity::label_type`), `string_enum!`, `money::{Money, Currency}`, `policy::AccountAccess`, `transactions::Notes`.
+- Produces (`coffer_domain::ids`): `PlannedItemId`.
+- Produces (`coffer_domain::plan`), every API type with `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]`:
+  - `string_enum` `PlanDirection { Outflow => "outflow", Inflow => "inflow" }`; `IntervalUnit { Days, Weeks, Months, Years }` (`"days"`…); `PlanItemType { Recurring => "recurring", OneOff => "one_off", Goal => "goal" }`.
+  - `label_type!` `PlannedItemName`, max 100.
+  - `#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)] enum PlanSchedule { Recurring { every: u16, unit: IntervalUnit, anchor_on: Date, end_on: Option<Date> }, OneOff { on: Date }, Goal { start_on: Date, due_on: Date, #[serde(default)] completed: bool } }`, with `fn item_type(&self) -> PlanItemType`.
+  - Consts: `MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000`, `MAX_PLAN_ITEMS: usize = 500`, `MAX_HYPOTHETICAL_ITEMS: usize = 50`, `MIN_HORIZON_MONTHS: u8 = 1`, `MAX_HORIZON_MONTHS: u8 = 60`, `MIN_PLAN_YEAR: i16 = 1970`, `MAX_PLAN_YEAR: i16 = 2200`.
+  - `enum PlanError` (thiserror; messages never echo input): `InvalidName`, `InvalidAmount`, `InvalidEvery` ("every must be 1 to 999"), `DateOutOfRange`, `EndBeforeAnchor`, `GoalDatesInverted`, `GoalMustBeOutflow`, `InvalidFloor`, `InvalidHorizon`, `InvalidStaleDays`, `InvalidFloorMonths`.
+  - `fn validate_amount(amount: Money) -> Result<(), PlanError>` (`1..=MAX_PLAN_AMOUNT_MINOR`); `fn validate_as_of(date: Date) -> Result<(), PlanError>`; `PlanSchedule::validate(&self, direction: PlanDirection) -> Result<(), PlanError>`.
+  - `schedule.rs`: `PlanSchedule::occurrences(&self, from: Date, to_exclusive: Date) -> Vec<Date>`, ascending, within `[from, to_exclusive)` and never after `end_on`; empty for `Goal`. k-th recurrence is `anchor + k × every` computed from the anchor with jiff's clamping `checked_add`. Fast-forward to the first `k` at or after `from` by day or month difference, so a far-future `from` costs no scan from the anchor.
+  - `goal.rs`: `fn goal_accrued(target_minor: i64, start_on: Date, due_on: Date, at: Date) -> i64` = target × clamp(elapsed days, 0, total) / total in `i128`, half-even. `fn goal_remaining(target_minor: i64, spent_minor: i64) -> i64` = `max(0, target - spent)`. `fn goal_need(target_minor: i64, spent_minor: i64, start_on: Date, due_on: Date, at: Date) -> i64` = `min(remaining, max(0, accrued(at) - spent))`. `spent_minor` is positive for money spent, already netted of refunds and floored at 0.
+  - `month.rs`: `struct CalendarMonth { year: i16, month: i8 }`, `Ord`, serde and `Display`/`FromStr` as `"YYYY-MM"`, manual `ToSchema` with pattern `^[0-9]{4}-(0[1-9]|1[0-2])$`; `fn of(Date) -> Self`, `fn first_day(self) -> Date`, `fn next(self) -> Self`.
+  - `settings.rs`: `#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)] enum SafetyFloor { Fixed { amount: Money }, MonthsOfOutflows { months: u8 } }`, with `fn validate(&self)` (fixed `0..=MAX_PLAN_AMOUNT_MINOR`, months `1..=60`) and `fn canonical(&self) -> String` for audit (`fixed:USD:100000`, `months_of_outflows:3`). `struct ForecastSettings { floor: Option<SafetyFloor>, include_income: bool, default_horizon_months: u8, stale_after_days: u16 }`; `Default` is `None`, `false`, `3`, `7`; `fn validate(&self)`.
+- Produces (`coffer_domain::policy`): `#[must_use] pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> bool`: true without a hint, otherwise `access.level_for(hint).is_some()`. Module-doc rule table gains three rows: `Read a forecast or a what-if | Transactions`, `Read plan versus actual | Transactions`, `Create, change or delete a planned item | Write`; and a paragraph: a planned item whose hint names an account the actor cannot see is treated as missing (R3).
+
+- [ ] **Step 1: Write failing tests.**
+  - `schedule.rs`, exact dates: `monthly_from_the_31st_clamps_without_drift` (anchor 2027-01-31, every 1 month, from 2027-01-01 to 2027-05-01 → 01-31, 02-28, 03-31, 04-30); `every_two_months_clamps_from_the_anchor` (anchor 2026-10-31 → 2026-12-31, 2027-02-28, 2027-04-30); `yearly_from_feb_29` (anchor 2028-02-29 → 2029-02-28, 2032-02-29); `every_two_weeks` (anchor 2026-11-02, from 2026-11-03 to 2026-12-01 → 11-16, 11-30); `end_on_is_inclusive`; `window_end_is_exclusive`; `one_off_only_in_window`; `goal_has_no_occurrences`; `before_anchor_starts_at_anchor`.
+  - Proptest `occurrences_match_brute_force`: over unit, every, anchor and window, the result equals walking `k` from 0; strictly ascending; all in window.
+  - `goal.rs`: `accrual_rounds_half_even` (target 100, total 3 days, at day 1 → 33; target 5, total 2, day 1 → 2; target 7, total 2, day 1 → 4); `accrual_clamps_before_start_and_after_due`; `need_is_never_negative_or_above_remaining`; proptest `need_is_monotonic_in_time`.
+  - `month.rs`: `month_roundtrips_and_rejects` (`2026-13`, `2026-1`, `26-01` refused).
+  - `plan.rs`: `validate_refuses_each_case` (one per `PlanError`); `unknown_schedule_field_is_refused`; `schedule_serde_is_tagged` (`{"type":"one_off","on":"2027-01-01"}`).
+  - `settings.rs`: `defaults_have_no_floor`; `zero_fixed_floor_is_valid`; `floor_canonical_text`.
+  - `policy/tests.rs`: `plan_item_visible_follows_level_for` (no hint → true for every access; uniform → true; granted: named → true, unnamed → false, `all` → true).
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-domain --all-features` → FAIL (types not defined).
+- [ ] **Step 3: Implement the types, and write the spec.** Add §8.9 *Plan and forecast* to the spec, stating rulings R1–R22 as decisions in the addendum's style. Amend §8.5 ("the FX source (plan 3)" → "(a later plan)"), §8.7 (the variable stays, R7) and §8.8 (rules, transfer links, FX, the starter set and unbinding are later; household settings arrive here without the time zone).
+- [ ] **Step 4: Run** → PASS, then the full gate; security review of `policy.rs`.
+- [ ] **Step 5: Commit** `feat(domain): planned item schedules and goal accrual`.
+
+### Task 2: The forecast calculation
+
+**Files:**
+- Create: `crates/domain/src/forecast.rs` (the function), `crates/domain/src/forecast/{types,reduction,tests}.rs`
+- Modify: `crates/domain/src/lib.rs`
+
+**Interfaces:**
+- Consumes (Task 1): `PlanSchedule`, `PlanDirection`, `SafetyFloor`, `goal_need`, `goal_remaining`, `CalendarMonth`; `accounts::LiquidityClass`.
+- Produces (`coffer_domain::forecast`), pure, no store types. Output types derive `Serialize` and `ToSchema` under `openapi`, and enums are tagged `#[serde(tag = "kind", rename_all = "snake_case")]`:
+  - Input: `ForecastInput { today: Date, as_of: Date, horizon_months: u8, include_income: bool, floor: Option<SafetyFloor>, stale_after_days: u16, accounts: Vec<AccountInput>, items: Vec<ItemInput>, category_spent: Vec<CategorySpent>, loose_ends: Vec<LooseEnds>, unbound: Vec<UnboundAccount>, feeds: Vec<FeedAlert> }`.
+  - `AccountInput { id: AccountId, name: String, currency: Currency, liquidity: LiquidityClass, include_in_forecast: bool, closed: bool, balance: Option<BalanceInput { on: Date, minor_units: i64 }>, feed_problems: Vec<FeedProblem { provider_account: ProviderAccountId, reason: FeedProblemReason /* ProviderError | CurrencyUnsupported | CurrencyDiffers */ }> }`.
+  - `ItemInput { source: LineSource, name: String, category: Option<CategoryId>, amount: Money, direction: PlanDirection, account_hint: Option<AccountId>, schedule: PlanSchedule, goal_spent_minor: i64 }`; `#[serde(tag = "kind")] enum LineSource { PlannedItem { id: PlannedItemId }, Hypothetical { index: u32 } }`.
+  - `CategorySpent { category: CategoryId, currency: Currency, spent_minor: i64 }`, already positive for money out; `LooseEnds { currency: Currency, uncategorized_count: u32, uncategorized_minor: i64, possible_duplicates: u32 }`; `UnboundAccount { provider_account: ProviderAccountId, connection: ConnectionId, name: String, institution: Option<String>, currency_raw: String }`; `FeedAlert { connection: ConnectionId, label: String, status: FeedStatus /* Error | ReauthRequired */ }`.
+  - `fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError>`; `enum ForecastError { OutOfRange }`, message "the forecast's totals are too large to represent".
+  - Output: `Forecast { as_of: Date, end_exclusive: Date, horizon_months: u8, include_income: bool, floor: Option<SafetyFloor>, stale_after_days: u16, status: ForecastStatus /* Firm | Provisional | Unavailable */, surplus: Option<Money>, totals: Vec<CurrencyTotals>, accounts: Vec<AccountLine>, items: Vec<ItemLine>, months: Vec<MonthBucket>, blockers: Vec<Blocker>, cautions: Vec<Caution> }`. `surplus` and optional fields carry `#[schema(required)]`.
+  - `CurrencyTotals { currency, cash_available: Money, planned_outflows: Money, goals: Money, floor: Money, planned_inflows: Money, excluded_inflows: Money, cash_needed: Money, surplus: Option<Money> }`. A currency's `surplus` is `Some` unless a blocker other than `mixed_currencies` applies.
+  - `AccountLine { account, name, liquidity, balance: Option<Money>, balance_on: Option<Date>, counted: bool, not_counted: Option<NotCountedReason /* ExcludedByFlag | Closed | NotCash */> }`, one per account.
+  - `ItemLine { source, name, item_type, direction, category: Option<CategoryId>, account_hint: Option<AccountId>, occurrences: u32, first_on: Option<Date>, last_on: Option<Date>, gross: Money, reduced_by: Money, counted: Money, goal: Option<GoalLine { target: Money, spent: Money, due_on: Date, due_in_horizon: bool }> }`; only items with a non-zero `gross`.
+  - `MonthBucket { month: CalendarMonth, partial: bool, lines: Vec<MonthCurrency { currency, outflows: Money, inflows: Money, goal_accrual: Money, projected_cash: Money, items: Vec<MonthItem { source: LineSource, amount: Money }> }> }`.
+  - `Blocker`: `MixedCurrencies { currencies: Vec<Currency> }`, `FloorNotSet`, `NoCountedAccounts`, `BalanceMissing { account: AccountId, name: String }`.
+  - `Caution`: `BalanceStale { account, on, age_days: u32 }`, `UnboundProviderAccount { provider_account, connection, name, institution, currency_raw, currency_supported: bool }`, `AccountFeedProblem { account, provider_account, reason }`, `ConnectionNeedsAttention { connection, label, status }`, `AsOfNotToday { today: Date }`, `LiabilityBalancePositive { account, balance: Money }`, `GoalOneOffOverlap { goal: LineSource, one_off: LineSource, category: CategoryId }`, `GoalOverdue { goal: LineSource, due_on: Date }`, `ItemHintNotCounted { item: LineSource, account: AccountId }`, `UncategorizedSpending { currency, count: u32, total: Money }`, `PossibleDuplicates { count: u32 }`, `CashDipsBelowFloor { month: CalendarMonth, currency, projected_cash: Money }`.
+- Rules the tests pin:
+  - `end_exclusive = as_of + horizon_months months`, clamped. Buckets run from `as_of`'s month through the month of the last day before `end_exclusive`. `partial` is true when the bucket doesn't cover a whole calendar month.
+  - An account is counted when `liquidity` is `Cash` or `ShortTermLiability`, `include_in_forecast`, and not closed. `cash_available` is the signed sum of counted balances (a card owing is already negative).
+  - `is_mixed`: more than one distinct currency among counted accounts, items with non-zero `gross`, and a `Fixed` floor.
+  - `cash_needed = planned_outflows + goals + floor - planned_inflows`; inflows are `0` (and go to `excluded_inflows`) unless `include_income`. `surplus = cash_available - cash_needed`.
+  - Goals: skipped when `completed` or when `gross` is zero. Due in `[as_of, end_exclusive)` or before `as_of` → `goal_remaining`; after → `goal_need` at `end_exclusive`. Month `goal_accrual` telescopes: `need(min(next month's first day, end_exclusive)) - need(previous)`, where a goal due within the horizon reaches `remaining` in the bucket holding `due_on`, and an overdue goal puts it all in the first bucket.
+  - Reduction is R9, in `reduction.rs`: applies only to stored recurring outflows, only to occurrences before the first day of `as_of`'s next month. Hypothetical items neither reduce nor consume.
+  - `projected_cash` = `cash_available` + running (inflows counted − outflows), goals and floor excluded.
+  - `status`: `Unavailable` iff `blockers` non-empty (then `surplus` is `None`), else `Firm` iff `cautions` empty, else `Provisional`. `surplus`'s currency is the only one in use; without blockers a counted account guarantees there is one.
+  - `UncategorizedSpending` and `PossibleDuplicates` are raised only when a recurring outflow falls in `as_of`'s month, which is the only time they change the number.
+  - `GoalOneOffOverlap`: same category, `one_off.on` within one calendar month either side of `due_on`; neither de-duplicated (§6.7). `CashDipsBelowFloor`: only with `include_income`, first month per currency where month-end `projected_cash` is below that currency's floor.
+  - All intermediates `i128`; any total outside `i64` is `Err(OutOfRange)`.
+
+- [ ] **Step 1: Write the golden test** `golden_three_month_forecast`. `today = as_of = 2026-11-15`, horizon 3, `end_exclusive = 2027-02-15`, USD, stale 7, floor `Fixed` 1,000,000.
+  - Accounts, all balances on 2026-11-14: Checking cash 2,000,000; Savings cash 5,000,000; Card short-term liability −150,000; Brokerage invested 9,000,000 (`NotCash`); Side cash 100,000 with `include_in_forecast = false` (`ExcludedByFlag`).
+  - Items: Rent monthly anchor 2026-01-01, 200,000, Housing. Groceries monthly anchor 2026-01-28, 60,000, Food. Water every 2 months anchor 2026-01-10, 12,000, Utilities. Repair one-off 2026-12-20, 150,000, Car. Late one-off 2027-02-15, 99,900, Car (outside). Vacation goal target 600,000, 2026-06-01 to 2027-01-31, spent 100,000, Travel. Roof goal target 1,200,000, 2026-02-15 to 2028-02-15 (730 days), Home. Salary inflow monthly anchor 2026-01-25, 800,000, Pay.
+  - `category_spent`: Housing 200,000; Food 40,000.
+
+  Assert exactly: `cash_available` 6,850,000. Rent 3 occurrences, 600,000, no reduction (rent's Nov 1 occurrence consumes the Housing pool). Groceries gross 180,000, `reduced_by` 40,000, counted 140,000. Water 12,000. Repair 150,000. Late absent. `planned_outflows` 902,000. Vacation 500,000, Roof 600,000, `goals` 1,100,000. `excluded_inflows` 2,400,000, `planned_inflows` 0. `cash_needed` 3,002,000. `surplus` 3,848,000. `status` `Firm`. Month outflows: 2026-11 20,000, 2026-12 410,000, 2027-01 272,000, 2027-02 200,000; first and last `partial`. `projected_cash` by month: 6,830,000, 6,420,000, 6,148,000, 5,948,000.
+
+  Then `golden_with_income`: same with `include_income`: `planned_inflows` 2,400,000, `cash_needed` 602,000, `surplus` 6,248,000.
+- [ ] **Step 2: Write the remaining failing tests.**
+  - Reduction: `one_spending_pool_per_category` (items of 10,000 on the 20th and 25th, spent 15,000, `as_of` the 15th → counted 0 and 5,000); `earlier_planned_spending_consumes_the_pool` (rent 200,000 on the 1st, maintenance 20,000 on the 20th, same category, spent 200,000 → maintenance not reduced); `one_offs_are_never_reduced`; `reduction_only_touches_the_current_month`; `reduction_never_below_zero`; `hypothetical_items_are_not_reduced`.
+  - Blockers: `mixed_currencies_block_and_report_each_currency` (USD and EUR accounts and items: `surplus` `None`, each `CurrencyTotals.surplus` `Some` and correct); `foreign_item_outside_horizon_is_not_mixed`; `floor_not_set_blocks`; `zero_floor_is_firm`; `no_counted_accounts_blocks`; `counted_account_without_balance_blocks`; `excluded_account_without_balance_does_not_block`.
+  - Cautions, each asserting `Provisional` and the number still present: `stale_after_threshold_not_on_it` (age 7 no caution, age 8 caution); `unbound_account_reported_with_currency_support` (`USD` true, `POINTS` false); `feed_problem_reported`; `feed_alert_reported`; `as_of_other_than_today_is_a_caution`; `positive_liability_balance_is_a_caution`; `goal_one_off_overlap_warns_and_counts_both`; `overlap_outside_a_month_does_not_warn`; `overdue_goal_counts_full_remaining_and_warns`; `item_hinted_at_uncounted_account_counts_and_warns`; `uncategorized_spending_warns_only_with_current_month_recurring`; `cash_dip_warns_only_with_income`.
+  - Goals: `completed_goal_not_counted`; `goal_due_on_horizon_end_is_full_at_end`; `goal_not_started_counts_nothing`; `overspent_goal_counts_zero`.
+  - Floor: `months_floor_sums_unreduced_recurring_per_currency`; `months_floor_ignores_one_offs_goals_and_inflows`.
+  - Overflow: `totals_past_i64_are_out_of_range`.
+  - Proptests over random households: `totals_explain_themselves` (`surplus = available − needed`; `needed = outflows + goals + floor − inflows`; counted `AccountLine`s sum to `cash_available`; `ItemLine.counted` sums to outflows and goals; month outflows and `goal_accrual` sum to the same totals); `status_matches_lists`; `surplus_absent_iff_blocked`.
+- [ ] **Step 3: Run** `cargo nextest run -p coffer-domain --all-features` → FAIL.
+- [ ] **Step 4: Implement** `compute_forecast`; `reduction.rs` holds R9.
+- [ ] **Step 5: Run** → PASS, then the full gate.
+- [ ] **Step 6: Commit** `feat(domain): the cash forecast calculation`.
+
+### Task 3: Household forecast settings
+
+**Files:**
+- Create: `crates/store/migrations/0012_household_settings.sql`, `crates/server/src/ledger/settings.rs`, `crates/server/src/http/api/household.rs`, `crates/server/tests/it/household_settings.rs`
+- Modify: `crates/store/src/household.rs`, `crates/server/src/ledger/mod.rs`, `crates/server/src/http/api/{mod,openapi}.rs`, `crates/server/tests/it/main.rs`, `crates/store/tests/it/foundation.rs`, `docs/api/openapi.json`
+
+**Interfaces:**
+- Consumes (Task 1): `ForecastSettings`, `SafetyFloor`; `Action::{ReadHousehold, ManageHousehold}`.
+- Schema `0012`: `household_settings (id INTEGER PRIMARY KEY CHECK (id = 1), floor_kind TEXT CHECK (floor_kind IN ('fixed', 'months_of_outflows')), floor_minor INTEGER CHECK (floor_minor BETWEEN 0 AND 1000000000000000), floor_currency TEXT CHECK (length(floor_currency) = 3), floor_months INTEGER CHECK (floor_months BETWEEN 1 AND 60), include_income INTEGER NOT NULL CHECK (include_income IN (0, 1)), default_horizon_months INTEGER NOT NULL CHECK (default_horizon_months BETWEEN 1 AND 60), stale_after_days INTEGER NOT NULL CHECK (stale_after_days BETWEEN 1 AND 365), CHECK` on the shape: no floor has all three null; `fixed` has minor and currency; `months_of_outflows` has months `)) STRICT`. No row means `ForecastSettings::default()`.
+- Store: `Store::forecast_settings() -> Result<ForecastSettings, StoreError>`; `StoreTx::forecast_settings()`; `StoreTx::set_forecast_settings(&ForecastSettings) -> Result<(), StoreError>`.
+- Produces: `Ledger::forecast_settings(&self, actor: &Actor) -> Result<ForecastSettings, LedgerError>` (`ReadHousehold`); `Ledger::update_forecast_settings(&self, actor: &Actor, patch: ForecastSettingsPatch) -> Result<ForecastSettings, LedgerError>` (`ManageHousehold`); `ForecastSettingsPatch { floor: Option<SafetyFloor>, include_income: Option<bool>, default_horizon_months: Option<u8>, stale_after_days: Option<u16> }`, `deny_unknown_fields`, absent stays. A floor can be replaced, never unset.
+- Audit: action `household.settings`, entity type `household`, entity id `household` (as `appearance.rs` does), one field per changed setting, the floor by `SafetyFloor::canonical`. A patch that changes nothing writes nothing.
+- API: `GET /api/v1/household/settings` (`getHouseholdSettings`, `read`), `PATCH` same path (`updateHouseholdSettings`, `admin`), tag `tags::HOUSEHOLD` (new, described in `base()`), both answering `ForecastSettings`. Grants don't change these: settings describe no account.
+
+- [ ] **Step 1: Write failing tests** (`household_settings.rs`): `unset_settings_read_as_defaults` (`floor: null`, 3, 7, `false`); `admin_token_sets_a_fixed_floor_and_it_is_audited` (one `household.settings` event; member and agent attributed); `write_token_is_refused` (403 "this action requires admin rights"); `member_role_cannot_exceed_its_ceiling`; `invalid_values_are_422` (negative floor, months 0 and 61, horizon 0 and 61, stale 0 and 366, unknown `kind` is 400); `noop_patch_writes_no_audit`; `floor_can_be_replaced_not_unset` (`floor: null` leaves it). Store: `settings_roundtrip_each_floor_kind`; `check_constraints_refuse_a_half_floor`.
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-server --all-features -E 'test(household_settings)'` → FAIL.
+- [ ] **Step 3: Implement;** regenerate `docs/api/openapi.json`.
+- [ ] **Step 4: Run** → PASS, then the full gate.
+- [ ] **Step 5: Commit** `feat(api): household forecast settings`.
+
+### Task 4: Planned items **[security]**
+
+**Files:**
+- Create: `crates/store/migrations/0013_planned_items.sql`, `crates/store/src/planned_items.rs`, `crates/server/src/ledger/plan_items.rs`, `crates/server/src/http/api/plan_items.rs`, `crates/store/tests/it/plan.rs`, `crates/server/tests/it/plan_items/{mod,crud,validation,grants}.rs`
+- Modify: `crates/store/src/lib.rs`, `crates/store/tests/it/main.rs`, `crates/server/src/ledger/mod.rs`, `crates/server/src/http/api/{mod,openapi}.rs`, `crates/server/tests/it/main.rs`, `docs/api/openapi.json`
+
+**Interfaces:**
+- Consumes (Task 1): every `plan` type, `PlannedItemId`, `plan_item_visible`. Existing: `ledger::transactions::Patch`, `idempotency::{create, CreateRequest}`, `ledger::complete_created`, `ledger::audit`, `TypedJsonBytes`, `transactions::Notes`, `StoreTx::{get_category, get_category_group, get_account}`.
+- Schema `0013`: `planned_items (id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100), category_id TEXT NOT NULL REFERENCES categories (id), amount_minor INTEGER NOT NULL CHECK (amount_minor BETWEEN 1 AND 1000000000000000), currency TEXT NOT NULL CHECK (length(currency) = 3), direction TEXT NOT NULL CHECK (direction IN ('outflow', 'inflow')), account_hint_id TEXT REFERENCES accounts (id), notes TEXT CHECK (length(notes) BETWEEN 1 AND 2000), active INTEGER NOT NULL CHECK (active IN (0, 1)), item_type TEXT NOT NULL CHECK (item_type IN ('recurring', 'one_off', 'goal')), every INTEGER CHECK (every BETWEEN 1 AND 999), unit TEXT CHECK (unit IN ('days', 'weeks', 'months', 'years')), anchor_on TEXT, end_on TEXT, one_off_on TEXT, goal_start_on TEXT, goal_due_on TEXT, goal_completed INTEGER CHECK (goal_completed IN (0, 1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`, each date column with the repo's `GLOB` CHECK, and a table CHECK that exactly the type's columns are set and goals are outflows. `STRICT`. Indexes on `category_id` and `account_hint_id`.
+- Store (`coffer_store`): `PlannedItemRecord { id, name: PlannedItemName, category: CategoryId, amount: Money, direction, account_hint: Option<AccountId>, notes: Option<Notes>, active: bool, schedule: PlanSchedule, created_at, updated_at }`; `NewPlannedItem`; `PlannedItemChanges` (each field `Option`; `account_hint` and `notes` are `Option<Option<_>>`). `StoreTx::{insert_planned_item, update_planned_item, delete_planned_item, get_planned_item, count_planned_items}`; `Store::{get_planned_item, list_planned_items(include_inactive: bool)}`, ordered by id.
+- Produces (`ledger::plan_items`), `Serialize`/`Deserialize` + `ToSchema`:
+  - `PlannedItemView { id, name, category, amount: Money, direction, account_hint: Option<AccountId> /* required */, notes: Option<String> /* required */, active, schedule: PlanSchedule, created_at, updated_at }`.
+  - `PlannedItemInput { name, category, amount: Money, direction, account_hint: Option<AccountId>, notes: Option<String>, active: Option<bool> /* default true */, schedule: PlanSchedule }`.
+  - `PlannedItemPatch { name: Option<String>, category: Option<CategoryId>, amount: Option<Money>, direction: Option<PlanDirection>, account_hint: Patch<AccountId>, notes: Patch<String>, active: Option<bool>, schedule: Option<PlanSchedule> }`.
+  - `pub(crate) fn check_hint(found: Result<AccountRecord, StoreError>) -> Result<(), LedgerError>`, given the caller's own `get_account` result: the account exists and is open, else `LedgerError::Invalid("the account hint names no open account")`.
+  - `pub(crate) fn check_item_category(category: &CategoryRecord, group_archived: bool, direction: PlanDirection) -> Result<(), LedgerError>`: the archive and kind rules below.
+  - `Ledger::{authorize_plan_write(&self, actor), create_planned_item(&self, actor, input, slot: Option<IdempotencySlot>), update_planned_item(&self, actor, id, patch), delete_planned_item(&self, actor, id), get_planned_item(&self, actor, id), list_planned_items(&self, actor, include_inactive: bool)}`.
+  - `authorize_plan_write` is `authorize(actor, WriteHousehold)` plus `authorize_every_account_access(actor, Write)`. Extract the body it shares with `authorize_category_write` into one private helper.
+  - Reads: `authorize(actor, ReadHousehold)`, then resolve access once and keep only `plan_item_visible(&access, record.account_hint)`. A hidden `get` returns `LedgerError::NotFound`, the same as an absent one.
+- Validation: name; `validate_amount`; `PlanSchedule::validate`; the category exists, is not archived, its group is not archived, and its kind matches (outflow `expense`, inflow `income`); hint via `check_hint`; notes `""` stores as `NULL` (as transactions do). Create over `MAX_PLAN_ITEMS` is 409 `conflict`. A patch re-validates only what changed, against the resulting item; changing a schedule's `type` is 422 "a planned item's type never changes". A goal with linked splits refuses a currency change (409): Task 5 adds that check and the delete refusal, since links don't exist yet.
+- Audit: `planned_item.create`, `.update`, `.delete`, entity type `planned_item`. Fields: `name`, `category`, `amount_minor`, `currency`, `direction`, `account_hint`, `notes`, `active`, and `schedule` as its JSON text. Delete records every field as before-values, so the audit keeps what is gone.
+- API, tag `tags::PLAN` (new): `GET` and `POST /api/v1/plan-items` (`listPlanItems` with `include_inactive`; `createPlanItem`, 201, `Idempotency-Key`), `GET`, `PATCH`, `DELETE /api/v1/plan-items/{item_id}` (`getPlanItem`, `updatePlanItem`, `deletePlanItem`, 204). List answers `{ items }`, like accounts: bounded by `MAX_PLAN_ITEMS`, so no cursor. Descriptions state that a goal and a one-off for the same expense count twice (§6.7).
+
+- [ ] **Step 1: Write failing tests.**
+  - `crud.rs`: `create_each_type_and_read_it_back`; `list_hides_inactive_unless_asked`; `patch_changes_only_what_was_sent` (`account_hint: null` clears, absent keeps); `noop_patch_writes_no_audit`; `delete_is_audited_with_before_values`; `create_is_idempotent` (same key replays, different body is `idempotency_key_reuse`); `every_change_attributes_member_and_agent`.
+  - `validation.rs`: one test per refusal: `amount_zero_negative_or_too_large`, `goal_must_be_outflow`, `inflow_needs_income_category`, `outflow_needs_expense_category`, `transfer_category_refused`, `archived_category_refused`, `category_in_archived_group_refused`, `unknown_category_is_422`, `hint_on_missing_or_closed_account_is_422`, `end_before_anchor`, `goal_due_not_after_start`, `dates_out_of_range`, `type_change_refused`, `unknown_field_is_400`, `item_limit_is_409`.
+  - `grants.rs`: `read_token_with_an_account_grant_lists_unhinted_and_visible_hints` (item hinted at hidden account absent; unhinted and visible-hint items present); `hidden_hint_answers_like_a_missing_item` (`GET` responses byte-identical to a random id's); `restricted_token_cannot_write` (403 "this action needs write access to every account" on create, patch, delete, before an idempotency key is reserved); `all_at_write_may_write`; `read_token_cannot_write`.
+  - `crates/store/tests/it/plan.rs`: `planned_item_roundtrips_each_schedule`; `check_refuses_mixed_schedule_columns`; `corrupt_currency_is_a_backend_error`.
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-server --all-features -E 'test(plan_items)'` → FAIL.
+- [ ] **Step 3: Implement;** regenerate `docs/api/openapi.json`.
+- [ ] **Step 4: Run** → PASS, then the full gate; security review.
+- [ ] **Step 5: Commit** `feat(api): planned items`.
+
+### Task 5: Goal links on splits **[security]**
+
+**Files:**
+- Create: `crates/store/migrations/0014_split_goal_link.sql`, `crates/server/tests/it/plan_items/goal_links.rs`
+- Modify: `crates/server/tests/it/plan_items/mod.rs`, `crates/domain/src/transactions.rs`, `crates/store/src/{transactions,planned_items}.rs`, `crates/server/src/canonical.rs:222`, `crates/server/src/ledger/{transactions,plan_items}.rs`, `docs/api/openapi.json`, and `goal: None` at every `SplitInput` literal in tests: `crates/store/tests/it/ledger.rs`, `crates/server/tests/it/{duplicates/unmerging,duplicates/merging,matching/mod,transactions_core/mod,plaid_sync/transactions,simplefin/sync}.rs`
+
+**Interfaces:**
+- Consumes (Task 4): `planned_items`, `PlannedItemRecord`, `Store`/`StoreTx::get_planned_item`; `plan_item_visible`.
+- Schema `0014`: `ALTER TABLE transaction_splits ADD COLUMN goal_id TEXT REFERENCES planned_items (id);` and `CREATE INDEX transaction_splits_goal_id ON transaction_splits (goal_id) WHERE goal_id IS NOT NULL;`.
+- Produces: `SplitInput` gains `#[serde(default, skip_serializing_if = "Option::is_none")] pub goal: Option<PlannedItemId>`, so audit text for unlinked splits doesn't change. `SplitRecord.goal: Option<PlannedItemId>`. `SplitView.goal: Option<PlannedItemId>` (`#[schema(required)]`). `StoreTx::replace_splits` writes it. `StoreTx::goal_has_links(PlannedItemId) -> Result<bool, StoreError>`.
+- `ledger::transactions`: `current_splits` carries `goal`. New `check_goals(tx, access: &AccountAccess, currency: Currency, splits: &[SplitInput])`, run with `check_categories` wherever splits are written (single patch and batch), only when `splits != before`.
+  - Missing, or `!plan_item_visible`: `Invalid("a split names a goal that does not exist")`, the same text for both, checked first.
+  - Not a goal: `Invalid("a split names a planned item that is not a goal")`.
+  - Other currency: `Invalid("a split's goal must be in the transaction's currency")`.
+  - Completed or inactive goals may be linked, so late receipts can be recorded.
+- `canonical.rs`: the rewrite at line 222 sets `goal: only.goal`.
+- `ledger::plan_items` (Task 4's deferred rules): delete with `goal_has_links` → 409 `conflict` "the goal has linked splits; mark it complete instead"; a currency change on the same → 409.
+
+- [ ] **Step 1: Write failing tests** (`goal_links.rs`): `split_links_to_a_goal_and_reads_back`; `link_is_audited_in_the_splits_change`; `unlinked_splits_keep_their_audit_text`; `missing_and_hidden_goal_answer_alike` (a token with `write` on the transaction's account, goal hinted at a hidden account: body byte-identical to a random id's); `non_goal_item_refused`; `other_currency_refused`; `completed_goal_may_be_linked`; `batch_refuses_by_operation_index`; `imported_amount_change_keeps_goal_link` (sync changes the amount of a one-split transaction; split follows, `goal` kept); `merge_keeps_goal_links`; `goal_with_links_cannot_be_deleted`; `goal_with_links_cannot_change_currency`; `deleting_a_transaction_frees_the_goal` (then delete succeeds); `read_with_hidden_goal_shows_only_its_opaque_id` (the id on the split answers 404 by `GET`).
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-server --all-features -E 'test(goal_links)'` → FAIL.
+- [ ] **Step 3: Implement;** regenerate `docs/api/openapi.json`.
+- [ ] **Step 4: Run** → PASS, then the full gate; security review.
+- [ ] **Step 5: Commit** `feat(ledger): link splits to goals`.
+
+### Task 6: Forecast and what-if API **[security]**
+
+**Files:**
+- Create: `crates/store/src/forecast.rs`, `crates/server/src/ledger/forecast.rs`, `crates/server/src/http/api/forecast.rs`, `crates/server/tests/it/forecast/{mod,answer,unknowns,what_if,access}.rs`
+- Modify: `crates/store/src/{lib,accounts,balances,planned_items,provider_accounts}.rs` (each `*_from_row` this reads becomes `pub(crate)`), `crates/server/src/ledger/mod.rs` (`Ledger::new` gains `timezone: TimeZone`; `fn today(&self) -> Date`), `crates/server/src/cli.rs:312` and `crates/server/src/testkit/mod.rs:328` (pass `config.timezone.clone()`), `crates/server/src/http/api/{mod,openapi}.rs`, `crates/server/tests/it/main.rs`, `crates/store/tests/it/plan.rs`, `docs/api/openapi.json`
+
+**Interfaces:**
+- Consumes: `compute_forecast` and input types (Task 2); `Store::forecast_settings` (Task 3); `PlannedItemRecord` (Task 4); `goal_id` (Task 5); `Ledger::authorize_every_account_access`, `AccountRecord`, `BalanceSnapshot`, `ProviderAccountRecord`, `ConnectionStatus`.
+- Produces (`coffer_store`): `Store::forecast_data(&self, as_of: Date) -> Result<ForecastData, StoreError>`, all in **one read transaction** (`self.pool.begin()`, as `list_categories`), so a sync committing midway can't split a forecast. `ForecastData { settings: ForecastSettings, accounts: Vec<(AccountRecord, Option<BalanceSnapshot>)> /* every account, closed included */, items: Vec<PlannedItemRecord> /* active only */, goal_spent: Vec<(PlannedItemId, i64)>, category_spent: Vec<CategorySpentRow { category, currency: Currency, spent_minor: i64 }>, loose_ends: Vec<LooseEndsRow { currency, uncategorized_count: u32, uncategorized_minor: i64, possible_duplicates: u32 }>, provider_accounts: Vec<ProviderAccountRecord>, connections: Vec<ConnectionHealth { id, label: String, status: ConnectionStatus }> }`. `ConnectionHealth` selects only those columns: no sealed credentials in this path.
+- Queries:
+  - Balance: latest `on_date <= as_of` per account (a future-dated snapshot is ignored).
+  - `goal_spent`: `max(0, -SUM(minor_units))` per `goal_id`, non-pending, `posted_on <= as_of`, any account.
+  - `category_spent`: `max(0, -SUM(minor_units))` per category and transaction currency for `as_of`'s month start `<= posted_on <= as_of`, non-pending, `goal_id IS NULL`, category kind `expense`, on open accounts with `include_in_forecast = 1` and liquidity `cash` or `short_term_liability`.
+  - `loose_ends`: same window and accounts; uncategorized outflows with no splits, count and total; count of `flag_possible_duplicate = 1`.
+  - SQLite's `SUM` overflow surfaces as a backend error: loud, never wrapped.
+- Produces (`ledger::forecast`):
+  - `ForecastOptions { as_of: Option<Date>, horizon_months: Option<u8>, include_income: Option<bool>, floor: Option<SafetyFloor>, stale_after_days: Option<u16> }`.
+  - `HypotheticalItem { name: String, category: Option<CategoryId>, amount: Money, direction: PlanDirection, account_hint: Option<AccountId>, schedule: PlanSchedule }` (`ToSchema`, `deny_unknown_fields`). Same validation as a stored item, through `check_hint` (`Store::get_account`) and `check_item_category` (from one `Store::list_categories`), except the category is optional.
+  - `WhatIfRequest { as_of, horizon_months, include_income, floor, stale_after_days (all optional), items: Vec<HypotheticalItem> }`, at most `MAX_HYPOTHETICAL_ITEMS` (`#[serde(default)]`).
+  - `Ledger::forecast(&self, actor: &Actor, options: ForecastOptions) -> Result<Forecast, LedgerError>`; `Ledger::what_if(&self, actor: &Actor, request: WhatIfRequest) -> Result<Forecast, LedgerError>`. Hypothetical items take `LineSource::Hypothetical { index }`.
+  - Authorization, first and before any read: `authorize(actor, ReadHousehold)?`, then `authorize_every_account_access(actor, AccountLevel::Transactions)`.
+  - Mapping in the ledger: `today` from the household zone; option falls back to settings; `feed_problems` from a bound provider account with `error` set, a `currency_raw` that doesn't parse (`CurrencyUnsupported`) or differs from the account's (`CurrencyDiffers`); `unbound` from unbound provider accounts; `feeds` from connections `Error` or `ReauthRequired`. Provider accounts of a `Removed` connection are skipped everywhere. Provider error *text* is never copied: only the reason.
+  - `ForecastError::OutOfRange` → `LedgerError::Invalid`. `Forecast` is built from these inputs only, so nothing about a request is echoed outside it.
+- API, tag `tags::FORECAST` (new): `GET /api/v1/forecast` (`getForecast`; `ForecastQuery { as_of: Option<Date>, horizon_months: Option<u8> /* minimum 1, maximum 60 */, include_income: Option<bool> }`) and `POST /api/v1/forecast/what-if` (`whatIfForecast`, body `WhatIfRequest`, answers 200). Both answer `Forecast`. The descriptions teach the domain: what each status means, that `surplus` is null when blocked, that negative is a shortfall, sign conventions, and that `what-if` persists nothing.
+
+- [ ] **Step 1: Write failing tests.**
+  - `answer.rs`: `forecast_over_the_api_matches_the_golden_example` (Task 2's data built through the real API and router, by `POST` of accounts, balances, categories, items, and categorized transactions; asserts `surplus` 3,848,000); `today_uses_the_household_time_zone` (clock at 2026-03-01T02:00:00Z; `COFFER_TIMEZONE=Pacific/Auckland` → `as_of` 2026-03-01, `America/Los_Angeles` → 2026-02-28); `empty_household_has_no_number` (200, `unavailable`, `surplus: null`, blockers `floor_not_set` and `no_counted_accounts`); `settings_supply_the_defaults`; `query_overrides_settings`; `horizon_out_of_range_is_422`; `totals_too_large_are_422`; `actuals_ignore_pending_excluded_accounts_and_goal_links`; `goal_spending_reduces_remaining`; `future_dated_snapshot_is_ignored`.
+  - `unknowns.rs` (through the router, with `TestServer::with_fake_provider`): `unbound_provider_account_is_a_caution`; `unsupported_currency_on_an_unbound_account_says_so`; `bound_account_with_a_provider_error_is_a_caution` (no provider error text in the body); `connection_needing_reauth_is_a_caution`; `removed_connection_is_not_reported`; `stale_balance_is_a_caution`; `counted_account_without_balance_blocks`; `mixed_currencies_answer_200_without_a_surplus`; `corrupt_account_currency_fails_loudly` (`execute_unchecked_for_tests` plants an unknown code: 500 `internal`, no number).
+  - `what_if.rs`: `what_if_adds_a_roof_and_lowers_the_surplus_by_it` (hypothetical one-off of 1,500,000 lowers `surplus` by exactly that); `what_if_writes_nothing` (audit count and plan list unchanged, no idempotency row); `what_if_overrides_floor_horizon_and_income`; `empty_what_if_equals_forecast`; `too_many_items_is_422`; `hypothetical_goal_counts`; `lines_identify_hypothetical_items_by_index`; `invalid_hypothetical_is_422_without_echo`.
+  - `access.rs`: `read_token_without_grants_gets_a_forecast`; `read_token_may_run_what_if`; `all_at_transactions_gets_a_forecast`; `all_at_balances_is_refused` (403 "this action needs transactions access to every account"); `account_grants_are_refused_on_both_routes`; `refusal_is_the_same_with_and_without_hidden_accounts` (bodies byte-identical).
+  - Store (`plan.rs`): `balance_is_latest_on_or_before_as_of`; `category_spent_nets_refunds_and_floors_at_zero`.
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-server --all-features -E 'test(forecast)'` → FAIL.
+- [ ] **Step 3: Implement;** regenerate `docs/api/openapi.json`. Confirm tagged enums pass the snapshot test and `spectral:oas`; fix findings in the code that generates the document.
+- [ ] **Step 4: Run** → PASS, then the full gate; security review.
+- [ ] **Step 5: Commit** `feat(api): cash forecast and what-if`.
+
+### Task 7: Adversarial proof that nothing leaks **[security]**
+
+Give this to a fresh agent with only §8.2, the `policy.rs` rule table and this task, so it attacks the code instead of confirming it. Tests only, unless one fails; a failure is fixed in the service that leaked, in this PR.
+
+**Files:**
+- Modify: `crates/server/tests/it/grants/{proptests,hidden_accounts,endpoints}.rs`, `crates/server/tests/it/grants/mod.rs` (a `planned_item` helper)
+
+**Interfaces:**
+- Consumes: the API of Tasks 3–6; existing `world()`, `grant`, `on`, `Household`, `read_uris`, `check_no_endpoint_leaks`.
+- Produces: no new interface.
+
+- [ ] **Step 1: Extend `read_uris`** with `/api/v1/plan-items`, `/api/v1/plan-items?include_inactive=true`, each item's URI, `/api/v1/forecast`, `/api/v1/household/settings`. Extend `Household` so each account may carry a planned item hinted at it, named after the account, and hidden accounts hold a goal-linked split. `no_endpoint_leaks_hidden_accounts` then also asserts no body holds a hidden-hinted item's id or name.
+- [ ] **Step 2: Add tests.** `hidden_accounts.rs`: `forecast_never_answers_a_restricted_token` (hidden account with a large balance, unbound provider account, stale balance: 403, none of those strings or amounts in the body); `what_if_with_hidden_hint_is_refused_like_any_restriction` (a restricted token naming a hidden account as a hint gets the same 403 as naming a visible one and as naming none: the authorization comes first); `what_if_cannot_probe_account_existence`; `goal_link_cannot_probe_hidden_items`. `endpoints.rs`: `plan_writes_need_every_account_at_write_before_reserving_the_key`; `balances_level_grant_on_all_cannot_derive_spending`; `grant_change_applies_to_plan_at_next_request` (hint visible, grant narrowed, item now 404); `new_account_hint_needs_an_all_grant`; `audit_of_plan_changes_stays_behind_the_all_grant`.
+- [ ] **Step 3: Run** `cargo nextest run -p coffer-server --all-features -E 'test(grants)'`. Any failure is a leak: fix it in the service and keep the test. If the property tests pass their time limit, leave `.config/nextest.toml` alone; a needed override is measured, per AGENTS.md.
+- [ ] **Step 4: Run** the full gate; security review.
+- [ ] **Step 5: Commit** `test(grants): the plan and forecast leak nothing`.
+
+### Task 8: Plan versus actual report
+
+**Files:**
+- Create: `crates/domain/src/plan_report.rs`, `crates/server/src/ledger/plan_report.rs`, `crates/server/src/http/api/reports.rs`, `crates/server/tests/it/plan_vs_actual.rs`
+- Modify: `crates/domain/src/lib.rs`, `crates/store/src/forecast.rs`, `crates/store/src/lib.rs`, `crates/server/src/ledger/mod.rs`, `crates/server/src/http/api/{mod,openapi}.rs`, `crates/server/tests/it/main.rs`, `docs/api/openapi.json`
+
+**Interfaces:**
+- Consumes: `CalendarMonth`, `PlanSchedule::occurrences`, `goal_accrued` (Task 1); `PlannedItemRecord` (Task 4); `goal_id` (Task 5); `ForecastError` (Task 2); `CategoryKind`.
+- Produces (`coffer_domain::plan_report`): `fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastError>`.
+  - `PlanReportInput { from: CalendarMonth, months: u8, average_months: u8, today: Date, items: Vec<ReportItem { id: PlannedItemId, name: String, category: CategoryId, amount: Money, direction: PlanDirection, schedule: PlanSchedule, goal_spent: Vec<(CalendarMonth, i64)> }>, actuals: Vec<MonthActual { month: CalendarMonth, category: CategoryId, kind: CategoryKind, currency: Currency, net_minor: i64 }>, uncategorized: Vec<MonthUncategorized { month: CalendarMonth, currency: Currency, count: u32, total_minor: i64 }> }`.
+  - `PlanReport { rows: Vec<PlanRow { month, category, currency, planned: Money, actual: Money, difference: Money, rolling_average: Money }>, goals: Vec<GoalRow { month, goal: PlannedItemId, name: String, currency, accrued: Money, spent_against: Money }>, uncategorized: Vec<UncategorizedRow { month, currency, count: u32, total: Money }>, partial_months: Vec<CalendarMonth> }`.
+  - Rules: `planned` is the sum of active recurring and one-off occurrences in the month (R21). `actual` is positive for spending in an `expense` category and for income in an `income` category; `transfer` is excluded. `difference = planned − actual`. `rolling_average` covers the `average_months` calendar months ending at that month, zeros included, half-even. Goals are not in `rows`. `accrued = goal_accrued(month end) − goal_accrued(month start)`, with month end meaning the next month's first day. A month holding `today` is in `partial_months`. Rows with all-zero values are left out.
+- Store: `Store::plan_report_data(&self, from: Date, to_exclusive: Date) -> Result<PlanReportData, StoreError>`, one read transaction, in `store/src/forecast.rs`: non-pending splits with `goal_id IS NULL` per `substr(posted_on, 1, 7)`, category and currency, on every account; goal-linked splits per month and goal; uncategorized per month and currency only on accounts with liquidity `cash` or `short_term_liability` (R6). `to_exclusive − from` covers `average_months` before `from`.
+- `Ledger::plan_vs_actual(&self, actor: &Actor, query: PlanReportQuery) -> Result<PlanReport, LedgerError>`: `ReadHousehold` plus `authorize_every_account_access(actor, Transactions)` first. `PlanReportQuery { from: CalendarMonth, months: Option<u8> /* 1..=36, default 3 */, average_months: Option<u8> /* 1..=12, default 3 */ }` (`IntoParams`).
+- API, tag `tags::REPORTS` (new): `GET /api/v1/reports/plan-vs-actual` (`getPlanVsActual`).
+
+- [ ] **Step 1: Write failing tests.** Domain: `occurrences_land_in_their_month`; `bi_monthly_bill_is_not_amortized`; `transfer_categories_are_excluded`; `refund_nets_against_spending`; `income_is_positive`; `goal_split_counts_against_the_goal_not_the_category`; `rolling_average_rounds_half_even_and_counts_zero_months` (2-month window: 5 and 0 → 2; 7 and 0 → 4; 3-month window: 100, 0, 100 → 67); `goal_accrual_by_month_telescopes_to_the_total` (proptest); `current_month_is_partial`. API (`plan_vs_actual.rs`): `report_matches_seeded_month`; `uncategorized_brokerage_trade_is_not_spending` (#43); `uncategorized_checking_spending_is_reported_separately`; `hidden_accounts_mean_refusal` (account grants → 403 "this action needs transactions access to every account"); `all_at_balances_is_refused`; `months_out_of_range_is_422`; `bad_month_is_400`.
+- [ ] **Step 2: Run** `cargo nextest run -p coffer-server --all-features -E 'test(plan_vs_actual)'` → FAIL.
+- [ ] **Step 3: Implement;** regenerate `docs/api/openapi.json`.
+- [ ] **Step 4: Run** → PASS, then the full gate.
+- [ ] **Step 5: Commit** `feat(api): plan versus actual report`.
+
+### Task 9: Docs and whole-branch review **[security]**
+
+**Files:**
+- Modify: `docs/agent-usage.md`, `docs/threat-model.md`, `docs/configuration.md`, `README.md`, `AGENTS.md`
+
+**Interfaces:** none (documentation and review).
+
+- [ ] **Step 1: `docs/agent-usage.md`.** New sections under Endpoints:
+  - *Plan*: the three types with one JSON example each, positive amount plus direction, category rules, double counting of a goal and a one-off, month-end clamping, goal links on splits (same currency).
+  - *Forecast*: the formula, what `firm`, `provisional` and `unavailable` mean, every blocker and caution with what to do about it, and "never report a `provisional` number without its cautions". What-if, with the roof example.
+  - *Plan versus actual*: fields, and why trades don't count.
+  - *Household settings*: admin, floor kinds, an unset floor blocks.
+  - *Scopes* notes that `what-if` is allowed for `read`. *Account grants* gains: forecast and report need `all` at `transactions`; plan writes need `all` at `write`; a hidden hint behaves as missing.
+- [ ] **Step 2: `docs/threat-model.md`.** Design: the plan and forecast under grants (R2, R3). Accepted residual risks: an unhinted item's name is household data and may mention an account; a split's `goal` id is opaque and can point at a hidden-hinted item, answering 404.
+- [ ] **Step 3: The rest.** `docs/configuration.md`: `COFFER_TIMEZONE` also decides the forecast's `as_of` and its current month; say it stays an environment variable. `README.md`: the status lines at 15 and 29 say the plan and forecast exist; next is FX, rules and transfer links, and the MCP server. `AGENTS.md`: crate map gains the domain's `plan`, `forecast`, `plan_report` and the ledger's plan items, settings, forecast and report; the rule-table convention mentions `plan_item_visible`.
+- [ ] **Step 4: Track what this plan defers.** Check `gh issue list` and, with the owner's confirmation, open an issue for each of FX with base and display currency; rules; transfer links; time zone in household settings (R7). No TODOs in source.
+- [ ] **Step 5: Run** `cargo run -p coffer-server -- openapi | diff - docs/api/openapi.json` (no output) and the full gate → PASS.
+- [ ] **Step 6: Commit** `docs: the spending plan and forecast`.
+- [ ] **Step 7: Whole-branch review** with a reviewer who didn't implement it: `security-review` over the plan's diff, plus a read of the golden example against §6.8 and each row of *Spec coverage*. Fix findings and commit. Record in the PR what was and wasn't verified: this includes a real run against a manual household through `cargo run -p coffer-server -- serve`, not just CI.
+
+## Spec coverage
+
+| Requirement | Task |
+|---|---|
+| §1 question; §2.7 forecast and what-if; §6.8 | 2, 6 |
+| §2.6, §6.7 planned items, schedules, goals, goal/one-off warning, income | 1, 2, 4, 5 |
+| §2.8, §6.9 plan vs actual | 8 (spending report, net worth history and review queue are not in scope) |
+| §4 "wrong forecast silently" | 2 (types, proptests), 6, 9 |
+| §6.1 money, classification | 1, 2 |
+| §6.3 role matrix: plan for members, settings for admins | 3, 4 |
+| §6.5, §8.2 grants | 1, 4, 5, 6, 7, 8 |
+| §6.6 audit | 3, 4, 5 |
+| §6.10 FX | Not built: R1, R11, R22; mixed currencies reported in 2, 6 |
+| §6.11 typed API, idempotency, problems | 3, 4, 6, 8 |
+| §6.12 MCP | Not in scope: R22 |
+| §8.7 time zone | 6; R7 |
