@@ -89,6 +89,7 @@ macro_rules! string_enum {
         }
     };
 }
+pub(crate) use string_enum;
 
 string_enum!(
     /// Whether a member (or an agent) has looked at a transaction.

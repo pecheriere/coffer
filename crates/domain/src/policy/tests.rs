@@ -809,3 +809,35 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn plan_item_visible_follows_level_for() {
+    let named = account(1);
+    let unnamed = account(2);
+    let actor = agent(Role::Member, Scope::Write);
+
+    let uniform = AccountAccess::Uniform(AccountLevel::Balances);
+    let granted = account_access_with_grants(
+        &actor,
+        &[grant(GrantTarget::Account(named), AccountLevel::Balances)],
+    );
+    let all =
+        account_access_with_grants(&actor, &[grant(GrantTarget::All, AccountLevel::Balances)]);
+
+    for access in [&uniform, &granted, &all] {
+        assert!(
+            plan_item_visible(access, None),
+            "an item without a hint is household data"
+        );
+    }
+    assert!(
+        plan_item_visible(&uniform, Some(unnamed)),
+        "uniform sees all"
+    );
+    assert!(plan_item_visible(&granted, Some(named)), "a named account");
+    assert!(
+        !plan_item_visible(&granted, Some(unnamed)),
+        "a hint at a hidden account is treated as missing"
+    );
+    assert!(plan_item_visible(&all, Some(unnamed)), "an all grant");
+}

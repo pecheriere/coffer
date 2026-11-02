@@ -22,10 +22,18 @@
 //! | Trigger a sync                           | `Write`                       |
 //! | Add, reconnect or remove a connection    | `Write`                       |
 //! | Create or change a category or group     | `Write`                       |
+//! | Read a forecast or a what-if             | `Transactions`                |
+//! | Read plan versus actual                  | `Transactions`                |
+//! | Create, change or delete a planned item  | `Write`                       |
 //!
 //! Using an existing category on a split is a write to the transaction's
 //! account, decided by [`authorize_account`]. A connection's last error is
 //! shown only to an actor who sees every account at `Transactions`.
+//!
+//! A planned item whose hint names an account the actor cannot see is treated
+//! as missing: left out of lists and answered like an item that does not
+//! exist ([`plan_item_visible`], spec §8.9 R3). A planned item without a hint
+//! is household data, visible to anyone who may read the household.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -478,6 +486,15 @@ pub fn authorize_every_account(
             reason: DenyReason::EveryAccount { needed },
         })
     }
+}
+
+/// Whether an actor holding `access` may know a planned item hinting at
+/// `hint` exists. An item without a hint is household data; one with a hint is
+/// data about that account, and is treated as missing when the account is
+/// hidden. Any level on the account shows it.
+#[must_use]
+pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> bool {
+    hint.is_none_or(|account| access.level_for(account).is_some())
 }
 
 /// Rejects a token scope above what `role` may exercise.
