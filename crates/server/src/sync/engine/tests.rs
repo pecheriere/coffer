@@ -264,17 +264,12 @@ fn connection_errors_join_sanitized() {
     assert_eq!(long.chars().count(), 500);
 }
 
-/// An error is read only so far as the result could show of it, and the
-/// reading stops once the result is full.
+/// Redaction sees the whole error: user information whose `@` lies far into
+/// the text is still removed, wherever the shown part ends.
 #[test]
-fn joining_connection_errors_reads_a_bounded_amount() {
-    let padded = format!("{}ok", "\u{7}".repeat(100));
-    assert_eq!(joined_errors(&[padded]).as_deref(), Some("ok"));
-    let beyond = format!("{}tail-marker", "a".repeat(10_000));
-    let kept = joined_errors(&[beyond]).unwrap();
-    assert!(!kept.contains("tail-marker"));
-    let many: Vec<String> = (0..1_000).map(|n| format!("error-{n}")).collect();
-    let kept = joined_errors(&many).unwrap();
-    assert_eq!(kept.chars().count(), 500);
-    assert!(!kept.contains("error-999"));
+fn user_information_is_redacted_however_late_its_at_sign() {
+    let error = format!("https://user:hunter2{}@host/x", "a".repeat(2_500));
+    let shown = joined_errors(&[error]).unwrap();
+    assert!(!shown.contains("hunter2"));
+    assert!(!shown.contains("user:"));
 }

@@ -154,21 +154,15 @@ pub(super) fn failure(err: &SyncError) -> Failure {
         },
     }
 }
-/// How many times the result's length is read of each error: sanitizing only
-/// removes characters, so this leaves enough for a text full of control ones.
-const ERROR_READ_FACTOR: usize = 4;
-
 /// The connection errors, sanitized and joined; `None` when there are none.
 pub(super) fn joined_errors(errors: &[String]) -> Option<String> {
-    // Each error is read only as far as the result could show of it, and
-    // reading stops once the result is full, so no more is copied than that.
+    // Each error is sanitized whole, so redaction sees any `@` in it. Their
+    // number and total size are bounded by the provider (SimpleFin keeps 100,
+    // Plaid sends a few) and the response cap, and joining stops once the
+    // result is full.
     let mut joined = String::new();
     for error in errors {
-        let head: String = error
-            .chars()
-            .take(MAX_PROVIDER_MESSAGE_CHARS * ERROR_READ_FACTOR)
-            .collect();
-        let sanitized = sanitize_provider_message(&head);
+        let sanitized = sanitize_provider_message(error);
         if sanitized.is_empty() {
             continue;
         }

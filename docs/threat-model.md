@@ -233,8 +233,8 @@
     stored from it. Each account is read once, and the count comes from the
     value that is converted, so an account or answer written as a JSON array
     is held to the same limits. The `errors` list of an answer keeps its first
-    100 entries and skips the rest, and the connection errors shown are read
-    only as far as the 500 characters kept.
+    100 entries; the rest are checked only as valid JSON. The kept errors are
+    sanitized whole, and the text stored is cut to 500 characters.
 - **Some Plaid records are passed by for good and only counted.** A record with
   an id too long to store is skipped, and longer texts are cut. A record whose
   `account_id` is too long, or that names no account, belongs to no account coffer
