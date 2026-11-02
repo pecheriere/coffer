@@ -15,5 +15,9 @@ export default defineConfig({
   // The longest test waits a minute for the rates job.
   timeout: 120_000,
   reporter: [['list']],
-  projects: [{ name: 'api', testDir: './api' }],
+  use: { screenshot: 'only-on-failure' },
+  projects: [
+    { name: 'api', testDir: './api' },
+    { name: 'ui', testDir: './ui' },
+  ],
 });

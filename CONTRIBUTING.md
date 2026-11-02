@@ -75,6 +75,7 @@ private key is in `staging/fixtures/passkeys.json`. Those keys are made up and p
 ```sh
 scripts/staging.sh test                       # all of them, with stack and templates if need be
 scripts/staging.sh test api/sync.spec.mjs     # arguments go to Playwright
+scripts/staging.sh test --project=ui          # the pages only
 ```
 
 They need Node 24 or later on the machine, and run from `staging/e2e/` in
@@ -84,6 +85,12 @@ API response is checked against `docs/api/openapi.json`, whichever test made it.
 what the in-process tests in `crates/*/tests/it/` can't, the built image, the real
 configuration and the egress rules, and logic and edge cases stay there. A server that
 panics or logs a mock credential fails the test using it.
+
+The UI tests sign in with Chromium's virtual authenticator, holding either a new passkey or
+the seed's. They set up a first admin on an empty server, make a token, bind an account, and
+look at the forecast and net worth at phone and desktop widths, in light and dark. Any console
+error, uncaught script error or browser report in the server's log, a content security
+policy violation included, fails the test it happened in.
 
 The known answers are the same on any day, which is checked on today and on templates
 seeded as of the first of this month and the last of the previous one, asked about by date

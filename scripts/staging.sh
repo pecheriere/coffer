@@ -10,6 +10,7 @@
 #   scripts/staging.sh test [args]         the end-to-end tests, args going to Playwright
 #   scripts/staging.sh template [days]     make sure the templates for these days exist
 #   scripts/staging.sh start <port> [day]  a throwaway server on a copy of the template
+#   scripts/staging.sh start-empty <port>  a throwaway server holding nothing, with no admin
 #   scripts/staging.sh stop <port>         throw it away
 #   scripts/staging.sh elsewhere [day]     what the image does with the seed away from localhost
 #
@@ -46,7 +47,8 @@ refuse_another_checkout() {
 
 build_image() {
   if [ -z "${COFFER_STAGING_IMAGE:-}" ]; then
-    docker buildx build --load -t "$image" "$root"
+    # No provenance: it gives the same build a new image id, which would seed again.
+    docker buildx build --load --provenance=false -t "$image" "$root"
   fi
 }
 
@@ -203,6 +205,15 @@ start_server() {
   wait_healthy "$name"
 }
 
+start_empty_server() {
+  local port=$1 name
+  name=$(container "$port")
+  docker rm -f -v "$name" >/dev/null 2>&1 || true
+  create_server "$name" "$port"
+  docker start "$name" >/dev/null
+  wait_healthy "$name"
+}
+
 stop_server() {
   docker rm -f -v "$(container "$1")" >/dev/null 2>&1 || true
 }
@@ -248,6 +259,9 @@ case "${1:-}" in
     ensure_mocks
     npm ci --prefix "$root/staging/e2e"
     cd "$root/staging/e2e"
+    # The one browser the virtual authenticator works in, at the version the lockfile's
+    # Playwright names.
+    npx playwright install --only-shell chromium
     npx playwright test "$@"
     ;;
   elsewhere)
@@ -255,6 +269,9 @@ case "${1:-}" in
     ;;
   start)
     start_server "${2:?a port from 18081 to 18099}" "${3:-}"
+    ;;
+  start-empty)
+    start_empty_server "${2:?a port from 18081 to 18099}"
     ;;
   stop)
     stop_server "${2:?a port}"
