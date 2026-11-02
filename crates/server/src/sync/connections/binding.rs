@@ -101,6 +101,36 @@ impl SyncService {
         Ok(view)
     }
 
+    /// Refuses, as [`SyncService::create_account_and_bind`] would, an actor who may not create an
+    /// account for the provider account, so that a form is authorized before it is read.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Denied`] and [`SyncError::NotFound`] as there; storage failures.
+    pub async fn authorize_create_account(
+        &self,
+        actor: &Actor,
+        provider_account: ProviderAccountId,
+    ) -> Result<(), SyncError> {
+        let access = self.authorize_creating(actor).await?;
+        let mut tx = self.store.begin().await?;
+        let current = tx.get_provider_account(provider_account).await?;
+        if visible(&access, &current) {
+            Ok(())
+        } else {
+            Err(SyncError::NotFound)
+        }
+    }
+
+    /// The access of an actor who may create and bind an account.
+    async fn authorize_creating(&self, actor: &Actor) -> Result<AccountAccess, SyncError> {
+        authorize(actor, Action::WriteHousehold)?;
+        authorize(actor, Action::ManageConnections)?;
+        let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, AccountLevel::Write)?;
+        Ok(access)
+    }
+
     /// Creates an account for the provider account and binds it, in one
     /// transaction: kind from the input, else the provider's hint; name
     /// from the input, else the provider account's; currency the provider
@@ -123,10 +153,7 @@ impl SyncService {
         provider_account: ProviderAccountId,
         input: NewLinkedAccountInput,
     ) -> Result<LinkedAccountView, SyncError> {
-        authorize(actor, Action::WriteHousehold)?;
-        authorize(actor, Action::ManageConnections)?;
-        let access = self.access.resolve(actor).await?;
-        authorize_every_account(actor, &access, AccountLevel::Write)?;
+        let access = self.authorize_creating(actor).await?;
         if let Some(name) = &input.name {
             parse_name(name)?;
         }

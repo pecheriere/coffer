@@ -4,11 +4,13 @@
 //! one with financial data). Forms add a `SimpleFin` connection, reconnect one that needs it,
 //! request a sync, remove a connection, forget one whose sealed token
 //! cannot be opened (see [`forget`]), let a held sync cursor move past the
-//! records that keep failing and bind a provider account to an
-//! account (see [`bind`]); each needs the session's
+//! records that keep failing, bind a provider account to an
+//! account (see [`bind`]) and say what a bound account is and whose money it is
+//! (see [`belonging`]); each needs the session's
 //! anti-forgery token, and a setup token is never shown back. When Plaid is
 //! configured it links to the Plaid Link pages.
 
+mod belonging;
 mod bind;
 mod forget;
 
@@ -35,6 +37,7 @@ use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::{Problem, set_retry_after};
+use crate::ledger::accounts::AccountView;
 use crate::sync::connections::{
     ConnectionState, ConnectionView, HeldCursorView, ProviderAccountView,
 };
@@ -57,6 +60,10 @@ pub fn routes() -> Router<AppState> {
         .route("/connections/{id}/remove", post(remove))
         .route("/connections/{id}/forget", post(forget::forget))
         .route("/connections/{id}/release-cursor", post(release_cursor))
+        .route(
+            "/connections/accounts/{id}/belonging",
+            post(belonging::update),
+        )
         .route(
             "/connections/provider-accounts/{id}/create-account",
             post(bind::create_account),
@@ -112,9 +119,9 @@ async fn render(
         .await
         .map_err(|err| PageError(err.into()))?;
     let binding = bind::Binding::load(state, &actor, &accounts).await?;
-    let account_names: HashMap<AccountId, String> = accounts
-        .into_iter()
-        .map(|account| (account.id, account.name))
+    let account_views: HashMap<AccountId, &AccountView> = accounts
+        .iter()
+        .map(|account| (account.id, account))
         .collect();
     let can_manage = authorize(&actor, Action::ManageConnections).is_ok();
     let csrf = &viewer.csrf;
@@ -122,7 +129,7 @@ async fn render(
     let forgettable = state.sync.forgettable(&actor).await.map_err(page_error)?;
     let shared = Shared {
         forgettable: &forgettable,
-        account_names: &account_names,
+        accounts: &account_views,
         binding: &binding,
         timezone: &state.config.timezone,
         csrf,
@@ -173,6 +180,7 @@ async fn render(
                 }
             }
         }
+        (binding.offered_labels(&accounts))
     };
     let frame = Frame {
         look,
@@ -193,7 +201,8 @@ async fn render(
 
 /// What every connection card shares.
 struct Shared<'a> {
-    account_names: &'a HashMap<AccountId, String>,
+    /// What the viewer sees of each account. Nothing on this page reads its balance.
+    accounts: &'a HashMap<AccountId, &'a AccountView>,
     binding: &'a bind::Binding,
     timezone: &'a TimeZone,
     csrf: &'a str,
@@ -303,7 +312,7 @@ fn connection_card(
             } @else {
                 ul.items {
                     @for (index, account) in accounts.iter().enumerate() {
-                        (account_item(connection, account, shared, waiting && index == 0))
+                        (belonging::account_item(connection, account, shared, waiting && index == 0))
                     }
                 }
             }
@@ -402,40 +411,6 @@ fn held_notice(
                     button.btn type="submit" { "Pass the failing records for good" }
                 }
             }
-        }
-    }
-}
-
-fn account_item(
-    connection: &ConnectionView,
-    account: &ProviderAccountView,
-    shared: &Shared<'_>,
-    open: bool,
-) -> Markup {
-    html! {
-        li.item {
-            div.item-main {
-                span.item-title { (account.name) }
-                span.item-meta {
-                    @if let Some(institution) = &account.institution {
-                        (institution) " · "
-                    }
-                    (account.currency)
-                }
-                @if let Some(error) = &account.error {
-                    span.item-meta { "Error: " (error) }
-                }
-            }
-            @match account.account {
-                Some(bound) => {
-                    span.chip {
-                        "Bound to "
-                        (shared.account_names.get(&bound).map_or("an account", String::as_str))
-                    }
-                }
-                None => span.chip.chip-quiet { "Not bound" },
-            }
-            (shared.binding.forms(connection, account, shared.csrf, open))
         }
     }
 }
