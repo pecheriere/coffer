@@ -15,9 +15,10 @@ mod goal;
 mod month;
 mod schedule;
 mod settings;
+pub mod strict_date;
 
 pub use goal::{goal_accrued, goal_need, goal_remaining};
-pub use month::{CalendarMonth, ParseMonthError};
+pub use month::{CalendarMonth, InvalidMonth};
 pub use settings::{ForecastSettings, SafetyFloor};
 
 /// The largest amount of a planned item or a fixed floor, in minor units.
@@ -38,19 +39,27 @@ pub const MAX_PLAN_YEAR: i16 = 2200;
 /// The largest `every` of a recurring schedule.
 const MAX_EVERY: u16 = 999;
 
+/// The most months of outflows a floor may hold.
+const MAX_FLOOR_MONTHS: u8 = 60;
+/// The longest a balance may be allowed to go unrefreshed, in days.
+const MAX_STALE_AFTER_DAYS: u16 = 365;
+
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Why a plan value was rejected. Messages never echo the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlanError {
-    #[error("name must be 1 to 100 characters without control characters")]
+    #[error(
+        "name must be 1 to {max} characters without control characters",
+        max = PlannedItemName::MAX_CHARS
+    )]
     InvalidName,
-    #[error("amount must be between 1 and 1000000000000000 minor units")]
+    #[error("amount must be between 1 and {MAX_PLAN_AMOUNT_MINOR} minor units")]
     InvalidAmount,
-    #[error("every must be 1 to 999")]
+    #[error("every must be 1 to {MAX_EVERY}")]
     InvalidEvery,
-    #[error("dates must fall in the years 1970 to 2200")]
+    #[error("dates must fall in the years {MIN_PLAN_YEAR} to {MAX_PLAN_YEAR}")]
     DateOutOfRange,
     #[error("the end date cannot be before the anchor date")]
     EndBeforeAnchor,
@@ -58,13 +67,13 @@ pub enum PlanError {
     GoalDatesInverted,
     #[error("a goal must be an outflow")]
     GoalMustBeOutflow,
-    #[error("a fixed floor must be between 0 and 1000000000000000 minor units")]
+    #[error("a fixed floor must be between 0 and {MAX_PLAN_AMOUNT_MINOR} minor units")]
     InvalidFloor,
-    #[error("the horizon must be 1 to 60 months")]
+    #[error("the horizon must be {MIN_HORIZON_MONTHS} to {MAX_HORIZON_MONTHS} months")]
     InvalidHorizon,
-    #[error("stale after must be 1 to 365 days")]
+    #[error("stale after must be 1 to {MAX_STALE_AFTER_DAYS} days")]
     InvalidStaleDays,
-    #[error("floor months must be 1 to 60")]
+    #[error("floor months must be 1 to {MAX_FLOOR_MONTHS}")]
     InvalidFloorMonths,
     #[error("unknown plan direction")]
     UnknownDirection,
@@ -124,15 +133,22 @@ pub enum PlanSchedule {
         every: u16,
         unit: IntervalUnit,
         /// The first occurrence.
+        #[serde(deserialize_with = "strict_date::deserialize")]
         anchor_on: Date,
         /// The last day an occurrence may fall on.
+        #[serde(default, deserialize_with = "strict_date::deserialize_option")]
         end_on: Option<Date>,
     },
     /// A single date.
-    OneOff { on: Date },
+    OneOff {
+        #[serde(deserialize_with = "strict_date::deserialize")]
+        on: Date,
+    },
     /// A sinking fund, set aside linearly from `start_on` to `due_on`.
     Goal {
+        #[serde(deserialize_with = "strict_date::deserialize")]
         start_on: Date,
+        #[serde(deserialize_with = "strict_date::deserialize")]
         due_on: Date,
         /// A completed goal needs no more money.
         #[serde(default)]
@@ -548,6 +564,102 @@ mod tests {
             },
             "completed defaults to false"
         );
+    }
+
+    /// Every date field of every schedule type, with `date` in it.
+    fn schedules_with(date: &str) -> [String; 5] {
+        [
+            format!(r#"{{"type":"one_off","on":"{date}"}}"#),
+            format!(r#"{{"type":"recurring","every":1,"unit":"days","anchor_on":"{date}"}}"#),
+            format!(
+                r#"{{"type":"recurring","every":1,"unit":"days","anchor_on":"2027-01-01","end_on":"{date}"}}"#
+            ),
+            format!(r#"{{"type":"goal","start_on":"{date}","due_on":"2028-01-01"}}"#),
+            format!(r#"{{"type":"goal","start_on":"2027-01-01","due_on":"{date}"}}"#),
+        ]
+    }
+
+    #[test]
+    fn schedule_dates_are_plain_dates() {
+        for text in schedules_with("2027-06-01") {
+            assert!(
+                serde_json::from_str::<PlanSchedule>(&text).is_ok(),
+                "a plain date is accepted"
+            );
+        }
+        for bad in [
+            "2027-06-01T00:00:00",
+            "2027-06-01T23:30:00-05:00",
+            "2027-06-01T23:30:00-05[America/New_York]",
+            "2027-06-01 00:00:00",
+            "+002027-06-01",
+            "-000001-06-01",
+            "20270601",
+            "2027-6-1",
+            "2027-02-30",
+            " 2027-06-01",
+            "2027-06-01 ",
+            "٢٠٢٧-06-01",
+        ] {
+            for text in schedules_with(bad) {
+                assert!(
+                    serde_json::from_str::<PlanSchedule>(&text).is_err(),
+                    "only a plain YYYY-MM-DD date is accepted"
+                );
+            }
+        }
+        let null_end = r#"{"type":"recurring","every":1,"unit":"days","anchor_on":"2027-01-01","end_on":null}"#;
+        assert!(
+            serde_json::from_str::<PlanSchedule>(null_end).is_ok(),
+            "a null end date means none"
+        );
+    }
+
+    #[test]
+    fn a_refused_date_is_not_echoed() {
+        let text = r#"{"type":"one_off","on":"sensitive-text"}"#;
+        let error = serde_json::from_str::<PlanSchedule>(text).unwrap_err();
+        assert!(
+            !error.to_string().contains("sensitive"),
+            "the input was echoed"
+        );
+    }
+
+    #[test]
+    fn error_messages_state_the_limits() {
+        for (error, text) in [
+            (
+                PlanError::InvalidName,
+                "name must be 1 to 100 characters without control characters",
+            ),
+            (
+                PlanError::InvalidAmount,
+                "amount must be between 1 and 1000000000000000 minor units",
+            ),
+            (PlanError::InvalidEvery, "every must be 1 to 999"),
+            (
+                PlanError::DateOutOfRange,
+                "dates must fall in the years 1970 to 2200",
+            ),
+            (
+                PlanError::InvalidFloor,
+                "a fixed floor must be between 0 and 1000000000000000 minor units",
+            ),
+            (
+                PlanError::InvalidHorizon,
+                "the horizon must be 1 to 60 months",
+            ),
+            (
+                PlanError::InvalidStaleDays,
+                "stale after must be 1 to 365 days",
+            ),
+            (
+                PlanError::InvalidFloorMonths,
+                "floor months must be 1 to 60",
+            ),
+        ] {
+            assert_eq!(error.to_string(), text, "the message states the limit");
+        }
     }
 
     #[test]

@@ -27,11 +27,12 @@ pub fn goal_accrued(target_minor: i64, start_on: Date, due_on: Date, at: Date) -
     i64::try_from(floor + i128::from(round_up)).unwrap_or(target_minor)
 }
 
-/// What is left of `target_minor` after `spent_minor`, never below zero.
-/// `spent_minor` is positive for money spent, already netted of refunds and
-/// floored at 0.
+/// What is left of `target_minor` after `spent_minor`, never below zero and
+/// never above the target. `spent_minor` is positive for money spent, netted
+/// of refunds; a negative value counts as nothing spent.
 #[must_use]
 pub fn goal_remaining(target_minor: i64, spent_minor: i64) -> i64 {
+    let spent_minor = spent_minor.max(0);
     target_minor.saturating_sub(spent_minor).max(0)
 }
 
@@ -45,6 +46,7 @@ pub fn goal_need(
     due_on: Date,
     at: Date,
 ) -> i64 {
+    let spent_minor = spent_minor.max(0);
     let unspent = goal_accrued(target_minor, start_on, due_on, at).saturating_sub(spent_minor);
     goal_remaining(target_minor, spent_minor).min(unspent.max(0))
 }
@@ -203,12 +205,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn negative_spending_counts_as_none() {
+        assert_eq!(
+            goal_remaining(100, -50),
+            100,
+            "remaining never passes the target"
+        );
+        assert_eq!(goal_remaining(100, i64::MIN), 100, "even at the extreme");
+        let due = day(10);
+        assert_eq!(
+            goal_need(100, -50, START, due, day(5)),
+            50,
+            "need stays the accrual"
+        );
+        assert_eq!(
+            goal_need(100, -50, START, due, day(10)),
+            100,
+            "need never passes the target"
+        );
+        assert_eq!(
+            goal_need(100, i64::MIN, START, due, day(5)),
+            50,
+            "even at the extreme"
+        );
+    }
+
     fn target() -> impl Strategy<Value = i64> {
         1..=MAX_PLAN_AMOUNT_MINOR
     }
 
+    /// Negative too: the floor at 0 is enforced here, not assumed of callers.
     fn spent() -> impl Strategy<Value = i64> {
-        0..=MAX_PLAN_AMOUNT_MINOR
+        -MAX_PLAN_AMOUNT_MINOR..=MAX_PLAN_AMOUNT_MINOR
     }
 
     proptest::proptest! {
@@ -253,7 +282,9 @@ mod tests {
         ) {
             let need = goal_need(target, spent, START, day(total), day(at));
             proptest::prop_assert!(need >= 0, "negative need");
-            proptest::prop_assert!(need <= goal_remaining(target, spent), "need above remaining");
+            let remaining = goal_remaining(target, spent);
+            proptest::prop_assert!(need <= remaining, "need above remaining");
+            proptest::prop_assert!(remaining <= target, "remaining above the target");
         }
     }
 }

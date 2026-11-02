@@ -30,10 +30,11 @@
 //! account, decided by [`authorize_account`]. A connection's last error is
 //! shown only to an actor who sees every account at `Transactions`.
 //!
-//! A planned item whose hint names an account the actor cannot see is treated
-//! as missing: left out of lists and answered like an item that does not
-//! exist ([`plan_item_visible`], spec §8.9 R3). A planned item without a hint
-//! is household data, visible to anyone who may read the household.
+//! A planned item whose hint names an account the actor cannot see at
+//! `Transactions` is treated as missing: left out of lists and answered like
+//! an item that does not exist ([`plan_item_visible`], spec §8.9 R3). A
+//! planned item without a hint is household data, visible to anyone who may
+//! read the household.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -489,12 +490,17 @@ pub fn authorize_every_account(
 }
 
 /// Whether an actor holding `access` may know a planned item hinting at
-/// `hint` exists. An item without a hint is household data; one with a hint is
-/// data about that account, and is treated as missing when the account is
-/// hidden. Any level on the account shows it.
+/// `hint` exists. An item without a hint is household data. One with a hint is
+/// data about that account, and more than `Balances` shows: its name, amount,
+/// cadence and notes need `Transactions`. Below that the item is treated as
+/// missing, because a refusal would confirm it exists.
 #[must_use]
 pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> bool {
-    hint.is_none_or(|account| access.level_for(account).is_some())
+    hint.is_none_or(|account| {
+        access
+            .level_for(account)
+            .is_some_and(|level| level >= AccountLevel::Transactions)
+    })
 }
 
 /// Rejects a token scope above what `role` may exercise.

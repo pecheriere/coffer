@@ -7,15 +7,17 @@ use jiff::Span;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
-/// Returned when a string is not a month written `YYYY-MM`. Never echoes the
-/// input.
+/// Returned for a string that is not a month written `YYYY-MM`, or a date
+/// outside the years 0000 to 9999, which that form cannot write. Never echoes
+/// the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid month")]
-pub struct ParseMonthError;
+pub struct InvalidMonth;
 
-/// One calendar month. Ordered chronologically. Its fields are private and
-/// every constructor keeps them inside the calendar's range, so
-/// [`Self::first_day`] always names a real date.
+/// One calendar month, in the years 0000 to 9999. Ordered chronologically. Its
+/// fields are private and every constructor keeps them in range, so
+/// [`Self::first_day`] always names a real date and its text always parses
+/// back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct CalendarMonth {
@@ -25,12 +27,17 @@ pub struct CalendarMonth {
 
 impl CalendarMonth {
     /// The month `date` falls in.
-    #[must_use]
-    pub fn of(date: Date) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// Returns [`InvalidMonth`] for a date before year 0.
+    pub fn of(date: Date) -> Result<Self, InvalidMonth> {
+        if date.year() < 0 {
+            return Err(InvalidMonth);
+        }
+        Ok(Self {
             year: date.year(),
             month: date.month(),
-        }
+        })
     }
 
     /// The first day of the month.
@@ -47,7 +54,9 @@ impl CalendarMonth {
     pub fn next(self) -> Self {
         self.first_day()
             .checked_add(Span::new().months(1))
-            .map_or(self, Self::of)
+            .ok()
+            .and_then(|date| Self::of(date).ok())
+            .unwrap_or(self)
     }
 }
 
@@ -58,30 +67,30 @@ impl fmt::Display for CalendarMonth {
 }
 
 impl FromStr for CalendarMonth {
-    type Err = ParseMonthError;
+    type Err = InvalidMonth;
 
     /// Accepts exactly four ASCII digits, `-`, and a month from `01` to `12`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let &[y0, y1, y2, y3, b'-', m0, m1] = s.as_bytes() else {
-            return Err(ParseMonthError);
+            return Err(InvalidMonth);
         };
         if ![y0, y1, y2, y3, m0, m1].iter().all(u8::is_ascii_digit) {
-            return Err(ParseMonthError);
+            return Err(InvalidMonth);
         }
         let year = [y0, y1, y2, y3]
             .into_iter()
             .fold(0_i16, |acc, digit| acc * 10 + i16::from(digit - b'0'));
-        let month = i8::try_from((m0 - b'0') * 10 + (m1 - b'0')).map_err(|_| ParseMonthError)?;
+        let month = i8::try_from((m0 - b'0') * 10 + (m1 - b'0')).map_err(|_| InvalidMonth)?;
         if (1..=12).contains(&month) {
             Ok(Self { year, month })
         } else {
-            Err(ParseMonthError)
+            Err(InvalidMonth)
         }
     }
 }
 
 impl TryFrom<String> for CalendarMonth {
-    type Error = ParseMonthError;
+    type Error = InvalidMonth;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         s.parse()
@@ -118,7 +127,7 @@ mod tests {
     use jiff::civil::{Date, date};
     use proptest::prelude::Strategy;
 
-    use super::{CalendarMonth, ParseMonthError};
+    use super::{CalendarMonth, InvalidMonth};
 
     fn month(s: &str) -> CalendarMonth {
         s.parse().unwrap()
@@ -163,7 +172,7 @@ mod tests {
         ] {
             assert_eq!(
                 text.parse::<CalendarMonth>(),
-                Err(ParseMonthError),
+                Err(InvalidMonth),
                 "a malformed month is refused"
             );
         }
@@ -176,11 +185,7 @@ mod tests {
             !error.to_string().contains("sensitive"),
             "the input was echoed"
         );
-        assert_eq!(
-            ParseMonthError.to_string(),
-            "invalid month",
-            "fixed message"
-        );
+        assert_eq!(InvalidMonth.to_string(), "invalid month", "fixed message");
     }
 
     #[test]
@@ -193,7 +198,7 @@ mod tests {
     fn of_first_day_and_next() {
         assert_eq!(
             CalendarMonth::of(date(2028, 2, 29)),
-            month("2028-02"),
+            Ok(month("2028-02")),
             "leap day"
         );
         assert_eq!(month("2028-02").first_day(), date(2028, 2, 1), "first day");
@@ -215,6 +220,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_date_before_year_zero_has_no_month() {
+        assert_eq!(
+            CalendarMonth::of(date(-1, 12, 31)),
+            Err(InvalidMonth),
+            "year -1"
+        );
+        assert_eq!(
+            CalendarMonth::of(Date::MIN),
+            Err(InvalidMonth),
+            "the calendar's first day"
+        );
+        assert_eq!(
+            CalendarMonth::of(date(0, 1, 1)).map(|month| month.to_string()),
+            Ok("0000-01".to_owned()),
+            "year 0 is the first the form can write"
+        );
+    }
+
     fn any_date() -> impl Strategy<Value = Date> {
         (-9999_i16..=9999, 1_i8..=12, 1_i8..=31).prop_map(|(year, month, day)| {
             let last = date(year, month, 1).days_in_month();
@@ -224,13 +248,22 @@ mod tests {
 
     proptest::proptest! {
         #[test]
-        fn a_month_contains_its_dates(any in any_date()) {
-            let of = CalendarMonth::of(any);
+        fn a_month_contains_its_dates_and_its_text_parses_back(any in any_date()) {
+            let Ok(of) = CalendarMonth::of(any) else {
+                proptest::prop_assert!(any.year() < 0, "a writable year was refused");
+                return Ok(());
+            };
+            proptest::prop_assert!(any.year() >= 0, "an unwritable year was accepted");
+            proptest::prop_assert_eq!(
+                of.to_string().parse::<CalendarMonth>(),
+                Ok(of),
+                "the text parses back"
+            );
             let first = of.first_day();
             proptest::prop_assert_eq!(first.year(), any.year(), "same year");
             proptest::prop_assert_eq!(first.month(), any.month(), "same month");
             proptest::prop_assert_eq!(first.day(), 1, "first day");
-            proptest::prop_assert_eq!(CalendarMonth::of(first), of, "first day roundtrips");
+            proptest::prop_assert_eq!(CalendarMonth::of(first), Ok(of), "first day roundtrips");
             if of.next() != of {
                 proptest::prop_assert!(of < of.next(), "next is later");
                 proptest::prop_assert_eq!(

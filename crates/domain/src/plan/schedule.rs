@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn a_far_future_window_needs_no_scan_from_the_anchor() {
+    fn far_future_windows_get_the_right_dates() {
         let schedule = recurring(1, IntervalUnit::Days, date(1970, 1, 1));
         assert_eq!(
             schedule.occurrences(date(9000, 1, 1), date(9000, 1, 3)),

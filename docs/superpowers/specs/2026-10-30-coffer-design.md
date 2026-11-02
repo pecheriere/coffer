@@ -68,7 +68,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 
 ## 3. Non-goals (v1)
 
-- A real UI (dashboards, transaction lists). Only the auth/admin pages in §6.4.
+- A real UI (dashboards, transaction lists). Only the auth/admin pages and the
+  read-only forecast page in §6.4.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
   local change, but no tables or code for it exist in v1 (superseded for agent
@@ -321,8 +322,8 @@ The last admin cannot be disabled or demoted.
 Server-rendered, no SPA, minimal JS only for WebAuthn ceremonies. Pages:
 setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
-No financial data pages in v1. (Connections get a page because pasting a
-setup token is a human step.)
+No financial data pages in v1, except one small read-only forecast page (§8.9,
+R14). (Connections get a page because pasting a setup token is a human step.)
 
 ### 6.5 Authorization
 
@@ -720,8 +721,10 @@ would reveal that hidden accounts exist. The refusal is the same whether or not
 any account is hidden.
 
 **R3. Planned item access.** A planned item hinting at an account the actor
-cannot see answers like a missing item: left out of lists, 404 on `GET`.
-Unhinted items are household data, visible to any `read` token. Creating,
+cannot see at `transactions` answers like a missing item: left out of lists, 404
+on `GET`, not 403, which would confirm it exists. A `balances` grant shows only
+the account and its balances; an item's name, amount, cadence and notes reveal
+much more. Unhinted items are household data, visible to any `read` token. Creating,
 changing or deleting an item needs `WriteHousehold` and an `all` grant at
 `write`, like a category. An unhinted item's name can mention an account: that
 is an accepted risk, and hinting the item hides it.
@@ -774,7 +777,12 @@ this one persists nothing.
 no items also takes `floor` and `stale_after_days`, so a tagged floor is never
 flattened into query parameters.
 
-**R14. No page.** Settings and the forecast are API-only (§3, §6.4).
+**R14. Settings are API-only; a small read-only forecast page is added.**
+`GET /forecast` is session-only and renders the same forecast as the API: cash
+available, cash needed, the surplus or the reason there is none, a monthly
+breakdown with expected income, and cautions. It has no write action, the same
+authorization as R2, the default content security policy, no inline script or
+style, and a link in the navigation.
 
 **R15. Income is off by default.** With it on, a caution fires when projected
 cash at a month's end, before an inflow arrives, is below the floor: a later bonus
@@ -801,7 +809,8 @@ on or before `as_of`.
 
 **R20. Limits.** Horizon 1 to 60 months, default 3. 500 stored items, 50
 hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every`
-1 to 999. Schedule dates and `as_of` in the years 1970 to 2200. A goal's due date
+1 to 999. Schedule dates and `as_of` in the years 1970 to 2200, written exactly
+`YYYY-MM-DD`, since a datetime's day depends on its zone. A goal's due date
 after its start date. Stale after 1 to 365 days, default 7. Floor months 1 to 60.
 "M months of outflows" sums unreduced recurring outflow occurrences in `[as_of,
 as_of + M months)`, per currency. Totals past `i64` answer 422, never a wrapped

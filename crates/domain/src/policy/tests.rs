@@ -811,33 +811,78 @@ proptest::proptest! {
 }
 
 #[test]
-fn plan_item_visible_follows_level_for() {
+fn plan_item_visible_needs_transactions_on_the_hint() {
     let named = account(1);
     let unnamed = account(2);
     let actor = agent(Role::Member, Scope::Write);
+    let named_at =
+        |level| account_access_with_grants(&actor, &[grant(GrantTarget::Account(named), level)]);
+    let all_at = |level| account_access_with_grants(&actor, &[grant(GrantTarget::All, level)]);
 
-    let uniform = AccountAccess::Uniform(AccountLevel::Balances);
-    let granted = account_access_with_grants(
-        &actor,
-        &[grant(GrantTarget::Account(named), AccountLevel::Balances)],
-    );
-    let all =
-        account_access_with_grants(&actor, &[grant(GrantTarget::All, AccountLevel::Balances)]);
-
-    for access in [&uniform, &granted, &all] {
-        assert!(
-            plan_item_visible(access, None),
-            "an item without a hint is household data"
-        );
+    for level in LEVELS {
+        for access in [
+            AccountAccess::Uniform(level),
+            named_at(level),
+            all_at(level),
+        ] {
+            assert!(
+                plan_item_visible(&access, None),
+                "an item without a hint is household data"
+            );
+        }
     }
+
     assert!(
-        plan_item_visible(&uniform, Some(unnamed)),
-        "uniform sees all"
+        !plan_item_visible(&named_at(AccountLevel::Balances), Some(named)),
+        "a named grant at balances does not show the item"
     );
-    assert!(plan_item_visible(&granted, Some(named)), "a named account");
     assert!(
-        !plan_item_visible(&granted, Some(unnamed)),
+        plan_item_visible(&named_at(AccountLevel::Transactions), Some(named)),
+        "a named grant at transactions shows the item"
+    );
+    assert!(
+        plan_item_visible(&named_at(AccountLevel::Write), Some(named)),
+        "a named grant at write shows the item"
+    );
+    assert!(
+        !plan_item_visible(&named_at(AccountLevel::Write), Some(unnamed)),
         "a hint at a hidden account is treated as missing"
     );
-    assert!(plan_item_visible(&all, Some(unnamed)), "an all grant");
+
+    assert!(
+        !plan_item_visible(&all_at(AccountLevel::Balances), Some(unnamed)),
+        "an all grant at balances does not show the item"
+    );
+    assert!(
+        plan_item_visible(&all_at(AccountLevel::Transactions), Some(unnamed)),
+        "an all grant at transactions shows the item"
+    );
+
+    assert!(
+        !plan_item_visible(&AccountAccess::Uniform(AccountLevel::Balances), Some(named)),
+        "uniform balances does not show the item"
+    );
+    assert!(
+        plan_item_visible(
+            &AccountAccess::Uniform(AccountLevel::Transactions),
+            Some(named)
+        ),
+        "uniform transactions shows the item"
+    );
+
+    let mixed = account_access_with_grants(
+        &actor,
+        &[
+            grant(GrantTarget::All, AccountLevel::Balances),
+            grant(GrantTarget::Account(named), AccountLevel::Transactions),
+        ],
+    );
+    assert!(
+        plan_item_visible(&mixed, Some(named)),
+        "the best grant naming the account decides"
+    );
+    assert!(
+        !plan_item_visible(&mixed, Some(unnamed)),
+        "the all grant alone stays at balances"
+    );
 }

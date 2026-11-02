@@ -3,12 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::money::Money;
-use crate::plan::{MAX_HORIZON_MONTHS, MAX_PLAN_AMOUNT_MINOR, MIN_HORIZON_MONTHS, PlanError};
-
-/// The most months of outflows a floor may hold.
-const MAX_FLOOR_MONTHS: u8 = 60;
-/// The longest a balance may be allowed to go unrefreshed, in days.
-const MAX_STALE_AFTER_DAYS: u16 = 365;
+use crate::plan::{
+    MAX_FLOOR_MONTHS, MAX_HORIZON_MONTHS, MAX_PLAN_AMOUNT_MINOR, MAX_STALE_AFTER_DAYS,
+    MIN_HORIZON_MONTHS, PlanError,
+};
 
 /// The cash that must stay untouched on top of the horizon's planned spending
 /// and goals.
