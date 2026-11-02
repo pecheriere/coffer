@@ -1298,7 +1298,7 @@ isn't counted among the accounts to set up (the navigation notice), and `suggest
 unchanged. It can still be bound, by either route, and binding clears the dismissal. Dismissing and
 restoring (`POST /provider-accounts/{id}/dismiss` and `/restore`, and forms on the page, on the same
 service) need `ManageConnections` and write access to every account, as binding does; an actor who
-doesn't see the provider account gets the answer for a missing one. Both are audited
+without write access to every account is refused before any lookup, so a real id and a missing one get the same answer. A dismissal stands even if real money later appears on the account: no caution until a member restores it. Both are audited
 (`provider_account.dismiss`, `provider_account.restore`), with the agent named as ever. Asking for
 a state it is already in, or for a bound account or a removed connection, is a 409, which also
 answers a page or form older than the change.

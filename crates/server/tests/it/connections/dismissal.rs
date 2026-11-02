@@ -147,7 +147,9 @@ async fn a_read_token_is_refused_and_changes_nothing() {
 }
 
 #[tokio::test]
-async fn a_token_that_cannot_see_it_gets_the_answer_for_a_missing_one() {
+/// A token with grants lacks write on every account, so it is refused with a 403 before any
+/// lookup: the answer cannot tell a real id from a missing one.
+async fn a_token_with_grants_is_refused_the_same_for_a_real_id_and_a_missing_one() {
     let (world, held) = with_one_held().await;
     let checking = world.account("Checking", "USD").await;
     let (_, narrow) = world
@@ -171,6 +173,7 @@ async fn a_token_that_cannot_see_it_gets_the_answer_for_a_missing_one() {
         let missing = world
             .call(Method::POST, &uri(ProviderAccountId::new()), &narrow, None)
             .await;
+        assert_eq!(real.0, StatusCode::FORBIDDEN);
         assert_eq!(real, missing);
     }
     assert!(

@@ -38,13 +38,13 @@ pub(super) fn forms(
             p.fine { (DISMISSED_FINE) }
             form method="post" action={ "/connections/provider-accounts/" (id) "/restore" } {
                 (csrf_field(csrf))
-                button.btn type="submit" { "Undo dismiss" }
+                button.btn type="submit" aria-label={ "Undo dismiss of " (account.name) } { "Undo dismiss" }
             }
         } @else {
             form method="post" action={ "/connections/provider-accounts/" (id) "/dismiss" } {
                 (csrf_field(csrf))
                 p.fine { (DISMISS_FINE) }
-                button.btn type="submit" { "Dismiss" }
+                button.btn type="submit" aria-label={ "Dismiss " (account.name) } { "Dismiss" }
             }
         }
     }

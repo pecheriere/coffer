@@ -124,3 +124,61 @@ async fn dismissing_something_unknown_is_not_found() {
         .await;
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_missing_or_wrong_csrf_token_changes_nothing() {
+    let mut world = world().await;
+    let connection = world.seeded(world.alice).await;
+    world.sync_fixture(connection).await;
+    let checking = world.provider_account("Checking").await;
+    let card = world.provider_account("Credit Card").await;
+    let page = world.admin.get("/connections").await;
+    world
+        .admin
+        .post_form(&dismiss_path(card.id), &[("csrf", &page.csrf())])
+        .await;
+
+    for path in [dismiss_path(checking.id), restore_path(card.id)] {
+        let missing = world.admin.post_form(&path, &[]).await;
+        let wrong = world.admin.post_form(&path, &[("csrf", "AAAA")]).await;
+        assert_eq!(missing.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN, "{path}");
+    }
+
+    assert!(
+        world
+            .provider_account("Checking")
+            .await
+            .dismissed_at
+            .is_none()
+    );
+    assert!(
+        world
+            .provider_account("Credit Card")
+            .await
+            .dismissed_at
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn the_buttons_name_their_account() {
+    let mut world = world().await;
+    let connection = world.seeded(world.alice).await;
+    world.sync_fixture(connection).await;
+    let checking = world.provider_account("Checking").await;
+    let page = world.admin.get("/connections").await;
+    assert!(page.body.contains("aria-label=\"Dismiss Checking\""));
+    assert!(page.body.contains("aria-label=\"Dismiss Credit Card\""));
+
+    world
+        .admin
+        .post_form(&dismiss_path(checking.id), &[("csrf", &page.csrf())])
+        .await;
+    let after = world.admin.get("/connections").await;
+    assert!(
+        after
+            .body
+            .contains("aria-label=\"Undo dismiss of Checking\"")
+    );
+}

@@ -9,7 +9,7 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::ProviderAccountId;
 use coffer_domain::policy::{AccountLevel, Action, authorize, authorize_every_account};
 
-use super::{ProviderAccountView, audit, visible};
+use super::{ProviderAccountView, audit};
 use crate::sync::SyncError;
 use crate::sync::engine::{SyncService, ensure_not_removed};
 
@@ -19,9 +19,9 @@ impl SyncService {
     /// # Errors
     ///
     /// [`SyncError::Denied`] without [`Action::ManageConnections`] and write access to every
-    /// account; [`SyncError::NotFound`] for an unknown provider account, or one the actor does
-    /// not see; [`SyncError::Conflict`] when it is bound, already dismissed, or its connection
-    /// is removed; storage failures.
+    /// account; [`SyncError::NotFound`] for an unknown provider account;
+    /// [`SyncError::Conflict`] when it is bound, already dismissed, or its connection is
+    /// removed; storage failures.
     pub async fn dismiss_provider_account(
         &self,
         actor: &Actor,
@@ -55,9 +55,8 @@ impl SyncService {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_provider_account(provider_account).await?;
-        if !visible(&access, &current) {
-            return Err(SyncError::NotFound);
-        }
+        // No visibility check: passing the every-account check above means the actor sees
+        // every provider account, bound or not.
         ensure_not_removed(&mut tx, current.connection).await?;
         let updated = tx
             .set_provider_account_dismissed(provider_account, dismiss.then_some(now))
