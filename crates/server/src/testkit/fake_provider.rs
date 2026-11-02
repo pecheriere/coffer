@@ -15,6 +15,9 @@ use crate::sync::provider::{
     ProviderFuture, ProviderKind,
 };
 
+/// The message of every panic a [`FakeProvider`] is scripted to raise.
+pub const SCRIPTED_PANIC: &str = "scripted provider panic";
+
 /// One fetch a [`FakeProvider`] received.
 #[derive(Debug, Clone)]
 pub struct FakeFetch {
@@ -36,6 +39,7 @@ pub struct FakeProvider {
     requests: Mutex<Vec<FakeFetch>>,
     fetch_gate: Mutex<Option<CallGate>>,
     fetch_panics: Mutex<bool>,
+    capabilities_panic: Mutex<bool>,
     connect_gate: Mutex<Option<CallGate>>,
     disconnect_gate: Mutex<Option<CallGate>>,
     disconnect_error: Mutex<Option<ProviderError>>,
@@ -105,6 +109,7 @@ impl FakeProvider {
             requests: Mutex::new(Vec::new()),
             fetch_gate: Mutex::new(None),
             fetch_panics: Mutex::new(false),
+            capabilities_panic: Mutex::new(false),
             connect_gate: Mutex::new(None),
             disconnect_gate: Mutex::new(None),
             disconnect_error: Mutex::new(None),
@@ -122,6 +127,12 @@ impl FakeProvider {
     /// Makes the next fetch panic, as a bug in a provider would.
     pub fn panic_next_fetch(&self) {
         *lock(&self.fetch_panics) = true;
+    }
+
+    /// Makes the next look at the capabilities panic: on the scheduler's
+    /// ticker, outside any run, when nothing else is using the provider.
+    pub fn panic_next_capabilities(&self) {
+        *lock(&self.capabilities_panic) = true;
     }
 
     /// Makes the next `connect` wait, once it has started, until the
@@ -173,6 +184,10 @@ impl Provider for FakeProvider {
     }
 
     fn capabilities(&self) -> Capabilities {
+        assert!(
+            !std::mem::take(&mut *lock(&self.capabilities_panic)),
+            "{SCRIPTED_PANIC}"
+        );
         self.capabilities
     }
 
@@ -221,7 +236,7 @@ impl Provider for FakeProvider {
             }
             match response {
                 Some(response) => response,
-                None => panic!("scripted provider panic"),
+                None => panic!("{SCRIPTED_PANIC}"),
             }
         })
     }

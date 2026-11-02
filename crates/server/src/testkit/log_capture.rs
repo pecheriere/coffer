@@ -1,5 +1,5 @@
-//! A capture of every log event, and a signal for when code under test logs a given
-//! event.
+//! The capture of every log event in a test process, and the signal for when
+//! code under test logs a given event.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -47,7 +47,8 @@ pub fn event_signal(
 
 /// Installs, once per process, the global subscriber that captures every
 /// log event (read with [`captured_log_text`]) and fires
-/// [`event_signal`]s. Every [`TestServer`](super::TestServer) constructor calls it.
+/// [`event_signal`]s. Every [`TestServer`](super::TestServer) constructor
+/// calls it.
 ///
 /// # Panics
 ///

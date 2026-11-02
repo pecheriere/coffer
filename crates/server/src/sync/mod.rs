@@ -3,6 +3,7 @@
 //! §8.4).
 
 pub mod apply;
+mod bounded;
 pub mod connections;
 pub mod engine;
 pub mod plaid;

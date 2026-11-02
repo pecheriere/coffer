@@ -9,8 +9,18 @@ rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pecheriere/coffer"
 
+# Backtraces in the logs name file and line (docs/configuration.md, "Panics"),
+# so line tables stay in the binary and it is not stripped. Panics must unwind
+# (the default): the server answers them and keeps serving.
 [profile.release]
-strip = true
+debug = "line-tables-only"
+strip = false
+
+# Only coffer's own code keeps line tables. A dependency's frame still shows its
+# function name, and the panic's location is exact wherever it is; line tables
+# for every dependency would add nearly 40 MB before compression (Dockerfile).
+[profile.release.package."*"]
+debug = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -38,6 +48,9 @@ axum = "0.8.9"
 # OpenAPI document generated from the handlers and their types.
 utoipa = { version = "6.0.0", default-features = false, features = ["macros", "uuid", "jiff_0_2"] }
 utoipa-axum = "0.3.0"
+# Answers a panicking handler with a 500 (crates/server/src/http/panic_answer.rs).
+# 0.6 is the version reqwest already brings into the tree, so this adds no crate.
+tower-http = { version = "0.6.11", default-features = false, features = ["catch-panic"] }
 # Query string parsing for the typed API extractors (both already in the tree
 # through axum).
 serde_urlencoded = "0.7.1"

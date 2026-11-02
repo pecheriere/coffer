@@ -12,7 +12,7 @@
 
 pub mod browser;
 mod fake_provider;
-mod logs;
+mod log_capture;
 mod passkeys;
 mod upstream;
 
@@ -47,8 +47,8 @@ use crate::sync::provider::{Provider, ProviderKind, ProviderRegistry};
 use crate::sync::simplefin::SimpleFin;
 use crate::vault::CredentialVault;
 
-pub use fake_provider::{CallGate, FakeFetch, FakeProvider};
-pub use logs::{capture_logs, captured_log_text, event_signal, log_marker};
+pub use fake_provider::{CallGate, FakeFetch, FakeProvider, SCRIPTED_PANIC};
+pub use log_capture::{capture_logs, captured_log_text, event_signal, log_marker};
 pub use passkeys::{SoftAuthenticator, link_token};
 pub use upstream::{MockUpstream, RecordedRequest};
 
@@ -471,6 +471,18 @@ fn registry(config: &Config) -> ProviderRegistry {
         ..config.clone()
     };
     ProviderRegistry::from_config(&config, &Egress::for_tests()).expect("provider registry")
+}
+
+/// The message of the panic of [`panic_with_marker`].
+pub const PANIC_MARKER: &str = "panic-marker-do-not-log";
+
+/// Panics with [`PANIC_MARKER`], for the `panic-for-tests` command.
+///
+/// # Panics
+///
+/// Always.
+pub fn panic_with_marker() -> ! {
+    panic!("{PANIC_MARKER}")
 }
 
 /// Locks `mutex`, recovering the data of a test that panicked holding it.

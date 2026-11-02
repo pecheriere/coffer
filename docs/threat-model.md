@@ -32,6 +32,14 @@
   database stores only a keyed BLAKE3 hash, domain-separated per token kind,
   so a stolen database or backup cannot be replayed without the server key.
   Secrets are shown once and never logged; errors never echo credentials.
+- **A panic's message is never logged or answered.** It can hold anything,
+  so the panic log has only the source location and a backtrace of code
+  locations, and a client gets a fixed 500. No crash reports leave the host.
+  The release binary keeps its symbols and line tables for those backtraces,
+  which reveals nothing the public source does not. Accepted risk: panic events
+  are not rate limited, at about 8 KB each, so a client that could cause a panic
+  could fill the logs; that needs a client-reachable panic, and a review of this
+  code found none.
 - **Provider credentials are stored only sealed.** They are encrypted with
   XChaCha20-Poly1305 (random 24-byte nonce per seal) under a key derived from
   the server key with BLAKE3 `derive_key` (context `coffer 2026-10 provider
@@ -225,8 +233,16 @@
     comes on top of that and has no deadline.
   - Memory in one fetch goes above the 64 MiB. Parsing adds overhead, and the
     account list and the page being read add up to 16 MiB each. A SimpleFin
-    answer has no limit on its accounts, and a 16 MiB answer of tiny entries
-    expands much further while it is read (issue #62).
+    answer is held whole, up to 16 MiB, and is read with the same bound as
+    Plaid's pages: at most 1,000 accounts, 10,000 transactions on one account
+    and 100,000 in all. Each list holds one entry past its limit, the rest
+    is skipped but must still be valid JSON, and an answer over a limit fails
+    the run with a fixed text before any entry is converted, so nothing is
+    stored from it. Each account is read once, and the count comes from the
+    value that is converted, so an account or answer written as a JSON array
+    is held to the same limits. The `errors` list of an answer keeps its first
+    100 entries; the rest are checked only as valid JSON. The kept errors are
+    sanitized whole, and the text stored is cut to 500 characters.
 - **Some Plaid records are passed by for good and only counted.** A record with
   an id too long to store is skipped, and longer texts are cut. A record whose
   `account_id` is too long, or that names no account, belongs to no account coffer

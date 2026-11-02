@@ -18,7 +18,6 @@ use jiff::civil::Date;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use thiserror::Error;
@@ -28,6 +27,7 @@ use zeroize::Zeroizing;
 use crate::config::PlaidConfig;
 use crate::egress::{Egress, EgressError, HostAllowList, OutboundRequest};
 use crate::sync::apply::{MAX_PROVIDER_ID_CHARS, valid_provider_id};
+use crate::sync::bounded::bounded;
 
 const PLAID_VERSION: HeaderName = HeaderName::from_static("plaid-version");
 const PLAID_VERSION_VALUE: HeaderValue = HeaderValue::from_static("2020-09-14");
@@ -744,34 +744,6 @@ fn limited_accounts<'de, D: Deserializer<'de>>(answer: D) -> Result<Vec<&'de Raw
 /// most held is three times the limit plus three.
 fn limited_records<'de, D: Deserializer<'de>>(list: D) -> Result<Vec<&'de RawValue>, D::Error> {
     bounded(list, MAX_PAGE_RECORDS)
-}
-
-/// The entries of `list`, up to one past `max`; the rest are read past without
-/// being held, and must still be valid JSON.
-fn bounded<'de, D: Deserializer<'de>>(list: D, max: usize) -> Result<Vec<&'de RawValue>, D::Error> {
-    struct Limited(usize);
-
-    impl<'de> Visitor<'de> for Limited {
-        type Value = Vec<&'de RawValue>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a list of records")
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut list: A) -> Result<Self::Value, A::Error> {
-            let mut kept = Vec::new();
-            while kept.len() <= self.0 {
-                match list.next_element()? {
-                    Some(entry) => kept.push(entry),
-                    None => return Ok(kept),
-                }
-            }
-            while list.next_element::<IgnoredAny>()?.is_some() {}
-            Ok(kept)
-        }
-    }
-
-    list.deserialize_seq(Limited(max))
 }
 
 /// Whether `id` is longer than coffer can store. Descriptions and merchants
