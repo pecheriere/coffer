@@ -6,7 +6,9 @@
 //! Credentials exist in clear only in memory: setup input goes to the
 //! provider, the credentials it returns are sealed under the connection's
 //! id before anything is stored, and they are opened again only to give
-//! them up at the provider when the connection is removed. No audit entry,
+//! them up at the provider when the connection is removed, or, for a
+//! provider that bills until removed, to test that they still open (the
+//! value is dropped at once). No audit entry,
 //! log line, error or view ever holds them.
 
 use coffer_domain::accounts::{AccountKind, LiquidityClass};

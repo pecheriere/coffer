@@ -112,13 +112,16 @@ impl SyncService {
         Ok((provider, credentials))
     }
 
-    /// Whether removing `connection` is refused for want of a way to give
-    /// its credentials up: its provider bills until told otherwise, and
-    /// either the server no longer offers the provider or the sealed
-    /// credentials do not open.
-    pub(super) fn cannot_give_up(&self, connection: &ConnectionRecord) -> bool {
+    /// Whether `connection` holds sealed credentials of a provider that bills
+    /// until told otherwise and they do not open under the server's key. A
+    /// provider that is merely not offered does not count: its credentials
+    /// still work once it is configured again.
+    pub(super) fn token_cannot_be_opened(&self, connection: &ConnectionRecord) -> bool {
         connection.credentials.as_deref().is_some_and(|sealed| {
-            bills_until_removed(connection) && self.reach(connection, sealed).is_err()
+            bills_until_removed(connection)
+                && !self
+                    .vault
+                    .can_open(connection.id, &SealedCredentials::from(sealed.to_vec()))
         })
     }
 

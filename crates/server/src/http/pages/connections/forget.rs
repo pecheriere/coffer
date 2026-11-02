@@ -1,4 +1,4 @@
-//! Forgetting a Plaid connection coffer cannot give up: the card's section
+//! Forgetting a Plaid connection whose sealed token cannot be opened: the card's section
 //! with its form, and the handler behind it.
 
 use axum::extract::{Path, State};
@@ -28,17 +28,22 @@ pub(super) fn section(id: ConnectionId, label: &str, csrf: &str) -> Markup {
     html! {
         h3 { "Forget this connection" }
         p {
-            "coffer cannot reach Plaid for this connection: Plaid is not configured on "
-            "this server, or the sealed token no longer opens, for example because the "
-            "server key is lost. Until then it cannot be removed."
+            "coffer cannot open this connection's sealed token, so it cannot remove the "
+            "Item at Plaid and cannot remove this connection."
         }
         p {
             strong {
-                "The Item keeps billing at Plaid until it is removed in Plaid's dashboard, "
-                "and coffer cannot do that for it."
+                "If this could be a wrong key or a restored backup, fix that first: "
+                "forgetting can't be undone, and removal then works normally."
             }
-            " Forgetting marks this connection removed and erases its sealed token here; "
-            "its accounts and transactions stay. Remove the Item in Plaid's dashboard too."
+        }
+        p {
+            "Forgetting marks this connection removed and erases its sealed token here; "
+            "its accounts and transactions stay. "
+            strong {
+                "coffer can't end billing for this Item, because that needs the token. "
+                "Contact Plaid, or check your Plaid dashboard, to end it."
+            }
         }
         form method="post" action={ "/connections/" (id) "/forget" } {
             (csrf_field(csrf))

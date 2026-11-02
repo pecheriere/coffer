@@ -145,6 +145,13 @@ impl CredentialVault {
         Ok(SealedCredentials(sealed))
     }
 
+    /// Whether credentials sealed for `connection` open under this server's
+    /// key. The opened value is dropped, and zeroized, at once.
+    #[must_use]
+    pub fn can_open(&self, connection: ConnectionId, sealed: &SealedCredentials) -> bool {
+        self.open(connection, sealed).is_ok()
+    }
+
     /// Opens credentials sealed for `connection`.
     ///
     /// # Errors

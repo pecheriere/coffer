@@ -2,10 +2,13 @@
 //!
 //! Removing a connection whose provider bills until told otherwise is
 //! refused while coffer cannot reach the provider for it (see
-//! [`SyncService::remove_connection`]). When that is permanent, say because
-//! the server key is lost, the member forgets the connection instead: it is
-//! marked `removed` and its sealed credentials are erased, and the provider
-//! keeps billing until the member removes the Item there themselves.
+//! [`SyncService::remove_connection`]). When the provider is merely not
+//! configured, the sealed token still works and configuring the provider
+//! again fixes that, so nothing is forgotten. When the token itself cannot be
+//! opened and that is permanent, say because the server key is lost, the
+//! member forgets the connection instead: it is marked `removed` and its
+//! sealed credentials are erased. coffer can then no longer end the
+//! provider's billing, which needs the token.
 
 use std::collections::HashSet;
 
@@ -19,15 +22,15 @@ use super::{CONNECTION_CHANGED, audit};
 use crate::sync::SyncError;
 use crate::sync::engine::{CONNECTION_REMOVED, SyncService, ensure_not_removed};
 
-const CAN_BE_REMOVED: &str =
-    "coffer can still give this connection up at its provider: remove it instead of forgetting it";
+const TOKEN_STILL_OPENS: &str = "this connection's sealed token still opens, so it is not forgotten: \
+     configure its provider again if need be and remove it instead";
 const CONFIRMATION_MISMATCH: &str =
     "type the connection's label to confirm that it is forgotten without being given up";
 
 impl SyncService {
-    /// The connections `actor` may forget now: not removed, removal refused
-    /// because coffer cannot give their credentials up, and the actor a
-    /// passkey session allowed to remove them.
+    /// The connections `actor` may forget now: not removed, their sealed
+    /// token cannot be opened, and the actor a passkey session allowed to
+    /// remove them.
     ///
     /// # Errors
     ///
@@ -55,25 +58,24 @@ impl SyncService {
                 )
                 .is_ok()
             })
-            .filter(|connection| self.cannot_give_up(connection))
+            .filter(|connection| self.token_cannot_be_opened(connection))
             .map(|connection| connection.id)
             .collect())
     }
 
     /// Marks the connection `removed` and erases its sealed credentials
-    /// without giving them up at the provider, which keeps billing the Item
-    /// until it is removed there. Only for a connection whose removal is
-    /// refused because coffer cannot give its credentials up, and only
-    /// when `confirmation` is the connection's label. Audited as
-    /// `connection.forget`, never as a removal.
+    /// without giving them up at the provider, which may keep billing the
+    /// Item. Only for a connection whose sealed token cannot be opened, and
+    /// only when `confirmation` is the connection's label. Audited as
+    /// `connection.forget` with its reason, never as a removal.
     ///
     /// # Errors
     ///
     /// [`SyncError::Denied`] unless the actor is a passkey session that may
     /// remove the connection and has write access to every account;
     /// [`SyncError::NotFound`] for an unknown connection;
-    /// [`SyncError::Conflict`] for a removed one, one coffer can still give
-    /// up, or one reconnected meanwhile; [`SyncError::Invalid`] when
+    /// [`SyncError::Conflict`] for a removed one, one whose token still opens,
+    /// or one reconnected meanwhile; [`SyncError::Invalid`] when
     /// `confirmation` is not its label; storage failures.
     pub async fn forget_connection(
         &self,
@@ -94,8 +96,8 @@ impl SyncService {
         if current.status == ConnectionStatus::Removed {
             return Err(SyncError::Conflict(CONNECTION_REMOVED));
         }
-        if !self.cannot_give_up(&current) {
-            return Err(SyncError::Conflict(CAN_BE_REMOVED));
+        if !self.token_cannot_be_opened(&current) {
+            return Err(SyncError::Conflict(TOKEN_STILL_OPENS));
         }
         if confirmation.trim() != current.label.as_str() {
             return Err(SyncError::Invalid(CONFIRMATION_MISMATCH));
@@ -132,7 +134,8 @@ impl SyncService {
                     before.status.as_str(),
                     ConnectionStatus::Removed.as_str(),
                 )
-                .set("given_up_at_provider", false),
+                .set("given_up_at_provider", false)
+                .set("reason", "sealed token cannot be opened"),
         )
         .await?;
         tx.commit().await?;

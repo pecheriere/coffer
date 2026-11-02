@@ -270,6 +270,11 @@ fn connection_card(connection: &ConnectionView, may_remove: bool, shared: &Share
                     button.btn.btn-primary type="submit" { "Reconnect" }
                 }
             }
+            @if live && plaid && !plaid_offered && !shared.forgettable.contains(&id) {
+                p.fine {
+                    "Plaid is not configured on this server. Configure it again to remove this connection."
+                }
+            }
             @if shared.forgettable.contains(&id) {
                 (forget::section(id, &connection.label, csrf))
             }

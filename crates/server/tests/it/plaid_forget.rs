@@ -7,27 +7,38 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+use std::sync::{Arc, Mutex};
+
 use axum::Router;
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::extract::State;
+use axum::http::{Method, Request, StatusCode, Uri, header};
+use axum::response::{IntoResponse as _, Response};
 use coffer_domain::audit::AuditValue;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::{AgentTokenId, ConnectionId};
 use coffer_domain::policy::{Action, DenyReason};
+use coffer_domain::sync::SyncRunStatus;
+use coffer_domain::sync::SyncTrigger;
 use coffer_server::http::router;
 use coffer_server::sync::SyncError;
 use coffer_server::sync::provider::ProviderKind;
 use coffer_server::testkit::browser::{Browser, Reply, with_admin};
-use coffer_server::testkit::{MockUpstream, TestServer};
+use coffer_server::testkit::{CallGate, MockUpstream, TestServer};
 use coffer_store::{AuditEvent, AuditFilter, ConnectionRecord, ConnectionStatus, PageRequest};
 use http_body_util::BodyExt as _;
 use secrecy::ExposeSecret as _;
 use tower::ServiceExt as _;
 
 const CREDENTIALS: &str = r#"{"access_token":"access-FORGET-MARKER-81","item_id":"item-1"}"#;
+const ACCOUNTS: &str = include_str!("fixtures/plaid/accounts_get.json");
+const POSTED: &str = include_str!("fixtures/plaid/transactions_sync_posted.json");
 const LABEL: &str = "Plaid bank";
 const WRONG: &str = "WRONG-LABEL-MARKER-82";
-const BILLING: &str = "keeps billing at Plaid until it is removed in Plaid's dashboard";
+const WARNING: &str = "If this could be a wrong key or a restored backup, fix that first: \
+     forgetting can&#39;t be undone, and removal then works normally.";
+const NO_END: &str = "coffer can&#39;t end billing for this Item, because that needs the token. \
+     Contact Plaid, or check your Plaid dashboard, to end it.";
 
 struct World {
     server: TestServer,
@@ -149,10 +160,13 @@ async fn forgetting_is_offered_only_where_removal_is_refused() {
     assert!(page.body.contains(&forget_path(lost)));
     assert!(!page.body.contains(&forget_path(healthy)));
     assert!(!page.body.contains(&forget_path(simplefin)));
-    assert!(page.body.contains(BILLING));
     assert!(
-        page.body.contains("coffer cannot do that for it"),
-        "the page says coffer cannot remove the Item"
+        page.body.contains(WARNING) || page.body.contains(&WARNING.replace("&#39;", "'")),
+        "the page warns that a wrong key or restored backup comes first"
+    );
+    assert!(
+        page.body.contains(NO_END) || page.body.contains(&NO_END.replace("&#39;", "'")),
+        "the page says what coffer cannot do and who to contact"
     );
 
     // Once forgotten, it is not offered again.
@@ -162,20 +176,32 @@ async fn forgetting_is_offered_only_where_removal_is_refused() {
     assert!(!after.body.contains(&forget_path(lost)));
 }
 
+/// With Plaid not configured the token still opens, so nothing is forgotten:
+/// the member configures Plaid again and removes the connection.
 #[tokio::test]
-async fn forgetting_is_offered_when_plaid_is_not_configured() {
+async fn nothing_is_forgotten_while_plaid_is_merely_not_configured() {
     let (mut server, signed_in, _) = with_admin().await;
     server.offer_no_provider();
     let mock = MockUpstream::start(Router::new()).await;
     let mut world = finish(server, signed_in, mock).await;
     let id = world.healthy(LABEL).await;
+    let before = world.connection(id).await;
 
     let page = world.admin.get("/connections").await;
-    assert!(page.body.contains(&forget_path(id)));
-    let done = world.forget(id, Some(LABEL)).await;
+    assert!(!page.body.contains(&forget_path(id)));
+    assert!(
+        page.body
+            .contains("Configure it again to remove this connection.")
+    );
+    let refused = world.forget(id, Some(LABEL)).await;
 
-    assert_eq!(done.status, StatusCode::SEE_OTHER);
-    assert_eq!(world.connection(id).await.status, ConnectionStatus::Removed);
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    world.assert_kept(id, &before).await;
+    let removal = world.server.sync.remove_connection(&world.alice, id).await;
+    assert!(
+        matches!(removal, Err(SyncError::Conflict(_))),
+        "removal stays refused"
+    );
 }
 
 #[tokio::test]
@@ -245,6 +271,12 @@ async fn forgetting_erases_the_token_and_audits_it_as_forgotten() {
         given_up.1.after,
         AuditValue::from(false),
         "it says the Item was not given up"
+    );
+    let reason = changes.iter().find(|(name, _)| *name == "reason").unwrap();
+    assert_eq!(
+        reason.1.after,
+        AuditValue::from("sealed token cannot be opened"),
+        "the audit entry records why it was allowed"
     );
     let text = serde_json::to_string(&entry.changes).unwrap();
     assert!(!text.contains("FORGET-MARKER"), "no credential is audited");
@@ -385,4 +417,73 @@ async fn a_member_cannot_forget_anothers_connection() {
 
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
     world.assert_kept(id, &before).await;
+}
+
+/// A forgetting while a run fetches leaves the run writing nothing: the apply
+/// step re-checks the connection in the transaction that writes.
+#[tokio::test]
+async fn forgetting_during_a_sync_writes_nothing() {
+    let gate = Arc::new(Mutex::new(None::<CallGate>));
+    let (server, signed_in, _) = with_admin().await;
+    let mock =
+        MockUpstream::start(Router::new().fallback(gated).with_state(Arc::clone(&gate))).await;
+    let world = finish(server.with_plaid(&mock), signed_in, mock).await;
+    let id = world.healthy(LABEL).await;
+    let held = CallGate::default();
+    *gate.lock().unwrap() = Some(held.clone());
+    let run = world
+        .server
+        .sync
+        .request_sync(Some(&world.alice), id, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    let sync = Arc::clone(&world.server.sync);
+    let running = tokio::spawn(async move { sync.run(run.id).await });
+
+    held.entered().await;
+    world.corrupt(id).await;
+    world
+        .server
+        .sync
+        .forget_connection(&world.alice, id, LABEL)
+        .await
+        .unwrap();
+    held.release();
+    let finished = running.await.unwrap().unwrap();
+
+    assert_eq!(finished.status, SyncRunStatus::Failed);
+    assert_eq!(
+        finished.detail.as_deref(),
+        Some("the connection is removed")
+    );
+    let stored = world.connection(id).await;
+    assert_eq!(stored.status, ConnectionStatus::Removed);
+    assert_eq!(stored.last_success_at, None);
+    assert!(stored.credentials.is_none());
+    assert_eq!(
+        world
+            .server
+            .store
+            .list_provider_accounts(None)
+            .await
+            .unwrap()
+            .len(),
+        0,
+        "no provider account was written"
+    );
+}
+
+/// Plaid's answers for a run: the fixtures' accounts and one page of
+/// changes, the first request held while a gate is set.
+async fn gated(State(gate): State<Arc<Mutex<Option<CallGate>>>>, uri: Uri) -> Response {
+    let held = gate.lock().unwrap().take();
+    if let Some(held) = held {
+        held.hold().await;
+    }
+    let body = match uri.path() {
+        "/accounts/get" => ACCOUNTS,
+        "/transactions/sync" => POSTED,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
