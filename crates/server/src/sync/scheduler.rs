@@ -8,7 +8,11 @@
 //! still going at shutdown is dropped: each provider account commits in its
 //! own transaction, so only whole accounts are left behind, and the next
 //! start marks the run failed. Errors are logged and retried with a
-//! backoff; nothing here panics the server.
+//! backoff. A panic ends one run or one pass of a task, which starts again;
+//! the log says it happened, never what it said, since a [`JoinError`]'s text
+//! holds the panic's message (the panic hook has logged where it was).
+//!
+//! [`JoinError`]: tokio::task::JoinError
 
 use std::future::Future;
 use std::sync::Arc;
@@ -87,25 +91,90 @@ pub fn spawn(
         // No receiver left means every task has already ended.
         let _ = stop.send(true);
         if let Err(err) = tasks.await {
-            tracing::error!(error = %err, "the sync scheduler ended abnormally");
+            tracing::error!(
+                panicked = err.is_panic(),
+                "the sync scheduler ended abnormally"
+            );
         }
         tracing::info!("sync scheduler stopped");
     })
 }
 
 /// Recovers interrupted runs, then runs the worker and the ticker until
-/// `stop_signal` says to stop. Each runs in its own task, so a panic in one is logged and
-/// leaves the other running.
+/// `stop_signal` says to stop. Each runs supervised in its own task, so a
+/// panic in one is logged, leaves the other running, and restarts it. A
+/// restarted worker recovers first: a panic outside a run can leave one
+/// marked running, and nothing else is performing runs by then.
 async fn run_tasks(sync: Arc<SyncService>, stop_signal: watch::Receiver<bool>) {
-    let mut stop = stop_signal.clone();
-    if !recover(&sync, &mut stop).await {
+    let recovered = supervise("recovery", stop_signal.clone(), {
+        let sync = Arc::clone(&sync);
+        let stop = stop_signal.clone();
+        move |_| {
+            let sync = Arc::clone(&sync);
+            let mut stop = stop.clone();
+            async move { recover(&sync, &mut stop).await }
+        }
+    })
+    .await;
+    if recovered != Some(true) {
         return;
     }
-    let worker = tokio::spawn(work(Arc::clone(&sync), stop_signal.clone()));
-    let ticker = tokio::spawn(tick_loop(sync, stop_signal));
+    let worker = tokio::spawn(supervise("worker", stop_signal.clone(), {
+        let sync = Arc::clone(&sync);
+        let stop = stop_signal.clone();
+        move |restarted| {
+            let sync = Arc::clone(&sync);
+            let mut stop = stop.clone();
+            async move {
+                if !restarted || recover(&sync, &mut stop).await {
+                    work(sync, stop).await;
+                }
+            }
+        }
+    }));
+    let ticker = tokio::spawn(supervise("ticker", stop_signal.clone(), {
+        let stop = stop_signal;
+        move |_| tick_loop(Arc::clone(&sync), stop.clone())
+    }));
     for (task, handle) in [("worker", worker), ("ticker", ticker)] {
         if let Err(err) = handle.await {
-            tracing::error!(task, error = %err, "a sync scheduler task ended abnormally");
+            tracing::error!(
+                task,
+                panicked = err.is_panic(),
+                "a sync scheduler task ended abnormally"
+            );
+        }
+    }
+}
+
+/// Runs what `start` makes in its own task until it ends without a panic, and
+/// returns its result. After a panic, logs it, waits and starts it again with
+/// `restarted` true. `None` if told to stop during that wait.
+async fn supervise<S, F>(
+    task: &'static str,
+    mut stop: watch::Receiver<bool>,
+    start: S,
+) -> Option<F::Output>
+where
+    S: Fn(bool) -> F,
+    F: Future<Output: Send + 'static> + Send + 'static,
+{
+    let mut backoff = Backoff::default();
+    let mut restarted = false;
+    loop {
+        match tokio::spawn(start(restarted)).await {
+            Ok(result) => return Some(result),
+            Err(err) => {
+                tracing::error!(
+                    task,
+                    panicked = err.is_panic(),
+                    "a sync scheduler task ended abnormally; starting it again"
+                );
+                if !pause(&mut stop, backoff.next()).await {
+                    return None;
+                }
+                restarted = true;
+            }
         }
     }
 }
@@ -174,6 +243,14 @@ async fn recover(sync: &SyncService, stop: &mut watch::Receiver<bool>) -> bool {
 async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
     let mut backoff = Backoff::default();
     loop {
+        #[cfg(feature = "testkit")]
+        assert!(
+            !sync
+                .worker_panics
+                .swap(false, std::sync::atomic::Ordering::SeqCst),
+            "{}",
+            crate::testkit::SCRIPTED_PANIC
+        );
         let next = match sync.store.next_queued_run().await {
             Ok(next) => next,
             Err(err) => {
@@ -216,7 +293,11 @@ async fn work(sync: Arc<SyncService>, mut stop: watch::Receiver<bool>) {
                 backoff.next()
             }
             Err(err) => {
-                tracing::error!(run = %run.id, error = %err, "a sync run ended abnormally");
+                tracing::error!(
+                    run = %run.id,
+                    panicked = err.is_panic(),
+                    "a sync run ended abnormally"
+                );
                 sync.abandon(run.id).await;
                 backoff.next()
             }
@@ -308,7 +389,11 @@ mod tests {
     use coffer_store::ConnectionStatus;
     use jiff::{SignedDuration, Timestamp};
 
-    use super::{BACKOFF_MAX, BACKOFF_START, Backoff, ScheduleEntry, due};
+    use std::sync::Mutex;
+
+    use tokio::sync::watch;
+
+    use super::{BACKOFF_MAX, BACKOFF_START, Backoff, ScheduleEntry, due, supervise};
 
     #[test]
     fn due_rules() {
@@ -357,6 +442,37 @@ mod tests {
             due(now, &[first, overflowing, second]),
             vec![first.id, second.id]
         );
+    }
+
+    #[tokio::test]
+    async fn supervise_starts_a_panicked_task_again_and_says_so() {
+        let (_stop, stopped) = watch::channel(false);
+        let starts = Mutex::new(Vec::new());
+        let result = supervise("test", stopped, |restarted| {
+            let first = {
+                let mut starts = starts.lock().unwrap();
+                starts.push(restarted);
+                starts.len() == 1
+            };
+            async move {
+                assert!(!first, "scripted panic");
+                "finished"
+            }
+        })
+        .await;
+        assert_eq!(result, Some("finished"));
+        assert_eq!(*starts.lock().unwrap(), [false, true]);
+    }
+
+    #[tokio::test]
+    async fn supervise_gives_up_when_told_to_stop_while_waiting() {
+        let (stop, stopped) = watch::channel(false);
+        stop.send(true).unwrap();
+        let result = supervise("test", stopped, |_| async {
+            panic!("scripted panic");
+        })
+        .await;
+        assert_eq!(result, None);
     }
 
     #[test]

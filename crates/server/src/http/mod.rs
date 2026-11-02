@@ -12,6 +12,7 @@ pub mod extract;
 mod health;
 pub mod idempotency;
 mod pages;
+mod panic_answer;
 pub mod problem;
 mod static_files;
 
@@ -56,12 +57,27 @@ impl std::fmt::Debug for AppState {
 
 /// The application router.
 pub fn router(state: AppState) -> Router {
+    layered(routes(&state), state)
+}
+
+/// The application router with `extra` routes among its own, under the same
+/// layers: how a test reaches a route production must never have.
+#[cfg(feature = "testkit")]
+pub fn router_with_test_routes(state: AppState, extra: Router<AppState>) -> Router {
+    layered(routes(&state).merge(extra), state)
+}
+
+fn routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(api::router())
         .merge(health::router())
         .merge(pages::router(&state.config))
         .merge(static_files::router())
         .fallback(pages::fallback)
+}
+
+fn layered(routes: Router<AppState>, state: AppState) -> Router {
+    routes
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             pages::require_same_origin,
@@ -71,8 +87,11 @@ pub fn router(state: AppState) -> Router {
             pages::render_error_pages,
         ))
         .layer(axum::middleware::from_fn(api::problem_bodies))
-        // Outermost, so every response gets the headers, `/api` problems
-        // included.
+        // Around every other layer, so a panic in one of them is caught too.
+        .layer(panic_answer::catch_panics())
+        .layer(axum::middleware::from_fn(panic_answer::answer))
+        // Outermost, so every response gets the headers, `/api` problems and
+        // the answer to a panic included.
         .layer(axum::middleware::map_response(pages::security_headers))
         .with_state(state)
 }
