@@ -18,6 +18,7 @@ use serde::Deserialize;
 use url::Url;
 
 use super::account::{token_item, viewer};
+use super::grants::{Back, grants_editor, grants_summary};
 use super::layout::{Frame, Nav, csrf_field, empty_state, once, page};
 use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
@@ -53,7 +54,20 @@ async fn render_members(
     let viewer = viewer(state, session);
     let look = session.look(state).await;
     let members = state.store.list_members().await.map_err(AuthError::from)?;
-    let tokens = state.agent_tokens.list_all(&actor).await?;
+    let mut tokens = Vec::new();
+    for token in state.agent_tokens.list_all(&actor).await? {
+        let grants = state
+            .store
+            .token_grants(token.id)
+            .await
+            .map_err(AuthError::from)?;
+        tokens.push((token, grants));
+    }
+    let accounts = state
+        .ledger
+        .list_accounts(&actor, true)
+        .await
+        .map_err(|err| PageError(err.into()))?;
     let username = |id: MemberId| {
         members
             .iter()
@@ -114,12 +128,13 @@ async fn render_members(
                 (empty_state(look, "No agent tokens in this household."))
             } @else {
                 ul.items {
-                    @for token in &tokens {
+                    @for (token, grants) in &tokens {
                         (token_item(token, now, csrf, &format!("/admin/tokens/{}/revoke", token.id), &html! {
                             (username(token.member)) " · " code { (token.prefix) "…" }
                             " · Created " (token.created_at) " · Last used "
                             (token.last_used_at.map_or_else(|| "never".to_owned(), |at| at.to_string()))
-                        }, &html! {}))
+                            " · " (grants_summary(grants, &accounts))
+                        }, &grants_editor(token, grants, &accounts, now, csrf, Back::Members)))
                     }
                 }
             }

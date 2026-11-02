@@ -6,6 +6,7 @@
     reason = "integration test: helpers outside #[test] functions unwrap to fail the test"
 )]
 
+mod admin_grants;
 mod members;
 mod rendering;
 mod security;

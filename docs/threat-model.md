@@ -108,7 +108,7 @@
   answers like a missing one), and each change is audited with the grants
   before and after. The list can never be emptied, for the same reason: a
   token is widened only by an explicit `all` grant, which the audit log
-  shows. On `/account`, a form that selects no level at all is refused
+  shows. On `/account` and, for an admin, `/admin/members`, a form that selects no level at all is refused
   rather than read as no restriction, and so is an account set at or below
   "All accounts", which would look restricted and not be. The side channels are
   closed:
