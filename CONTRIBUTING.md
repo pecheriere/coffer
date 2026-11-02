@@ -78,7 +78,8 @@ scripts/staging.sh test api/sync.spec.mjs     # arguments go to Playwright
 scripts/staging.sh test --project=ui          # the pages only
 ```
 
-They need Node 24 or later on the machine, and run from `staging/e2e/` in
+CI's `e2e` job runs them on every pull request, on the image `docker-build` made, and keeps
+what a failing test saw as an artifact. They need Node 24 or later on the machine, and run from `staging/e2e/` in
 [Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
 install scripts. Each test gets its own server on a new copy of the template, and every
 API response is checked against `docs/api/openapi.json`, whichever test made it. They cover
