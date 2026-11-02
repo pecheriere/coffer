@@ -6,36 +6,74 @@ use std::collections::BTreeMap;
 
 use coffer_domain::accounts::LiquidityClass;
 use coffer_domain::ids::AccountId;
+use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
-    AccountSeries, ConversionState, NetWorthBlocker, NetWorthCaution, RateMissingReason,
+    AccountPoint, AccountSeries, ConversionState, NetWorthBlocker, NetWorthCaution,
+    RateMissingReason,
 };
 use jiff::civil::Date;
 
 use crate::http::pages::amounts::{day, magnitude};
 
-/// What a report's accounts are called. An id with no name, which only a change between
-/// two reads could cause, falls back to a plain description.
-pub(super) struct Names<'a>(BTreeMap<AccountId, &'a str>);
+/// What a report's accounts are called, and how they stood. An id with no name, which only
+/// a change between two reads could cause, falls back to a plain description.
+pub(super) struct Names<'a> {
+    accounts: BTreeMap<AccountId, &'a AccountSeries>,
+    /// The day of the report's latest point.
+    latest: Option<Date>,
+}
 
 impl<'a> Names<'a> {
-    pub(super) fn of_accounts(accounts: &'a [AccountSeries]) -> Self {
-        Self(
-            accounts
-                .iter()
-                .map(|line| (line.account, line.name.as_str()))
-                .collect(),
-        )
+    pub(super) fn of_accounts(accounts: &'a [AccountSeries], latest: Option<Date>) -> Self {
+        Self {
+            accounts: accounts.iter().map(|line| (line.account, line)).collect(),
+            latest,
+        }
     }
 
     /// The account's name, to go inside a sentence.
     pub(super) fn account(&self, id: AccountId) -> &str {
-        self.0.get(&id).copied().unwrap_or("an account")
+        self.accounts
+            .get(&id)
+            .map_or("an account", |line| line.name.as_str())
     }
 
     /// The account's name, to start a sentence.
     fn account_first(&self, id: AccountId) -> &str {
-        self.0.get(&id).copied().unwrap_or("An account")
+        self.accounts
+            .get(&id)
+            .map_or("An account", |line| line.name.as_str())
     }
+
+    /// Whether the account's latest point counts and meets `holds`, so that the present
+    /// tense is true of it.
+    fn holds_now(&self, id: AccountId, holds: impl Fn(&AccountPoint) -> bool) -> bool {
+        self.accounts
+            .get(&id)
+            .and_then(|line| {
+                line.points
+                    .iter()
+                    .find(|point| Some(point.on) == self.latest)
+            })
+            .is_some_and(|point| point.counted && holds(point))
+    }
+
+    /// The last point at which the account counted and met `holds`.
+    fn last_held(&self, id: AccountId, holds: impl Fn(&AccountPoint) -> bool) -> Option<Date> {
+        self.accounts
+            .get(&id)
+            .and_then(|line| {
+                line.points
+                    .iter()
+                    .rfind(|point| point.counted && holds(point))
+            })
+            .map(|point| point.on)
+    }
+}
+
+/// ` on 3 May 2026`, or nothing with no date to give.
+fn on_day(date: Option<Date>) -> String {
+    date.map_or_else(String::new, |date| format!(" on {}", day(date)))
 }
 
 fn days(count: u32) -> String {
@@ -144,17 +182,46 @@ pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> 
             day(*from),
             day(*to),
         ),
-        NetWorthCaution::LiabilityBalancePositive { account, balance } => format!(
-            "{} is a card or loan, but shows {} in hand rather than owed. It may have been \
-             entered with the wrong sign, and it counts as it stands.",
-            names.account_first(*account),
-            magnitude(*balance),
-        ),
-        NetWorthCaution::ClosedAccountOwing { account, balance } => format!(
-            "{} is closed but still owes {}, which keeps counting.",
-            names.account_first(*account),
-            magnitude(*balance),
-        ),
+        NetWorthCaution::LiabilityBalancePositive { account, balance } => {
+            positive_liability_sentence(*account, *balance, names)
+        }
+        NetWorthCaution::ClosedAccountOwing { account, balance } => {
+            closed_owing_sentence(*account, *balance, names)
+        }
+    }
+}
+
+/// A caution's `balance` is from the last point it held, so it's said in the present only
+/// if the latest point still shows it.
+fn positive_liability_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+    let in_hand = |point: &AccountPoint| point.balance.minor_units > 0;
+    let name = names.account_first(account);
+    let amount = magnitude(balance);
+    if names.holds_now(account, in_hand) {
+        format!(
+            "{name} is a card or loan, but shows {amount} in hand rather than owed. It may have \
+             been entered with the wrong sign, and it counts as it stands."
+        )
+    } else {
+        format!(
+            "{name} showed {amount} in hand{}, though it is a card or loan. It may have been \
+             entered with the wrong sign, and that counted as it stood.",
+            on_day(names.last_held(account, in_hand)),
+        )
+    }
+}
+
+fn closed_owing_sentence(account: AccountId, balance: Money, names: &Names<'_>) -> String {
+    let owing = |point: &AccountPoint| point.balance.minor_units < 0;
+    let name = names.account_first(account);
+    let amount = magnitude(balance);
+    if names.holds_now(account, owing) {
+        format!("{name} is closed but still owes {amount}, which keeps counting.")
+    } else {
+        let when = names
+            .last_held(account, owing)
+            .map_or_else(String::new, |date| format!(", on {}", day(date)));
+        format!("{name} is closed and owed {amount} when last counted{when}.")
     }
 }
 
@@ -262,7 +329,7 @@ mod tests {
         let kinds = schema_kinds::<NetWorthCaution>();
         let samples = cautions();
         assert_eq!(sampled_kinds(&samples), kinds);
-        let names = Names::of_accounts(&[]);
+        let names = Names::of_accounts(&[], None);
         for caution in &samples {
             assert_worded(&caution_sentence(caution, &names), &kinds);
         }
@@ -281,7 +348,7 @@ mod tests {
     /// Reasons inside one kind say different things, so one can't be left as another's.
     #[test]
     fn each_sample_says_something_different() {
-        let names = Names::of_accounts(&[]);
+        let names = Names::of_accounts(&[], None);
         let samples = cautions();
         let said: BTreeSet<String> = samples
             .iter()
@@ -300,9 +367,9 @@ mod tests {
                     currency: usd(),
                 },
             },
-            &Names::of_accounts(&[]),
+            &Names::of_accounts(&[], None),
         );
-        assert!(sentence.contains("still owes 1,234.56 USD"));
+        assert!(sentence.contains("owed 1,234.56 USD"));
     }
 
     #[test]
@@ -314,7 +381,7 @@ mod tests {
                 first_on: ON,
                 last_on: ON,
             },
-            &Names::of_accounts(&[]),
+            &Names::of_accounts(&[], None),
         );
         assert!(sentence.starts_with("USD can't be converted on 2 November 2026:"));
     }

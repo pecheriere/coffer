@@ -50,6 +50,8 @@ struct Frame {
     x_label_gap: i32,
     /// About how wide one character of a label is.
     char_width: i32,
+    /// About how far a label rises above its baseline.
+    text_rise: i32,
 }
 
 const WIDE: Frame = Frame {
@@ -65,6 +67,7 @@ const WIDE: Frame = Frame {
     x_labels: 6,
     x_label_gap: 96,
     char_width: 7,
+    text_rise: 14,
 };
 
 const NARROW: Frame = Frame {
@@ -80,10 +83,15 @@ const NARROW: Frame = Frame {
     x_labels: 4,
     x_label_gap: 84,
     char_width: 9,
+    text_rise: 17,
 };
 
+/// About how far a label falls below its baseline, in tenths.
+const TEXT_DROP: i32 = 30;
 /// A hover target is at least this wide, in tenths.
 const HIT_WIDTH: i32 = 240;
+/// What a gap says of itself.
+const GAP_WORDS: &str = "no total";
 /// A gap this wide, in tenths, has room to say what it is.
 const GAP_WORDS_WIDTH: i32 = 640;
 /// Up to this many days between the ends, a date label names the day.
@@ -248,8 +256,10 @@ fn gaps(placed: &[(i32, Option<Placed>)]) -> Vec<(i32, i32)> {
     gaps
 }
 
-/// The hover target of each period, as `(x, width)` in tenths: its share of the plot, and
-/// never narrower than a finger, staying inside the drawing.
+/// The hover target of each period, as `(x, width)` in tenths: from where its share of the
+/// plot starts, never narrower than a finger, staying inside the drawing. Where they overlap
+/// the next one drawn lies on top from its own start, so the band showing at any point is
+/// that point's, as far as the last finger's width of the plot.
 fn hit_bands(placed: &[(i32, Option<Placed>)], frame: &Frame) -> Vec<(i32, i32)> {
     let across: Vec<i32> = placed.iter().map(|(x, _)| *x).collect();
     let edge = (frame.left * 10, frame.right * 10);
@@ -265,12 +275,7 @@ fn hit_bands(placed: &[(i32, Option<Placed>)], frame: &Frame) -> Vec<(i32, i32)>
                 .get(index + 1)
                 .map_or(edge.1, |after| i32::midpoint(*after, *x));
             let width = (to - from).max(HIT_WIDTH);
-            let start = if to - from < HIT_WIDTH {
-                x - HIT_WIDTH / 2
-            } else {
-                from
-            };
-            (start.clamp(0, frame.width * 10 - width), width)
+            (from.clamp(0, frame.width * 10 - width), width)
         })
         .collect()
 }
@@ -333,12 +338,31 @@ fn x_anchor(position: usize, picks: usize) -> &'static str {
     }
 }
 
+/// The space a text takes up as `((left, right), (top, bottom))`, in tenths.
+type Space = ((i32, i32), (i32, i32));
+
 /// The direct label on the latest value, and where it goes.
-struct DirectLabel<'a> {
-    text: &'a str,
+struct DirectLabel {
+    text: String,
     x: i32,
     y: i32,
     anchor: &'static str,
+}
+
+impl DirectLabel {
+    /// The space it takes up.
+    fn space(&self, frame: &Frame) -> Space {
+        let width = text_width(&self.text, frame);
+        let left = match self.anchor {
+            "end" => self.x - width,
+            "middle" => self.x - width / 2,
+            _ => self.x,
+        };
+        (
+            (left, left + width),
+            (self.y - frame.text_rise * 10, self.y + TEXT_DROP),
+        )
+    }
 }
 
 /// How wide `text` is about to be in `frame`, in tenths.
@@ -346,16 +370,35 @@ fn text_width(text: &str, frame: &Frame) -> i32 {
     i32::try_from(text.chars().count()).unwrap_or(i32::MAX / 100) * frame.char_width * 10
 }
 
-/// The segments of the line that reach between `left` and `right`, in tenths.
-fn segments_within(
+/// The lowest and highest `y` of each piece of the line between `left` and `right`.
+fn line_pieces(
     placed: &[(i32, Option<Placed>)],
-    left: i32,
-    right: i32,
-) -> impl Iterator<Item = (Placed, Placed)> {
+    (left, right): (i32, i32),
+) -> impl Iterator<Item = (i32, i32)> {
     placed.windows(2).filter_map(move |pair| {
         let (from, to) = (pair[0].1?, pair[1].1?);
-        (from.x <= right && to.x >= left).then_some((from, to))
+        if from.x > right || to.x < left {
+            return None;
+        }
+        let y_at = |x: i32| {
+            if to.x == from.x {
+                return from.y;
+            }
+            let along = i64::from(to.y - from.y) * i64::from(x - from.x) / i64::from(to.x - from.x);
+            from.y + i32::try_from(along).unwrap_or(0)
+        };
+        let (start, end) = (y_at(left.max(from.x)), y_at(right.min(to.x)));
+        Some((start.min(end), start.max(end)))
     })
+}
+
+/// Whether the line passes through the band `[top, bottom]` between `left` and `right`.
+fn line_crosses(
+    placed: &[(i32, Option<Placed>)],
+    across: (i32, i32),
+    (top, bottom): (i32, i32),
+) -> bool {
+    line_pieces(placed, across).any(|(high, low)| high <= bottom && low >= top)
 }
 
 /// Where the direct label's baseline goes, in tenths: just above the latest value; if the
@@ -364,39 +407,41 @@ fn segments_within(
 fn direct_label_y(
     placed: &[(i32, Option<Placed>)],
     latest: Placed,
-    (left, right): (i32, i32),
+    across: (i32, i32),
     frame: &Frame,
 ) -> i32 {
-    let crosses = |band: (i32, i32)| {
-        segments_within(placed, left, right)
-            .any(|(from, to)| from.y.min(to.y) <= band.1 && from.y.max(to.y) >= band.0)
-    };
     let above = (latest.y - 240, latest.y - 60);
     let below = (latest.y + 60, latest.y + 240);
-    if !crosses(above) {
+    if !line_crosses(placed, across, above) {
         latest.y - 120
-    } else if !crosses(below) && below.1 < frame.bottom * 10 {
+    } else if !line_crosses(placed, across, below) && below.1 < frame.bottom * 10 {
         latest.y + 200
     } else {
-        segments_within(placed, left, right)
-            .map(|(from, to)| from.y.min(to.y))
+        line_pieces(placed, across)
+            .map(|(high, _)| high)
             .min()
             .map_or(latest.y, |highest| highest - 100)
     }
 }
 
-/// The label of the latest value, at its side of the plot.
-fn direct_label<'a>(
-    points: &'a [ChartPoint],
+/// The label of the latest value, at its side of the plot. It's dated when later periods
+/// have none, since a gap too narrow for words wouldn't otherwise say it isn't the value now.
+fn direct_label(
+    points: &[ChartPoint],
     placed: &[(i32, Option<Placed>)],
     frame: &Frame,
-) -> Option<DirectLabel<'a>> {
+) -> Option<DirectLabel> {
     let index = placed.iter().rposition(|(_, point)| point.is_some())?;
     let latest = placed[index].1?;
-    let text = points[index].label.as_str();
+    let point = &points[index];
+    let text = if index + 1 == points.len() {
+        point.label.clone()
+    } else {
+        format!("{}, {}", point.label, point.on.strftime("%-d %b %Y"))
+    };
     let middle = (frame.left + frame.right) * 5;
-    let width = text_width(text, frame);
-    let (anchor, reach) = if placed.len() == 1 {
+    let width = text_width(&text, frame);
+    let (anchor, across) = if placed.len() == 1 {
         ("middle", (latest.x - width / 2, latest.x + width / 2))
     } else if latest.x > middle {
         ("end", (latest.x - width, latest.x))
@@ -404,30 +449,42 @@ fn direct_label<'a>(
         ("start", (latest.x, latest.x + width))
     };
     Some(DirectLabel {
-        text,
         x: latest.x,
-        y: direct_label_y(placed, latest, reach, frame),
+        y: direct_label_y(placed, latest, across, frame),
+        text,
         anchor,
     })
 }
 
-/// Whether a value tick's label, at the plot's left, would sit under the direct label.
-fn under_direct_label(
+/// Where a value tick's label goes, above its grid line: `(x, anchor)` at the plot's left
+/// if that's clear of the line and of `taken`, else at its right. With neither clear
+/// it has no label: the others carry the scale, and a stub of line beside a figure reads as
+/// a minus sign.
+fn tick_label_place(
     tick_y: i32,
-    tick_text: &str,
-    direct: Option<&DirectLabel<'_>>,
+    text: &str,
+    placed: &[(i32, Option<Placed>)],
+    taken: &[Space],
     frame: &Frame,
-) -> bool {
-    direct.is_some_and(|label| {
-        let width = text_width(label.text, frame);
-        let label_left = match label.anchor {
-            "end" => label.x - width,
-            "middle" => label.x - width / 2,
-            _ => label.x,
-        };
-        label_left < frame.left * 10 + text_width(tick_text, frame)
-            && (tick_y - 40 - label.y).abs() < 160
+) -> Option<(i32, &'static str)> {
+    let width = text_width(text, frame);
+    let band = (tick_y - 40 - frame.text_rise * 10, tick_y - 40 + TEXT_DROP);
+    let (left, right) = (frame.left * 10, frame.right * 10);
+    [
+        ((left, left + width), frame.left, "start"),
+        ((right - width, right), frame.right, "end"),
+    ]
+    .into_iter()
+    .find(|(across, _, _)| {
+        let over_text = taken.iter().any(|(other_across, other_band)| {
+            across.0 <= other_across.1
+                && other_across.0 <= across.1
+                && band.0 <= other_band.1
+                && other_band.0 <= band.1
+        });
+        !over_text && !line_crosses(placed, *across, band)
     })
+    .map(|(_, x, anchor)| (x, anchor))
 }
 
 /// The chart's accessible name: its range, its first and last values, and where the rest
@@ -443,6 +500,15 @@ fn name(points: &[ChartPoint]) -> Option<String> {
     ))
 }
 
+/// Whether the values have a scale that leaves zero out, so a change looks larger than it is.
+pub(super) fn scale_misses_zero(points: &[ChartPoint]) -> bool {
+    let values = || points.iter().filter_map(|point| point.value);
+    let (Some(min), Some(max)) = (values().min(), values().max()) else {
+        return false;
+    };
+    min != max && (min > 0 || max < 0)
+}
+
 /// One drawing of `points`, whose values are in `currency`.
 pub(super) fn line_chart(points: &[ChartPoint], currency: Currency, size: ChartSize) -> Markup {
     let frame = size.frame();
@@ -456,6 +522,25 @@ pub(super) fn line_chart(points: &[ChartPoint], currency: Currency, size: ChartS
     let path = line_path(&placed);
     let plot_height = frame.bottom - frame.top;
     let picks = x_label_picks(points, &placed, frame);
+    let bands = gaps(&placed);
+    // Only with a line to tell it from: with none, one sentence says so instead.
+    let words: Vec<i32> = bands
+        .iter()
+        .filter(|(from, to)| to - from >= GAP_WORDS_WIDTH && direct.is_some())
+        .map(|(from, to)| i32::midpoint(*from, *to))
+        .collect();
+    let words_y = frame.top + plot_height / 2;
+    let taken: Vec<Space> = direct
+        .iter()
+        .map(|label| label.space(frame))
+        .chain(words.iter().map(|x| {
+            let half = text_width(GAP_WORDS, frame) / 2;
+            (
+                (x - half, x + half),
+                ((words_y - frame.text_rise) * 10, words_y * 10 + TEXT_DROP),
+            )
+        }))
+        .collect();
     let scale: Vec<(i64, i32, String)> = ticks(min, max, frame.ticks)
         .into_iter()
         .filter_map(|tick| {
@@ -466,12 +551,11 @@ pub(super) fn line_chart(points: &[ChartPoint], currency: Currency, size: ChartS
     html! {
         svg class=(frame.class) viewBox={ "0 0 " (frame.width) " " (frame.height) }
             width=(frame.width) height=(frame.height) role="img" aria-label=(name) focusable="false" {
-            @for (from, to) in gaps(&placed) {
-                rect.chart-gap x=(px(from)) y=(frame.top) width=(px(to - from)) height=(plot_height) {}
-                @if to - from >= GAP_WORDS_WIDTH && direct.is_some() {
-                    text.chart-label x=(px(i32::midpoint(from, to))) y=(frame.top + plot_height / 2)
-                        text-anchor="middle" { "no total" }
-                }
+            @for (from, to) in &bands {
+                rect.chart-gap x=(px(*from)) y=(frame.top) width=(px(to - from)) height=(plot_height) {}
+            }
+            @for x in &words {
+                text.chart-label x=(px(*x)) y=(words_y) text-anchor="middle" { (GAP_WORDS) }
             }
             @for (tick, y, _) in &scale {
                 line class=(if *tick == 0 && min < 0 && max > 0 { "chart-zero" } else { "chart-grid" })
@@ -480,10 +564,9 @@ pub(super) fn line_chart(points: &[ChartPoint], currency: Currency, size: ChartS
             @if !path.is_empty() {
                 path.chart-line d=(path) {}
             }
-            // Over the line, whose halo keeps them legible where it passes.
             @for (_, y, text) in &scale {
-                @if !under_direct_label(*y, text, direct.as_ref(), frame) {
-                    text.chart-label.chart-y x=(frame.left) y=(px(y - 40)) { (text) }
+                @if let Some((x, anchor)) = tick_label_place(*y, text, &placed, &taken, frame) {
+                    text.chart-label.chart-y x=(x) y=(px(y - 40)) text-anchor=(anchor) { (text) }
                 }
             }
             @for mark in marks(&placed) {

@@ -125,7 +125,10 @@ fn only_the_latest_value_is_labelled() {
     let svg = drawn(&[Some(1), Some(2), Some(3), None]);
     let labelled = svg.split("chart-direct").count() - 1;
     assert_eq!(labelled, 1);
-    assert!(svg.contains(">3 USD</text>"), "the latest value");
+    assert!(
+        svg.contains(">3 USD, 3 Jan 2026</text>"),
+        "the latest value, dated"
+    );
     assert!(!svg.contains(">2 USD</text>"));
 }
 
@@ -313,18 +316,245 @@ fn the_direct_label_clears_a_line_on_both_sides() {
     assert!(label >= 12.0, "and still in the drawing");
 }
 
-/// A label the plot's first tick would sit under gives way, so the two never collide.
+/// Only a value that isn't the last period needs a date: a gap narrower than its words
+/// doesn't say so.
+#[test]
+fn the_label_of_the_last_period_has_no_date() {
+    let svg = drawn(&[Some(1), Some(3)]);
+    assert!(svg.contains(">3 USD</text>"));
+}
+
+/// The gap runs from the last value before it to the first after it, or to the last period.
+#[test]
+fn a_gap_band_spans_its_neighbours() {
+    let band = |values: &[Option<i64>]| {
+        let svg = drawn(values);
+        (
+            attributes(&svg, "chart-gap", "x")[0].to_owned(),
+            attributes(&svg, "chart-gap", "width")[0].to_owned(),
+        )
+    };
+    assert_eq!(
+        band(&[Some(1), Some(2), None, Some(3)]),
+        ("242.6".to_owned(), "469.4".to_owned()),
+        "in the middle"
+    );
+    assert_eq!(
+        band(&[Some(1), Some(2), None]),
+        ("360.0".to_owned(), "352.0".to_owned()),
+        "at the end"
+    );
+    assert_eq!(
+        band(&[None, Some(1), Some(2)]),
+        ("8.0".to_owned(), "352.0".to_owned()),
+        "at the start"
+    );
+}
+
+#[test]
+fn a_gap_says_what_it_is_when_there_is_room() {
+    let wide = drawn(&[Some(1), Some(2), None, Some(3)]);
+    assert!(wide.contains(">no total</text>"));
+
+    let mut values = vec![Some(1); 100];
+    values[50] = None;
+    let narrow = drawn(&values);
+    assert_eq!(attributes(&narrow, "chart-gap", "x").len(), 1);
+    assert!(!narrow.contains(">no total</text>"), "too narrow for words");
+}
+
+/// Each tick's label, read as `(text, x, y, anchor)`.
+fn tick_labels(svg: &str) -> Vec<(String, f64, f64, String)> {
+    svg.split("<text ")
+        .skip(1)
+        .filter(|element| element.contains("chart-y"))
+        .map(|element| {
+            let attribute = |name: &str| {
+                element
+                    .split_once(&format!(" {name}=\""))
+                    .and_then(|(_, rest)| rest.split_once('"'))
+                    .map(|(value, _)| value.to_owned())
+            };
+            let text = element
+                .split_once('>')
+                .unwrap()
+                .1
+                .split_once('<')
+                .unwrap()
+                .0;
+            (
+                text.to_owned(),
+                attribute("x").unwrap().parse().unwrap(),
+                attribute("y").unwrap().parse().unwrap(),
+                attribute("text-anchor").unwrap_or_else(|| "start".to_owned()),
+            )
+        })
+        .collect()
+}
+
+/// The labels name the values at the height they're drawn: a rising line from 0.00 to
+/// 1,000.00 on a plot from 252 up to 30.
+#[test]
+fn ticks_say_their_value_at_their_height() {
+    let svg = drawn(&[Some(0), Some(100_000)]);
+
+    let grid: Vec<&str> = attributes(&svg, "chart-grid", "y1");
+    assert_eq!(grid, ["252.0", "141.0", "30.0"]);
+    assert_eq!(
+        tick_labels(&svg),
+        [
+            ("0.00".to_owned(), 712.0, 248.0, "end".to_owned()),
+            ("500.00".to_owned(), 8.0, 137.0, "start".to_owned()),
+            ("1,000.00".to_owned(), 8.0, 26.0, "start".to_owned()),
+        ]
+    );
+}
+
+/// The y of the line at `x`, on the segment holding it.
+fn line_y_at(line: &[(f64, f64)], x: f64) -> Option<f64> {
+    line.windows(2).find_map(|pair| {
+        let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+        (x0 <= x && x <= x1).then(|| y0 + (y1 - y0) * (x - x0) / (x1 - x0).max(0.001))
+    })
+}
+
+/// No tick's label sits on the line, whatever its shape: a stub of line beside a label
+/// reads as a minus sign.
+#[test]
+fn tick_labels_keep_off_the_line() {
+    let rising: Vec<Option<i64>> = (0..40).map(|at| Some(at * 1_000)).collect();
+    let falling: Vec<Option<i64>> = (0..40).rev().map(|at| Some(at * 1_000)).collect();
+    let valley: Vec<Option<i64>> = (0_i64..40)
+        .map(|at| Some((at - 20).abs() * 1_000))
+        .collect();
+    let crossing: Vec<Option<i64>> = (0..40).map(|at| Some((at - 15) * 1_000)).collect();
+    for values in [&rising, &falling, &valley, &crossing] {
+        for size in [ChartSize::Wide, ChartSize::Narrow] {
+            let frame = size.frame();
+            let svg = line_chart(&points(values), usd(), size).into_string();
+            let line = path_points(&line_of(&svg));
+            let labels = tick_labels(&svg);
+            assert!(!labels.is_empty(), "the scale is marked");
+            for (text, x, y, anchor) in labels {
+                let width = f64::from(i32::try_from(text.len()).unwrap() * frame.char_width);
+                let (left, right) = if anchor == "end" {
+                    (x - width, x)
+                } else {
+                    (x, x + width)
+                };
+                let mut at = left;
+                while at <= right {
+                    if let Some(line_y) = line_y_at(&line, at) {
+                        assert!(
+                            line_y < y - 14.0 || line_y > y + 3.0,
+                            "the line runs through a label"
+                        );
+                    }
+                    at += 1.0;
+                }
+            }
+        }
+    }
+}
+
+/// On a dense range bands overlap, and the last drawn wins: each must win over its own
+/// point, not a later one's.
+#[test]
+fn the_band_under_a_point_is_that_points() {
+    let values = vec![Some(1); 92];
+    let svg = drawn(&values);
+    let lefts: Vec<f64> = attributes(&svg, "chart-hit", "x")
+        .iter()
+        .map(|x| x.parse().unwrap())
+        .collect();
+    let widths: Vec<f64> = attributes(&svg, "chart-hit", "width")
+        .iter()
+        .map(|x| x.parse().unwrap())
+        .collect();
+    let crosses: Vec<f64> = (0_i32..92)
+        .map(|at| f64::from(WIDE.left) + f64::from(at) * 704.0 / 91.0)
+        .collect();
+    for (index, x) in crosses.iter().enumerate().filter(|(_, x)| **x < 690.0) {
+        let winner = lefts
+            .iter()
+            .zip(&widths)
+            .rposition(|(left, width)| left <= x && *x < left + width);
+        assert_eq!(winner, Some(index), "the band over a point names it");
+    }
+}
+
+/// How much of the date a label needs depends on how long the chart runs.
+#[test]
+fn date_labels_say_as_much_as_the_span_needs() {
+    let labels = |last: Date| {
+        let ends = [
+            ChartPoint {
+                on: START,
+                value: Some(1),
+                label: String::new(),
+                title: String::new(),
+            },
+            ChartPoint {
+                on: last,
+                value: Some(2),
+                label: String::new(),
+                title: String::new(),
+            },
+        ];
+        let svg = line_chart(&ends, usd(), ChartSize::Wide).into_string();
+        svg.split("chart-x")
+            .skip(1)
+            .map(|element| {
+                element
+                    .split_once('>')
+                    .unwrap()
+                    .1
+                    .split_once('<')
+                    .unwrap()
+                    .0
+                    .to_owned()
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(labels(date(2026, 3, 1)), ["1 Jan", "1 Mar"]);
+    assert_eq!(labels(date(2027, 1, 1)), ["Jan 2026", "Jan 2027"]);
+    assert_eq!(labels(date(2035, 1, 1)), ["2026", "2035"]);
+}
+
+/// The line holds the left of this tick's height, and a gap's words the right.
+#[test]
+fn a_tick_keeps_off_a_gaps_words() {
+    let middle = Some(55_000);
+    let svg = drawn(&[
+        middle,
+        middle,
+        middle,
+        Some(0),
+        Some(100_000),
+        middle,
+        middle,
+        middle,
+        middle,
+        None,
+    ]);
+
+    assert!(svg.contains(">no total</text>"));
+    let labels: Vec<String> = tick_labels(&svg).into_iter().map(|label| label.0).collect();
+    assert_eq!(labels, ["0.00", "1,000.00"], "no room for the middle one");
+}
+
+/// A label that would sit under the direct label goes elsewhere, so the two never collide.
 #[test]
 fn a_tick_gives_way_to_the_direct_label() {
     let mut values = vec![Some(0), Some(100)];
     values.resize(40, None);
     let svg = drawn(&values);
-    let ys = attributes(&svg, "chart-y", "y");
-    assert!(!ys.is_empty(), "other ticks stay");
-    let direct = attributes(&svg, "chart-direct", "y");
-    let direct_y: f64 = direct[0].parse().unwrap();
-    assert!(
-        ys.iter()
-            .all(|y| (y.parse::<f64>().unwrap() - direct_y).abs() >= 16.0)
-    );
+    let labels = tick_labels(&svg);
+    assert!(!labels.is_empty(), "ticks stay");
+    let direct_y: f64 = attributes(&svg, "chart-direct", "y")[0].parse().unwrap();
+    let direct_x: f64 = attributes(&svg, "chart-direct", "x")[0].parse().unwrap();
+    for (_, x, y, anchor) in labels {
+        let near_left = anchor == "start" && (x - direct_x).abs() < 80.0;
+        assert!(!near_left || (y - direct_y).abs() >= 16.0, "they'd collide");
+    }
 }

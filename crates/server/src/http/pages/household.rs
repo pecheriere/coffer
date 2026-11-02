@@ -73,7 +73,7 @@ async fn household(
                 (csrf_field(&viewer.csrf))
                 label.field {
                     "Display currency"
-                    select.input name="display_currency" {
+                    select.input name="display_currency" required {
                         @if settings.display_currency.is_none() {
                             option value="" selected { "Choose a currency" }
                         }

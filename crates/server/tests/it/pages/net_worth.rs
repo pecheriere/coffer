@@ -12,17 +12,18 @@ use coffer_store::{AuditFilter, PageRequest};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
+mod form;
+mod truth;
+
 use super::forecast::{row, section, text_of};
 use crate::net_worth::{Golden, World, unbuilt, world};
 
-const PAGE: &str = "/net-worth";
-const HOUSEHOLD: &str = "/admin/household";
-const SET_CURRENCY: &str = "/admin/household/display-currency";
+pub(super) const PAGE: &str = "/net-worth";
 /// The three months the `3m` range covers on the golden example's day, by day.
-const THREE_MONTHS: &str = "from=2026-08-02&to=2026-11-02&interval=day";
+pub(super) const THREE_MONTHS: &str = "from=2026-08-02&to=2026-11-02&interval=day";
 
 /// A browser signed in as `world`'s alice, an admin.
-async fn alice(world: &World) -> Browser {
+pub(super) async fn alice(world: &World) -> Browser {
     let session = world
         .server
         .sessions
@@ -35,7 +36,7 @@ async fn alice(world: &World) -> Browser {
 }
 
 /// A browser signed in as bob, a member without the household's keys.
-async fn bob(world: &World) -> Browser {
+pub(super) async fn bob(world: &World) -> Browser {
     let invite = world
         .server
         .identity
@@ -49,7 +50,7 @@ async fn bob(world: &World) -> Browser {
 }
 
 /// The page at `query`, which must answer 200.
-async fn page(world: &World, query: &str) -> Reply {
+pub(super) async fn page(world: &World, query: &str) -> Reply {
     let reply = alice(world).await.get(&format!("{PAGE}{query}")).await;
     assert_eq!(reply.status, StatusCode::OK);
     reply
@@ -79,7 +80,7 @@ fn day_heading(on: &str) -> String {
 }
 
 /// The line of the page's first drawing.
-fn line_of(body: &str) -> String {
+pub(super) fn line_of(body: &str) -> String {
     let (_, rest) = body.split_once("chart-line\" d=\"").unwrap();
     rest.split_once('"').unwrap().0.to_owned()
 }
@@ -273,7 +274,6 @@ async fn accounts_show_balance_dates_and_rate() {
         "owed keeps its sign"
     );
     assert!(text_of(table).contains("Side"), "visible, marked");
-    assert!(row(table, "Side").iter().all(|cell| cell == "Not counted"));
 }
 
 #[tokio::test]
@@ -640,126 +640,4 @@ async fn browser_reports_withhold_this_page() {
     assert!(event.contains("page=\"other\""));
     assert!(event.contains("client_message=\"[withheld]\""));
     assert!(!event.contains("1234.56"));
-}
-
-/// Posts `fields` to the display currency form with `browser`'s token prepended.
-async fn set_currency(browser: &mut Browser, fields: &[(&str, &str)]) -> Reply {
-    let csrf = browser.get("/account").await.csrf();
-    let mut all = vec![("csrf", csrf.as_str())];
-    all.extend_from_slice(fields);
-    browser.post_form(SET_CURRENCY, &all).await
-}
-
-fn has_entry(events: &[coffer_store::AuditEvent], action: &str) -> bool {
-    events.iter().any(|event| event.action == action)
-}
-
-#[tokio::test]
-async fn admin_sets_the_display_currency() {
-    let world = world().await;
-    let Golden { .. } = world.golden().await;
-    let mut admin = alice(&world).await;
-    let before = world.settings_events().await.len();
-
-    let form = admin.get(HOUSEHOLD).await.body;
-    assert!(form.contains(&format!("action=\"{SET_CURRENCY}\"")));
-    assert!(
-        form.contains("<option value=\"USD\" selected>"),
-        "the current one"
-    );
-    assert!(form.contains("recomputes"), "says what changing it does");
-
-    let reply = set_currency(&mut admin, &[("display_currency", "EUR")]).await;
-    assert_eq!(reply.status, StatusCode::SEE_OTHER);
-    assert_eq!(reply.header(header::LOCATION), HOUSEHOLD);
-
-    let events = world.settings_events().await;
-    assert_eq!(events.len(), before + 1, "audited once");
-    assert!(
-        has_entry(&events, "household.settings"),
-        "by the same service"
-    );
-    let report = world.report(THREE_MONTHS).await;
-    assert_eq!(report["display_currency"], "EUR", "the report now converts");
-    assert_eq!(report["points"][4]["total"]["minor_units"], 565_449);
-    assert!(
-        admin
-            .get(HOUSEHOLD)
-            .await
-            .body
-            .contains("<option value=\"EUR\" selected>")
-    );
-    assert!(text_of(section(&admin.get(PAGE).await.body, "answer")).contains("EUR"));
-}
-
-#[tokio::test]
-async fn member_is_refused_whatever_is_sent() {
-    let world = world().await;
-    let mut member = bob(&world).await;
-    let before = world.settings_events().await.len();
-
-    for fields in [
-        &[("display_currency", "USD")][..],
-        &[("display_currency", "<b>nope</b>")][..],
-        &[("display_currency", "USD"), ("extra", "1")][..],
-        &[][..],
-    ] {
-        let reply = set_currency(&mut member, fields).await;
-        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{fields:?}");
-        assert!(!reply.body.contains("nope"), "does not echo");
-    }
-
-    assert_eq!(world.settings_events().await.len(), before);
-    let report = world.report(THREE_MONTHS).await;
-    assert_eq!(report["display_currency"], Value::Null, "nothing changed");
-    assert_eq!(
-        member.get(HOUSEHOLD).await.status,
-        StatusCode::FORBIDDEN,
-        "no form"
-    );
-}
-
-#[tokio::test]
-async fn forged_form_fails_whole() {
-    let world = world().await;
-    let mut admin = alice(&world).await;
-    let before = world.settings_events().await.len();
-
-    for fields in [
-        &[("display_currency", "ZZZ")][..],
-        &[("display_currency", "<b>nope</b>")][..],
-        &[("display_currency", "")][..],
-        &[("display_currency", "usd")][..],
-        &[][..],
-        &[("display_currency", "USD"), ("extra", "1")][..],
-        &[("display_currency", "USD"), ("floor", "0")][..],
-    ] {
-        let reply = set_currency(&mut admin, fields).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{fields:?}");
-        assert!(reply.header(header::CONTENT_TYPE).starts_with("text/html"));
-        assert!(!reply.body.contains("nope"), "does not echo");
-    }
-
-    assert_eq!(world.settings_events().await.len(), before, "not audited");
-    let report = world.report(THREE_MONTHS).await;
-    assert_eq!(report["display_currency"], Value::Null, "nothing changed");
-}
-
-#[tokio::test]
-async fn csrf_is_required() {
-    let world = world().await;
-    let mut admin = alice(&world).await;
-    let before = world.settings_events().await.len();
-
-    for fields in [
-        &[("display_currency", "USD")][..],
-        &[("csrf", "wrong"), ("display_currency", "USD")][..],
-    ] {
-        let reply = admin.post_form(SET_CURRENCY, fields).await;
-        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{fields:?}");
-    }
-
-    assert_eq!(world.settings_events().await.len(), before, "not audited");
-    let report = world.report(THREE_MONTHS).await;
-    assert_eq!(report["display_currency"], Value::Null, "nothing changed");
 }
