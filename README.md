@@ -29,13 +29,15 @@ What exists and what comes next:
   agent tokens that can be limited to chosen accounts at a chosen level; a
   typed OpenAPI document of the JSON API.
 - **0.2.1:** bind accounts from the Connections page, a notice when new accounts need setting up, a time and memory cap on syncs, and an optional egress relay.
-- **Unreleased:** a spending plan (recurring bills and budgets, one-offs and
-  sinking-fund goals, goal links on splits), the household's safety floor, a cash
-  forecast with a what-if, plan versus actual with rollovers, and a read-only
-  forecast page; net worth per day, week or month in a display currency, converted
-  at the European Central Bank's daily rates (fetched only when the household holds
-  more than one currency), with a read-only net worth page and chart.
-- **Next:** rules, transfer links, a forecast across currencies, entering a rate by
+- **0.3.0:** a spending plan (recurring bills and budgets, one-offs and
+  sinking-fund goals, goal links on splits), settling a bill for one month, the
+  household's safety floor, a cash forecast with a what-if, plan versus actual with
+  rollovers, and a read-only forecast page; net worth per day, week or month in a
+  display currency, converted at the European Central Bank's daily rates (fetched
+  only when the household holds more than one currency), with a read-only net worth
+  page and chart; balances kept for provider accounts that aren't bound yet; server
+  panics and browser errors reported in the log; and sturdier syncing.
+- **Next:** accounts held for other people, rules, transfer links, a forecast across currencies, entering a rate by
   hand, and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
