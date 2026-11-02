@@ -8,11 +8,15 @@ operation, parameter and schema.
 
 ## Create a token
 
-1. Sign in to coffer with your passkey and open `/account`.
+1. Sign in to coffer with your passkey and open `/account`. The first admin
+   gets in through the single-use setup link that `coffer serve` logs on its
+   first start, or `coffer bootstrap-link` prints (see
+   [Commands](configuration.md#commands)).
 2. Create an agent token: give it a name (for example `claude`), choose a
    scope and, preferably, an expiry.
 3. To limit it to chosen accounts, set the levels on the same form. It lists
-   one level select per open account, so a household with no accounts yet has
+   one level select per open account (a closed account can't be granted
+   through the form), so a household with no accounts yet has
    only "All accounts" (see
    [Account grants](#account-grants)). Left as they are, "All accounts" at
    `write` and every account at `none`, the token has no grants: it sees
@@ -37,7 +41,7 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates`. |
 | `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration, such as changing the forecast settings. Only admins can create `admin` tokens. |
 

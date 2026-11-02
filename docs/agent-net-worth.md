@@ -44,8 +44,11 @@ grants) for step 3. `$BASE` is the server's address; ids in answers are UUIDs.
    `{"minor_units": 100000}`. A balance carries forward until a newer one. An
    account has no value before its first balance, and a balance dated in the
    future has none until that day. A linked account gets its balances from
-   syncs. Date balances today or yesterday, since one older than the household's
-   `stale_after_days` (7 by default) raises `balance_stale`.
+   syncs. The call answers 200 with the recorded `{on, balance, source}`. Date a
+   balance today or yesterday when you want a current number: only the latest
+   point's balance can raise `balance_stale` (older than the household's
+   `stale_after_days`, 7 by default), so backfilling history with old dates is
+   fine, as long as the latest balance is recent.
 3. The display currency, which every total is added up in. It is never guessed:
 
    ```sh
@@ -56,8 +59,8 @@ grants) for step 3. `$BASE` is the server's address; ids in answers are UUIDs.
    A member can also choose it on the Household page (`/admin/household`).
 4. Exchange rates need nothing from you. When the accounts and the display
    currency come to more than one currency, coffer fetches the rates of each from
-   the European Central Bank, all of their history on first use, within about a
-   minute. Check `GET $BASE/api/v1/fx/coverage` (below). Until a rate is held, a
+   the European Central Bank, all of their history on first use. They can arrive
+   within seconds of setting the display currency, or take about a minute. Check `GET $BASE/api/v1/fx/coverage` (below). Until a rate is held, a
    report has the `rate_missing` caution with the reason `not_fetched_yet`. A
    household with one currency contacts nobody.
 5. The report: `GET $BASE/api/v1/reports/net-worth?from=2026-10-01&interval=month`.
@@ -187,7 +190,9 @@ How to read it:
   is not a household that was poor. `closed_on` is the day an account closed:
   **a drop on that day is the account closing, not money.** From `closed_on` an
   account counts only while its balance is negative, since a debt doesn't close
-  with the card (`closed_account_owing`). Reopening an account restores its days.
+  with the card (`closed_account_owing`). On `closed_on` itself the account's point
+  keeps its `amount` but says `counted: false`, and the total leaves it out.
+  Reopening an account restores its days.
   Say so when you explain a change between points.
 - An account with `include_in_net_worth: false` is listed with `counted: false`
   and `not_counted: "excluded_by_flag"`, and has no points.
@@ -332,7 +337,9 @@ nothing. Changing it:
   for a moment;
 - is audited with the old and new codes (`household.settings`).
 
-The currency is one of the codes coffer knows; an unknown one is 400. The
+The currency is one of the codes coffer knows. An unknown one is 400 with the detail
+"the request body is not valid JSON for this operation": it reads that way because the
+code isn't in the type the body is read into. The
 settings answer shows all of them:
 
 ```json
