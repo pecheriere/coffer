@@ -39,6 +39,9 @@ const MAX_PASSES: u32 = 3;
 const MAX_PAGES: usize = 200;
 /// The most records one pass gathers, whatever the size of its pages.
 const MAX_RECORDS: usize = 100_000;
+/// The most response bytes one pass holds: some 30,000 real records of about
+/// 2 KiB each, where 200 pages of 16 MiB would be 3.2 GiB.
+const MAX_PASS_BYTES: usize = 64 * 1024 * 1024;
 
 /// Plaid's error type for a failure on its side.
 const API_ERROR: &str = "API_ERROR";
@@ -64,6 +67,7 @@ const CREDENTIALS_UNUSABLE: &str =
     "the connection's Plaid credentials are not usable; reconnect it";
 const CREDENTIALS_NOT_STORABLE: &str = "Plaid's access token could not be stored";
 const TOO_MUCH_DATA: &str = "Plaid sent more records than one sync accepts";
+const TOO_MANY_BYTES: &str = "Plaid sent more data than one sync accepts";
 const CURSOR_UNUSABLE: &str = "Plaid sent a sync cursor coffer could not store";
 const ACCOUNT_UNREADABLE: &str = "Plaid sent this account in a form coffer could not read";
 const ACCOUNT_NOT_LISTED: &str = "Plaid sent records for an account it did not list";
@@ -75,6 +79,7 @@ const RECORDS_WITHOUT_ACCOUNT: &str =
 #[derive(Debug)]
 pub struct Plaid {
     client: PlaidClient,
+    max_pass_bytes: usize,
 }
 
 /// What is sealed as a Plaid connection's credentials.
@@ -121,8 +126,9 @@ struct Gathered {
     records: HashMap<String, NetRecord>,
     /// Unusable records without an id, by account.
     unnamed: BTreeMap<String, usize>,
-    /// Whether some unusable record names no account to report it on.
-    unattributed: bool,
+    /// Unusable records that name no account to report them on and no record
+    /// already seen: nothing can be done with them but count them.
+    unattributed: usize,
     /// The records read so far, counting every appearance.
     total: usize,
     next: usize,
@@ -178,7 +184,12 @@ impl Gathered {
             match (unusable.transaction_id, unusable.account_id) {
                 (Some(id), Some(account)) => self.record(id, account, NetState::Unusable),
                 (None, Some(account)) => *self.unnamed.entry(account).or_default() += 1,
-                (_, None) => self.unattributed = true,
+                // The record's last word, even without an account of its own.
+                (Some(id), None) => match self.records.get_mut(&id) {
+                    Some(known) => known.state = NetState::Unusable,
+                    None => self.unattributed += 1,
+                },
+                (None, None) => self.unattributed += 1,
             }
         }
         Ok(())
@@ -186,7 +197,7 @@ impl Gathered {
 
     /// The netted records by account, each in the order of its first
     /// appearance.
-    fn into_buckets(self) -> (BTreeMap<String, Bucket>, bool) {
+    fn into_buckets(self) -> (BTreeMap<String, Bucket>, usize) {
         let mut records: Vec<(String, NetRecord)> = self.records.into_iter().collect();
         records.sort_by_key(|(_, record)| record.first_seen);
         let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
@@ -218,7 +229,21 @@ impl Plaid {
     /// The provider, over `client`.
     #[must_use]
     pub fn new(client: PlaidClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            max_pass_bytes: MAX_PASS_BYTES,
+        }
+    }
+
+    /// This provider with a pass limited to `bytes`, so a test can reach the
+    /// limit with small pages.
+    #[cfg(feature = "testkit")]
+    #[must_use]
+    pub fn with_max_pass_bytes(self, bytes: usize) -> Self {
+        Self {
+            max_pass_bytes: bytes,
+            ..self
+        }
     }
 
     async fn exchange(&self, public_token: &SecretString) -> Result<SecretString, ProviderError> {
@@ -257,11 +282,16 @@ impl Plaid {
     ) -> Result<(Gathered, String), PlaidError> {
         let mut gathered = Gathered::default();
         let mut next = cursor.map(str::to_owned);
+        let mut bytes = 0_usize;
         for _ in 0..MAX_PAGES {
             let mut page = self
                 .client
                 .sync_page(access_token, next.as_deref().filter(|c| !c.is_empty()))
                 .await?;
+            bytes = bytes.saturating_add(page.body_bytes);
+            if bytes > self.max_pass_bytes {
+                return Err(PlaidError::Invalid(TOO_MANY_BYTES));
+            }
             let last = !page.has_more;
             let cursor = std::mem::take(&mut page.next_cursor);
             gathered.add(page)?;
@@ -302,12 +332,13 @@ impl Plaid {
         let cursor = storable_cursor(cursor)?;
         let (buckets, unattributed) = gathered.into_buckets();
         let (accounts, mut connection_errors) = account_data(accounts, buckets, request.today);
-        if unattributed {
+        if unattributed > 0 {
             connection_errors.push(RECORDS_WITHOUT_ACCOUNT.to_owned());
         }
         Ok(FetchResult {
             accounts,
             connection_errors,
+            skipped: u32::try_from(unattributed).unwrap_or(u32::MAX),
             cursor,
         })
     }
@@ -357,6 +388,7 @@ fn account_data(
 ) -> (Vec<ProviderAccountData>, Vec<String>) {
     let mut accounts = Vec::new();
     let mut connection_errors = Vec::new();
+    let mut without_id = false;
     for account in answer.accounts {
         let bucket = buckets.remove(&account.account_id).unwrap_or_default();
         accounts.push(readable_account(account, bucket, today));
@@ -364,7 +396,7 @@ fn account_data(
     for account in answer.unreadable {
         let UnreadableAccount { account_id, name } = account;
         let Some(id) = account_id else {
-            connection_errors.push(ACCOUNT_WITHOUT_ID.to_owned());
+            without_id = true;
             continue;
         };
         let bucket = buckets.remove(&id).unwrap_or_default();
@@ -372,6 +404,9 @@ fn account_data(
     }
     for (id, bucket) in buckets {
         accounts.push(failed_account(id, None, bucket, ACCOUNT_NOT_LISTED));
+    }
+    if without_id {
+        connection_errors.push(ACCOUNT_WITHOUT_ID.to_owned());
     }
     (accounts, connection_errors)
 }
@@ -656,6 +691,7 @@ mod tests {
             unusable,
             next_cursor: "c".to_owned(),
             has_more: false,
+            body_bytes: 0,
         }
     }
 
@@ -692,7 +728,7 @@ mod tests {
 
         let (mut buckets, unattributed) = gathered.into_buckets();
 
-        assert!(unattributed, "a record of no account is noted");
+        assert_eq!(unattributed, 1, "a record of no account is counted");
         let bucket = buckets.remove("a").unwrap();
         let present: Vec<_> = bucket
             .transactions
@@ -874,6 +910,10 @@ mod tests {
                 UnreadableAccount {
                     account_id: None,
                     name: Some("no id".to_owned()),
+                },
+                UnreadableAccount {
+                    account_id: None,
+                    name: None,
                 },
             ],
         };

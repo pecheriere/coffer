@@ -131,7 +131,12 @@ manager's output. For a container, see
 
 Sync limits for Plaid: a requested sync at least 15 minutes after the last
 one, scheduled syncs at least an hour apart, and 48 syncs in 24 hours, per
-connection.
+connection. One pass over Plaid's transaction pages accepts at most 64 MiB of
+responses, and an answer may list at most 1,000 accounts. For any provider, a
+fetch that takes more than 10 minutes fails the run, and the next run starts
+from the same place. Nothing is stored until the fetch ends, so a first sync
+that needs longer fails every time. The limit covers fetching only: storing what
+was fetched comes on top and has no time limit. None of these can be configured.
 
 OAuth banks: coffer sets no redirect URI. Plaid documents that OAuth works on
 web without one, opening the bank in a popup (a new tab on mobile). The cost

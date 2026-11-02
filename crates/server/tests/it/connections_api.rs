@@ -127,6 +127,7 @@ impl World {
                 unusable: Vec::new(),
             }],
             connection_errors: Vec::new(),
+            skipped: 0,
             cursor: None,
         }));
     }

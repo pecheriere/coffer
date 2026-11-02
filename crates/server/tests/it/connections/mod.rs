@@ -88,6 +88,7 @@ impl World {
         self.fake.push(Ok(FetchResult {
             accounts,
             connection_errors: Vec::new(),
+            skipped: 0,
             cursor: None,
         }));
         let mut tx = self.server.store.begin().await.unwrap();

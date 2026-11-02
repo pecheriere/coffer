@@ -147,6 +147,9 @@ pub struct FetchResult {
     pub accounts: Vec<ProviderAccountData>,
     /// Errors about the connection as a whole, reported beside the data.
     pub connection_errors: Vec<String>,
+    /// Records the fetch passes by for good because they belong to no account
+    /// it reports: only counted, among the run's skipped records.
+    pub skipped: u32,
     /// The cursor to send next time, for [`FetchMode::Cursor`].
     pub cursor: Option<String>,
 }

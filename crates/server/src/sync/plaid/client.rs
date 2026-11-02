@@ -18,7 +18,8 @@ use jiff::civil::Date;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::de::{IgnoredAny, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use thiserror::Error;
 use url::Url;
@@ -26,6 +27,7 @@ use zeroize::Zeroizing;
 
 use crate::config::PlaidConfig;
 use crate::egress::{Egress, EgressError, HostAllowList, OutboundRequest};
+use crate::sync::apply::MAX_PROVIDER_ID_CHARS;
 
 const PLAID_VERSION: HeaderName = HeaderName::from_static("plaid-version");
 const PLAID_VERSION_VALUE: HeaderValue = HeaderValue::from_static("2020-09-14");
@@ -36,6 +38,9 @@ const PRODUCTS: [&str; 1] = ["transactions"];
 const DAYS_REQUESTED: u32 = 730;
 /// The most updates `/transactions/sync` returns in one page.
 const SYNC_PAGE_SIZE: u32 = 500;
+/// The most accounts one answer may list: an Item holds a handful, and each
+/// entry of a list of `{}` costs far more memory than its 3 bytes.
+const MAX_ACCOUNTS: usize = 1_000;
 /// The longest `error_type` or `error_code` kept.
 const MAX_CODE_LEN: usize = 64;
 
@@ -50,6 +55,7 @@ const UNREADABLE_TYPE: &str = "UNREADABLE";
 const ANSWER_UNREADABLE: &str = "Plaid sent an answer coffer could not read";
 const RECORD_UNREADABLE: &str = "Plaid sent a record coffer could not read";
 const AMOUNT_UNREADABLE: &str = "Plaid sent an amount that is not an exact decimal";
+const TOO_MANY_ACCOUNTS: &str = "Plaid listed more accounts than one sync accepts";
 const REQUEST_UNUSABLE: &str = "the Plaid request could not be built";
 
 /// A failed Plaid request. No variant holds a credential, a token or a text
@@ -198,6 +204,8 @@ pub struct SyncPage {
     pub next_cursor: String,
     /// Whether another page follows.
     pub has_more: bool,
+    /// The size of the answer this page was read from.
+    pub body_bytes: usize,
 }
 
 /// The Plaid API, for one environment.
@@ -281,7 +289,7 @@ struct ExchangeAnswer {
 #[derive(Deserialize)]
 struct AccountsAnswer<'a> {
     /// Kept raw so that one malformed account does not spoil the others.
-    #[serde(borrow)]
+    #[serde(borrow, deserialize_with = "limited_accounts")]
     accounts: Vec<&'a RawValue>,
 }
 
@@ -479,6 +487,9 @@ impl PlaidClient {
         };
         let body = self.post("accounts/get", fields).await?;
         let answer: AccountsAnswer<'_> = read(&body)?;
+        if answer.accounts.len() > MAX_ACCOUNTS {
+            return Err(PlaidError::Invalid(TOO_MANY_ACCOUNTS));
+        }
         Ok(PlaidAccounts::from_raw(&answer.accounts))
     }
 
@@ -501,7 +512,7 @@ impl PlaidClient {
         };
         let body = self.post("transactions/sync", fields).await?;
         let raw: RawSyncPage<'_> = read(&body)?;
-        Ok(SyncPage::from_raw(raw))
+        Ok(SyncPage::from_raw(raw, body.len()))
     }
 
     /// Removes the Item at Plaid, which ends its access token and its
@@ -584,7 +595,7 @@ impl UnreadableAccount {
                 name: None,
             },
             |ids| Self {
-                account_id: text(ids.account_id),
+                account_id: storable_id(ids.account_id),
                 name: text(ids.name),
             },
         )
@@ -599,8 +610,8 @@ impl UnusableRecord {
                 account_id: None,
             },
             |ids| Self {
-                transaction_id: text(ids.transaction_id),
-                account_id: text(ids.account_id),
+                transaction_id: storable_id(ids.transaction_id),
+                account_id: storable_id(ids.account_id),
             },
         )
     }
@@ -611,6 +622,9 @@ impl PlaidAccount {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawAccount<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
+        if over_long(&raw.account_id) {
+            return Err(PlaidError::Invalid(RECORD_UNREADABLE));
+        }
         let current = raw.balances.current.map(amount).transpose()?;
         Ok(Self {
             account_id: raw.account_id,
@@ -630,6 +644,9 @@ impl PlaidTransaction {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawTransaction<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
+        if over_long(&raw.transaction_id) || over_long(&raw.account_id) {
+            return Err(PlaidError::Invalid(RECORD_UNREADABLE));
+        }
         Ok(Self {
             amount: amount(raw.amount)?,
             transaction_id: raw.transaction_id,
@@ -641,24 +658,29 @@ impl PlaidTransaction {
             name: raw.name,
             merchant_name: raw.merchant_name,
             pending: raw.pending,
-            pending_transaction_id: raw.pending_transaction_id,
+            // Too long to name a stored record, so it replaces nothing.
+            pending_transaction_id: raw.pending_transaction_id.filter(|id| !over_long(id)),
         })
     }
 }
 
 impl SyncPage {
-    fn from_raw(raw: RawSyncPage<'_>) -> Self {
+    fn from_raw(raw: RawSyncPage<'_>, body_bytes: usize) -> Self {
         let mut unusable = Vec::new();
         let added = transactions(&raw.added, &mut unusable);
         let modified = transactions(&raw.modified, &mut unusable);
         let mut removed = Vec::new();
         for record in &raw.removed {
             match serde_json::from_str::<RawRemoved>(record.get()) {
-                Ok(parsed) => removed.push(RemovedTransaction {
-                    transaction_id: parsed.transaction_id,
-                    account_id: parsed.account_id,
-                }),
-                Err(_) => unusable.push(UnusableRecord::of(record)),
+                Ok(parsed)
+                    if !over_long(&parsed.transaction_id) && !over_long(&parsed.account_id) =>
+                {
+                    removed.push(RemovedTransaction {
+                        transaction_id: parsed.transaction_id,
+                        account_id: parsed.account_id,
+                    });
+                }
+                _ => unusable.push(UnusableRecord::of(record)),
             }
         }
         Self {
@@ -668,6 +690,7 @@ impl SyncPage {
             unusable,
             next_cursor: raw.next_cursor,
             has_more: raw.has_more,
+            body_bytes,
         }
     }
 }
@@ -690,6 +713,45 @@ fn transactions(
 /// The JSON string `raw` holds, if it holds one.
 fn text(raw: Option<&RawValue>) -> Option<String> {
     serde_json::from_str(raw?.get()).ok()
+}
+
+/// The entries of an account list, up to one past [`MAX_ACCOUNTS`]: enough to
+/// tell it is too long without holding an entry for all of it.
+fn limited_accounts<'de, D: Deserializer<'de>>(answer: D) -> Result<Vec<&'de RawValue>, D::Error> {
+    struct Limited;
+
+    impl<'de> Visitor<'de> for Limited {
+        type Value = Vec<&'de RawValue>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a list of accounts")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut list: A) -> Result<Self::Value, A::Error> {
+            let mut kept = Vec::new();
+            while kept.len() <= MAX_ACCOUNTS {
+                match list.next_element()? {
+                    Some(entry) => kept.push(entry),
+                    None => return Ok(kept),
+                }
+            }
+            while list.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(kept)
+        }
+    }
+
+    answer.deserialize_seq(Limited)
+}
+
+/// Whether `id` is longer than coffer can store. Descriptions and merchants
+/// are cut to their limits later; an id cut short would name something else.
+fn over_long(id: &str) -> bool {
+    id.chars().count() > MAX_PROVIDER_ID_CHARS
+}
+
+/// The id `raw` holds, if it holds one coffer can store.
+fn storable_id(raw: Option<&RawValue>) -> Option<String> {
+    text(raw).filter(|id| !over_long(id))
 }
 
 /// A JSON number as an exact decimal: a string, an exponent or any other
@@ -757,170 +819,4 @@ fn code_or_unknown(text: &str, credentials: &[&str]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use secrecy::{ExposeSecret as _, SecretString};
-
-    use super::{
-        AccessTokenFields, PlaidClient, PlaidError, PlaidRequest, PlaidTransaction, code_or_unknown,
-    };
-    use crate::config::{PlaidConfig, PlaidEnvironment};
-    use crate::egress::{Egress, EgressError, HostAllowList};
-
-    fn config(environment: PlaidEnvironment) -> PlaidConfig {
-        PlaidConfig {
-            client_id: "CLIENT-MARKER".to_owned(),
-            secret: SecretString::from("SECRET-MARKER"),
-            environment,
-            country_codes: vec!["US".to_owned()],
-        }
-    }
-
-    fn record(amount: &str) -> String {
-        format!(
-            r#"{{"transaction_id":"t","account_id":"a","amount":{amount},"date":"2027-01-10",
-                "name":"n","pending":false}}"#
-        )
-    }
-
-    #[test]
-    fn amounts_parsed_from_raw_numbers() {
-        for (raw, exact) in [
-            ("12", "12"),
-            ("4.5", "4.5"),
-            ("-4.50", "-4.50"),
-            ("0.1", "0.1"),
-        ] {
-            let parsed = PlaidTransaction::parse(&record(raw)).unwrap();
-            assert_eq!(parsed.amount.as_str(), exact, "the exact text is kept");
-        }
-        for raw in [
-            "1e2",
-            "1E2",
-            "1.5e-3",
-            "\"12\"",
-            "null",
-            "true",
-            "[12]",
-            "1234567890123456789012",
-        ] {
-            assert!(
-                matches!(
-                    PlaidTransaction::parse(&record(raw)),
-                    Err(PlaidError::Invalid(_))
-                ),
-                "only an exact decimal number is read"
-            );
-        }
-    }
-
-    #[test]
-    fn other_fields_of_a_record_are_checked() {
-        for bad in [
-            r#"{"transaction_id":"t"}"#,
-            r#"{"transaction_id":"t","account_id":"a","amount":1,"date":"not a date",
-                "name":"n","pending":false}"#,
-            r#"{"transaction_id":"t","account_id":"a","amount":1,"date":"2027-02-30",
-                "name":"n","pending":false}"#,
-            "7",
-        ] {
-            assert!(
-                matches!(PlaidTransaction::parse(bad), Err(PlaidError::Invalid(_))),
-                "a malformed record is invalid"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn only_the_environment_host_is_reachable() {
-        let client = PlaidClient {
-            egress: Egress::new(None).unwrap(),
-            config: config(PlaidEnvironment::Sandbox),
-            base: "https://attacker.example/".parse().unwrap(),
-            hosts: HostAllowList::parse(PlaidEnvironment::Sandbox.host()).unwrap(),
-        };
-        let token = SecretString::from("access-token");
-        assert!(
-            matches!(
-                client.accounts(&token).await,
-                Err(PlaidError::Egress(EgressError::HostNotAllowed))
-            ),
-            "another host must be refused"
-        );
-
-        // Each environment's client allows its own host, not the other's.
-        for (environment, own, other) in [
-            (
-                PlaidEnvironment::Sandbox,
-                "https://sandbox.plaid.com/accounts/get",
-                "https://production.plaid.com/accounts/get",
-            ),
-            (
-                PlaidEnvironment::Production,
-                "https://production.plaid.com/accounts/get",
-                "https://sandbox.plaid.com/accounts/get",
-            ),
-        ] {
-            let client = PlaidClient::new(Egress::new(None).unwrap(), config(environment)).unwrap();
-            assert_eq!(client.base.host_str(), Some(environment.host()));
-            assert!(
-                client
-                    .egress
-                    .check_url(&own.parse().unwrap(), &client.hosts)
-                    .is_ok()
-            );
-            assert!(matches!(
-                client
-                    .egress
-                    .check_url(&other.parse().unwrap(), &client.hosts),
-                Err(EgressError::HostNotAllowed)
-            ));
-        }
-    }
-
-    #[test]
-    fn debug_output_redacts_credentials() {
-        let config = config(PlaidEnvironment::Sandbox);
-        let token = SecretString::from("TOKEN-MARKER");
-        let request = PlaidRequest {
-            client_id: &config.client_id,
-            secret: config.secret.expose_secret(),
-            fields: AccessTokenFields {
-                access_token: token.expose_secret(),
-            },
-        };
-        let client = PlaidClient::new(Egress::new(None).unwrap(), config.clone()).unwrap();
-        for debug in [format!("{request:?}"), format!("{client:?}")] {
-            for marker in ["CLIENT-MARKER", "SECRET-MARKER", "TOKEN-MARKER"] {
-                assert!(
-                    !debug.contains(marker),
-                    "the Debug output must not show a credential"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn only_code_shaped_text_is_kept() {
-        assert_eq!(code_or_unknown("INVALID_FIELD", &[]), "INVALID_FIELD");
-        assert_eq!(code_or_unknown("HTTP_502", &[]), "HTTP_502");
-        for bad in [
-            "",
-            "access-sandbox-1234",
-            "lowercase",
-            "WITH SPACE",
-            "NEW\nLINE",
-            &"A".repeat(65),
-        ] {
-            assert_eq!(code_or_unknown(bad, &[]), "UNKNOWN");
-        }
-        // A credential shaped like a code is withheld, alone or inside one.
-        let credentials = ["UPPERCLIENT1", "UPPERSECRET2", ""];
-        for echoed in ["UPPERCLIENT1", "UPPERSECRET2", "X_UPPERSECRET2_Y"] {
-            assert!(
-                code_or_unknown(echoed, &credentials) == "UNKNOWN",
-                "a code holding a credential is replaced"
-            );
-        }
-        assert_eq!(code_or_unknown("OTHER", &credentials), "OTHER");
-    }
-}
+mod tests;
