@@ -13,6 +13,7 @@ mod connections_api;
 mod connections_page;
 mod duplicates;
 mod egress;
+mod egress_relay;
 mod grants;
 mod healthcheck;
 mod identity;

@@ -18,10 +18,10 @@ plus a safety floor), so that everything above that can be invested.
 
 What exists and what comes next:
 
-- **0.1.0 (this release):** identity and access. Passkey-only members (admin and
+- **0.1.0:** identity and access. Passkey-only members (admin and
   member roles), expiring invite links, sessions, revocable agent tokens with
   read/write/admin scopes, an append-only audit log, backups, a container image.
-- **Unreleased:** accounts (manual and linked), daily balances, categories
+- **0.2.0 (this release):** accounts (manual and linked), daily balances, categories
   and transactions with splits, review and assignment; SimpleFin and Plaid connections
   synced on a schedule and on demand, with duplicate matching and merging;
   agent tokens that can be limited to chosen accounts at a chosen level; a

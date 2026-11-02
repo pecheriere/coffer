@@ -19,7 +19,7 @@ use coffer_server::testkit::browser::{Browser, Reply, with_admin};
 use secrecy::ExposeSecret as _;
 
 /// A signed-in admin with accounts "Checking" and "Savings".
-async fn with_accounts() -> (TestServer, Browser, Actor, AccountId, AccountId) {
+pub(super) async fn with_accounts() -> (TestServer, Browser, Actor, AccountId, AccountId) {
     let (server, admin, _) = with_admin().await;
     let alice = server
         .sessions
@@ -31,7 +31,7 @@ async fn with_accounts() -> (TestServer, Browser, Actor, AccountId, AccountId) {
     (server, admin, alice, checking, savings)
 }
 
-async fn new_account(server: &TestServer, actor: &Actor, name: &str) -> AccountId {
+pub(super) async fn new_account(server: &TestServer, actor: &Actor, name: &str) -> AccountId {
     server
         .ledger
         .create_account(
@@ -53,7 +53,7 @@ async fn new_account(server: &TestServer, actor: &Actor, name: &str) -> AccountI
 }
 
 /// A token of `actor` with `scope` and `grants`.
-async fn grants_token(
+pub(super) async fn grants_token(
     server: &TestServer,
     actor: &Actor,
     scope: Scope,

@@ -21,6 +21,7 @@ testkit = [
     "coffer-domain/testkit",
     "coffer-store/testkit",
     "dep:http-body-util",
+    "dep:openssl",
     "dep:tower",
     "dep:webauthn-authenticator-rs",
 ]
@@ -57,6 +58,8 @@ utoipa.workspace = true
 utoipa-axum.workspace = true
 webauthn-rs.workspace = true
 zeroize.workspace = true
+# Optional: only for vendored-openssl, and for the testkit feature's test
+# certificates.
 openssl = { workspace = true, optional = true }
 # Optional: only for the testkit feature.
 http-body-util = { workspace = true, optional = true }

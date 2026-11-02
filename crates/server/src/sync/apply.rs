@@ -659,6 +659,9 @@ impl Apply<'_> {
             self.tx
                 .set_flag(created.id, TransactionFlag::PossibleDuplicate, true)
                 .await?;
+            // `others` are matched within this account, so the store's
+            // same-account check cannot refuse them; if it ever did, the
+            // error rolls the whole sync back.
             self.tx.add_duplicate_candidates(created.id, others).await?;
             let listed: Vec<String> = others.iter().map(ToString::to_string).collect();
             changes = changes
