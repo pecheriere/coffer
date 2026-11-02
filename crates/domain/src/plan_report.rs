@@ -11,6 +11,10 @@
 //! - A possible duplicate keeps counting, since it may be real, and its row's
 //!   `possible_duplicate` says how much of `actual` it is.
 //! - A split linked to a goal counts on the goal's line and never in its category.
+//!
+//! An occurrence a person settled (R9a) stays in `planned`, since it is what was planned, and
+//! the row's `settled` says how much of it is. A rollover doesn't read settlements: it is
+//! for budgets.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +25,10 @@ use serde::Serialize;
 use crate::forecast::{ForecastError, money};
 use crate::ids::{CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
-use crate::plan::{CalendarMonth, PlanSchedule, PlanSpending, div_half_even, goal_accrued};
+use crate::plan::{
+    CalendarMonth, PlanSchedule, PlanSpending, SettlementKind, div_half_even, goal_accrued,
+    occurrences_in,
+};
 use crate::transactions::CategoryKind;
 
 /// Everything one report reads, gathered by the caller at one moment.
@@ -57,6 +64,8 @@ pub struct ReportItem {
     pub active: bool,
     /// What is linked to this goal, per month.
     pub goal_spent: Vec<GoalMonth>,
+    /// The months a person settled it for.
+    pub settled: BTreeMap<CalendarMonth, SettlementKind>,
 }
 
 /// The money linked to one goal in one month, positive for money spent.
@@ -105,6 +114,9 @@ pub struct PlanReport {
     pub goals: Vec<GoalRow>,
     /// Ordered by month and currency. Never spending.
     pub uncategorized: Vec<UncategorizedRow>,
+    /// The occurrences a person settled, ordered by month and item: they stay in `planned`,
+    /// and this is why a row's `difference` may be no surprise.
+    pub settled: Vec<SettledRow>,
     /// What each category with a budget has left, one line per category and currency,
     /// ordered by both.
     pub rollovers: Vec<RolloverRow>,
@@ -134,6 +146,8 @@ pub struct PlanRow {
     pub left_out: Money,
     /// How much of `actual` is on transactions flagged as possible duplicates.
     pub possible_duplicate: Money,
+    /// How much of `planned` a person settled for this month: see [`SettledRow`].
+    pub settled: Money,
 }
 
 /// One goal in one month.
@@ -160,6 +174,19 @@ pub struct UncategorizedRow {
     pub currency: Currency,
     pub count: u32,
     pub total: Money,
+}
+
+/// One item's occurrences in one month that a person settled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SettledRow {
+    pub month: CalendarMonth,
+    pub item: PlannedItemId,
+    pub name: String,
+    pub category: CategoryId,
+    pub kind: SettlementKind,
+    /// The whole amount of the item's occurrences in this month.
+    pub amount: Money,
 }
 
 /// A category's budgets over the reported months up to today's: bills have no rollover,
@@ -256,6 +283,7 @@ pub fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastErr
                 },
             })
             .collect(),
+        settled: settled_rows(input, reported)?,
         rollovers: rollover_rows(input, &pairs, &up_to_today, &planned, &actuals)?,
         partial_months: reported
             .iter()
@@ -279,6 +307,8 @@ struct Planned {
     /// The bills and one-offs dated up to and including today, which spending pays first
     /// (R9).
     due_by_today: i128,
+    /// The part of `total` a person settled.
+    settled: i128,
 }
 
 /// What happened in one [`Key`], with `actual` positive for what the category's kind counts.
@@ -295,6 +325,7 @@ fn planned_by_month(input: &PlanReportInput, reported: &[CalendarMonth]) -> BTre
         let amount = i128::from(item.amount.minor_units);
         let is_budget = item.spending == Some(PlanSpending::Budget);
         for &month in reported {
+            let is_settled = item.settled.contains_key(&month);
             for on in item
                 .schedule
                 .occurrences(month.first_day(), month.next().first_day())
@@ -303,6 +334,9 @@ fn planned_by_month(input: &PlanReportInput, reported: &[CalendarMonth]) -> BTre
                     .entry((month, item.category, item.amount.currency))
                     .or_default();
                 entry.total += amount;
+                if is_settled {
+                    entry.settled += amount;
+                }
                 if is_budget {
                     entry.budget += amount;
                 } else if on <= input.today {
@@ -371,7 +405,41 @@ fn plan_row(
         rolling_average: money(rolling_average, currency)?,
         left_out: money(happened.left_out, currency)?,
         possible_duplicate: money(happened.possible_duplicate, currency)?,
+        settled: money(plan.settled, currency)?,
     }))
+}
+
+/// What a person settled in `reported`, by month and in the order items come in. A month
+/// holding no occurrence of the item, as after a change of schedule, has nothing to show.
+fn settled_rows(
+    input: &PlanReportInput,
+    reported: &[CalendarMonth],
+) -> Result<Vec<SettledRow>, ForecastError> {
+    let mut rows = Vec::new();
+    for &month in reported {
+        for item in input.items.iter().filter(|item| item.active) {
+            let Some(&kind) = item.settled.get(&month) else {
+                continue;
+            };
+            let occurrences = occurrences_in(&item.schedule, month).len();
+            if occurrences == 0 {
+                continue;
+            }
+            let occurrences = i128::try_from(occurrences).map_err(|_| ForecastError::OutOfRange)?;
+            rows.push(SettledRow {
+                month,
+                item: item.id,
+                name: item.name.clone(),
+                category: item.category,
+                kind,
+                amount: money(
+                    i128::from(item.amount.minor_units) * occurrences,
+                    item.amount.currency,
+                )?,
+            });
+        }
+    }
+    Ok(rows)
 }
 
 /// Each goal's lines, by month and in the order goals come in.

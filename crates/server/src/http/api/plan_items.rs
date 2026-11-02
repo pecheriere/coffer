@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::Response;
 use coffer_domain::ids::PlannedItemId;
+use coffer_domain::plan::CalendarMonth;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -15,6 +16,7 @@ use crate::http::extract::ApiActor;
 use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::plan_items::{PlannedItemInput, PlannedItemPatch, PlannedItemView};
+use crate::ledger::settlements::{SettlementInput, SettlementView};
 
 /// The planned items the token may see. At most 500 exist, so a list has no
 /// cursor.
@@ -39,6 +41,17 @@ pub struct PlannedItemListQuery {
 pub struct PlannedItemPath {
     /// The planned item's id.
     pub item_id: PlannedItemId,
+}
+
+/// One month of a planned item.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Path)]
+#[serde(deny_unknown_fields)]
+pub struct SettlementPath {
+    /// The planned item's id.
+    pub item_id: PlannedItemId,
+    /// The month, written `YYYY-MM`.
+    pub month: CalendarMonth,
 }
 
 /// Every planned item the token may see.
@@ -213,6 +226,77 @@ pub(super) async fn delete(
     state
         .ledger
         .delete_planned_item(&actor, path.item_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Settles a planned item for one month.
+#[utoipa::path(
+    put,
+    path = "/api/v1/plan-items/{item_id}/settlements/{month}",
+    operation_id = "settlePlanItem",
+    tag = tags::PLAN,
+    description = "Records that a recurring bill's or a one-off's occurrences in this month were \
+                   `paid` some way the forecast can't see, or are `skipped`. In a forecast they \
+                   count as nothing: no gross, no gap, no `bill_not_seen`, no share of the \
+                   category's spending. It never changes the item. The forecast lists them in \
+                   `settled`; plan versus actual keeps them in `planned` and says they are settled. \
+                   The month must be in the years 1970 to 2200, at most 12 months from today's \
+                   either way, and hold an occurrence of the item. A budget, a goal and income can't \
+                   be settled. Sending what the month already says writes nothing and answers with \
+                   it, who and when included. Another `kind` replaces it. Needs `write`; a token \
+                   with account grants also needs `all` at `write`, decided before anything is \
+                   looked up.",
+    security(("bearer" = [])),
+    params(SettlementPath),
+    request_body = SettlementInput,
+    responses(
+        (status = 200, description = "The month's settlement as it now is.", body = SettlementView),
+        (status = 409, description = "The item already holds 60 settlements.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn settle(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<SettlementPath>,
+    TypedJson(input): TypedJson<SettlementInput>,
+) -> Result<Json<SettlementView>, Problem> {
+    Ok(Json(
+        state
+            .ledger
+            .settle_planned_item(&actor, path.item_id, path.month, input.kind)
+            .await?,
+    ))
+}
+
+/// Removes a planned item's settlement for one month.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/plan-items/{item_id}/settlements/{month}",
+    operation_id = "unsettlePlanItem",
+    tag = tags::PLAN,
+    description = "The month's occurrences count again. A month with no settlement answers the \
+                   same and writes nothing. Any month in the years 1970 to 2200 may be cleared, \
+                   however far from today, so an item at its limit can make room. Needs `write`; \
+                   a token with account grants also needs `all` at `write`, decided before \
+                   anything is looked up.",
+    security(("bearer" = [])),
+    params(SettlementPath),
+    responses(
+        (status = 204, description = "The month has no settlement."),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn unsettle(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<SettlementPath>,
+) -> Result<StatusCode, Problem> {
+    state
+        .ledger
+        .unsettle_planned_item(&actor, path.item_id, path.month)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

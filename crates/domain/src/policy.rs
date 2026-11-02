@@ -26,6 +26,7 @@
 //! | Read plan versus actual                  | `Transactions`                |
 //! | Read the safety floor                    | `Transactions`                |
 //! | Create, change or delete a planned item  | `Write`                       |
+//! | Settle a planned item for a month        | `Write`                       |
 //!
 //! The safety floor is not refused without it: the settings answer with `floor: null`.
 //!

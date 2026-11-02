@@ -6,13 +6,15 @@
 //! missing, because a refusal would confirm it exists (R3). Changes need
 //! `all` at `write`, like a category: the plan is shared by every account.
 
+use std::collections::BTreeMap;
+
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Money;
 use coffer_domain::plan::{
     MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule, PlanSpending, PlannedItemName,
-    spending_applies, validate_amount,
+    settlement_applies, spending_applies, validate_amount,
 };
 use coffer_domain::policy::{Action, authorize, plan_item_visible};
 use coffer_domain::transactions::{CategoryKind, Notes};
@@ -24,6 +26,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::settlements::{SettlementView, settlements_value};
 use super::transactions::{Patch, notes};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
@@ -41,6 +44,7 @@ const TOO_MANY: &str = "a household holds at most 500 planned items";
 const GOAL_LINKED: &str = "the goal has linked splits; mark it complete instead";
 const GOAL_LINKED_CURRENCY: &str = "the goal has linked splits, which hold it to its currency";
 const SCHEDULE_TEXT_FAILED: &str = "schedule serialization failed";
+const SETTLED: &str = "the item is settled for some months: delete those settlements first";
 
 /// A planned item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -65,12 +69,15 @@ pub struct PlannedItemView {
     /// spent in its category so far this month; a `bill` counts in full.
     #[schema(required)]
     pub spending: Option<PlanSpending>,
+    /// The months it is settled for, ordered by month: its occurrences in them count as
+    /// nothing in a forecast.
+    pub settlements: Vec<SettlementView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
 
 impl PlannedItemView {
-    fn new(record: &PlannedItemRecord) -> Self {
+    fn new(record: &PlannedItemRecord, settlements: Vec<SettlementView>) -> Self {
         Self {
             id: record.id,
             name: record.name.as_str().to_owned(),
@@ -82,6 +89,7 @@ impl PlannedItemView {
             active: record.active,
             schedule: record.schedule,
             spending: record.spending,
+            settlements,
             created_at: record.created_at,
             updated_at: record.updated_at,
         }
@@ -162,6 +170,7 @@ pub(super) fn invalid(error: PlanError) -> LedgerError {
         PlanError::EndBeforeAnchor => "the end date cannot be before the anchor date",
         PlanError::GoalDatesInverted => "a goal's due date must be after its start date",
         PlanError::GoalMustBeOutflow => "a goal must be an outflow",
+        PlanError::SettlementOutOfWindow => "a settlement must fall within 12 months of today",
         // `PlanError` is non-exhaustive, and no other variant arises here.
         _ => "the planned item is not valid",
     })
@@ -324,6 +333,13 @@ impl CheckedPatch {
             direction,
             &schedule,
         )?;
+        // A settlement says only what a bill or a one-off can have said of it.
+        if !settlement_applies(direction, &schedule, spending)
+            && settlement_applies(current.direction, &current.schedule, current.spending)
+            && !tx.settlements_of_item(current.id).await?.is_empty()
+        {
+            return Err(LedgerError::Conflict(ProblemCode::Conflict, SETTLED));
+        }
 
         let mut changes = PlannedItemChanges::default();
         let mut audited = AuditChanges::new();
@@ -484,7 +500,7 @@ impl Ledger {
             changes,
         )
         .await?;
-        let view = PlannedItemView::new(&record);
+        let view = PlannedItemView::new(&record, Vec::new());
         complete_created(&mut tx, slot, &view).await?;
         tx.commit().await?;
         Ok(view)
@@ -498,7 +514,8 @@ impl Ledger {
     /// it, whether or not the item exists; [`LedgerError::NotFound`] for an
     /// unknown item; [`LedgerError::Invalid`] for a value the item may not
     /// hold; [`LedgerError::Conflict`] for a new currency on a goal with
-    /// linked splits; storage failures.
+    /// linked splits, or for making a settled bill a budget or income; storage
+    /// failures.
     pub async fn update_planned_item(
         &self,
         actor: &Actor,
@@ -511,8 +528,14 @@ impl Ledger {
         let mut tx = self.store.begin().await?;
         let current = tx.get_planned_item(id).await?;
         let (changes, audited) = patch.changes(&mut tx, &current).await?;
+        let settlements = tx
+            .settlements_of_item(id)
+            .await?
+            .iter()
+            .map(SettlementView::new)
+            .collect();
         if audited.is_empty() {
-            return Ok(PlannedItemView::new(&current));
+            return Ok(PlannedItemView::new(&current, settlements));
         }
         let record = tx.update_planned_item(id, changes, now).await?;
         audit(
@@ -526,7 +549,7 @@ impl Ledger {
         )
         .await?;
         tx.commit().await?;
-        Ok(PlannedItemView::new(&record))
+        Ok(PlannedItemView::new(&record, settlements))
     }
 
     /// Deletes a planned item. Its audit entry keeps every field as it was.
@@ -549,8 +572,9 @@ impl Ledger {
         if tx.goal_has_links(id).await? {
             return Err(LedgerError::Conflict(ProblemCode::Conflict, GOAL_LINKED));
         }
+        let settlements = tx.settlements_of_item(id).await?;
         tx.delete_planned_item(id).await?;
-        let changes = AuditChanges::new()
+        let mut changes = AuditChanges::new()
             .unset("name", current.name.as_str())
             .unset("category", current.category)
             .unset("amount_minor", current.amount.minor_units)
@@ -561,6 +585,9 @@ impl Ledger {
             .unset("active", current.active)
             .unset("schedule", schedule_text(&current.schedule)?)
             .unset("spending", current.spending.map(PlanSpending::as_str));
+        if !settlements.is_empty() {
+            changes = changes.unset("settlements", settlements_value(&settlements)?);
+        }
         audit(
             &mut tx,
             now,
@@ -590,11 +617,12 @@ impl Ledger {
         authorize(actor, Action::ReadHousehold)?;
         let access = self.access.resolve(actor).await?;
         let record = self.store.get_planned_item(id).await?;
-        if plan_item_visible(&access, record.account_hint) {
-            Ok(PlannedItemView::new(&record))
-        } else {
-            Err(LedgerError::NotFound)
+        if !plan_item_visible(&access, record.account_hint) {
+            return Err(LedgerError::NotFound);
         }
+        let settlements = self.store.settlements_of_item(id).await?;
+        let settlements = settlements.iter().map(SettlementView::new).collect();
+        Ok(PlannedItemView::new(&record, settlements))
     }
 
     /// The planned items the actor may see, ordered by id; inactive ones only
@@ -613,10 +641,20 @@ impl Ledger {
         authorize(actor, Action::ReadHousehold)?;
         let access = self.access.resolve(actor).await?;
         let records = self.store.list_planned_items(include_inactive).await?;
+        let mut settlements: BTreeMap<PlannedItemId, Vec<SettlementView>> = BTreeMap::new();
+        for one in self.store.settlements().await? {
+            settlements
+                .entry(one.item)
+                .or_default()
+                .push(SettlementView::new(&one));
+        }
         Ok(records
             .iter()
             .filter(|record| plan_item_visible(&access, record.account_hint))
-            .map(PlannedItemView::new)
+            .map(|record| {
+                let settled = settlements.remove(&record.id).unwrap_or_default();
+                PlannedItemView::new(record, settled)
+            })
             .collect())
     }
 }
@@ -638,6 +676,7 @@ mod tests {
             PlanError::EndBeforeAnchor,
             PlanError::GoalDatesInverted,
             PlanError::GoalMustBeOutflow,
+            PlanError::SettlementOutOfWindow,
         ] {
             assert_eq!(invalid(error).to_string(), error.to_string());
         }

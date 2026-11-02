@@ -67,6 +67,7 @@ fn routes() -> ApiRouter {
             plan_items::update,
             plan_items::delete
         ))
+        .op(routes!(plan_items::settle, plan_items::unsettle))
         .op(routes!(forecast::get))
         .op(routes!(forecast::what_if))
         .op(routes!(reports::plan_vs_actual))

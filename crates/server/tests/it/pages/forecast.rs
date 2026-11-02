@@ -10,6 +10,7 @@ use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
 use crate::forecast::answer::{Golden, golden, insert_pending};
+use crate::forecast::settled::id_of;
 use crate::forecast::unknowns::{fed, reported};
 use crate::forecast::{AS_OF, BALANCE_ON, World, outflow, usd};
 
@@ -350,6 +351,52 @@ async fn firm_says_what_it_means() {
 
     assert!(answer.contains("Firm:"));
     assert!(answer.contains("nothing to warn you about"));
+}
+
+/// The worked example with its water bill settled: the page says so in plain words, and
+/// what it shows is still what the API answers.
+#[tokio::test]
+async fn a_settled_item_is_shown_in_plain_words() {
+    let Golden { world, .. } = golden().await;
+    let water = id_of(&world.forecast().await, "Water");
+    world.settle(&water, "2026-11", "paid").await;
+
+    let body = page(&world).await.body;
+    let answer = text_of(section(&body, "answer"));
+
+    assert!(answer.contains("38,480.00 USD"));
+    assert!(answer.contains("Firm:"));
+    assert!(
+        answer.contains("Water: 120.00 USD for November 2026 isn't counted, marked paid."),
+        "says what was settled"
+    );
+}
+
+/// It stays read-only: nothing on the page acts on a settlement.
+#[tokio::test]
+async fn a_settled_item_has_nothing_to_press() {
+    let Golden { world, .. } = golden().await;
+    let water = id_of(&world.forecast().await, "Water");
+    world.settle(&water, "2026-11", "skipped").await;
+
+    let reply = page(&world).await;
+    let main = &reply.body[reply.body.find("<main").unwrap()..];
+
+    assert!(text_of(main).contains("marked skipped"));
+    assert!(!main.contains("<form"), "no form");
+    assert!(!main.contains("<button"), "no button");
+}
+
+#[tokio::test]
+async fn nothing_settled_says_nothing_of_it() {
+    let Golden { world, .. } = golden().await;
+
+    let answer = text_of(section(&page(&world).await.body, "answer"));
+
+    assert!(
+        !answer.contains("Settled"),
+        "no heading with nothing under it"
+    );
 }
 
 #[tokio::test]

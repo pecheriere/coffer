@@ -11,6 +11,7 @@ mod access;
 pub(crate) mod answer;
 mod budget_month;
 mod charges;
+pub(crate) mod settled;
 mod too_large;
 pub(crate) mod unknowns;
 mod what_if;

@@ -10,6 +10,7 @@
 mod crud;
 mod goal_links;
 mod grants;
+mod settlements;
 mod validation;
 
 use axum::body::Body;

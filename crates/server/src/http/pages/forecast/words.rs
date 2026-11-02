@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
-    AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, LineSource,
+    AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, LineSource, SettledLine,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money, format_minor_units};
-use coffer_domain::plan::CalendarMonth;
+use coffer_domain::plan::{CalendarMonth, SettlementKind};
 use jiff::civil::Date;
 
 /// What the forecast's ids are called. An id with no name, which only a change between
@@ -152,6 +152,20 @@ fn listed(names: &[&str]) -> String {
         [only] => (*only).to_owned(),
         [first @ .., last] => format!("{} and {last}", first.join(", ")),
     }
+}
+
+/// What a person settled, and so what the number leaves out.
+pub(super) fn settled_sentence(line: &SettledLine) -> String {
+    let word = match line.kind {
+        SettlementKind::Paid => "paid",
+        SettlementKind::Skipped => "skipped",
+    };
+    format!(
+        "{}: {} for {} isn't counted, marked {word}.",
+        line.name,
+        money(line.amount),
+        month_name(line.month),
+    )
 }
 
 /// Why there is no number.

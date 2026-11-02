@@ -12,6 +12,7 @@ mod goals;
 mod limits;
 mod merged;
 mod rollover;
+mod settled;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -370,6 +371,7 @@ async fn report_matches_seeded_month() {
             "rolling_average": usd(figures[3]),
             "left_out": usd(0),
             "possible_duplicate": usd(0),
+            "settled": usd(0),
         })
     };
     assert_eq!(

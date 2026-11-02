@@ -18,7 +18,7 @@ use crate::ids::CategoryId;
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending,
-    SafetyFloor,
+    SafetyFloor, SettlementKind,
 };
 
 const MAX_AMOUNT: i64 = 1_000_000_000;
@@ -78,6 +78,23 @@ fn schedule() -> impl Strategy<Value = PlanSchedule> {
     ]
 }
 
+/// A few months around the ones `as_of` picks from, so that they often hold an occurrence
+/// and the window often reaches them.
+fn settled_months() -> impl Strategy<Value = BTreeMap<CalendarMonth, SettlementKind>> {
+    collection::btree_map(
+        (-8..16).prop_map(|offset: i32| {
+            CalendarMonth::of(
+                date(2026, 11, 1)
+                    .checked_add(i64::from(offset).months())
+                    .unwrap(),
+            )
+            .unwrap()
+        }),
+        prop_oneof![Just(SettlementKind::Paid), Just(SettlementKind::Skipped)],
+        0..5,
+    )
+}
+
 /// `categories` is the pool items draw on: few, so that they share.
 fn item(categories: Vec<CategoryId>) -> impl Strategy<Value = ItemInput> {
     (
@@ -86,8 +103,9 @@ fn item(categories: Vec<CategoryId>) -> impl Strategy<Value = ItemInput> {
         0..categories.len(),
         0..6,
         0..MAX_AMOUNT,
+        settled_months(),
     )
-        .prop_map(move |(amount, schedule, category, kind, spent)| {
+        .prop_map(move |(amount, schedule, category, kind, spent, settled)| {
             let is_goal = matches!(schedule, PlanSchedule::Goal { .. });
             let base = ItemInput {
                 category: categories.get(category).copied(),
@@ -99,6 +117,8 @@ fn item(categories: Vec<CategoryId>) -> impl Strategy<Value = ItemInput> {
                 0 if !is_goal => inflow(base),
                 1 => hypothetical(0, base),
                 2 | 3 if is_recurring => budget(base),
+                // Only a stored bill or one-off going out may be settled.
+                _ if !is_goal => ItemInput { settled, ..base },
                 _ => base,
             }
         })
@@ -239,10 +259,55 @@ fn is_stored_budget(item: &ItemInput) -> bool {
         && item.spending == Some(PlanSpending::Budget)
 }
 
+/// What `item` counts for in `[from, to)`: a settled month's occurrences count as nothing.
 fn dated(item: &ItemInput, from: Date, to: Date) -> Result<i128, String> {
+    let mut dates = 0_i128;
+    for on in item.schedule.occurrences(from, to) {
+        let month = CalendarMonth::of(on).map_err(|_| "no month")?;
+        if !item.settled.contains_key(&month) {
+            dates += 1;
+        }
+    }
+    Ok(i128::from(item.amount.minor_units) * dates)
+}
+
+/// What `item` would count for in `[from, to)` were nothing settled, less [`dated`]: the
+/// settled occurrences' whole amount.
+fn settled_amount(item: &ItemInput, from: Date, to: Date) -> Result<i128, String> {
     let dates = item.schedule.occurrences(from, to).len();
     let dates = i128::try_from(dates).map_err(|_| "too many")?;
-    Ok(i128::from(item.amount.minor_units) * dates)
+    Ok(i128::from(item.amount.minor_units) * dates - dated(item, from, to)?)
+}
+
+/// The list says exactly what was taken out, item by item: the settled occurrences from the
+/// first of `as_of`'s month to the window's end, and nothing with none.
+fn check_settled_list(input: &ForecastInput, forecast: &Forecast) -> Result<(), String> {
+    let month_start = input.as_of.first_of_month();
+    let window_ends = window_end(input.as_of, input.horizon_months)?;
+    for item in &input.items {
+        let listed: i128 = forecast
+            .settled
+            .iter()
+            .filter(|line| line.source == item.source)
+            .map(|line| wide(line.amount))
+            .sum();
+        if listed != settled_amount(item, month_start, window_ends)? {
+            return Err("the settled list is not what was taken out".to_owned());
+        }
+    }
+    if forecast.settled.iter().any(|line| line.occurrences == 0) {
+        return Err("a settled line with no occurrence".to_owned());
+    }
+    Ok(())
+}
+
+/// `input` as it would be had no one settled anything.
+fn unsettled(input: &ForecastInput) -> ForecastInput {
+    let mut clear = input.clone();
+    for item in &mut clear.items {
+        item.settled.clear();
+    }
+    clear
 }
 
 /// Checks reductions and unpaid bills against aggregates worked out apart from the
@@ -512,6 +577,38 @@ proptest! {
     fn reductions_spend_each_pool_once(input in input()) {
         let forecast = compute_forecast(&input).unwrap();
         prop_assert_eq!(check_reduction(&input, &forecast), Ok(()), "reduction oracle");
+    }
+
+    #[test]
+    fn the_settled_list_says_what_was_taken_out(input in input()) {
+        let forecast = compute_forecast(&input).unwrap();
+        prop_assert_eq!(check_settled_list(&input, &forecast), Ok(()), "settled oracle");
+    }
+
+    /// A settled occurrence owes nothing and takes no spending, so spending moves on to
+    /// other bills and budgets: the need can only fall, whatever the plan.
+    #[test]
+    fn settling_never_raises_the_need_nor_touches_cash_or_the_floor(input in input()) {
+        let settled = compute_forecast(&input).unwrap();
+        let plain = compute_forecast(&unsettled(&input)).unwrap();
+        for row in &settled.totals {
+            let before = plain.totals.iter().find(|other| other.currency == row.currency);
+            let Some(before) = before else {
+                panic!("settling never adds a currency");
+            };
+            prop_assert!(row.cash_needed.minor_units <= before.cash_needed.minor_units, "need");
+            prop_assert_eq!(row.cash_available, before.cash_available, "cash");
+            prop_assert_eq!(row.floor, before.floor, "floor");
+        }
+        let extra = settled.cautions.iter().filter(|caution| !plain.cautions.contains(caution));
+        for caution in extra {
+            // What a caution says can change with the need: a gap's amount, as spending moves
+            // to another bill, and the first month cash dips below the floor.
+            prop_assert!(
+                matches!(caution, Caution::BillNotSeen { .. } | Caution::CashDipsBelowFloor { .. }),
+                "settling adds no caution of its own"
+            );
+        }
     }
 
     #[test]

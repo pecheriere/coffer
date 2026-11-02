@@ -5,6 +5,8 @@
 //! `projected_cash` and `surplus` carry a sign, and a negative `surplus` is a
 //! shortfall.
 
+use std::collections::BTreeMap;
+
 use jiff::civil::Date;
 use serde::Serialize;
 
@@ -13,6 +15,7 @@ use crate::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAcc
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, SafetyFloor,
+    SettlementKind,
 };
 
 /// Everything one forecast reads, gathered by the caller at one moment.
@@ -103,6 +106,9 @@ pub struct ItemInput {
     pub spending: Option<PlanSpending>,
     /// Spending linked to a goal, positive for money spent. 0 for anything else.
     pub goal_spent_minor: i64,
+    /// The months a person settled it for. Only a stored recurring bill or one-off
+    /// outflow has any: a what-if can't settle, and the ledger refuses anything else.
+    pub settled: BTreeMap<CalendarMonth, SettlementKind>,
 }
 
 /// Where a line of the breakdown comes from.
@@ -210,6 +216,9 @@ pub struct Forecast {
     pub months: Vec<MonthBucket>,
     pub blockers: Vec<Blocker>,
     pub cautions: Vec<Caution>,
+    /// What a person settled, and so what counts as nothing above: in input order, then
+    /// by month. Settling raises no caution of its own, since a person decided.
+    pub settled: Vec<SettledLine>,
 }
 
 /// How far to trust the number.
@@ -308,6 +317,27 @@ pub struct ItemLine {
     /// The sinking fund's own figures, for a goal.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub goal: Option<GoalLine>,
+}
+
+/// One item's occurrences in one month that a person settled: what would have counted, had
+/// they not, as a bill's whole amount or a gap, and taken a share of its category's spending.
+/// A month the window doesn't reach isn't listed, since it changes nothing here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SettledLine {
+    pub source: LineSource,
+    pub name: String,
+    pub item_type: PlanItemType,
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub category: Option<CategoryId>,
+    pub month: CalendarMonth,
+    pub kind: SettlementKind,
+    /// How many of the month's occurrences the window looks at. In `as_of`'s month that
+    /// is those before `as_of` too.
+    pub occurrences: u32,
+    /// The whole amount of `occurrences`. A bill spending had already covered wasn't in
+    /// the number, so the number may differ by less than this.
+    pub amount: Money,
 }
 
 /// A sinking fund's figures.

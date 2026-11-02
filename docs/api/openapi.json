@@ -2300,7 +2300,7 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution, no share of its category's spending. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
@@ -3529,6 +3529,251 @@
         ]
       }
     },
+    "/api/v1/plan-items/{item_id}/settlements/{month}": {
+      "put": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Settles a planned item for one month.",
+        "description": "Records that a recurring bill's or a one-off's occurrences in this month were `paid` some way the forecast can't see, or are `skipped`. In a forecast they count as nothing: no gross, no gap, no `bill_not_seen`, no share of the category's spending. It never changes the item. The forecast lists them in `settled`; plan versus actual keeps them in `planned` and says they are settled. The month must be in the years 1970 to 2200, at most 12 months from today's either way, and hold an occurrence of the item. A budget, a goal and income can't be settled. Sending what the month already says writes nothing and answers with it, who and when included. Another `kind` replaces it. Needs `write`; a token with account grants also needs `all` at `write`, decided before anything is looked up.",
+        "operationId": "settlePlanItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The planned item's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PlannedItemId"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "The month, written `YYYY-MM`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CalendarMonth"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The month's settlement as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item already holds 60 settlements.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "plan"
+        ],
+        "summary": "Removes a planned item's settlement for one month.",
+        "description": "The month's occurrences count again. A month with no settlement answers the same and writes nothing. Any month in the years 1970 to 2200 may be cleared, however far from today, so an item at its limit can make room. Needs `write`; a token with account grants also needs `all` at `write`, decided before anything is looked up.",
+        "operationId": "unsettlePlanItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The planned item's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PlannedItemId"
+            }
+          },
+          {
+            "name": "month",
+            "in": "path",
+            "description": "The month, written `YYYY-MM`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CalendarMonth"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The month has no settlement."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/provider-accounts": {
       "get": {
         "tags": [
@@ -3899,7 +4144,7 @@
           "reports"
         ],
         "summary": "Plan versus actual.",
-        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getPlanVsActual",
         "parameters": [
           {
@@ -6806,7 +7051,8 @@
           "items",
           "months",
           "blockers",
-          "cautions"
+          "cautions",
+          "settled"
         ],
         "properties": {
           "accounts": {
@@ -6867,6 +7113,13 @@
               "$ref": "#/components/schemas/MonthBucket"
             },
             "description": "One bucket per calendar month the window touches."
+          },
+          "settled": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettledLine"
+            },
+            "description": "What a person settled, and so what counts as nothing above: in input order, then\nby month. Settling raises no caution of its own, since a person decided."
           },
           "stale_after_days": {
             "type": "integer",
@@ -7800,6 +8053,7 @@
           "rows",
           "goals",
           "uncategorized",
+          "settled",
           "rollovers",
           "partial_months"
         ],
@@ -7832,6 +8086,13 @@
             },
             "description": "Ordered by month, category and currency. A row with nothing to say is left out."
           },
+          "settled": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettledRow"
+            },
+            "description": "The occurrences a person settled, ordered by month and item: they stay in `planned`,\nand this is why a row's `difference` may be no surprise."
+          },
           "uncategorized": {
             "type": "array",
             "items": {
@@ -7853,7 +8114,8 @@
           "difference",
           "rolling_average",
           "left_out",
-          "possible_duplicate"
+          "possible_duplicate",
+          "settled"
         ],
         "properties": {
           "actual": {
@@ -7888,6 +8150,10 @@
           "rolling_average": {
             "$ref": "#/components/schemas/Money",
             "description": "The mean of `actual` over the window ending this month, zeros included, rounded\nhalf-even."
+          },
+          "settled": {
+            "$ref": "#/components/schemas/Money",
+            "description": "How much of `planned` a person settled for this month: see [`SettledRow`]."
           }
         }
       },
@@ -8191,6 +8457,7 @@
           "active",
           "schedule",
           "spending",
+          "settlements",
           "created_at",
           "updated_at"
         ],
@@ -8238,6 +8505,13 @@
           },
           "schedule": {
             "$ref": "#/components/schemas/PlanSchedule"
+          },
+          "settlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettlementView"
+            },
+            "description": "The months it is settled for, ordered by month: its occurrences in them count as\nnothing in a forecast."
           },
           "spending": {
             "oneOf": [
@@ -8542,6 +8816,150 @@
           "write",
           "admin"
         ]
+      },
+      "SettledLine": {
+        "type": "object",
+        "description": "One item's occurrences in one month that a person settled: what would have counted, had\nthey not, as a bill's whole amount or a gap, and taken a share of its category's spending.\nA month the window doesn't reach isn't listed, since it changes nothing here.",
+        "required": [
+          "source",
+          "name",
+          "item_type",
+          "category",
+          "month",
+          "kind",
+          "occurrences",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The whole amount of `occurrences`. A bill spending had already covered wasn't in\nthe number, so the number may differ by less than this."
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "item_type": {
+            "$ref": "#/components/schemas/PlanItemType"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SettlementKind"
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "name": {
+            "type": "string"
+          },
+          "occurrences": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the month's occurrences the window looks at. In `as_of`'s month that\nis those before `as_of` too.",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineSource"
+          }
+        }
+      },
+      "SettledRow": {
+        "type": "object",
+        "description": "One item's occurrences in one month that a person settled.",
+        "required": [
+          "month",
+          "item",
+          "name",
+          "category",
+          "kind",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The whole amount of the item's occurrences in this month."
+          },
+          "category": {
+            "$ref": "#/components/schemas/CategoryId"
+          },
+          "item": {
+            "$ref": "#/components/schemas/PlannedItemId"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SettlementKind"
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SettlementInput": {
+        "type": "object",
+        "description": "How a month is settled.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SettlementKind",
+            "description": "`paid` for money gone some way the forecast can't see, `skipped` for money that\nwon't go. The forecast treats them alike."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SettlementKind": {
+        "type": "string",
+        "description": "How a planned item's occurrences in one month were settled: `paid` some way the\nforecast can't see, or `skipped`. The forecast treats both alike, and the word\nsays what the person meant.",
+        "enum": [
+          "paid",
+          "skipped"
+        ]
+      },
+      "SettlementView": {
+        "type": "object",
+        "description": "One month a planned item is settled for.",
+        "required": [
+          "month",
+          "kind",
+          "member",
+          "agent",
+          "settled_at"
+        ],
+        "properties": {
+          "agent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentTokenId",
+                "description": "The agent token the member acted through; `null` when signed in."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SettlementKind"
+          },
+          "member": {
+            "$ref": "#/components/schemas/MemberId",
+            "description": "Who settled it."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "settled_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "SimpleFinReconnect": {
         "type": "object",

@@ -35,6 +35,10 @@ use crate::ledger::plan_report::PlanReportQuery;
                    and a removed, revised or possibly duplicate charge there is in that line's \
                    `left_out`. Outflows with no splits are never spending: `uncategorized` lists \
                    them, without invested and illiquid accounts.\n\n\
+                   An occurrence a person settled (`settlePlanItem`) stays in `planned`, since it \
+                   is what was planned: a row's `settled` says how much of `planned` it is, and \
+                   the list `settled` says which item, for which month, and whether `paid` or \
+                   `skipped`.\n\n\
                    `rollovers` has a line for each category and currency with a budget: what was \
                    `budgeted` over the reported months up to today's, what they `spent` on it while \
                    a budget was running, once bills and one-offs dated up to today have taken \

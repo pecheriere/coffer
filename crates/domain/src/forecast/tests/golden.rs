@@ -15,6 +15,8 @@
 //! Needed: 914,000 + 1,100,000 + 1,000,000 = 3,014,000. Surplus: 3,836,000.
 //! With 12,000 spent on Utilities, as `golden_with_the_water_bill_seen` has it: no
 //! gap, outflows 902,000, needed 3,002,000, surplus 3,848,000, firm.
+//! With November's water bill settled, as `golden_with_the_water_bill_settled` has it: the
+//! same numbers, firm, and the answer lists it.
 //! With Groceries on the 14th, the day before `as_of`, as
 //! `golden_with_groceries_dated_before_as_of` has it: Nov, Dec, Jan, Feb = 240,000,
 //! less the 40,000, so outflows 974,000 and surplus 3,776,000.
@@ -31,7 +33,7 @@ use crate::forecast::{
     MonthItem, NotCountedReason,
 };
 use crate::ids::CategoryId;
-use crate::plan::{CalendarMonth, IntervalUnit};
+use crate::plan::{CalendarMonth, IntervalUnit, SettlementKind};
 
 fn golden_household() -> ForecastInput {
     let housing = CategoryId::new();
@@ -346,6 +348,33 @@ fn golden_with_the_water_bill_seen() {
         ],
         "6,850,000 less each month's outflows"
     );
+}
+
+/// The same household with November's water bill settled: no spending seen, but the same
+/// numbers as `golden_with_the_water_bill_seen`, and the answer says what was settled.
+#[test]
+fn golden_with_the_water_bill_settled() {
+    let mut input = golden_household();
+    let water = input.items.get_mut(2).unwrap();
+    water.settled.insert(month("2026-11"), SettlementKind::Paid);
+    let forecast = run(&input);
+    assert_eq!(forecast.status, ForecastStatus::Firm, "a person decided");
+    assert_eq!(forecast.cautions, [], "no caution");
+    assert_eq!(forecast.surplus, Some(usd(3_848_000)), "the answer");
+    let totals = usd_totals(&forecast);
+    assert_eq!(totals.planned_outflows, usd(902_000), "planned outflows");
+    assert_eq!(totals.cash_needed, usd(3_002_000), "cash needed");
+    let water = line(&forecast, "Water");
+    assert_eq!(water.gross, usd(12_000), "January still counts");
+    assert_eq!(water.unpaid, usd(0), "no gap");
+    let [settled] = forecast.settled.as_slice() else {
+        panic!("one settled line");
+    };
+    assert_eq!(settled.name, "Water", "its name");
+    assert_eq!(settled.month, month("2026-11"), "its month");
+    assert_eq!(settled.kind, SettlementKind::Paid, "its kind");
+    assert_eq!(settled.occurrences, 1, "one occurrence");
+    assert_eq!(settled.amount, usd(12_000), "its amount");
 }
 
 /// November 14 has passed, and its 60,000 less the 40,000 spent still counts. Counting

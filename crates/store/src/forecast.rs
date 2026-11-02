@@ -18,9 +18,10 @@ use crate::convert::{corrupt, int, parsed, text};
 use crate::household::fetch_forecast_settings;
 use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
+use crate::settlements;
 use crate::{
     AccountRecord, BalanceSnapshot, ConnectionStatus, PlannedItemRecord, ProviderAccountRecord,
-    Store, StoreError,
+    SettlementRecord, Store, StoreError,
 };
 
 /// Everything a forecast reads.
@@ -33,6 +34,8 @@ pub struct ForecastData {
     /// The active planned items, ordered by id, so a pool that two items draw on the
     /// same day always pays them in the same order.
     pub items: Vec<PlannedItemRecord>,
+    /// Every settlement, ordered by item and month.
+    pub settlements: Vec<SettlementRecord>,
     /// Spending linked to each goal, positive for money spent.
     pub goal_spent: Vec<(PlannedItemId, i64)>,
     pub category_spent: Vec<CategorySpentRow>,
@@ -58,6 +61,8 @@ pub struct CategorySpentRow {
 pub struct PlanReportData {
     /// Every planned item, inactive ones too, ordered by id.
     pub items: Vec<PlannedItemRecord>,
+    /// Every settlement, ordered by item and month.
+    pub settlements: Vec<SettlementRecord>,
     /// Per month, category and currency, ordered by them.
     pub actuals: Vec<MonthActual>,
     /// Per goal and month, ordered by them.
@@ -433,6 +438,7 @@ impl Store {
             .iter()
             .map(planned_item_from_row)
             .collect::<Result<_, _>>()?;
+        let settlements = settlements::all(&mut tx).await?;
         let goal_spent = sqlx::query(GOAL_SPENT)
             .bind(&day)
             .fetch_all(&mut *tx)
@@ -486,6 +492,7 @@ impl Store {
             settings,
             accounts,
             items,
+            settlements,
             goal_spent,
             category_spent,
             loose_ends,
@@ -517,6 +524,7 @@ impl Store {
             .iter()
             .map(planned_item_from_row)
             .collect::<Result<_, _>>()?;
+        let settlements = settlements::all(&mut tx).await?;
         let actuals = sqlx::query(REPORT_ACTUALS)
             .bind(&from)
             .bind(&to_exclusive)
@@ -547,6 +555,7 @@ impl Store {
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(PlanReportData {
             items,
+            settlements,
             actuals,
             goal_spent,
             uncategorized,
