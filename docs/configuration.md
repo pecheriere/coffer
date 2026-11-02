@@ -184,7 +184,7 @@ fields as claims.** With `COFFER_LOG_FORMAT=json`, on one line:
 | `page` | The page's route template, such as `/invite/{token}`, never its real path, query or fragment. A path that is no known page is `other`. |
 | `script` | The path of `coffer.js` or `plaid-link.js`, `none` if the report names no script, and `other` for anything else, another origin included. |
 | `line`, `column` | Numbers in that script, `0` when unknown. |
-| `client_message` | At most 200 characters, with control and format characters removed, whitespace reduced to single spaces, and any word that looks like an address replaced by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. From a page that is `other` it is `[withheld]`. |
+| `client_message` | At most 200 characters of letters, numbers, punctuation and symbols, with whitespace reduced to single spaces. A word shaped like a credential (`eyJ` with a dot, `-----BEGIN`) is replaced by `[token]`, and one that looks like an address by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. It is `[withheld]` from a page that is `other`, and for an `error` whose script is not one of coffer's. |
 
 To find them in JSON logs:
 
@@ -194,8 +194,13 @@ docker logs coffer 2>&1 | jq -Rc 'fromjson? | select(.fields.trust == "untrusted
 
 In the text format, search for `client-reported`.
 
+A report can't be trusted to be free of what your log alerts look for, despite
+the `[token]` rule: if you alert on secrets in logs, ignore events with `trust` =
+`untrusted`.
+
 Limits: 5 reports per client and 20 in all per minute; a body of at most 8 KiB.
-What is over a limit or refused is dropped without a line. At most every 5 minutes,
+Only a report that passes every other check spends the limit. What is over a limit
+or refused is dropped without a line. At most every 5 minutes,
 and only when the next request arrives, one `WARN` event `browser reports dropped`
 gives the counts (`over_limit`, `refused`); a restart loses a count not yet logged.
 Many `over_limit` drops with reports you can't explain mean something on your

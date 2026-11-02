@@ -455,7 +455,7 @@ fn redact_word(word: &str) -> std::borrow::Cow<'_, str> {
 
 /// Whether `c` is a Unicode format character (general category Cf, as of
 /// Unicode 15.1).
-pub(crate) fn is_format_char(c: char) -> bool {
+fn is_format_char(c: char) -> bool {
     matches!(
         c,
         '\u{ad}'

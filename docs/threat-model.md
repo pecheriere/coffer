@@ -169,20 +169,27 @@
   say that a script, a passkey ceremony or the content security policy failed. It
   needs no credentials, since sign-in failures matter most, so anyone on the
   network can call it. It stores nothing, reads no session and sends nothing on.
-  - *Every answer is the same empty 204*, so a caller cannot tell whether a report
-    was kept. Other methods get the router's 405.
+  - *Every answer is the same empty 204*, so its content does not say whether a
+    report was kept. Other methods get the router's 405. Its timing can differ: a
+    request refused before the body is read is answered at once, so on a direct,
+    unbuffered connection a client sending part of a body can tell. That reveals
+    only rules this public source states.
   - *Refused early.* Only the exact content types `application/json` and
     `application/csp-report` are read. A declared or real body over 8 KiB, far
-    below the general 64 KiB, is refused before any parsing. Requests beyond 5 per
-    client or 20 in all per minute are refused before the body is read. The per
-    client limit uses the last `X-Forwarded-For` entry, which the proxy adds; the
-    global limit holds whatever a client claims.
+    below the general 64 KiB, is refused before any parsing. Only a report that
+    passes every check then spends the limit of 5 per client and 20 in all per
+    minute, so another site's page or junk cannot silence a real browser, and the
+    size limit bounds what refusing them costs. The per client limit uses the last
+    `X-Forwarded-For` entry, which the proxy adds; the global limit holds whatever
+    a client claims.
   - *Forged lines.* The event has a fixed shape and says it is client-reported and
     untrusted. `kind`, `page` and `script` come from fixed lists, and a CSP report's
     text is built from fixed values, so none of them holds client text. The only
-    client text is the message of a script report, which loses control and format
-    characters and has its whitespace reduced to single spaces, and which the log
-    formats quote or encode. A test sends CR, LF, ANSI escapes and JSON-breaking
+    client text is the message of a script report, which keeps only letters,
+    numbers, punctuation and symbols, with whitespace reduced to single spaces, and
+    which the log formats quote or encode. So a variation selector or other
+    invisible character cannot hide text from a reader while an agent reading the
+    log sees it. A test sends CR, LF, ANSI escapes and JSON-breaking
     text through the real binary in both formats.
   - *Tokens in URLs.* A page is logged only as its route template, such as
     `/invite/{token}`, and a path outside the list as `other`, so no query,
@@ -405,18 +412,33 @@
     adds none, all clients share one limit.
 - **A browser report's message can hold data from the page.** A browser's error
   text can quote what a script was working on, and it reaches the log, up to 200
-  characters. coffer's own code must never put an amount or a name in an error's
-  message: `coffer.js` reports only a browser's text for an error and the name and
-  text of an `Error`, and for a refused request only the status, not the server's
-  text; `plaid-link.js` reports
-  fixed texts and Plaid's error code, never Plaid's message. A message is logged
-  only from a page in the list in `http/browser_reports/fields.rs`, which holds
-  only pages without financial data, as the spec has it for v1. **The forecast
-  page will show amounts, so it must stay out of that list:** a report from it, or
-  from any page not listed, has `page` `other` and its message `[withheld]`, so a
-  new page is safe until someone decides otherwise. A word without a `/`, such as a
-  bare token, is not recognized as an address. coffer's own code puts no token in
-  an error's message.
+  characters. So a message is kept only if it comes from coffer's own code, which
+  must never put an amount or a name in an error's message: `coffer.js` reports
+  only a browser's text for an error and the name and text of an `Error`, and for a
+  refused request only the status, not the server's text; `plaid-link.js` reports
+  fixed texts and Plaid's error code, never Plaid's message. An `error` whose script
+  is not one of coffer's, such as a password manager's, is logged with its message
+  `[withheld]`. A message is also kept only from a page in the list in
+  `http/browser_reports/fields.rs`. Some of those pages show names or provider
+  accounts, which is safe only because coffer's code never reads them into an
+  error. **The forecast page will show amounts, so it stays out of that list if its
+  scripts handle them:** a report from any page not listed has `page` `other` and
+  its message `[withheld]`, so a new page is safe until someone decides otherwise.
+  What is left:
+  - An `unhandled_rejection` names no script, so one from another script on a
+    listed page keeps its message, which could hold page content. Withholding them
+    all would lose the rejections of coffer's own code.
+  - A word without a `/`, such as a bare token, is not recognized as an address.
+    coffer's own code puts no token in an error's message.
+- **A report can't be trusted to be free of what log alerts look for.** A message
+  word shaped like a credential (`eyJ` with a dot, or `-----BEGIN`) is replaced by
+  `[token]`, so that anyone on the network cannot set off the operator's alert on
+  secrets in logs with a few bytes. Other shapes pass. An alert on secrets in logs
+  should ignore events with `trust` = `untrusted`.
+- **No time limit on reading a request's body.** A client that sends a report's body
+  slowly holds a connection and a task for as long as it likes, as on every other
+  POST route. It holds at most 8 KiB and writes nothing to the log. The network
+  boundary and the proxy's own timeouts are the mitigation.
 - **The expected Plaid violation hides its twin.** A `style-src-elem` violation for
   inline content on a Link page is taken as Plaid's start-up check and dropped,
   uncounted. A second such violation on the page, the sign of a real change in

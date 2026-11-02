@@ -35,7 +35,8 @@
       reports += 1;
       const body = JSON.stringify({
         kind,
-        message: String(message).slice(0, MAX_MESSAGE),
+        // By characters: cutting a pair in two would leave half a character.
+        message: Array.from(String(message)).slice(0, MAX_MESSAGE).join(''),
         script: scriptPath(where.script),
         line: Number.isInteger(where.line) && where.line >= 0 ? where.line : 0,
         column: Number.isInteger(where.column) && where.column >= 0 ? where.column : 0,

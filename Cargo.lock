@@ -470,6 +470,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "unicode-properties",
  "url",
  "utoipa",
  "utoipa-axum",

@@ -175,3 +175,16 @@ async fn a_cross_site_preflight_is_not_granted() {
             .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
     );
 }
+
+#[tokio::test]
+async fn the_answer_carries_the_security_headers() {
+    let (_server, mut browser) = browser().await;
+    let reply = post_script(&mut browser, &script_report("answer-headers")).await;
+    assert_eq!(
+        reply.header(header::CONTENT_SECURITY_POLICY),
+        "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; \
+         form-action 'self'; base-uri 'none'; report-uri /browser-reports"
+    );
+    assert_eq!(reply.header(header::REFERRER_POLICY), "same-origin");
+    assert_eq!(reply.header(header::X_CONTENT_TYPE_OPTIONS), "nosniff");
+}

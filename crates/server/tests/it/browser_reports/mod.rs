@@ -16,6 +16,7 @@ mod rates;
 
 use axum::body::Body;
 use axum::http::{Method, header};
+use coffer_server::assets::JS_COFFER_JS;
 use coffer_server::testkit::browser::{Browser, Reply};
 use coffer_server::testkit::{TEST_PUBLIC_URL, TestServer, captured_log_text};
 use serde_json::{Value, json};
@@ -26,7 +27,7 @@ const CSP: &str = "application/csp-report";
 
 /// A body the endpoint would log, with `marker` as its message.
 fn script_report(marker: &str) -> Value {
-    json!({ "kind": "error", "message": marker, "page": "/login" })
+    json!({ "kind": "error", "message": marker, "script": JS_COFFER_JS.url, "page": "/login" })
 }
 
 /// A browser's CSP report for a violation on `path`.

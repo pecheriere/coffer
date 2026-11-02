@@ -3,12 +3,18 @@
 //! nothing sent anywhere else.
 //!
 //! It has to work before sign-in, so anyone on the network can call it. Each
-//! request therefore goes through, in this order, and costs almost nothing
-//! once it is refused: an exact content type, the origin rule below, the
-//! declared size, the [`limiter`], the real size, and the parser. Only then
-//! is one event logged, whose fields [`fields`] allow-lists. The answer is
-//! always the same empty 204, so a caller learns nothing, not even whether
-//! the report was kept.
+//! request therefore goes through, in this order: an exact content type, the
+//! origin rule below, the declared size, the real size, the parser, and only
+//! then the [`limiter`]. So a refused request spends nothing of the limits, and
+//! neither another site's page nor junk can silence a real browser; the size
+//! limit bounds what that costs. A report kept writes one event, whose fields
+//! [`fields`] allow-lists.
+//!
+//! The answer is always the same empty 204, so its content says nothing, not
+//! even whether the report was kept. Its timing can: a request refused before
+//! the body is read is answered at once, so on a direct, unbuffered connection
+//! a client that sends only part of a body can tell which it was. That reveals
+//! only the rules this public source already states.
 //!
 //! This route is exempt from the router's origin rule, because a browser may
 //! send a CSP report with no `Origin`, and applies its own:
@@ -116,9 +122,6 @@ impl Intake {
         if !self.origin_allowed(format, &parts.headers) || declares_too_much(&parts.headers) {
             return Outcome::Refused;
         }
-        if !self.limiter.admit(client_of(&parts.headers), now) {
-            return Outcome::OverLimit;
-        }
         let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else {
             return Outcome::Refused;
         };
@@ -130,10 +133,16 @@ impl Intake {
                 .ok()
                 .and_then(|envelope| envelope.into_report(&self.public_url)),
         };
-        match report {
-            Some(report) if report.is_expected() => Outcome::Expected,
-            Some(report) => Outcome::Log(report),
-            None => Outcome::Refused,
+        let Some(report) = report else {
+            return Outcome::Refused;
+        };
+        if report.is_expected() {
+            return Outcome::Expected;
+        }
+        if self.limiter.admit(client_of(&parts.headers), now) {
+            Outcome::Log(report)
+        } else {
+            Outcome::OverLimit
         }
     }
 

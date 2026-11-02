@@ -1,11 +1,12 @@
 //! What a logged report holds: allow-listed fields, cut and cleaned, and never
 //! a token, a query or another origin's address.
 
+use axum::http::{StatusCode, header};
 use coffer_server::assets::{JS_COFFER_JS, JS_PLAID_LINK_JS};
-use coffer_server::testkit::log_marker;
+use coffer_server::testkit::{TEST_PUBLIC_URL, log_marker};
 use serde_json::{Value, json};
 
-use super::{browser, log_since, post_script, script_report, the_event};
+use super::{JSON, browser, log_since, post, post_script, script_report, the_event};
 
 async fn event_for(body: &Value, marker: &str) -> String {
     let (_server, mut browser) = browser().await;
@@ -101,6 +102,133 @@ async fn control_and_format_characters_are_removed_from_a_message() {
     assert!(
         event.contains("client_message=\"clean-a clean-b[31mclean-cclean-d clean-e clean-f\""),
         "{event}"
+    );
+}
+
+#[tokio::test]
+async fn invisible_characters_are_removed_from_a_message() {
+    for (index, invisible) in [
+        '\u{e0101}',
+        '\u{fe01}',
+        '\u{3164}',
+        '\u{115f}',
+        '\u{2800}',
+        '\u{ffa0}',
+        '\u{e000}',
+        '\u{ffff}',
+        '\u{34f}',
+        '\u{301}',
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let marker = format!("seen-{index}-");
+        let raw = format!("{marker}{invisible}{invisible}hidden");
+        let event = event_for(&script_report(&raw), &marker).await;
+        let kept = format!("client_message=\"{marker}hidden\"");
+        assert!(
+            event.contains(&kept),
+            "U+{:X}: {event}",
+            u32::from(invisible)
+        );
+    }
+}
+
+#[tokio::test]
+async fn visible_text_of_other_languages_is_kept() {
+    let raw = "kept-marker é ß 日本語 €5 « ok » — 😀";
+    let event = event_for(&script_report(raw), "kept-marker").await;
+    assert!(
+        event.contains(&format!("client_message=\"{raw}\"")),
+        "{event}"
+    );
+}
+
+#[tokio::test]
+async fn a_word_shaped_like_a_credential_loses_it() {
+    for (index, word) in [
+        "eyJaaaaaaaaaa.bbbbbbbbbb.",
+        "eyJaaaaaaaaaa.bbbbbbbbbb.cccccccccc",
+        "key=eyJaaaaaaaaaa.bbbbbbbbbb",
+        "eyJ\u{200b}aaaaaaaaaa\u{e0101}.bbbbbbbbbb",
+        "-----BEGIN",
+        "x-----BEGIN",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let marker = format!("cred-{index}");
+        let raw = format!("{marker} {word} done");
+        let event = event_for(&script_report(&raw), &marker).await;
+        assert!(
+            event.contains(&format!("client_message=\"{marker} [token] done\"")),
+            "{event}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_word_that_only_starts_like_a_credential_is_kept() {
+    let raw = "plain-marker eyJust words.";
+    let event = event_for(&script_report(raw), "plain-marker").await;
+    assert!(event.contains("plain-marker eyJust words."), "{event}");
+}
+
+/// What a script's cut used to leave: half a character, which JSON can carry
+/// and a Rust string cannot.
+#[tokio::test]
+async fn a_message_ending_in_half_a_character_is_kept() {
+    let (_server, mut browser) = browser().await;
+    let body = r#"{"kind":"passkey","message":"half-char \ud83d","page":"/login"}"#;
+    let headers = [
+        (header::CONTENT_TYPE, JSON),
+        (header::ORIGIN, TEST_PUBLIC_URL),
+    ];
+    post(&mut browser, &headers, body).await;
+    assert!(the_event("half-char").contains("half-char"));
+}
+
+#[tokio::test]
+async fn a_message_that_is_not_text_drops_the_report() {
+    let (_server, mut browser) = browser().await;
+    let start = log_marker();
+    for message in [
+        json!(12),
+        json!(["not-text-marker"]),
+        json!({ "a": "not-text-marker" }),
+    ] {
+        let mut body = script_report("x");
+        body["message"] = message;
+        body["kind"] = json!("plaid");
+        post_script(&mut browser, &body).await;
+    }
+    assert!(!log_since(&start).contains("kind=\"plaid\""));
+}
+
+/// A password manager's or other extension's script can throw text holding
+/// the page's content. Only coffer's own scripts are known not to.
+#[tokio::test]
+async fn an_error_from_a_script_not_coffer_s_withholds_its_message() {
+    let (_server, mut browser) = browser().await;
+    let start = log_marker();
+    for script in [
+        Some("chrome-extension://abcdef/content.js"),
+        Some("https://cdn.plaid.com/link/v2/stable/link-initialize.js"),
+        Some("other"),
+        None,
+    ] {
+        let mut body = json!({ "kind": "error", "message": "page-content", "page": "/login" });
+        if let Some(script) = script {
+            body["script"] = json!(script);
+        }
+        post_script(&mut browser, &body).await;
+    }
+    let log = log_since(&start);
+    assert!(!log.contains("page-content"), "{log}");
+    assert_eq!(
+        log.matches("client_message=\"[withheld]\"").count(),
+        4,
+        "{log}"
     );
 }
 
@@ -268,8 +396,35 @@ async fn any_other_script_is_other() {
     {
         let marker = format!("script-other-{index}");
         let mut body = script_report(&marker);
+        // Any kind but `error`, which would also withhold the message.
+        body["kind"] = json!("passkey");
         body["script"] = json!(script);
         let event = event_for(&body, &marker).await;
         assert!(event.contains("script=\"other\""), "{script}: {event}");
+    }
+}
+
+/// axum cannot list a router's routes, so the table can't be compared with
+/// them. A page missing from it is safe (`other`, message withheld), so what
+/// this catches is the reverse: an entry whose route has gone. The Link pages
+/// exist only on a server configured for Plaid.
+#[tokio::test]
+async fn the_pages_named_in_the_table_exist() {
+    let (_server, mut browser) = browser().await;
+    for page in [
+        "/login",
+        "/setup/x",
+        "/invite/x",
+        "/account",
+        "/connections",
+        "/admin/members",
+        "/admin/invites",
+        "/admin/household",
+    ] {
+        assert_ne!(
+            browser.get(page).await.status,
+            StatusCode::NOT_FOUND,
+            "{page}"
+        );
     }
 }

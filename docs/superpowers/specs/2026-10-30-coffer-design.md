@@ -318,7 +318,9 @@ The last admin cannot be disabled or demoted.
 
 ### 6.4 Web pages (v1, minimal)
 
-Server-rendered, no SPA, minimal JS only for WebAuthn ceremonies. Pages:
+Server-rendered, no SPA, minimal JS only for WebAuthn ceremonies, Plaid Link,
+small page helpers such as copy buttons, and reporting browser errors to
+coffer's own log (`docs/configuration.md`, "Browser reports"). Pages:
 setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
 No financial data pages in v1. (Connections get a page because pasting a

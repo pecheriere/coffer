@@ -2,11 +2,14 @@
 //! set of values, a small number, or the one bit of client text, which
 //! [`clean_message`] cleans and cuts.
 
+use std::fmt;
+
 use serde::Deserialize;
+use serde::de::{Deserializer, Error, Visitor};
+use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory as _};
 use url::Url;
 
 use crate::assets;
-use crate::sync::provider::is_format_char;
 
 /// The most characters logged of a client's message.
 const MESSAGE_CHARS: usize = 200;
@@ -19,6 +22,12 @@ const NONE: &str = "none";
 const WITHHELD: &str = "[withheld]";
 /// Stands for a word that looks like an address, which may hold a link's token.
 const URL_WORD: &str = "[url]";
+/// Stands for a word shaped like a credential, which log alerts look for.
+const TOKEN_WORD: &str = "[token]";
+
+/// Letters and symbols that show nothing: the Hangul fillers and the blank
+/// Braille pattern.
+const BLANK_LOOKING: [char; 5] = ['\u{115f}', '\u{1160}', '\u{2800}', '\u{3164}', '\u{ffa0}'];
 
 const LINK_NEW: &str = "/connections/plaid/new";
 const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
@@ -26,10 +35,12 @@ const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 /// The pages that run coffer's scripts, by route. A page is logged only as
 /// one of these, so a link's token or an id in its path never reaches the log.
 ///
-/// **A message is logged only from a page listed here, so list only pages that
-/// show no financial data.** A page showing amounts or names, such as the
-/// coming forecast page, stays out, so that a report from it says only that
-/// something failed.
+/// Some of them show names or provider accounts. Listing them is safe because
+/// a message is logged only from coffer's own code (see
+/// [`ScriptReport::into_report`]) and that code has no path to that data: it
+/// never reads what a page shows into an error. **A page whose scripts handle
+/// amounts or names breaks that, so it stays out**, as the coming forecast page
+/// must if it does, and a report from it says only that something failed.
 const PAGES: [&str; 10] = [
     "/login",
     "/setup/{token}",
@@ -96,7 +107,7 @@ impl Kind {
 #[serde(deny_unknown_fields)]
 pub(super) struct ScriptReport {
     kind: Kind,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lossy_text")]
     message: String,
     #[serde(default)]
     script: String,
@@ -109,21 +120,47 @@ pub(super) struct ScriptReport {
 }
 
 impl ScriptReport {
+    /// The message is kept only when it is known to come from coffer's own code:
+    /// from a page in [`PAGES`] and, for an error, which names its script, from
+    /// one of coffer's scripts. A password manager's script, say, can throw text
+    /// holding the page's content.
     pub(super) fn into_report(self, public_url: &Url) -> Report {
         let page = page_template(public_url, &self.page);
+        let script = script_path(public_url, &self.script);
+        let foreign_error = self.kind == Kind::Error && (script == OTHER || script == NONE);
         Report {
             kind: self.kind,
-            message: if page == OTHER {
+            message: if page == OTHER || foreign_error {
                 WITHHELD.to_owned()
             } else {
                 clean_message(&self.message)
             },
-            script: script_path(public_url, &self.script),
+            script,
             line: self.line,
             column: self.column,
             page,
         }
     }
+}
+
+/// A JSON string as text, whatever it holds: half a character, which JSON can
+/// carry and a Rust string cannot, becomes U+FFFD rather than losing the report.
+fn lossy_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    struct LossyText;
+
+    impl Visitor<'_> for LossyText {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string")
+        }
+
+        fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<String, E> {
+            Ok(String::from_utf8_lossy(bytes).into_owned())
+        }
+    }
+
+    deserializer.deserialize_bytes(LossyText)
 }
 
 /// The body of a browser's `report-uri` report. Browsers add fields of their
@@ -296,21 +333,26 @@ fn blocked_class(public_url: &Url, raw: &str) -> &'static str {
 
 /// A client's message, safe to log:
 /// - every run of whitespace, line separators included, becomes one space;
-/// - control characters and Unicode format characters go, so nothing can start
-///   a new line, reach a terminal or hide what a reader sees;
-/// - a word that looks like an address becomes [`URL_WORD`], since a link's
-///   token could be in it;
+/// - only letters, numbers, punctuation and symbols stay, so nothing can start a
+///   new line, reach a terminal or hide text from a reader. That leaves out
+///   combining marks, so some scripts lose their vowels: this is for diagnosis;
+/// - a word shaped like a credential becomes [`TOKEN_WORD`], so that a report
+///   cannot set off a log alert on secrets, and one that looks like an address
+///   becomes [`URL_WORD`], since a link's token could be in it;
 /// - the result is cut to [`MESSAGE_CHARS`] characters.
 fn clean_message(raw: &str) -> String {
     let words: Vec<String> = raw
         .split_whitespace()
         .map(|word| {
             word.chars()
-                .filter(|&c| !c.is_control() && !is_format_char(c))
+                .filter(|&c| is_printable(c))
                 .collect::<String>()
         })
+        .filter(|word| !word.is_empty())
         .map(|word| {
-            if looks_like_address(&word) {
+            if looks_like_credential(&word) {
+                TOKEN_WORD.to_owned()
+            } else if looks_like_address(&word) {
                 URL_WORD.to_owned()
             } else {
                 word
@@ -318,6 +360,21 @@ fn clean_message(raw: &str) -> String {
         })
         .collect();
     words.join(" ").chars().take(MESSAGE_CHARS).collect()
+}
+
+fn is_printable(c: char) -> bool {
+    matches!(
+        c.general_category_group(),
+        GeneralCategoryGroup::Letter
+            | GeneralCategoryGroup::Number
+            | GeneralCategoryGroup::Punctuation
+            | GeneralCategoryGroup::Symbol
+    ) && !BLANK_LOOKING.contains(&c)
+}
+
+/// A JSON Web Token's start and dots, or a key file's header.
+fn looks_like_credential(word: &str) -> bool {
+    word.contains("-----BEGIN") || (word.contains("eyJ") && word.contains('.'))
 }
 
 fn looks_like_address(word: &str) -> bool {
@@ -329,9 +386,10 @@ fn looks_like_address(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::{ProptestConfig, any, proptest};
+    use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory as _};
     use url::Url;
 
-    use super::{MESSAGE_CHARS, clean_message, is_format_char, matches_template, page_template};
+    use super::{MESSAGE_CHARS, clean_message, matches_template, page_template};
 
     fn public_url() -> Url {
         Url::parse("https://coffer.test").unwrap()
@@ -360,16 +418,44 @@ mod tests {
         assert_eq!(clean_message(" \r\n\t "), "");
     }
 
+    /// Nothing that can break a log line or hide from a reader, in the
+    /// categories themselves and not through the function under test.
+    fn assert_safe(cleaned: &str) {
+        assert!(cleaned.chars().count() <= MESSAGE_CHARS);
+        assert!(!cleaned.contains("  ") && cleaned.trim() == cleaned);
+        for c in cleaned.chars() {
+            let group = c.general_category_group();
+            assert!(
+                c == ' '
+                    || matches!(
+                        group,
+                        GeneralCategoryGroup::Letter
+                            | GeneralCategoryGroup::Number
+                            | GeneralCategoryGroup::Punctuation
+                            | GeneralCategoryGroup::Symbol
+                    ),
+                "U+{:X}",
+                u32::from(c)
+            );
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(200))]
 
-        /// Whatever is sent, nothing that can break a log line is left.
         #[test]
         fn a_cleaned_message_is_always_safe(raw in any::<String>()) {
+            assert_safe(&clean_message(&raw));
+        }
+
+        /// Random text rarely holds these, so they get a run of their own.
+        #[test]
+        fn a_message_of_invisible_characters_is_always_safe(
+            raw in "[a-z \\x{e0100}-\\x{e01ef}\\x{fe00}-\\x{fe0f}\\x{300}-\\x{36f}\\x{115f}\\x{1160}\\x{3164}\\x{ffa0}\\x{2800}\\x{e000}-\\x{f8ff}\\x{202a}-\\x{202e}]{0,300}",
+        ) {
             let cleaned = clean_message(&raw);
-            assert!(cleaned.chars().count() <= MESSAGE_CHARS);
-            assert!(cleaned.chars().all(|c| !c.is_control() && !is_format_char(c)));
-            assert!(cleaned.chars().all(|c| c == ' ' || !c.is_whitespace()));
+            assert_safe(&cleaned);
+            assert!(cleaned.chars().all(|c| c == ' ' || c.is_ascii_lowercase()), "{cleaned}");
         }
     }
 }

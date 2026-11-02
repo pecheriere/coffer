@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use coffer_server::assets::JS_COFFER_JS;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -123,7 +124,13 @@ async fn post(addr: SocketAddr, body: &str) -> String {
 async fn hostile_log(env: &[(&str, &str)]) -> Vec<String> {
     let serving = Serving::start(env);
     let addr = listen_address(&serving.wait_for("coffer is serving").await);
-    let body = json!({ "kind": "error", "message": HOSTILE, "page": "/login" }).to_string();
+    let body = json!({
+        "kind": "error",
+        "message": HOSTILE,
+        "script": JS_COFFER_JS.url,
+        "page": "/login",
+    })
+    .to_string();
     assert_eq!(post(addr, &body).await, "HTTP/1.1 204 No Content");
     serving.wait_for("hostile-start").await;
     serving.lines()

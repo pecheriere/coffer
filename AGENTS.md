@@ -134,9 +134,10 @@ worktree when its branch has merged.
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the
   threat model's accepted risks.
-- A page showing financial data stays out of `PAGES` in
+- A page whose scripts handle amounts or names stays out of `PAGES` in
   `http/browser_reports/fields.rs`, so a browser report's free text from it is
-  never logged. The threat model says why.
+  never logged, and first-party scripts never put page data in an error's
+  message. The threat model says why.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 
