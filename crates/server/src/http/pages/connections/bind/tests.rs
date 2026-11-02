@@ -46,6 +46,7 @@ fn drawn(binding: &Binding, bound: &AccountView) -> String {
         institution: None,
         currency: "USD".to_owned(),
         kind_hint: None,
+        suggested_kind: None,
         account: Some(bound.id),
         balance: None,
         error: None,

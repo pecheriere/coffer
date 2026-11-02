@@ -56,8 +56,8 @@ pub struct NewLinkedAccountRequest {
     /// 1 to 100 characters, without control characters; by default the
     /// provider account's name.
     pub name: Option<String>,
-    /// By default the kind the provider suggests; required when it suggests
-    /// none.
+    /// By default `kind_hint`, the kind the provider reports; required when it reports none.
+    /// `suggested_kind` is never the default: to use it, send it here.
     pub kind: Option<AccountKind>,
     /// A chosen liquidity class; by default the kind's.
     pub liquidity: Option<LiquidityClass>,
@@ -153,7 +153,9 @@ pub(super) async fn bind(
     description = "Creates an account in the provider account's currency, exactly as \
                    `createAccount` does, and binds the provider account to it, in one step. \
                    The records synced while it was unbound become the account's transactions \
-                   and the balances reported meanwhile its history. \
+                   and the balances reported meanwhile its history. With no `kind` it takes the \
+                   provider's `kind_hint`, and without one is refused with a 422: \
+                   `suggested_kind` is a guess from the name and is never applied. \
                    Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(ProviderAccountPath),

@@ -34,6 +34,9 @@ use super::FormKind;
 
 pub(super) const KIND_UNKNOWN: &str = "Choose one of the account kinds in the list.";
 const ACCOUNT_UNKNOWN: &str = "Choose the account to link to.";
+/// Under a kind preselected from the provider's name, which is only a guess.
+const SUGGESTED: &str =
+    "Suggested from the account's name, so check it: the kind decides what counts as cash.";
 /// The longest account name, in characters; the form's `maxlength`.
 const NAME_CHARS: usize = 100;
 
@@ -143,6 +146,9 @@ impl Binding {
         };
         let id = account.id;
         let name: String = account.name.chars().take(NAME_CHARS).collect();
+        // Submitting is the member's confirmation, of a value they can see: what the form posts is
+        // the only kind that a guess ever reaches the service as.
+        let preselected = account.kind_hint.or(account.suggested_kind);
         html! {
             details.item-detail open[unfolded] {
                 summary { "Bind to an account" }
@@ -154,15 +160,15 @@ impl Binding {
                             maxlength=(NAME_CHARS) required;
                     }
                     (kind_field(id, &html! {
-                        @if account.kind_hint.is_none() {
+                        @if preselected.is_none() {
                             option value="" selected disabled { "Choose a kind" }
                         }
                         @for kind in AccountKind::ALL {
-                            option value=(kind.as_str()) selected[account.kind_hint == Some(kind)] {
+                            option value=(kind.as_str()) selected[preselected == Some(kind)] {
                                 (kind_label(kind))
                             }
                         }
-                    }))
+                    }, account.suggested_kind.map(|_| SUGGESTED)))
                     label.field {
                         "Whose money is it?"
                         select .input name="belongs_to" {

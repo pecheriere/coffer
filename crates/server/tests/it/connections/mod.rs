@@ -14,6 +14,7 @@ mod binding;
 mod credentials;
 mod kept_balances;
 mod removal;
+mod suggestion;
 mod sync_limits;
 
 use axum::body::Body;

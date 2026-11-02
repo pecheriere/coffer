@@ -14,7 +14,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
-use coffer_domain::accounts::AccountKind;
 use coffer_domain::ids::MemberId;
 use jiff::SignedDuration;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -24,6 +23,7 @@ use super::client::{
     PlaidAccount, PlaidAccounts, PlaidClient, PlaidError, PlaidTransaction, SyncPage,
     UnreadableAccount,
 };
+use super::kinds::kind_hint;
 use crate::sync::apply::Coverage;
 use crate::sync::provider::{
     Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider,
@@ -505,22 +505,6 @@ fn transaction(record: PlaidTransaction) -> ProviderTransaction {
     }
 }
 
-/// What Plaid's `type` and `subtype` suggest the account is.
-fn kind_hint(kind: &str, subtype: Option<&str>) -> Option<AccountKind> {
-    match (kind, subtype) {
-        ("depository", Some("checking")) => Some(AccountKind::Checking),
-        ("depository", Some("savings")) => Some(AccountKind::Savings),
-        ("credit", _) => Some(AccountKind::CreditCard),
-        ("loan", Some("mortgage")) => Some(AccountKind::Mortgage),
-        ("loan", _) => Some(AccountKind::Loan),
-        ("investment", Some("brokerage")) => Some(AccountKind::Brokerage),
-        ("investment", Some("401k" | "403b" | "ira" | "roth" | "pension")) => {
-            Some(AccountKind::Retirement)
-        }
-        _ => None,
-    }
-}
-
 /// The provider error an error during a fetch stands for: as
 /// [`provider_error`], and an Item that is dead needs its member too.
 fn fetch_error(err: PlaidError) -> ProviderError {
@@ -622,13 +606,12 @@ impl Provider for Plaid {
 
 #[cfg(test)]
 mod tests {
-    use coffer_domain::accounts::AccountKind;
     use coffer_domain::money::DecimalAmount;
     use jiff::civil::date;
 
     use super::{
         ACCOUNT_NOT_LISTED, ACCOUNT_UNREADABLE, ACCOUNT_WITHOUT_ID, Bucket, DATA_CHANGED, Gathered,
-        MAX_RECORDS, account_data, kind_hint, provider_error, storable_cursor,
+        MAX_RECORDS, account_data, provider_error, storable_cursor,
     };
     use crate::sync::plaid::client::{
         PlaidAccount, PlaidAccounts, PlaidError, PlaidTransaction, RemovedTransaction, SyncPage,
@@ -757,35 +740,6 @@ mod tests {
             ),
             "more records than a sync accepts are refused"
         );
-    }
-
-    #[test]
-    fn kind_hints() {
-        for (kind, subtype, expected) in [
-            ("depository", Some("checking"), Some(AccountKind::Checking)),
-            ("depository", Some("savings"), Some(AccountKind::Savings)),
-            ("depository", Some("cd"), None),
-            ("depository", None, None),
-            ("credit", Some("credit card"), Some(AccountKind::CreditCard)),
-            ("credit", None, Some(AccountKind::CreditCard)),
-            ("loan", Some("mortgage"), Some(AccountKind::Mortgage)),
-            ("loan", Some("student"), Some(AccountKind::Loan)),
-            ("loan", None, Some(AccountKind::Loan)),
-            (
-                "investment",
-                Some("brokerage"),
-                Some(AccountKind::Brokerage),
-            ),
-            ("investment", Some("401k"), Some(AccountKind::Retirement)),
-            ("investment", Some("403b"), Some(AccountKind::Retirement)),
-            ("investment", Some("ira"), Some(AccountKind::Retirement)),
-            ("investment", Some("roth"), Some(AccountKind::Retirement)),
-            ("investment", Some("pension"), Some(AccountKind::Retirement)),
-            ("investment", Some("hsa"), None),
-            ("other", None, None),
-        ] {
-            assert_eq!(kind_hint(kind, subtype), expected, "{kind} {subtype:?}");
-        }
     }
 
     /// A passing failure is `Unavailable`, a refusal `Invalid`, and neither

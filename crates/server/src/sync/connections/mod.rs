@@ -11,7 +11,7 @@
 //! value is dropped at once). No audit entry,
 //! log line, error or view ever holds them.
 
-use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
+use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass, suggest_kind};
 use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
@@ -93,6 +93,9 @@ pub struct ProviderAccountView {
     /// The kind the provider suggests, if any.
     #[schema(required)]
     pub kind_hint: Option<AccountKind>,
+    /// A guess from the provider's name. Never applied: send `kind`.
+    #[schema(required)]
+    pub suggested_kind: Option<AccountKind>,
     /// The coffer account it is bound to; `null` while unbound.
     #[schema(required)]
     pub account: Option<AccountId>,
@@ -107,6 +110,12 @@ pub struct ProviderAccountView {
 
 impl From<ProviderAccountRecord> for ProviderAccountView {
     fn from(record: ProviderAccountRecord) -> Self {
+        // Computed here, at read, and kept nowhere (spec §8.11 B12).
+        let suggested_kind = if record.account.is_none() && record.kind_hint.is_none() {
+            suggest_kind(&record.name)
+        } else {
+            None
+        };
         Self {
             id: record.id,
             connection: record.connection,
@@ -114,6 +123,7 @@ impl From<ProviderAccountRecord> for ProviderAccountView {
             institution: record.institution,
             currency: record.currency_raw,
             kind_hint: record.kind_hint,
+            suggested_kind,
             account: record.account,
             balance: record.last_balance.map(|balance| RawBalanceView {
                 on: balance.on,

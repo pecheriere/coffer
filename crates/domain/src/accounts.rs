@@ -1,6 +1,7 @@
 //! Account classification and validated account and connection names.
 
 pub mod belonging;
+mod suggest;
 
 use std::str::FromStr;
 
@@ -9,6 +10,8 @@ use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCa
 
 use crate::identity::{label_type, parse_label};
 use crate::transactions::string_enum;
+
+pub use suggest::suggest_kind;
 
 /// Why an account value was rejected. Messages never echo the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

@@ -161,13 +161,6 @@ async fn the_first_sync_walks_through_the_accounts_it_found() {
             .contains("Checking and savings count as cash in the forecast."),
         "the kind's effect is explained"
     );
-    let select = page.between("name=\"kind\"", "</select>");
-    assert!(
-        select.contains("<option value=\"\" selected disabled>Choose a kind</option>"),
-        "without a hint the kind is a choice to make, not a default"
-    );
-    assert!(!select.contains("<option value=\"checking\" selected"));
-
     world
         .admin
         .post_form(

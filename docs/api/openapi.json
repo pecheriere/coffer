@@ -4242,7 +4242,7 @@
           "connections"
         ],
         "summary": "Creates an account for a provider account and binds it.",
-        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions and the balances reported meanwhile its history. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Creates an account in the provider account's currency, exactly as `createAccount` does, and binds the provider account to it, in one step. The records synced while it was unbound become the account's transactions and the balances reported meanwhile its history. With no `kind` it takes the provider's `kind_hint`, and without one is refused with a 422: `suggested_kind` is a guess from the name and is never applied. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "createAccountForProviderAccount",
         "parameters": [
           {
@@ -9176,7 +9176,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "By default the kind the provider suggests; required when it suggests\nnone."
+                "description": "By default `kind_hint`, the kind the provider reports; required when it reports none.\n`suggested_kind` is never the default: to use it, send it here."
               },
               {
                 "type": "null"
@@ -9962,6 +9962,7 @@
           "institution",
           "currency",
           "kind_hint",
+          "suggested_kind",
           "account",
           "balance",
           "error",
@@ -10030,6 +10031,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "suggested_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountKind",
+                "description": "A guess from the provider's name. Never applied: send `kind`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
