@@ -478,6 +478,18 @@
   token can't know it did. The audit log records the split list before and
   after, with the goal's id, and a member can link it again. Until then the goal
   looks less spent, and the money counts as its category's spending instead.
+- **A rate already held shows through a restricted token's net worth.** Rates are
+  stored once for the household. A token with an account in a currency a hidden
+  account already caused to be fetched gets an amount where, alone, it would read
+  `not_fetched_yet` until the first fetch, and `fetch_failing` or `provider_off`
+  for as long as an outage lasts or the provider stays off. Its `rate_on` then shows
+  about when the last fetch was. That is one bit about a currency the token already
+  sees, plus that date, and it can't tell a hidden account from a closed one or a
+  past display currency; it shows no amount, count, name or id, and no other
+  currency. No token can bring it about, since creating an account needs `all` at
+  `write` and changing the display currency needs `all` at `balances` (spec §8.10
+  N2, N8). An operator who keeps the provider off for a long time keeps the window
+  open that long. Timing of any answer was not examined.
 - **No rate limiting beyond ceremony caps and browser reports.** Brute-forcing a
   256-bit token is infeasible; password-style guessing does not exist. Network
   access control is the defense against abuse volume.

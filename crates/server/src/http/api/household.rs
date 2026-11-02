@@ -51,7 +51,10 @@ pub(super) async fn get(
                    answers, and is audited with the old and new codes. A number out of range is \
                    422; one outside the field's type (such as 300 months) or an unknown currency \
                    code is 400. Needs `admin`, whatever the token's account grants, but the \
-                   answer shows `floor` only as `getHouseholdSettings` would to that token.",
+                   answer shows `floor` only as `getHouseholdSettings` would to that token. A \
+                   patch naming `display_currency`, whatever it names, also needs `all` at \
+                   `balances` from a token with account grants: which codes convert at once \
+                   depends on the currencies in use. The refusal is the same whatever exists.",
     security(("bearer" = [])),
     request_body = ForecastSettingsPatch,
     responses(

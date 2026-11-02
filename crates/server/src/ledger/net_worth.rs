@@ -5,8 +5,9 @@
 //! accounts and the household's settings alone (N2), so the scope is decided before
 //! anything is read and filters every query. What is known of fetching rates can depend
 //! on a hidden account, so it reaches a report only as the reason for a rate a visible row
-//! lacks. The FX endpoints say which currencies are in use, so they need `all` at
-//! `balances`. None of this writes.
+//! lacks. The rates themselves are shared: N2 rules on what a rate already held can tell a
+//! token about its own currency. The FX endpoints say which currencies are in use, so they
+//! need `all` at `balances`. None of this writes.
 
 use std::collections::BTreeSet;
 

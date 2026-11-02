@@ -11,8 +11,10 @@
 
 mod access;
 mod endpoints;
+mod fx_channels;
 mod hidden_accounts;
 mod management;
+mod net_worth_channels;
 mod plan_channels;
 mod proptests;
 mod settings;
@@ -64,6 +66,11 @@ struct World {
 /// Admin "alice", signed in with a passkey.
 async fn world() -> World {
     let (server, fake) = TestServer::with_fake_provider().await;
+    world_over(server, fake).await
+}
+
+/// As [`world`], over `server` and its `fake`.
+async fn world_over(server: TestServer, fake: Arc<FakeProvider>) -> World {
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     World {
