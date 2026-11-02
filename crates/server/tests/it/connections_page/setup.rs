@@ -158,7 +158,7 @@ async fn the_first_sync_walks_through_the_accounts_it_found() {
     assert!(page.body.contains("Until each is bound"));
     assert!(
         page.body
-            .contains("Checking and savings count as cash for planning."),
+            .contains("Checking and savings count as cash in the forecast."),
         "the kind's effect is explained"
     );
     let select = page.between("name=\"kind\"", "</select>");

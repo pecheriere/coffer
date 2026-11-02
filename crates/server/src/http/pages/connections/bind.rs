@@ -3,6 +3,8 @@
 //! service, which decides; the page only leaves out forms that the
 //! actor's role and access could not use.
 
+use std::collections::HashSet;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -10,23 +12,27 @@ use coffer_domain::accounts::AccountKind;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, ProviderAccountId};
 use coffer_domain::policy::{
-    AccountLevel, Action, authorize, authorize_account, authorize_every_account,
+    AccountAccess, AccountLevel, Action, authorize, authorize_account, authorize_every_account,
 };
 use maud::{Markup, html};
 use serde::Deserialize;
 
+use super::belonging::{
+    BELONGS_TO_UNKNOWN, SEEN_BY, answer_options, beneficiaries, held_for_field, in_form_words,
+    kind_field, parse_belongs_to,
+};
 use super::{Notice, back, refused, render};
 use crate::http::AppState;
 use crate::http::pages::layout::csrf_field;
 use crate::http::pages::{PageError, PageForm, PageSession};
-use crate::ledger::accounts::AccountView;
+use crate::ledger::accounts::{AccountView, assert_no_debug};
 use crate::sync::connections::{
     ConnectionState, ConnectionView, NewLinkedAccountInput, ProviderAccountView,
 };
 
 use super::FormKind;
 
-const KIND_UNKNOWN: &str = "Choose one of the account kinds in the list.";
+pub(super) const KIND_UNKNOWN: &str = "Choose one of the account kinds in the list.";
 const ACCOUNT_UNKNOWN: &str = "Choose the account to link to.";
 /// The longest account name, in characters; the form's `maxlength`.
 const NAME_CHARS: usize = 100;
@@ -37,6 +43,8 @@ pub(super) struct Binding {
     may_create: bool,
     may_link: bool,
     open: Vec<OpenAccount>,
+    /// The accounts the actor may change, closed ones too.
+    writable: HashSet<AccountId>,
 }
 
 struct OpenAccount {
@@ -53,31 +61,53 @@ impl Binding {
         accounts: &[AccountView],
     ) -> Result<Self, PageError> {
         let access = state.access.resolve(actor).await?;
+        Ok(Self::new(actor, &access, accounts))
+    }
+
+    /// The forms `actor`, holding `access`, can use.
+    fn new(actor: &Actor, access: &AccountAccess, accounts: &[AccountView]) -> Self {
         let may_link = authorize(actor, Action::ManageConnections).is_ok()
-            && authorize_every_account(actor, &access, AccountLevel::Write).is_ok();
+            && authorize_every_account(actor, access, AccountLevel::Write).is_ok();
         let may_create = may_link && authorize(actor, Action::WriteHousehold).is_ok();
+        let writable: HashSet<AccountId> = accounts
+            .iter()
+            .map(|account| account.id)
+            .filter(|id| authorize_account(actor, access, *id, AccountLevel::Write).is_ok())
+            .collect();
         let open = accounts
             .iter()
-            .filter(|account| {
-                !account.closed
-                    && authorize_account(actor, &access, account.id, AccountLevel::Write).is_ok()
-            })
+            .filter(|account| !account.closed && writable.contains(&account.id))
             .map(|account| OpenAccount {
                 id: account.id,
                 name: account.name.clone(),
                 currency: account.currency.as_str(),
             })
             .collect();
-        Ok(Self {
+        Self {
             may_create,
             may_link,
             open,
-        })
+            writable,
+        }
     }
 
     /// Whether the actor could create an account for a provider account.
     pub(super) fn can_bind(&self) -> bool {
         self.may_create
+    }
+
+    /// Whether the actor may change the account `id`.
+    pub(super) fn may_change(&self, id: AccountId) -> bool {
+        self.writable.contains(&id)
+    }
+
+    /// The labels the forms' `Held for` offers: nothing for an actor who has no such form.
+    pub(super) fn offered_labels(&self, accounts: &[AccountView]) -> Markup {
+        if self.may_create || !self.writable.is_empty() {
+            beneficiaries(accounts)
+        } else {
+            html! {}
+        }
     }
 
     /// The forms for an unbound provider account of a live connection,
@@ -123,20 +153,24 @@ impl Binding {
                         input .input type="text" name="name" value=(name)
                             maxlength=(NAME_CHARS) required;
                     }
-                    label.field {
-                        "Kind"
-                        select .input name="kind" required {
-                            @if account.kind_hint.is_none() {
-                                option value="" selected disabled { "Choose a kind" }
-                            }
-                            @for kind in AccountKind::ALL {
-                                option value=(kind.as_str()) selected[account.kind_hint == Some(kind)] {
-                                    (kind_label(kind))
-                                }
+                    (kind_field(id, &html! {
+                        @if account.kind_hint.is_none() {
+                            option value="" selected disabled { "Choose a kind" }
+                        }
+                        @for kind in AccountKind::ALL {
+                            option value=(kind.as_str()) selected[account.kind_hint == Some(kind)] {
+                                (kind_label(kind))
                             }
                         }
-                        span.fine { "Checking and savings count as cash for planning." }
+                    }))
+                    label.field {
+                        "Whose money is it?"
+                        select .input name="belongs_to" {
+                            option value="" selected { "Follow the kind" }
+                            (answer_options())
+                        }
                     }
+                    (held_for_field(id, None, &format!("{SEEN_BY} Leave it empty if this is the household's money.")))
                     button.btn.btn-primary type="submit" { "Create account and bind" }
                 }
                 @if !candidates.is_empty() {
@@ -159,7 +193,7 @@ impl Binding {
 }
 
 /// How a kind reads in the select.
-fn kind_label(kind: AccountKind) -> &'static str {
+pub(super) fn kind_label(kind: AccountKind) -> &'static str {
     match kind {
         AccountKind::Checking => "Checking",
         AccountKind::Savings => "Savings",
@@ -193,7 +227,13 @@ pub(super) struct CreateForm {
     name: String,
     #[serde(default)]
     kind: String,
+    #[serde(default)]
+    belongs_to: String,
+    #[serde(default)]
+    beneficiary: String,
 }
+
+assert_no_debug!(CreateForm);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,7 +244,7 @@ pub(super) struct LinkForm {
     account: String,
 }
 
-async fn unprocessable(
+pub(super) async fn unprocessable(
     state: &AppState,
     session: &PageSession,
     message: &'static str,
@@ -225,12 +265,18 @@ pub(super) async fn create_account(
 ) -> Result<Response, PageError> {
     let actor = session.verify(&state, &form.csrf)?;
     let id = provider_account_id(&id)?;
+    if let Err(err) = state.sync.authorize_create_account(&actor, id).await {
+        return refused(&state, &session, err, FormKind::Action).await;
+    }
     let kind = match form.kind.as_str() {
         "" => None,
         raw => match raw.parse::<AccountKind>() {
             Ok(kind) => Some(kind),
             Err(_) => return unprocessable(&state, &session, KIND_UNKNOWN).await,
         },
+    };
+    let Ok(belongs_to) = parse_belongs_to(&form.belongs_to) else {
+        return unprocessable(&state, &session, BELONGS_TO_UNKNOWN).await;
     };
     let name = Some(form.name.trim().to_owned()).filter(|name| !name.is_empty());
     let input = NewLinkedAccountInput {
@@ -239,12 +285,12 @@ pub(super) async fn create_account(
         liquidity: None,
         include_in_net_worth: None,
         include_in_forecast: None,
-        belongs_to: None,
-        beneficiary: None,
+        belongs_to,
+        beneficiary: Some(form.beneficiary),
     };
     match state.sync.create_account_and_bind(&actor, id, input).await {
         Ok(_) => Ok(back()),
-        Err(err) => refused(&state, &session, err, FormKind::Action).await,
+        Err(err) => refused(&state, &session, in_form_words(err), FormKind::Action).await,
     }
 }
 
@@ -264,3 +310,6 @@ pub(super) async fn link_account(
         Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }
 }
+
+#[cfg(test)]
+mod tests;
