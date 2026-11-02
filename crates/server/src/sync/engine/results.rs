@@ -156,19 +156,26 @@ pub(super) fn failure(err: &SyncError) -> Failure {
 }
 /// The connection errors, sanitized and joined; `None` when there are none.
 pub(super) fn joined_errors(errors: &[String]) -> Option<String> {
-    let sanitized: Vec<String> = errors
-        .iter()
-        .map(|error| sanitize_provider_message(error))
-        .filter(|error| !error.is_empty())
-        .collect();
-    if sanitized.is_empty() {
+    // Each error is sanitized whole, so redaction sees any `@` in it. Their
+    // number and total size are bounded by the provider (SimpleFin keeps 100,
+    // Plaid sends a few) and the response cap, and joining stops once the
+    // result is full.
+    let mut joined = String::new();
+    for error in errors {
+        let sanitized = sanitize_provider_message(error);
+        if sanitized.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push_str("; ");
+        }
+        joined.push_str(&sanitized);
+        if joined.chars().count() >= MAX_PROVIDER_MESSAGE_CHARS {
+            break;
+        }
+    }
+    if joined.is_empty() {
         return None;
     }
-    Some(
-        sanitized
-            .join("; ")
-            .chars()
-            .take(MAX_PROVIDER_MESSAGE_CHARS)
-            .collect(),
-    )
+    Some(joined.chars().take(MAX_PROVIDER_MESSAGE_CHARS).collect())
 }

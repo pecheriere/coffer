@@ -135,7 +135,10 @@ Sync limits for Plaid: a requested sync at least 15 minutes after the last
 one, scheduled syncs at least an hour apart, and 48 syncs in 24 hours, per
 connection. One pass over Plaid's transaction pages accepts at most 64 MiB of
 responses and 100,000 records, a page may hold at most 1,000 records, and an
-answer may list at most 1,000 accounts. For any provider, a
+answer may list at most 1,000 accounts. A SimpleFin answer may list at most
+1,000 accounts, 10,000 transactions on one account and 100,000 transactions in
+all, and keeps the first 100 of its connection errors (the rest are checked only as valid JSON); one over any of the three counts fails the run and stores nothing from it, and the
+bridge's own limit of 90 days keeps an honest household far below them. For any provider, a
 fetch that takes more than 10 minutes fails the run, and the next run starts
 from the same place. Nothing is stored until the fetch ends, so a first sync
 that needs longer fails every time. The limit covers fetching only: storing what

@@ -263,3 +263,13 @@ fn connection_errors_join_sanitized() {
     let long = joined_errors(&["x".repeat(400), "y".repeat(400)]).unwrap();
     assert_eq!(long.chars().count(), 500);
 }
+
+/// Redaction sees the whole error: user information whose `@` lies far into
+/// the text is still removed, wherever the shown part ends.
+#[test]
+fn user_information_is_redacted_however_late_its_at_sign() {
+    let error = format!("https://user:hunter2{}@host/x", "a".repeat(2_500));
+    let shown = joined_errors(&[error]).unwrap();
+    assert!(!shown.contains("hunter2"));
+    assert!(!shown.contains("user:"));
+}
