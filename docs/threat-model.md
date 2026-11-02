@@ -154,10 +154,14 @@
     its answer and whether it writes are those of a split with no link. What is
     left: such a patch dividing the money into other amounts drops the link,
     which the token cannot know. The audit log records it.
-  - A fixed safety floor's amount and currency are readable by any `read` token
-    (`GET /api/v1/household/settings`): settings describe no account, so grants
-    don't apply. A token holding only an account in another currency learns the
-    household plans in that one, and roughly how much it keeps.
+  - A safety floor is a figure of the whole household's plan, and a fixed one's
+    currency could show money the token isn't granted. So
+    `GET /api/v1/household/settings` and a patch's answer say `floor: null` below
+    `all` at `transactions`, the access a forecast needs, exactly as with none set,
+    and a restricted `admin` token that may replace the floor can't confirm a guess
+    at it by the answer. The other settings (whether income counts, the default
+    horizon, when a balance is stale) read the same for every token: they say how
+    a forecast is worked out, not what the household holds or plans.
   - Whatever spans every account needs an `all` grant at `transactions` to
     read (the audit log, unbound provider accounts, a connection's sync
     runs, whose counts and errors cover all its accounts) or at `write` to

@@ -73,6 +73,9 @@ token's access.
   named in an error (a batch names the failing operation by index only) or
   in another transaction's `duplicate_candidates`. A planned item hinted at one
   answers likewise, and a split linked to such a goal reads `goal: null`.
+- `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
+  `all` at `transactions`, the same as no floor set. The other settings read the
+  same for every token.
 - A visible account below the level needed is a 403 `forbidden` whose
   detail names the level: "this action needs transactions access to this
   account". `GET /api/v1/transactions` silently leaves out the accounts the

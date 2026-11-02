@@ -1,9 +1,16 @@
 //! The household's forecast settings (spec §6.8, §8.9).
+//!
+//! A safety floor is a figure of the plan over every account, so it takes the
+//! forecast's access (R2) to read: below that it reads as `null`, the same as none
+//! set, on a read and in a patch's answer alike. The other settings say how a forecast
+//! is worked out, not what the household holds or plans.
 
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::plan::{ForecastSettings, PlanError, SafetyFloor};
-use coffer_domain::policy::{Action, authorize};
+use coffer_domain::policy::{
+    AccountAccess, AccountLevel, Action, authorize, authorize_every_account,
+};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -44,31 +51,49 @@ pub(super) fn invalid(error: PlanError) -> LedgerError {
     })
 }
 
+/// `settings` as `actor` may have them: without the floor unless it may have a
+/// forecast.
+fn as_shown(actor: &Actor, access: &AccountAccess, settings: ForecastSettings) -> ForecastSettings {
+    match authorize_every_account(actor, access, AccountLevel::Transactions) {
+        Ok(()) => settings,
+        Err(_) => ForecastSettings {
+            floor: None,
+            ..settings
+        },
+    }
+}
+
 impl Ledger {
-    /// The household's forecast settings: the defaults until some are set.
+    /// The household's forecast settings: the defaults until some are set. The floor
+    /// reads as none without the forecast's access.
     ///
     /// # Errors
     ///
-    /// [`LedgerError::Denied`] without [`Action::ReadHousehold`]; storage
-    /// failures.
+    /// [`LedgerError::Denied`] without [`Action::ReadHousehold`]; a failure to resolve
+    /// access; storage failures.
     pub async fn forecast_settings(&self, actor: &Actor) -> Result<ForecastSettings, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
-        Ok(self.store.forecast_settings().await?)
+        let access = self.access.resolve(actor).await?;
+        let settings = self.store.forecast_settings().await?;
+        Ok(as_shown(actor, &access, settings))
     }
 
     /// Changes the forecast settings. A patch that changes nothing writes
-    /// nothing, audit included.
+    /// nothing, audit included. The answer shows the floor as
+    /// [`Self::forecast_settings`] does, so it can't confirm a guess at it.
     ///
     /// # Errors
     ///
     /// [`LedgerError::Denied`] without [`Action::ManageHousehold`];
-    /// [`LedgerError::Invalid`] for a value out of range; storage failures.
+    /// [`LedgerError::Invalid`] for a value out of range; a failure to resolve
+    /// access; storage failures.
     pub async fn update_forecast_settings(
         &self,
         actor: &Actor,
         patch: ForecastSettingsPatch,
     ) -> Result<ForecastSettings, LedgerError> {
         authorize(actor, Action::ManageHousehold)?;
+        let access = self.access.resolve(actor).await?;
         let now = self.clock.now();
         // `begin` takes `BEGIN IMMEDIATE`, so no writer can change the row
         // between this read and the no-op check below.
@@ -114,7 +139,7 @@ impl Ledger {
             );
         }
         if changes.is_empty() {
-            return Ok(current);
+            return Ok(as_shown(actor, &access, current));
         }
         tx.set_forecast_settings(&next).await?;
         audit(
@@ -128,6 +153,6 @@ impl Ledger {
         )
         .await?;
         tx.commit().await?;
-        Ok(next)
+        Ok(as_shown(actor, &access, next))
     }
 }

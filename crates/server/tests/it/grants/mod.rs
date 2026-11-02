@@ -15,6 +15,7 @@ mod hidden_accounts;
 mod management;
 mod plan_channels;
 mod proptests;
+mod settings;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};

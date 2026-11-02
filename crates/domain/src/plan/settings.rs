@@ -60,7 +60,8 @@ impl SafetyFloor {
 #[serde(deny_unknown_fields)]
 pub struct ForecastSettings {
     /// The safety floor. Until one is set a forecast has no number: a silent
-    /// floor of 0 would overstate what can be invested.
+    /// floor of 0 would overstate what can be invested. A token without the access a
+    /// forecast needs reads `null` whether or not one is set.
     pub floor: Option<SafetyFloor>,
     /// Whether planned inflows reduce the cash needed.
     pub include_income: bool,

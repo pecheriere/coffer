@@ -19,8 +19,11 @@ use crate::ledger::settings::ForecastSettingsPatch;
     tag = tags::HOUSEHOLD,
     description = "The forecast settings: the safety floor (`null` until one is set, and a \
                    forecast has no number without it), whether planned income counts, the \
-                   default horizon and when a balance counts as stale. Needs `read`. Account \
-                   grants do not apply: settings describe no account.",
+                   default horizon and when a balance counts as stale. Needs `read`. A token with \
+                   account grants below `all` at `transactions` reads `floor` as `null`, the \
+                   same as none set: a floor is a figure of the whole household's plan, and \
+                   that is the access a forecast needs. The other settings read the same for \
+                   every token.",
     security(("bearer" = [])),
     responses(
         (status = 200, description = "The settings; the defaults until some are set.",
@@ -44,7 +47,8 @@ pub(super) async fn get(
     description = "Changes the settings given; a field left out stays. A floor can be \
                    replaced but never unset: `floor: null` leaves it. A patch that changes \
                    nothing writes nothing. A number out of range is 422; one outside the field's type (such \
-                   as 300 months) is 400. Needs `admin`. Account grants do not apply.",
+                   as 300 months) is 400. Needs `admin`, whatever the token's account grants, but \
+                   the answer shows `floor` only as `getHouseholdSettings` would to that token.",
     security(("bearer" = [])),
     request_body = ForecastSettingsPatch,
     responses(

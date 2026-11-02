@@ -720,7 +720,9 @@ at `transactions` (§8.2); without it the answer is 403 with "this action needs
 transactions access to every account". There is no partial forecast: a number
 over the visible accounts would be confidently wrong, and marking it partial
 would reveal that hidden accounts exist. The refusal is the same whether or not
-any account is hidden.
+any account is hidden. The safety floor, a figure of that same plan, takes the same
+access to read: below it the settings answer, on a read or a patch, says `floor:
+null`, the same as none set. The other settings read the same for every token.
 
 **R3. Planned item access.** A planned item hinting at an account the actor
 cannot see at `transactions` answers like a missing item: left out of lists, 404

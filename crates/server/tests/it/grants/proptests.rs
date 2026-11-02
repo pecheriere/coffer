@@ -202,8 +202,9 @@ fn read_uris(
 
 /// A goal hinted at each account, named after it, on its first transaction and on
 /// the second of the account before, so a visible split links to a goal that may be
-/// hidden; and one without a hint. What the token may not see of them goes in `hidden`.
-async fn seed_goals(
+/// hidden; one without a hint; and a safety floor. What the token may not see of them
+/// goes in `hidden`.
+async fn seed_plan(
     world: &World,
     household: &Household,
     accounts: &[AccountId],
@@ -247,6 +248,23 @@ async fn seed_goals(
     if !holds_transactions {
         hidden.push(s(unhinted));
         hidden.push(unhinted_name);
+    }
+    let floor_minor = 7_346_198_000_i64;
+    world
+        .server
+        .ledger
+        .update_forecast_settings(
+            &world.alice,
+            serde_json::from_value(serde_json::json!({"floor": {
+                "kind": "fixed",
+                "amount": {"minor_units": floor_minor, "currency": "USD"},
+            }}))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    if household.all < Some(AccountLevel::Transactions) {
+        hidden.push(floor_minor.to_string());
     }
     goals
 }
@@ -300,7 +318,7 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
         accounts.push(account);
         transactions.extend(own);
     }
-    let goals = seed_goals(
+    let goals = seed_plan(
         &world,
         household,
         &accounts,

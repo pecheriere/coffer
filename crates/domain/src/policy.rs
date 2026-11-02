@@ -24,7 +24,10 @@
 //! | Create or change a category or group     | `Write`                       |
 //! | Read a forecast or a what-if             | `Transactions`                |
 //! | Read plan versus actual                  | `Transactions`                |
+//! | Read the safety floor                    | `Transactions`                |
 //! | Create, change or delete a planned item  | `Write`                       |
+//!
+//! The safety floor is not refused without it: the settings answer with `floor: null`.
 //!
 //! Using an existing category on a split is a write to the transaction's
 //! account, decided by [`authorize_account`]. A connection's last error is
