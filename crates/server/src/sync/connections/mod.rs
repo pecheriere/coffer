@@ -90,7 +90,7 @@ pub struct ProviderAccountView {
     pub institution: Option<String>,
     /// The currency as the provider gave it.
     pub currency: String,
-    /// The kind the provider suggests, if any.
+    /// The kind the provider reports, if any.
     #[schema(required)]
     pub kind_hint: Option<AccountKind>,
     /// A guess from the provider's name. Never applied: send `kind`.

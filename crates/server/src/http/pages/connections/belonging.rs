@@ -176,7 +176,7 @@ pub(super) fn account_item(
             } @else {
                 span.chip.chip-quiet { "Not bound" }
             }
-            (shared.binding.forms(connection, account, shared.csrf, open))
+            (shared.binding.forms(connection, account, shared.csrf, open, shared.refused_row == Some(account.id)))
             @if let Some(view) = view.filter(|view| shared.binding.may_change(view.id)) {
                 (row_form(account, view, shared.csrf))
             }

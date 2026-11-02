@@ -2,7 +2,7 @@
 
 use coffer_domain::accounts::AccountKind;
 
-/// What Plaid's `type` and `subtype` suggest the account is. Plaid has no subtype for a
+/// What Plaid's `type` and `subtype` say the account is. Plaid has no subtype for a
 /// donor-advised fund, so that stays to the account's name.
 pub(super) fn kind_hint(kind: &str, subtype: Option<&str>) -> Option<AccountKind> {
     match (kind, subtype) {

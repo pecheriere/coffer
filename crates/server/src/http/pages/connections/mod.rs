@@ -81,6 +81,8 @@ struct Notice {
     message: String,
     /// Seconds until a retry may succeed, sent as `Retry-After`.
     retry_after: Option<u32>,
+    /// The provider account whose bind form was refused, when one was.
+    refused_row: Option<ProviderAccountId>,
 }
 
 impl Notice {
@@ -89,6 +91,15 @@ impl Notice {
             status,
             message: message.into(),
             retry_after: None,
+            refused_row: None,
+        }
+    }
+
+    /// This notice, about a bind form of the provider account `row`.
+    fn on_row(self, row: ProviderAccountId) -> Self {
+        Self {
+            refused_row: Some(row),
+            ..self
         }
     }
 }
@@ -135,6 +146,7 @@ async fn render(
         csrf,
         can_manage,
         plaid_offered,
+        refused_row: notice.as_ref().and_then(|notice| notice.refused_row),
     };
     let content = html! {
         h1 { "Connections" }
@@ -211,6 +223,8 @@ struct Shared<'a> {
     /// The connections the viewer may forget: their sealed token cannot be
     /// opened, so removal cannot give the credentials up.
     forgettable: &'a HashSet<ConnectionId>,
+    /// The provider account whose bind form this page answers a refusal of.
+    refused_row: Option<ProviderAccountId>,
 }
 
 /// What the viewer may do with one connection beyond what everyone with
@@ -501,6 +515,7 @@ fn notice_for(err: &SyncError, form: FormKind) -> Option<Notice> {
                 wait_text(*retry_after)
             ),
             retry_after: Some(retry_seconds(*retry_after)),
+            refused_row: None,
         },
         SyncError::InProgress | SyncError::Conflict(_) | SyncError::CurrencyMismatch => {
             Notice::new(StatusCode::CONFLICT, capitalized(&err.to_string()))
@@ -540,6 +555,19 @@ async fn refused(
 ) -> Result<Response, PageError> {
     match notice_for(&err, form) {
         Some(notice) => render(state, session, Some(notice)).await,
+        None => Err(page_error(err)),
+    }
+}
+
+/// As [`refused`], for a bind form of the provider account `row`.
+async fn refused_on_row(
+    state: &AppState,
+    session: &PageSession,
+    err: SyncError,
+    row: ProviderAccountId,
+) -> Result<Response, PageError> {
+    match notice_for(&err, FormKind::Action) {
+        Some(notice) => render(state, session, Some(notice.on_row(row))).await,
         None => Err(page_error(err)),
     }
 }

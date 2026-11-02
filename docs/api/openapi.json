@@ -9176,7 +9176,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "By default `kind_hint`, the kind the provider reports; required when it reports none.\n`suggested_kind` is never the default: to use it, send it here."
+                "description": "By default `kind_hint`, the kind the provider reports; required when it reports none.\n`suggested_kind` is never the default: to use it, ask a member first, then send it here."
               },
               {
                 "type": "null"
@@ -10018,7 +10018,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AccountKind",
-                "description": "The kind the provider suggests, if any."
+                "description": "The kind the provider reports, if any."
               },
               {
                 "type": "null"

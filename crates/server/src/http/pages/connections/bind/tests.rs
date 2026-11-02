@@ -74,6 +74,7 @@ fn drawn(binding: &Binding, bound: &AccountView) -> String {
         can_manage: false,
         plaid_offered: false,
         forgettable: &HashSet::new(),
+        refused_row: None,
     };
     belonging::account_item(&connection, &row, &shared, false).into_string()
 }

@@ -57,7 +57,7 @@ pub struct NewLinkedAccountRequest {
     /// provider account's name.
     pub name: Option<String>,
     /// By default `kind_hint`, the kind the provider reports; required when it reports none.
-    /// `suggested_kind` is never the default: to use it, send it here.
+    /// `suggested_kind` is never the default: to use it, ask a member first, then send it here.
     pub kind: Option<AccountKind>,
     /// A chosen liquidity class; by default the kind's.
     pub liquidity: Option<LiquidityClass>,

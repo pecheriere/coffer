@@ -1268,7 +1268,11 @@ kind, computed at read and never stored. It is shown when binding and answered a
 `suggested_kind`. It is never applied by itself: a bind with no `kind` still falls back only to
 the provider's own `kind_hint`, and otherwise answers 422. A provider's name may hold personal text,
 so nothing about a suggestion is logged or audited. Only an unambiguous match suggests: a whole
-word, and two kinds matching at the same strength suggest nothing. Plaid's subtypes `529`,
+word, and two kinds matching at the same strength suggest nothing. A name holding `hsa` or `health
+savings` suggests nothing, whatever else it holds: a health savings account isn't cash, and none of
+the kinds is one. A form says it's a guess to check, and also that the kind leaves the account out
+of net worth when it does. A bind form refused doesn't put the guess back in its row, which may be
+what the member rejected: only a provider's own hint is preselected there. Plaid's subtypes `529`,
 `education savings account`, `utma` and `ugma` become `kind_hint`s.
 
 **B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account

@@ -24,7 +24,10 @@ const SPECIFIC: &Terms = &[
     (&["401k"], AccountKind::Retirement),
     (&["401", "k"], AccountKind::Retirement),
     (&["403b"], AccountKind::Retirement),
+    (&["403", "b"], AccountKind::Retirement),
     (&["457b"], AccountKind::Retirement),
+    (&["457", "b"], AccountKind::Retirement),
+    (&["thrift", "savings"], AccountKind::Retirement),
     (&["pension"], AccountKind::Retirement),
     (&["retirement"], AccountKind::Retirement),
     (&["rsu"], AccountKind::EquityComp),
@@ -48,9 +51,13 @@ const GENERIC: &Terms = &[
     (&["amex"], AccountKind::CreditCard),
 ];
 
+/// Terms that leave a name suggesting nothing, whatever else it holds: a health savings account
+/// isn't cash and isn't any of the kinds, so Plaid's `hsa` is no hint either.
+const NOTHING: &[&[&str]] = &[&["hsa"], &["health", "savings"]];
+
 /// The kind `name` suggests: the one kind of a specific term, else the one kind of a generic
-/// term, else none. Two kinds at the same strength suggest nothing, and a generic term doesn't
-/// settle two specific ones. Words are maximal runs of ASCII letters and digits, so a term
+/// term, else none. Two kinds at the same strength suggest nothing, a generic term doesn't
+/// settle two specific ones, and a term of [`NOTHING`] settles it. Words are maximal runs of ASCII letters and digits, so a term
 /// matches whole words only: `x5291` is not a 529.
 #[must_use]
 pub fn suggest_kind(name: &str) -> Option<AccountKind> {
@@ -59,6 +66,9 @@ pub fn suggest_kind(name: &str) -> Option<AccountKind> {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
         .collect();
+    if NOTHING.iter().any(|term| holds(&words, term)) {
+        return None;
+    }
     match kinds_named(SPECIFIC, &words)[..] {
         [kind] => Some(kind),
         [] => match kinds_named(GENERIC, &words)[..] {
@@ -73,12 +83,16 @@ pub fn suggest_kind(name: &str) -> Option<AccountKind> {
 fn kinds_named(terms: &Terms, words: &[&str]) -> Vec<AccountKind> {
     let mut kinds = Vec::new();
     for (term, kind) in terms {
-        let held = (0..words.len()).any(|at| words[at..].starts_with(term));
-        if held && !kinds.contains(kind) {
+        if holds(words, term) && !kinds.contains(kind) {
             kinds.push(*kind);
         }
     }
     kinds
+}
+
+/// Whether `words` hold the words of `term`, adjacent and in order.
+fn holds(words: &[&str], term: &[&str]) -> bool {
+    (0..words.len()).any(|at| words[at..].starts_with(term))
 }
 
 #[cfg(test)]
@@ -142,7 +156,10 @@ mod tests {
             ("401k", Some(Retirement)),
             ("401 k", Some(Retirement)),
             ("403b", Some(Retirement)),
+            ("403 b", Some(Retirement)),
             ("457b", Some(Retirement)),
+            ("457 b", Some(Retirement)),
+            ("thrift savings", Some(Retirement)),
             ("pension", Some(Retirement)),
             ("retirement", Some(Retirement)),
             ("rsu", Some(EquityComp)),
@@ -174,6 +191,40 @@ mod tests {
             ("Mortgage Credit Card", None),
             ("Roth IRA 401k Pension", Some(Retirement)),
             ("Checking Chequing", Some(Checking)),
+        ]);
+    }
+
+    /// However a plan writes its number, and a specific term beats the `savings` in its name.
+    #[test]
+    fn retirement_plans_are_named_with_or_without_brackets() {
+        assert_suggests(&[
+            ("403(b)", Some(Retirement)),
+            ("457(b)", Some(Retirement)),
+            ("403(b) Savings", Some(Retirement)),
+            ("457(b) Savings Plan", Some(Retirement)),
+            ("Thrift Savings Plan", Some(Retirement)),
+            ("Thrift Checking", Some(Checking)),
+            ("403 Checking", Some(Checking)),
+        ]);
+    }
+
+    /// An HSA isn't cash, and Plaid's `hsa` is no hint either: such a name suggests nothing,
+    /// whatever else it holds.
+    #[test]
+    fn a_health_savings_account_suggests_nothing() {
+        assert_suggests(&[
+            ("HSA", None),
+            ("hsa", None),
+            ("Health Savings Account", None),
+            ("HSA Checking", None),
+            ("HSA Brokerage", None),
+            ("Roth HSA", None),
+            ("529 Health Savings", None),
+            ("Health-Savings Credit Card", None),
+            ("Health Savings", None),
+            ("Health Checking", Some(Checking)),
+            ("Health Plan Savings", Some(Savings)),
+            ("Hsas Savings", Some(Savings)),
         ]);
     }
 
