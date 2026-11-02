@@ -28,7 +28,7 @@ fn observation_from_row(row: &SqliteRow) -> Result<RateObservation, StoreError> 
     })
 }
 
-fn coverage_from_row(row: &SqliteRow) -> Result<FxCoverage, StoreError> {
+pub(crate) fn coverage_from_row(row: &SqliteRow) -> Result<FxCoverage, StoreError> {
     Ok(FxCoverage {
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         status: parsed(row, "status")?,
@@ -43,14 +43,6 @@ fn coverage_from_row(row: &SqliteRow) -> Result<FxCoverage, StoreError> {
 /// The rates `currencies` need to value every day in `[from, to]`: each one's
 /// rates inside the window and its latest before it, which a weekend or a
 /// holiday carries forward. The euro has no rates to load.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the net worth tables are its only caller and arrive in the next change; \
-                  the lint fails this expectation once they use it, which removes it"
-    )
-)]
 pub(crate) async fn load_rate_book(
     conn: &mut SqliteConnection,
     currencies: &[Currency],
@@ -168,8 +160,8 @@ impl StoreTx {
     /// Store `rates` of `currency`, writing only those that are new or differ
     /// from what is stored, and mark the currency `ready` when it has any
     /// rate; with none stored, even after an empty answer, it is
-    /// `not_published`. Answers the earliest day that changed, or `None` when
-    /// nothing did.
+    /// `not_published`. The daily rows it moves are rewritten in this transaction.
+    /// Answers the earliest day that changed, or `None` when nothing did.
     ///
     /// # Errors
     ///
@@ -224,6 +216,9 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
+        if let Some(earliest) = earliest {
+            self.refresh_after_rate(currency, earliest).await?;
+        }
         Ok(earliest)
     }
 

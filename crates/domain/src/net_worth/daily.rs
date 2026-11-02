@@ -6,7 +6,7 @@ use jiff::civil::{Date, date};
 
 use super::types::ConversionState;
 use crate::accounts::BalanceSource;
-use crate::fx::{Conversion, RateBook, convert};
+use crate::fx::{Conversion, RateBook, RateLeg, convert};
 use crate::ids::AccountId;
 use crate::money::Currency;
 
@@ -39,6 +39,9 @@ pub struct DailyValue {
     pub display_minor: Option<i64>,
     /// Present only with [`ConversionState::Converted`].
     pub rate_on: Option<Date>,
+    /// Which side `rate_on` is on, or the rate is missing on: present only with
+    /// [`ConversionState::Converted`] and [`ConversionState::Missing`].
+    pub rate_leg: Option<RateLeg>,
     pub conversion: ConversionState,
 }
 
@@ -67,8 +70,7 @@ pub fn daily_values(
         let Some(snapshot) = upto.checked_sub(1).and_then(|last| sorted.get(last)) else {
             continue;
         };
-        let (display_minor, rate_on, conversion) =
-            display_amount(snapshot.balance_minor, currency, display, on, book);
+        let amount = display_amount(snapshot.balance_minor, currency, display, on, book);
         rows.push(DailyValue {
             account,
             on,
@@ -76,12 +78,21 @@ pub fn daily_values(
             balance_on: snapshot.on,
             balance_source: snapshot.source,
             display,
-            display_minor,
-            rate_on,
-            conversion,
+            display_minor: amount.minor,
+            rate_on: amount.rate_on,
+            rate_leg: amount.leg,
+            conversion: amount.state,
         });
     }
     rows
+}
+
+/// What a row says of its balance in the display currency.
+struct DisplayAmount {
+    minor: Option<i64>,
+    rate_on: Option<Date>,
+    leg: Option<RateLeg>,
+    state: ConversionState,
 }
 
 fn display_amount(
@@ -90,16 +101,35 @@ fn display_amount(
     display: Option<Currency>,
     on: Date,
     book: &RateBook,
-) -> (Option<i64>, Option<Date>, ConversionState) {
+) -> DisplayAmount {
+    let nothing = |state| DisplayAmount {
+        minor: None,
+        rate_on: None,
+        leg: None,
+        state,
+    };
     let Some(display) = display else {
-        return (None, None, ConversionState::NoDisplayCurrency);
+        return nothing(ConversionState::NoDisplayCurrency);
     };
     match convert(minor, currency, display, on, book) {
-        Conversion::Same { minor } => (Some(minor), None, ConversionState::Same),
-        Conversion::Converted { minor, rate_on } => {
-            (Some(minor), Some(rate_on), ConversionState::Converted)
-        }
-        Conversion::Missing => (None, None, ConversionState::Missing),
-        Conversion::TooLarge => (None, None, ConversionState::TooLarge),
+        Conversion::Same { minor } => DisplayAmount {
+            minor: Some(minor),
+            ..nothing(ConversionState::Same)
+        },
+        Conversion::Converted {
+            minor,
+            rate_on,
+            leg,
+        } => DisplayAmount {
+            minor: Some(minor),
+            rate_on: Some(rate_on),
+            leg: Some(leg),
+            state: ConversionState::Converted,
+        },
+        Conversion::Missing { leg } => DisplayAmount {
+            leg: Some(leg),
+            ..nothing(ConversionState::Missing)
+        },
+        Conversion::TooLarge => nothing(ConversionState::TooLarge),
     }
 }

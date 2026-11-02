@@ -8,8 +8,8 @@ use proptest::prelude::{Just, Strategy, prop_assert, prop_assert_eq, prop_oneof,
 use proptest::{collection, sample};
 
 use super::{
-    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory, RateLookup,
-    RateObservation, convert,
+    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory, RateLeg,
+    RateLookup, RateObservation, convert,
 };
 use crate::money::Currency;
 
@@ -58,8 +58,12 @@ fn on_friday(minor: i64, from: &str, to: &str) -> Conversion {
     convert(minor, currency(from), currency(to), FRIDAY, &friday_book())
 }
 
-fn converted(minor: i64, rate_on: Date) -> Conversion {
-    Conversion::Converted { minor, rate_on }
+fn converted(minor: i64, rate_on: Date, leg: RateLeg) -> Conversion {
+    Conversion::Converted {
+        minor,
+        rate_on,
+        leg,
+    }
 }
 
 #[test]
@@ -143,20 +147,32 @@ fn status_words_are_fixed() {
 #[test]
 fn euro_to_dollar() {
     // 100,000 × 1.1172 = 111,720 exactly.
-    assert_eq!(on_friday(100_000, "EUR", "USD"), converted(111_720, FRIDAY));
+    assert_eq!(
+        on_friday(100_000, "EUR", "USD"),
+        converted(111_720, FRIDAY, RateLeg::Display)
+    );
 }
 
 #[test]
 fn dollar_to_euro_rounds() {
     // 550,000 / 1.1172 = 492,302.18... and -30,000 / 1.1172 = -26,852.85...
-    assert_eq!(on_friday(550_000, "USD", "EUR"), converted(492_302, FRIDAY));
-    assert_eq!(on_friday(-30_000, "USD", "EUR"), converted(-26_853, FRIDAY));
+    assert_eq!(
+        on_friday(550_000, "USD", "EUR"),
+        converted(492_302, FRIDAY, RateLeg::Held)
+    );
+    assert_eq!(
+        on_friday(-30_000, "USD", "EUR"),
+        converted(-26_853, FRIDAY, RateLeg::Held)
+    );
 }
 
 #[test]
 fn cross_rate_goes_through_euro() {
     // 100,000 / 0.8338 × 1.1172 = 133,988.96...
-    assert_eq!(on_friday(100_000, "GBP", "USD"), converted(133_989, FRIDAY));
+    assert_eq!(
+        on_friday(100_000, "GBP", "USD"),
+        converted(133_989, FRIDAY, RateLeg::Both)
+    );
 }
 
 #[test]
@@ -164,14 +180,23 @@ fn exponents_are_respected() {
     // JPY 1,000,000 / 175.68 × 1.1172 = USD 6,359.2896... = 635,928.96... cents.
     assert_eq!(
         on_friday(1_000_000, "JPY", "USD"),
-        converted(635_929, FRIDAY)
+        converted(635_929, FRIDAY, RateLeg::Both)
     );
     // USD 1,000.00 / 1.1172 × 175.68 = JPY 157,250.26...
-    assert_eq!(on_friday(100_000, "USD", "JPY"), converted(157_250, FRIDAY));
+    assert_eq!(
+        on_friday(100_000, "USD", "JPY"),
+        converted(157_250, FRIDAY, RateLeg::Both)
+    );
     // KWD 1.234 / 0.34 × 175.68 = JPY 637.61...
-    assert_eq!(on_friday(1_234, "KWD", "JPY"), converted(638, FRIDAY));
+    assert_eq!(
+        on_friday(1_234, "KWD", "JPY"),
+        converted(638, FRIDAY, RateLeg::Both)
+    );
     // EUR 1,000.00 × 136 = ISK 136,000.
-    assert_eq!(on_friday(100_000, "EUR", "ISK"), converted(136_000, FRIDAY));
+    assert_eq!(
+        on_friday(100_000, "EUR", "ISK"),
+        converted(136_000, FRIDAY, RateLeg::Display)
+    );
 }
 
 #[test]
@@ -179,19 +204,19 @@ fn half_even_both_signs() {
     let half = book(&[("USD", &[(FRIDAY, "0.5")])]);
     let at_half = |minor| convert(minor, currency("EUR"), currency("USD"), FRIDAY, &half);
     // 2.5 goes to the even 2, 3.5 to the even 4, and alike below zero.
-    assert_eq!(at_half(5), converted(2, FRIDAY));
-    assert_eq!(at_half(7), converted(4, FRIDAY));
-    assert_eq!(at_half(-5), converted(-2, FRIDAY));
-    assert_eq!(at_half(-7), converted(-4, FRIDAY));
+    assert_eq!(at_half(5), converted(2, FRIDAY, RateLeg::Display));
+    assert_eq!(at_half(7), converted(4, FRIDAY, RateLeg::Display));
+    assert_eq!(at_half(-5), converted(-2, FRIDAY, RateLeg::Display));
+    assert_eq!(at_half(-7), converted(-4, FRIDAY, RateLeg::Display));
     // 0.5 and 1.5.
-    assert_eq!(at_half(1), converted(0, FRIDAY));
-    assert_eq!(at_half(3), converted(2, FRIDAY));
+    assert_eq!(at_half(1), converted(0, FRIDAY, RateLeg::Display));
+    assert_eq!(at_half(3), converted(2, FRIDAY, RateLeg::Display));
     let third = book(&[("USD", &[(FRIDAY, "0.3")])]);
     let at_third = |minor| convert(minor, currency("EUR"), currency("USD"), FRIDAY, &third);
     // 0.3 goes towards zero and 0.6 away from it.
-    assert_eq!(at_third(1), converted(0, FRIDAY));
-    assert_eq!(at_third(2), converted(1, FRIDAY));
-    assert_eq!(at_third(-2), converted(-1, FRIDAY));
+    assert_eq!(at_third(1), converted(0, FRIDAY, RateLeg::Display));
+    assert_eq!(at_third(2), converted(1, FRIDAY, RateLeg::Display));
+    assert_eq!(at_third(-2), converted(-1, FRIDAY, RateLeg::Display));
 }
 
 #[test]
@@ -220,7 +245,9 @@ fn no_later_rate_is_used() {
     let usd = currency("USD");
     assert_eq!(
         convert(100, eur, usd, date(1999, 1, 3), &book),
-        Conversion::Missing
+        Conversion::Missing {
+            leg: RateLeg::Display,
+        }
     );
     assert_eq!(
         book.rate(usd, first),
@@ -239,7 +266,7 @@ fn weekend_uses_friday() {
             saturday,
             &friday_book()
         ),
-        converted(111_720, FRIDAY)
+        converted(111_720, FRIDAY, RateLeg::Display)
     );
 }
 
@@ -253,11 +280,11 @@ fn cross_rate_reports_the_older_date() {
     let later = FRIDAY;
     assert_eq!(
         convert(100_000, currency("GBP"), currency("USD"), later, &book),
-        converted(133_989, wednesday)
+        converted(133_989, wednesday, RateLeg::Held)
     );
     assert_eq!(
         convert(133_989, currency("USD"), currency("GBP"), later, &book),
-        converted(100_000, wednesday)
+        converted(100_000, wednesday, RateLeg::Display)
     );
 }
 
@@ -268,15 +295,17 @@ fn missing_either_leg_is_missing() {
     let thb = currency("THB");
     assert_eq!(
         convert(100, usd, thb, FRIDAY, &usd_only),
-        Conversion::Missing
+        Conversion::Missing {
+            leg: RateLeg::Display,
+        }
     );
     assert_eq!(
         convert(100, thb, usd, FRIDAY, &usd_only),
-        Conversion::Missing
+        Conversion::Missing { leg: RateLeg::Held }
     );
     assert_eq!(
         convert(100, thb, currency("EUR"), FRIDAY, &usd_only),
-        Conversion::Missing
+        Conversion::Missing { leg: RateLeg::Held }
     );
 }
 
@@ -297,11 +326,11 @@ fn limits_cannot_overflow() {
     // The other way round: 2^63 × 10^-6 / 9,999,999,999 × 10^-3 = 0.92... rounds to 1.
     assert_eq!(
         convert(i64::MIN, kwd, jpy, FRIDAY, &extremes),
-        converted(-1, FRIDAY)
+        converted(-1, FRIDAY, RateLeg::Both)
     );
     assert_eq!(
         convert(i64::MAX, kwd, jpy, FRIDAY, &extremes),
-        converted(1, FRIDAY)
+        converted(1, FRIDAY, RateLeg::Both)
     );
 }
 
@@ -311,8 +340,14 @@ fn limits_cannot_overflow() {
 fn the_largest_result_is_the_same_in_both_signs() {
     let one = book(&[("USD", &[(FRIDAY, "1")])]);
     let at_one = |minor| convert(minor, currency("EUR"), currency("USD"), FRIDAY, &one);
-    assert_eq!(at_one(i64::MAX), converted(i64::MAX, FRIDAY));
-    assert_eq!(at_one(-i64::MAX), converted(-i64::MAX, FRIDAY));
+    assert_eq!(
+        at_one(i64::MAX),
+        converted(i64::MAX, FRIDAY, RateLeg::Display)
+    );
+    assert_eq!(
+        at_one(-i64::MAX),
+        converted(-i64::MAX, FRIDAY, RateLeg::Display)
+    );
     assert_eq!(at_one(i64::MIN), Conversion::TooLarge);
     let two = book(&[("USD", &[(FRIDAY, "2")])]);
     let at_two = |minor| convert(minor, currency("EUR"), currency("USD"), FRIDAY, &two);
@@ -323,9 +358,14 @@ fn the_largest_result_is_the_same_in_both_signs() {
 fn opposite(conversion: Conversion) -> Conversion {
     match conversion {
         Conversion::Same { minor } => Conversion::Same { minor: -minor },
-        Conversion::Converted { minor, rate_on } => Conversion::Converted {
+        Conversion::Converted {
+            minor,
+            rate_on,
+            leg,
+        } => Conversion::Converted {
             minor: -minor,
             rate_on,
+            leg,
         },
         other => other,
     }

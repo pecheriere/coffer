@@ -500,6 +500,7 @@ fn what_an_unlisted_account_brings_changes_nothing() {
         display: Some(currency("USD")),
         display_minor: None,
         rate_on: None,
+        rate_leg: None,
         conversion: ConversionState::Missing,
     });
     handed_more.first_on.push((foreign, OCT_26));

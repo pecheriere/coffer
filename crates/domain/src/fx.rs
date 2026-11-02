@@ -38,6 +38,8 @@ pub enum FxError {
     UnknownFetchStatus,
     #[error("unknown rate error code")]
     UnknownErrorCode,
+    #[error("unknown rate leg")]
+    UnknownRateLeg,
 }
 
 /// Units of a currency per one euro, exactly. Text outside the program:
@@ -175,6 +177,20 @@ string_enum!(
     }
 );
 
+string_enum!(
+    /// Which side of a conversion a rate belongs to: what a rate date or a missing
+    /// rate is about. The euro is 1 on every day, so it is never the one.
+    RateLeg, FxError::UnknownRateLeg,
+    {
+        /// The amount's own currency.
+        Held => "held",
+        /// The currency it is shown in.
+        Display => "display",
+        /// Both: the same rate date on each side, or no rate on either.
+        Both => "both",
+    }
+);
+
 /// One day's rate of one currency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -276,10 +292,14 @@ pub(crate) fn is_euro(currency: Currency) -> bool {
 pub enum Conversion {
     /// The currencies are the same, so no rate was involved.
     Same { minor: i64 },
-    /// `rate_on` is the older of the rate dates used.
-    Converted { minor: i64, rate_on: Date },
-    /// A rate on or before the day is missing for either currency.
-    Missing,
+    /// `rate_on` is the older of the rate dates used, and `leg` the side it is on.
+    Converted {
+        minor: i64,
+        rate_on: Date,
+        leg: RateLeg,
+    },
+    /// A rate on or before the day is missing, on `leg`.
+    Missing { leg: RateLeg },
     /// The magnitude of the result does not fit in `i64`.
     TooLarge,
 }
@@ -292,13 +312,28 @@ pub fn convert(minor: i64, from: Currency, to: Currency, on: Date, book: &RateBo
     if from == to {
         return Conversion::Same { minor };
     }
-    let (from_rate, to_rate, rate_on) = match (book.rate(from, on), book.rate(to, on)) {
-        (RateLookup::Missing, _) | (_, RateLookup::Missing) => return Conversion::Missing,
+    let (from_rate, to_rate, rate_on, leg) = match (book.rate(from, on), book.rate(to, on)) {
+        (RateLookup::Missing, RateLookup::Missing) => {
+            return Conversion::Missing { leg: RateLeg::Both };
+        }
+        (RateLookup::Missing, _) => return Conversion::Missing { leg: RateLeg::Held },
+        (_, RateLookup::Missing) => {
+            return Conversion::Missing {
+                leg: RateLeg::Display,
+            };
+        }
         (RateLookup::Euro, RateLookup::Euro) => return Conversion::Same { minor },
-        (RateLookup::Euro, RateLookup::Found(day, rate)) => (FxRate::ONE, rate, day),
-        (RateLookup::Found(day, rate), RateLookup::Euro) => (rate, FxRate::ONE, day),
+        (RateLookup::Euro, RateLookup::Found(day, rate)) => {
+            (FxRate::ONE, rate, day, RateLeg::Display)
+        }
+        (RateLookup::Found(day, rate), RateLookup::Euro) => (rate, FxRate::ONE, day, RateLeg::Held),
         (RateLookup::Found(from_on, from_rate), RateLookup::Found(to_on, to_rate)) => {
-            (from_rate, to_rate, from_on.min(to_on))
+            let leg = match from_on.cmp(&to_on) {
+                Ordering::Less => RateLeg::Held,
+                Ordering::Greater => RateLeg::Display,
+                Ordering::Equal => RateLeg::Both,
+            };
+            (from_rate, to_rate, from_on.min(to_on), leg)
         }
     };
     let magnitude = scaled_magnitude(
@@ -312,10 +347,12 @@ pub fn convert(minor: i64, from: Currency, to: Currency, on: Date, book: &RateBo
         Some(magnitude) if minor < 0 => Conversion::Converted {
             minor: -magnitude,
             rate_on,
+            leg,
         },
         Some(magnitude) => Conversion::Converted {
             minor: magnitude,
             rate_on,
+            leg,
         },
         None => Conversion::TooLarge,
     }

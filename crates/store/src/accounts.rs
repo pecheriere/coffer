@@ -106,6 +106,39 @@ async fn fetch_account<'e>(
     account_from_row(&row)
 }
 
+/// The accounts in `scope`, ordered by id, which is oldest first: filtered in the
+/// query, and with an empty scope never asked.
+pub(crate) async fn accounts_in_scope<'e>(
+    executor: impl SqliteExecutor<'e>,
+    scope: &AccountScope,
+    include_closed: bool,
+) -> Result<Vec<AccountRecord>, StoreError> {
+    let mut query =
+        QueryBuilder::<Sqlite>::new(concat!("SELECT ", columns!(), " FROM accounts WHERE 1 = 1"));
+    match scope {
+        AccountScope::All => {}
+        AccountScope::Only(ids) if ids.is_empty() => return Ok(Vec::new()),
+        AccountScope::Only(ids) => {
+            query.push(" AND id IN (");
+            let mut separated = query.separated(", ");
+            for id in ids {
+                separated.push_bind(id.to_string());
+            }
+            separated.push_unseparated(")");
+        }
+    }
+    if !include_closed {
+        query.push(" AND closed_at IS NULL");
+    }
+    query.push(" ORDER BY id");
+    let rows = query
+        .build()
+        .fetch_all(executor)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+    rows.iter().map(account_from_row).collect()
+}
+
 /// Whether some provider account is bound to `account`.
 async fn is_linked<'e>(
     executor: impl SqliteExecutor<'e>,
@@ -246,33 +279,7 @@ impl Store {
         scope: &AccountScope,
         include_closed: bool,
     ) -> Result<Vec<AccountRecord>, StoreError> {
-        let mut query = QueryBuilder::<Sqlite>::new(concat!(
-            "SELECT ",
-            columns!(),
-            " FROM accounts WHERE 1 = 1"
-        ));
-        match scope {
-            AccountScope::All => {}
-            AccountScope::Only(ids) if ids.is_empty() => return Ok(Vec::new()),
-            AccountScope::Only(ids) => {
-                query.push(" AND id IN (");
-                let mut separated = query.separated(", ");
-                for id in ids {
-                    separated.push_bind(id.to_string());
-                }
-                separated.push_unseparated(")");
-            }
-        }
-        if !include_closed {
-            query.push(" AND closed_at IS NULL");
-        }
-        query.push(" ORDER BY id");
-        let rows = query
-            .build()
-            .fetch_all(&self.pool)
-            .await
-            .map_err(StoreError::from_sqlx)?;
-        rows.iter().map(account_from_row).collect()
+        accounts_in_scope(&self.pool, scope, include_closed).await
     }
 
     /// Whether some provider account is bound to `account`.

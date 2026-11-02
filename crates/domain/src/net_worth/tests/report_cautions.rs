@@ -199,22 +199,95 @@ fn the_euro_is_never_the_one_named() {
     );
 }
 
-/// A row keeps one rate date, not which leg it came from, so between two foreign
-/// currencies the caution names the account's.
+/// Both rates are equally old, so each currency is as much to blame.
 #[test]
-fn between_two_foreign_currencies_the_account_s_is_named() {
+fn two_rates_of_the_same_old_day_are_both_named() {
     let rate_on = date(2026, 10, 1);
     let book = rates(&[("USD", &[(rate_on, "1.1")]), ("GBP", &[(rate_on, "0.8")])]);
     let held = [cash(1, "USD", &[(OCT_26, 100)])];
     let mut asked = input(&held, Some("GBP"), &book);
     asked.stale_after_days = u16::MAX;
+    let stale = |code| NetWorthCaution::RateStale {
+        currency: currency(code),
+        on: NOV_1,
+        rate_on,
+        age_days: 31,
+    };
+    assert_eq!(
+        net_worth_report(&asked).unwrap().cautions,
+        [stale("GBP"), stale("USD")]
+    );
+}
+
+/// The ECB's rouble ends in 2022 while its dollar goes on: the rate that is old
+/// is the rouble's, though the account is in dollars.
+#[test]
+fn a_usd_account_shown_in_a_discontinued_currency_names_that_currency() {
+    let last_rouble = date(2022, 3, 1);
+    let book = rates(&[
+        ("USD", &[(date(2026, 10, 25), "1.1172")]),
+        ("RUB", &[(last_rouble, "117.2")]),
+    ]);
+    let held = [cash(1, "USD", &[(TODAY, 100)])];
+    let mut asked = input(&held, Some("RUB"), &book);
+    asked.from = TODAY;
+    asked.to = TODAY;
     assert_eq!(
         net_worth_report(&asked).unwrap().cautions,
         [NetWorthCaution::RateStale {
-            currency: currency("USD"),
-            on: NOV_1,
-            rate_on,
-            age_days: 31,
+            currency: currency("RUB"),
+            on: TODAY,
+            rate_on: last_rouble,
+            age_days: 1707,
+        }]
+    );
+}
+
+/// The account's own rate is the old one: the display currency's is not named.
+#[test]
+fn an_old_rate_of_the_account_s_currency_names_that_currency() {
+    let last_rouble = date(2022, 3, 1);
+    let book = rates(&[
+        ("USD", &[(date(2026, 10, 25), "1.1172")]),
+        ("RUB", &[(last_rouble, "117.2")]),
+    ]);
+    let held = [cash(1, "RUB", &[(TODAY, 100)])];
+    let mut asked = input(&held, Some("USD"), &book);
+    asked.from = TODAY;
+    asked.to = TODAY;
+    assert_eq!(
+        net_worth_report(&asked).unwrap().cautions,
+        [NetWorthCaution::RateStale {
+            currency: currency("RUB"),
+            on: TODAY,
+            rate_on: last_rouble,
+            age_days: 1707,
+        }]
+    );
+}
+
+/// The pound's rates start after the day and the dollar's before it, so only the
+/// pound is named, whatever coverage says of the dollar.
+#[test]
+fn a_rate_too_early_names_only_the_currency_lacking_it() {
+    let book = rates(&[
+        ("USD", &[(date(1999, 1, 4), "1.1789")]),
+        ("GBP", &[(NOV_1, "0.8338")]),
+    ]);
+    let held = [cash(1, "USD", &[(OCT_26, 100)])];
+    let mut asked = input(&held, Some("GBP"), &book);
+    asked.to = OCT_26;
+    asked.coverage = vec![CurrencyState {
+        currency: currency("USD"),
+        reason: Some(RateMissingReason::FetchFailing),
+    }];
+    assert_eq!(
+        net_worth_report(&asked).unwrap().cautions,
+        [NetWorthCaution::RateMissing {
+            currency: currency("GBP"),
+            reason: RateMissingReason::NoneThatEarly,
+            first_on: OCT_26,
+            last_on: OCT_26,
         }]
     );
 }

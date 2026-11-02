@@ -75,6 +75,8 @@ impl StoreTx {
     /// snapshots of `account`, never over a snapshot already there, and
     /// remove everything kept for it, so nothing can apply twice. What was
     /// kept in another currency has no meaning for the account and is dropped.
+    /// The daily rows of the account are rewritten in this transaction, from the
+    /// earliest day written on.
     ///
     /// # Errors
     ///
@@ -121,10 +123,14 @@ impl StoreTx {
                 .transpose()
         };
         let days = written.iter().map(|(day,)| day);
+        // ISO days sort as text.
+        let first_day = day(days.clone().min())?;
+        if let Some(first_day) = first_day {
+            self.refresh_after_bring_in(account, first_day).await?;
+        }
         Ok(BroughtIn {
             written: count(written_count),
-            // ISO days sort as text.
-            first_day: day(days.clone().min())?,
+            first_day,
             last_day: day(days.max())?,
             other_currency: count(removed.saturating_sub(matching)),
             already_there: count(matching.saturating_sub(written_count)),

@@ -106,7 +106,7 @@ pub(crate) async fn fetch_forecast_settings<'e>(
         )
 }
 
-async fn fetch_display_currency<'e>(
+pub(crate) async fn fetch_display_currency<'e>(
     executor: impl SqliteExecutor<'e>,
 ) -> Result<Option<Currency>, StoreError> {
     let stored: Option<Option<String>> =
@@ -236,7 +236,7 @@ impl StoreTx {
     /// Set the display currency and answer the one it replaced, which is the
     /// new one again when nothing changed. With no settings row yet, the row
     /// is made with the forecast defaults; an existing row keeps every other
-    /// value.
+    /// value. A change rewrites every daily row in this transaction.
     ///
     /// # Errors
     ///
@@ -265,6 +265,9 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
+        if previous != Some(currency) {
+            self.refresh_after_display_change().await?;
+        }
         Ok(previous)
     }
 }

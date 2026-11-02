@@ -1,5 +1,5 @@
 //! What only the crate can see: the stored `fetched_at`, and the loader that
-//! the net worth tables will use.
+//! the net worth table uses.
 
 use coffer_domain::fx::{FxRate, FxSource, RateLookup, RateObservation};
 use coffer_domain::money::Currency;

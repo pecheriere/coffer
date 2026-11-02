@@ -16,7 +16,7 @@ use super::types::{
     RateMissingReason, ReportAccount,
 };
 use crate::accounts::LiquidityClass;
-use crate::fx::{RATE_STALE_AFTER_DAYS, is_euro};
+use crate::fx::{RATE_STALE_AFTER_DAYS, RateLeg, is_euro};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 
@@ -415,18 +415,19 @@ fn rate_cautions(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<NetWorthCaution
                 if line.row.conversion == ConversionState::TooLarge {
                     continue;
                 }
-                for (currency, reason) in missing_legs(held, display, input) {
+                for currency in rate_currencies(line.row, held, display) {
+                    let reason = missing_reason(currency, input);
                     missing
                         .entry(currency)
                         .and_modify(|seen| seen.2 = on)
                         .or_insert((reason, on, on));
                 }
             } else if let Some((rate_on, age_days)) = stale_rate(line.row) {
-                let worst = stale
-                    .entry(foreign_leg(held, display))
-                    .or_insert((on, rate_on, age_days));
-                if age_days > worst.2 {
-                    *worst = (on, rate_on, age_days);
+                for currency in rate_currencies(line.row, held, display) {
+                    let worst = stale.entry(currency).or_insert((on, rate_on, age_days));
+                    if age_days > worst.2 {
+                        *worst = (on, rate_on, age_days);
+                    }
                 }
             }
         }
@@ -460,35 +461,31 @@ fn stale_rate(row: &DailyValue) -> Option<(Date, u32)> {
     (days_old > RATE_STALE_AFTER_DAYS).then_some((rate_on, u32::try_from(days_old).ok()?))
 }
 
-/// The currency to name for a conversion from `held` to `display`: the row keeps
-/// one rate date, not which leg it came from. Never the euro, which has no rate.
-fn foreign_leg(held: Currency, display: Currency) -> Currency {
-    if is_euro(held) { display } else { held }
+/// The currencies a row's old or missing rate is about, by the side it keeps. A
+/// row with no side is one the store refuses, in another display currency: it
+/// names the foreign one, never the euro, which has no rate.
+fn rate_currencies(row: &DailyValue, held: Currency, display: Currency) -> Vec<Currency> {
+    let foreign = if is_euro(held) {
+        RateLeg::Display
+    } else {
+        RateLeg::Held
+    };
+    match row.rate_leg.unwrap_or(foreign) {
+        RateLeg::Held => vec![held],
+        RateLeg::Display => vec![display],
+        RateLeg::Both => vec![held, display],
+    }
 }
 
-/// The currencies to blame for a missing conversion: those with a reason, or the
-/// foreign leg when both have rates, so none is that early.
-fn missing_legs(
-    held: Currency,
-    display: Currency,
-    input: &NetWorthInput,
-) -> Vec<(Currency, RateMissingReason)> {
-    let reason_for = |currency: Currency| {
-        input
-            .coverage
-            .iter()
-            .find(|state| state.currency == currency)
-            .and_then(|state| state.reason)
-    };
-    let mut legs: Vec<_> = [held, display]
-        .into_iter()
-        .filter(|leg| !is_euro(*leg))
-        .filter_map(|leg| Some((leg, reason_for(leg)?)))
-        .collect();
-    if legs.is_empty() {
-        legs.push((foreign_leg(held, display), RateMissingReason::NoneThatEarly));
-    }
-    legs
+/// Why `currency` has no rate: what its coverage says or, when that is nothing,
+/// that it has rates and none that early.
+fn missing_reason(currency: Currency, input: &NetWorthInput) -> RateMissingReason {
+    input
+        .coverage
+        .iter()
+        .find(|state| state.currency == currency)
+        .and_then(|state| state.reason)
+        .unwrap_or(RateMissingReason::NoneThatEarly)
 }
 
 /// Cautions about single accounts, each said once, in input order.
