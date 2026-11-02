@@ -92,6 +92,7 @@ async fn a_posted_record_joins_the_pending_one_its_delta_removes() {
                 splits: Some(vec![SplitInput {
                     category: food,
                     minor_units: before.amount_minor,
+                    goal: None,
                 }]),
                 ..TransactionPatch::default()
             },

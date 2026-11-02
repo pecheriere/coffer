@@ -10,17 +10,26 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
   audit entry types, money, accounts, transactions, matching, sync run
-  triggers and statuses, clock). No I/O.
+  triggers and statuses, clock; `plan` (planned items, schedules, goals,
+  forecast settings), `forecast` and `plan_report`, the pure calculations
+  behind the cash forecast and plan versus actual). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
-  type, so a different database backend changes only this crate.
+  type, so a different database backend changes only this crate. It holds
+  planned items, the household settings, and the one read transaction that
+  gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
-  with a content security policy of their own); `ledger` (accounts and balances, categories,
-  transactions and their splits, merging, un-merging and dismissing possible
-  duplicates); `egress` (the one outbound
+  with a content security policy of their own, and whose `forecast.rs` is the
+  read-only forecast page; `browser_reports/`, the
+  unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
+  the household forecast `settings`, the `forecast` and its what-if, the
+  `plan_report`, transactions and their splits, merging, un-merging and
+  dismissing possible duplicates; `unseen.rs` holds what a token with grants
+  doesn't get of a transaction it can read: duplicate candidates in accounts it
+  can't read and goal links it can't see); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
@@ -105,9 +114,11 @@ worktree when its branch has merged.
   `authorize_every_account` for what spans every account (the rule table in
   the `policy` module docs), with the `AccountAccess` that `AccessResolver`
   resolves (never built by hand). A `Denied` becomes a problem only through
-  `impl From<Denied> for Problem`.
+  `impl From<Denied> for Problem`. Whether a planned item exists for an actor
+  is decided only by `plan_item_visible`, whose hidden answer is the missing one.
 - Money is an integer in minor units with its ISO 4217 currency
-  (`coffer_domain::money`); negative is money out of the account. No
+  (`coffer_domain::money`); negative is money out of the account, except a
+  planned item's amount, a positive magnitude with a `direction`. No
   floating point anywhere on a money path, provider JSON included.
 - Outbound HTTP goes only through `egress::Egress`, with a host allow-list.
   Providers are registered only in `ProviderRegistry::from_config`. Every
@@ -133,6 +144,10 @@ worktree when its branch has merged.
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the
   threat model's accepted risks.
+- A page whose scripts handle amounts or names stays out of `PAGES` in
+  `http/browser_reports/fields.rs`, so a browser report's free text from it is
+  never logged, and first-party scripts never put page data in an error's
+  message. The threat model says why.
 - Lints are strict (`unsafe_code` forbidden, clippy `all` and `pedantic` at
   deny). No `#[allow]`/`#[expect]` without a `reason = "..."`.
 

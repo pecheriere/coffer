@@ -19,7 +19,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
 | `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
@@ -51,6 +51,9 @@ are `Secure`. Requirements for the proxy:
   request outside `/api/` whose `Origin` differs from the public origin.
 - Do not log request paths under `/setup/` or `/invite/`: they carry
   single-use secrets in the URL. coffer itself never logs request paths.
+- Add the client's address as the last entry of `X-Forwarded-For`, as Caddy,
+  nginx with `$proxy_add_x_forwarded_for` and Tailscale do. It is read only to
+  limit [browser reports](#browser-reports) per client, and never logged.
 - Keep `COFFER_LISTEN` on a loopback or private interface that only the proxy
   can reach.
 
@@ -154,8 +157,58 @@ often do not support popups. Tell them to open coffer in a normal browser.
 
 - `GET /healthz` returns `200 ok` when the database answers, otherwise `503`.
   It needs no credentials and reveals nothing else.
+- `POST /browser-reports` takes [browser reports](#browser-reports). It needs
+  no credentials and always answers an empty `204`.
 - `/api/v1/*` is the JSON API (see `agent-usage.md`); everything else is the
   web UI.
+
+## Browser reports
+
+When something fails in a browser, the operator can find it in the log. coffer's
+pages report uncaught script errors, unhandled promise rejections, failed passkey
+ceremonies and Plaid Link failures, at most 5 per page load, and the browser
+reports violations of the content security policy. All of them go to coffer's own
+`POST /browser-reports`, never to a third party, and nothing is stored.
+
+Each report kept writes one `WARN` event with the message `browser report
+(client-reported, untrusted)`. **Anyone on the network can send one, so treat its
+fields as claims.** With `COFFER_LOG_FORMAT=json`, on one line:
+
+```json
+{"timestamp":"...","level":"WARN","fields":{"message":"browser report (client-reported, untrusted)","source":"browser","trust":"untrusted","kind":"passkey","page":"/invite/{token}","script":"none","line":0,"column":0,"client_message":"enroll: NotAllowedError: The operation either timed out or was not allowed. [url]"},"target":"coffer_server::http::browser_reports::fields"}
+```
+
+| Field | What it holds |
+|-------|---------------|
+| `kind` | `error`, `unhandled_rejection`, `passkey`, `plaid` or `csp`. |
+| `page` | The page's route template, such as `/invite/{token}`, never its real path, query or fragment. A path that is no known page is `other`. |
+| `script` | The path of `coffer.js` or `plaid-link.js`, `none` if the report names no script, and `other` for anything else, another origin included. |
+| `line`, `column` | Numbers in that script, `0` when unknown. |
+| `client_message` | At most 200 characters of letters, numbers, punctuation and symbols, with whitespace reduced to single spaces. A word shaped like a credential (`eyJ` with a dot, `-----BEGIN`) is replaced by `[token]`, and one that looks like an address by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. It is `[withheld]` from a page that is `other`, and for an `error` whose script is not one of coffer's. |
+
+To find them in JSON logs:
+
+```sh
+docker logs coffer 2>&1 | jq -Rc 'fromjson? | select(.fields.trust == "untrusted") | .fields'
+```
+
+In the text format, search for `client-reported`.
+
+A report can't be trusted to be free of what your log alerts look for, despite
+the `[token]` rule: if you alert on secrets in logs, ignore events with `trust` =
+`untrusted`.
+
+Limits: 5 reports per client and 20 in all per minute; a body of at most 8 KiB.
+Only a report that passes every other check spends the limit. What is over a limit
+or refused is dropped without a line. At most every 5 minutes,
+and only when the next request arrives, one `WARN` event `browser reports dropped`
+gives the counts (`over_limit`, `refused`); a restart loses a count not yet logged.
+Many `over_limit` drops with reports you can't explain mean something on your
+network is sending them.
+
+The one `style-src-elem` violation that Plaid's script causes on each Link page is
+expected, so it is neither logged nor counted. Any other violation on those pages
+is a finding.
 
 ## Panics
 
@@ -207,6 +260,11 @@ coffer recover-admin <username> # print a re-enroll link for an admin who lost e
 coffer backup <dest>            # consistent copy of the database, mode 0600; refuses an existing file
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
+
+On first start with no admin yet, `serve` also logs the setup link. Every link
+issued this way, by `serve` at startup or by `bootstrap-link`, revokes the
+earlier unused setup links, so only the newest works: a restart of `serve`
+invalidates a link printed before it. Both stop once an admin exists.
 
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.

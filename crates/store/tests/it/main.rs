@@ -2,7 +2,9 @@
 //! single test binary so a change relinks one program instead of one per file.
 
 mod duplicates;
+mod forecast;
 mod foundation;
 mod identity;
 mod ledger;
+mod plan;
 mod sync;

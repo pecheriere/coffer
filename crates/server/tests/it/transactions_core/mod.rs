@@ -202,6 +202,7 @@ fn splits(parts: &[(CategoryId, i64)]) -> Vec<SplitInput> {
         .map(|(category, minor_units)| SplitInput {
             category: *category,
             minor_units: *minor_units,
+            goal: None,
         })
         .collect()
 }

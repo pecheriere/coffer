@@ -3,11 +3,12 @@
 use super::{grant, on, s, world};
 use axum::http::{Method, StatusCode};
 use coffer_domain::identity::Scope;
+use coffer_domain::ids::{AccountId, CategoryId};
 use coffer_domain::policy::{AccountLevel, GrantTarget, TokenGrant};
 use coffer_server::ledger::categories::CategoryGroupInput;
 use coffer_server::sync::provider::{ConnectInput, ProviderKind};
 use secrecy::{ExposeSecret as _, SecretString};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -394,4 +395,267 @@ async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
         2,
         "the candidates survived the merge: the filter hid them"
     );
+}
+
+/// A create body for a monthly bill, hinted at `hint`.
+fn bill(category: CategoryId, hint: Option<AccountId>) -> Value {
+    json!({
+        "name": "Water bill",
+        "category": category,
+        "amount": {"minor_units": 4200, "currency": "USD"},
+        "direction": "outflow",
+        "account_hint": hint,
+        "schedule": {"type": "recurring", "every": 1, "unit": "months",
+                     "anchor_on": "2027-01-01"},
+    })
+}
+
+const PLAN_ITEMS: &str = "/api/v1/plan-items";
+
+#[tokio::test]
+async fn plan_writes_need_every_account_at_write_before_reserving_the_key() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let category = world.expense_category().await;
+    let (id, token) = world
+        .token(Scope::Write, vec![on(a, AccountLevel::Write)])
+        .await;
+    let body = bill(category, Some(a));
+    let before = world.audit_count().await;
+    for _ in 0..2 {
+        // The same key twice: never `in progress`, never a replay.
+        let (status, text) = world
+            .send(
+                Method::POST,
+                PLAN_ITEMS,
+                &token,
+                Some(&body),
+                Some("plan-key"),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let refusal: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            refusal,
+            json!({
+                "type": "urn:coffer:problem:forbidden",
+                "title": "Forbidden",
+                "status": 403,
+                "code": "forbidden",
+                "detail": "this action needs write access to every account",
+            })
+        );
+    }
+    assert_eq!(world.audit_count().await, before, "nothing was written");
+
+    world
+        .server
+        .agent_tokens
+        .replace_grants(
+            &world.alice,
+            id,
+            vec![grant(GrantTarget::All, AccountLevel::Write)],
+        )
+        .await
+        .unwrap();
+    let (status, _) = world
+        .send(
+            Method::POST,
+            PLAN_ITEMS,
+            &token,
+            Some(&body),
+            Some("plan-key"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "the key was free");
+}
+
+/// `all` at `balances` shows every account and its balances, and nothing a
+/// spending figure could be worked out from.
+#[tokio::test]
+async fn balances_level_grant_on_all_cannot_derive_spending() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    world.balance(a).await;
+    let category = world.expense_category().await;
+    let goal = world
+        .planned_item("Spending plan", Some(a), category, 5000)
+        .await;
+    let transaction = world.transaction(a, 1, "A purchase").await;
+    world.link_split(transaction, category, -1000, goal).await;
+    let (_, token) = world
+        .token(
+            Scope::Read,
+            vec![grant(GrantTarget::All, AccountLevel::Balances)],
+        )
+        .await;
+
+    let (status, text) = world
+        .send(Method::GET, "/api/v1/transactions", &token, None, None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let listed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(listed, json!({"items": [], "next": null}));
+    let (status, text) = world
+        .send(Method::GET, PLAN_ITEMS, &token, None, None)
+        .await;
+    assert_eq!((status, text.as_str()), (StatusCode::OK, r#"{"items":[]}"#));
+    let refusal = json!({
+        "type": "urn:coffer:problem:forbidden",
+        "title": "Forbidden",
+        "status": 403,
+        "code": "forbidden",
+        "detail": "this action needs transactions access to every account",
+    });
+    for uri in [
+        "/api/v1/forecast",
+        "/api/v1/reports/plan-vs-actual?from=2026-10",
+        "/api/v1/audit",
+    ] {
+        let (status, body) = world.get(uri, &token).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, refusal);
+    }
+    let (status, _) = world
+        .get(&format!("/api/v1/transactions/{transaction}"), &token)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a level too low, named");
+}
+
+#[tokio::test]
+async fn grant_change_applies_to_plan_at_next_request() {
+    let world = world().await;
+    let (a, b) = (
+        world.account("Checking").await,
+        world.account("Other").await,
+    );
+    let category = world.expense_category().await;
+    let item = world
+        .planned_item("On the first", Some(a), category, 5000)
+        .await;
+    let (id, token) = world
+        .token(Scope::Read, vec![on(a, AccountLevel::Transactions)])
+        .await;
+    let uri = format!("{PLAN_ITEMS}/{item}");
+    let (status, _) = world.get(&uri, &token).await;
+    assert_eq!(status, StatusCode::OK, "the hint is visible");
+
+    world
+        .server
+        .agent_tokens
+        .replace_grants(&world.alice, id, vec![on(b, AccountLevel::Transactions)])
+        .await
+        .unwrap();
+
+    let answer = world.send(Method::GET, &uri, &token, None, None).await;
+    let missing = world
+        .send(
+            Method::GET,
+            &format!("{PLAN_ITEMS}/{}", coffer_domain::ids::PlannedItemId::new()),
+            &token,
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(answer.0, StatusCode::NOT_FOUND);
+    assert!(answer == missing, "answered like a missing item");
+    let (_, listed) = world.get(PLAN_ITEMS, &token).await;
+    assert_eq!(listed, json!({"items": []}));
+}
+
+/// An account made after a token is hidden from it, with the items hinted at
+/// it, unless it holds `all`.
+#[tokio::test]
+async fn new_account_hint_needs_an_all_grant() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let category = world.expense_category().await;
+    let (_, named) = world
+        .token(Scope::Read, vec![on(a, AccountLevel::Transactions)])
+        .await;
+    let (_, everything) = world
+        .token(
+            Scope::Read,
+            vec![grant(GrantTarget::All, AccountLevel::Transactions)],
+        )
+        .await;
+
+    let newer = world.account("Newer").await;
+    let item = world
+        .planned_item("On the newer", Some(newer), category, 5000)
+        .await;
+
+    let uri = format!("{PLAN_ITEMS}/{item}");
+    let (status, _) = world.get(&uri, &named).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, seen) = world.get(&uri, &everything).await;
+    assert_eq!(status, StatusCode::OK);
+    let hint = seen["account_hint"].clone();
+    assert_eq!(hint, s(newer));
+}
+
+#[tokio::test]
+async fn audit_of_plan_changes_stays_behind_the_all_grant() {
+    let world = world().await;
+    let a = world.account("Checking").await;
+    let category = world.expense_category().await;
+    let (_, writer) = world
+        .token(
+            Scope::Write,
+            vec![grant(GrantTarget::All, AccountLevel::Write)],
+        )
+        .await;
+    let (status, created) = world
+        .call(
+            Method::POST,
+            PLAN_ITEMS,
+            &writer,
+            Some(bill(category, Some(a))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let item = created["id"].as_str().unwrap().to_owned();
+    let (status, _) = world
+        .call(
+            Method::DELETE,
+            &format!("{PLAN_ITEMS}/{item}"),
+            &writer,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let filtered = format!("/api/v1/audit?entity_type=planned_item&entity_id={item}");
+    for grants in [
+        vec![on(a, AccountLevel::Write)],
+        vec![grant(GrantTarget::All, AccountLevel::Balances)],
+    ] {
+        let (_, token) = world.token(Scope::Write, grants).await;
+        for uri in ["/api/v1/audit", filtered.as_str()] {
+            let (status, text) = world.send(Method::GET, uri, &token, None, None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            let body: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                body["detail"],
+                "this action needs transactions access to every account"
+            );
+            assert!(!text.contains("Water bill"), "nothing of what it records");
+        }
+    }
+
+    let (_, wide) = world
+        .token(
+            Scope::Read,
+            vec![grant(GrantTarget::All, AccountLevel::Transactions)],
+        )
+        .await;
+    let (status, entries) = world.get(&filtered, &wide).await;
+    assert_eq!(status, StatusCode::OK);
+    let actions: Vec<&str> = entries["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["planned_item.delete", "planned_item.create"]);
 }

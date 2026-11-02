@@ -34,7 +34,7 @@ const USER: &str = "sfuser-page";
 const PASSWORD: &str = "SFPAGE-MARKER";
 const BOGUS_TOKEN: &str = "SECRETTOKEN-page-not-a-real-setup-token";
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-                   frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
+                   frame-ancestors 'none'; form-action 'self'; base-uri 'none'; report-uri /browser-reports";
 
 /// What the mock bridge answers, in order: claims, then accounts.
 #[derive(Default)]

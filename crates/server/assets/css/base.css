@@ -74,6 +74,43 @@ button:disabled { opacity: .6; cursor: progress; }
 .wordmark { font: var(--weight-head) .95rem/1 var(--font-head); letter-spacing: .02em; color: var(--muted); margin: 0 0 .5rem; }
 .fine { font-size: .8125rem; color: var(--muted); }
 
+.answer-label { margin-bottom: .25rem; }
+.answer-number { font: var(--weight-head) clamp(2rem, 9vw, 3rem)/1.1 var(--font-num); font-variant-numeric: tabular-nums; margin: 0 0 .5rem; }
+.answer-short { color: var(--negative); }
+.status { margin: 0 0 1rem; }
+.status:last-child { margin-bottom: 0; }
+.status-firm { color: var(--positive); }
+.status-provisional { color: var(--warning); }
+.status-unavailable { color: var(--muted); }
+.reasons { margin: 0; padding-left: 1.25rem; }
+.reasons li + li { margin-top: .5rem; }
+.sums, .months { width: 100%; border-collapse: collapse; margin: 0 0 1rem; }
+.sums th, .sums td, .months th, .months td { padding: .5rem .25rem; border-top: 1px solid var(--border); text-align: right; font-weight: 500; }
+.sums td, .months td { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sums tr:first-child th, .sums tr:first-child td, .months thead th { border-top: 0; }
+.sums th, .months th[scope="row"] { text-align: left; }
+.months thead th { color: var(--muted); font-size: .8125rem; font-weight: 700; vertical-align: bottom; overflow-wrap: normal; }
+.months thead th:first-child { text-align: left; }
+.months .chip { margin-top: .25rem; }
+.sum-part th { padding-left: 1.25rem; color: var(--muted); }
+.sum-part td { color: var(--muted); }
+.sum-total th, .sum-total td { font-weight: 700; }
+.sum-aside th, .sum-aside td { color: var(--muted); font-size: .8125rem; }
+@media (max-width: 39.99rem) {
+  .months, .months tbody, .months tr, .months td, .months th[scope="row"], .sums, .sums tbody { display: block; }
+  .sums tr { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 1rem; padding: .5rem .25rem; border-top: 1px solid var(--border); }
+  .sums tr:first-child { border-top: 0; }
+  .sums th, .sums td { padding: 0; border-top: 0; overflow-wrap: normal; }
+  .sums tr.sum-part { padding-left: 1.25rem; }
+  .sum-part th { padding-left: 0; }
+  .months thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .months tbody tr { padding: .5rem 0; border-top: 1px solid var(--border); }
+  .months tbody tr:first-child { border-top: 0; }
+  .months th[scope="row"] { font-weight: 700; border-top: 0; padding: .25rem 0; }
+  .months td { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 1rem; padding: .125rem 0; border-top: 0; }
+  .months td::before { content: attr(data-label); color: var(--muted); font-family: var(--font-body); white-space: normal; overflow-wrap: normal; text-align: left; }
+}
+
 @media (min-width: 40rem) {
   .topbar { padding: .75rem 1.5rem; }
   .nav { order: 0; flex-basis: auto; }

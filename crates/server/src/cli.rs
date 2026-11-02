@@ -338,6 +338,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         store.clone(),
         clock.clone(),
         Arc::clone(&access),
+        config.timezone.clone(),
     ));
     let egress = Egress::from_config(&config)?;
     let registry = Arc::new(ProviderRegistry::from_config(&config, &egress)?);

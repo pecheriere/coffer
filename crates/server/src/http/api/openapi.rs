@@ -8,7 +8,7 @@ use axum::Json;
 use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::server::{ServerBuilder, ServerVariableBuilder};
-use utoipa::openapi::tag::TagBuilder;
+use utoipa::openapi::tag::{Tag, TagBuilder};
 use utoipa::openapi::{
     ComponentsBuilder, ContactBuilder, InfoBuilder, LicenseBuilder, OpenApi, OpenApiBuilder, RefOr,
 };
@@ -23,9 +23,13 @@ pub(super) const BEARER: &str = "bearer";
 pub(super) mod tags {
     pub const IDENTITY: &str = "identity";
     pub const MEMBERS: &str = "members";
+    pub const HOUSEHOLD: &str = "household";
     pub const ACCOUNTS: &str = "accounts";
     pub const CATEGORIES: &str = "categories";
     pub const TRANSACTIONS: &str = "transactions";
+    pub const PLAN: &str = "plan";
+    pub const FORECAST: &str = "forecast";
+    pub const REPORTS: &str = "reports";
     pub const CONNECTIONS: &str = "connections";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
@@ -37,6 +41,64 @@ static DOCUMENT: LazyLock<OpenApi> = LazyLock::new(|| super::routes().split().1)
 #[must_use]
 pub fn document() -> OpenApi {
     DOCUMENT.clone()
+}
+
+/// What each of [`tags`] covers.
+fn operation_tags() -> [Tag; 12] {
+    let tag = |name: &str, description: &str| {
+        TagBuilder::new()
+            .name(name)
+            .description(Some(description))
+            .build()
+    };
+    [
+        tag(tags::IDENTITY, "Who the token belongs to."),
+        tag(tags::MEMBERS, "The household's members."),
+        tag(
+            tags::HOUSEHOLD,
+            "The household-wide forecast settings: safety floor, income, horizon and \
+             stale-balance threshold.",
+        ),
+        tag(
+            tags::ACCOUNTS,
+            "Accounts and their daily balances. Amounts are integer minor units of the \
+             account's currency.",
+        ),
+        tag(
+            tags::CATEGORIES,
+            "The household's category groups and categories, which transaction splits \
+             use.",
+        ),
+        tag(
+            tags::TRANSACTIONS,
+            "Transactions, their splits into categories, and their review: listing, \
+             search, single changes and atomic batches.",
+        ),
+        tag(
+            tags::PLAN,
+            "The household's spending plan: recurring items, one-offs and goals. Amounts \
+             are positive magnitudes with a direction.",
+        ),
+        tag(
+            tags::FORECAST,
+            "How much cash the household needs over the coming months, and how much above \
+             that could be invested. A planned amount is a positive magnitude with a \
+             direction; a balance, `cash_available`, `projected_cash` and `surplus` carry a \
+             sign, and a negative `surplus` is a shortfall.",
+        ),
+        tag(
+            tags::REPORTS,
+            "What happened against what was planned, by category and month. `actual` is \
+             positive for what the category's kind counts.",
+        ),
+        tag(
+            tags::CONNECTIONS,
+            "Connections to data providers, their syncs, and the provider accounts they \
+             report, which are bound to accounts.",
+        ),
+        tag(tags::AUDIT, "The append-only log of every change."),
+        tag(tags::META, "This API's own description."),
+    ]
 }
 
 /// The document before any operation is added: info, server, tags and the
@@ -75,12 +137,6 @@ pub(super) fn base() -> OpenApi {
                 .description(Some("The server's `COFFER_PUBLIC_URL`")),
         )
         .build();
-    let tag = |name: &str, description: &str| {
-        TagBuilder::new()
-            .name(name)
-            .description(Some(description))
-            .build()
-    };
     // Error responses come from `CommonProblems`, whose schemas no route
     // registers.
     let mut problem_schemas = vec![(ProblemBody::name().into_owned(), ProblemBody::schema())];
@@ -103,32 +159,7 @@ pub(super) fn base() -> OpenApi {
     OpenApiBuilder::new()
         .info(info)
         .servers(Some([server]))
-        .tags(Some([
-            tag(tags::IDENTITY, "Who the token belongs to."),
-            tag(tags::MEMBERS, "The household's members."),
-            tag(
-                tags::ACCOUNTS,
-                "Accounts and their daily balances. Amounts are integer minor units of the \
-                 account's currency.",
-            ),
-            tag(
-                tags::CATEGORIES,
-                "The household's category groups and categories, which transaction splits \
-                 use.",
-            ),
-            tag(
-                tags::TRANSACTIONS,
-                "Transactions, their splits into categories, and their review: listing, \
-                 search, single changes and atomic batches.",
-            ),
-            tag(
-                tags::CONNECTIONS,
-                "Connections to data providers, their syncs, and the provider accounts they \
-                 report, which are bound to accounts.",
-            ),
-            tag(tags::AUDIT, "The append-only log of every change."),
-            tag(tags::META, "This API's own description."),
-        ]))
+        .tags(Some(operation_tags()))
         .components(Some(components))
         .build()
 }

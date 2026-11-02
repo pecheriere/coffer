@@ -77,6 +77,10 @@ http = "1.4"
 # Safe access to umask(2); already in the tree through tempfile.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs", "process"] }
 url = "2.5.8"
+# Unicode categories for the allow-list of a browser report's text
+# (crates/server/src/http/browser_reports/fields.rs). No new crate in Cargo.lock:
+# stringprep already names it.
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 percent-encoding = "2.3.2"
 # Outbound HTTPS (crates/server/src/egress.rs). rustls with the ring provider
 # and the platform verifier; reqwest gets a preconfigured rustls client, so

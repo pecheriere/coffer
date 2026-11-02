@@ -68,7 +68,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 
 ## 3. Non-goals (v1)
 
-- A real UI (dashboards, transaction lists). Only the auth/admin pages in §6.4.
+- A real UI (dashboards, transaction lists). Only the auth/admin pages and the
+  read-only forecast page in §6.4.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
   local change, but no tables or code for it exist in v1 (superseded for agent
@@ -318,11 +319,13 @@ The last admin cannot be disabled or demoted.
 
 ### 6.4 Web pages (v1, minimal)
 
-Server-rendered, no SPA, minimal JS only for WebAuthn ceremonies. Pages:
+Server-rendered, no SPA, minimal JS only for WebAuthn ceremonies, Plaid Link,
+small page helpers such as copy buttons, and reporting browser errors to
+coffer's own log (`docs/configuration.md`, "Browser reports"). Pages:
 setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
-No financial data pages in v1. (Connections get a page because pasting a
-setup token is a human step.)
+No financial data pages in v1, except one small read-only forecast page (§8.9,
+R14). (Connections get a page because pasting a setup token is a human step.)
 
 ### 6.5 Authorization
 
@@ -636,7 +639,7 @@ differs: all its records write as they always did.
 §5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge
 hosts (`COFFER_SIMPLEFIN_HOSTS`, default `bridge.simplefin.org`,
 `beta-bridge.simplefin.org`), Plaid's API host when Plaid is configured (plan
-2b), and the FX source (plan 3). HTTPS on port 443 only, no redirects, and
+2b), and the FX source (a later plan). HTTPS on port 443 only, no redirects, and
 targets must resolve to public addresses. `HTTPS_PROXY` is honoured when set;
 then coffer does not resolve target hosts, and the public-address check is the
 proxy's job. `COFFER_EGRESS_RELAY`, one IP address and refused together with
@@ -684,9 +687,252 @@ rounded: a record that does not convert exactly is unusable.
 ### 8.7 Household timezone
 
 Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
-default `UTC`), an environment variable until household settings arrive (plan 3).
+default `UTC`). It stays an environment variable, and household settings do not
+take it over (§8.9, R7). The forecast's "today" is the household's day in this
+zone.
 
 ### 8.8 Deferred
 
-Rules (a §2 goal), transfer links, household settings, a starter category set
-and unbinding a provider account move to plan 3.
+Rules (a §2 goal), transfer links, FX, a starter category set and unbinding a
+provider account move to a later plan, as does MCP (§6.12). Household settings
+arrive in plan 3, without the time zone (§8.7, §8.9).
+
+### 8.9 Plan and forecast
+
+Decisions made while planning the planned items, sinking funds and cash
+forecast of §6.7 to §6.9 (plan 3). Where they differ from an earlier section,
+they govern.
+
+Amounts stay exact: integer minor units in `i64`, intermediates in `i128`, never
+a float. Rounding is half-even, once, at the end of a calculation. Every "today"
+is the household's day (§8.7). A planned item's amount is a positive magnitude
+with a direction; `Money` on accounts and splits keeps its sign.
+
+**R1. Several currencies report; they are not refused.** FX is not built. A
+forecast with several currencies answers 200 with `surplus: null`, status
+`unavailable`, blocker `mixed_currencies`, and full per-currency totals, each
+with its own surplus. Currencies are never netted. When FX arrives `surplus`
+fills in and the blocker goes.
+
+**R2. Forecast access.** A forecast, a what-if or a plan-versus-actual report
+sums every account's balances and category spending, so it needs an `all` grant
+at `transactions` (§8.2); without it the answer is 403 with "this action needs
+transactions access to every account". There is no partial forecast: a number
+over the visible accounts would be confidently wrong, and marking it partial
+would reveal that hidden accounts exist. The refusal is the same whether or not
+any account is hidden. The safety floor, a figure of that same plan, takes the same
+access to read: below it the settings answer, on a read or a patch, says `floor:
+null`, the same as none set. The other settings read the same for every token.
+
+**R3. Planned item access.** A planned item hinting at an account the actor
+cannot see at `transactions` answers like a missing item: left out of lists, 404
+on `GET`, not 403, which would confirm it exists. A `balances` grant shows only
+the account and its balances; an item's name, amount, cadence and notes reveal
+much more. Unhinted items are household data, which need `transactions` on at
+least one account, named or through an `all` grant, for the same reason. A token
+holding only `balances` sees no planned items at all: an empty list, not a 403.
+Uniform access always qualifies. Creating,
+changing or deleting an item needs `WriteHousehold` and an `all` grant at
+`write`, like a category. An unhinted item's name can mention an account: that
+is an accepted risk, and hinting the item hides it.
+
+**R4. Status and severity.** A forecast's status is `firm`, `provisional` or
+`unavailable`. `blockers` mean no number at all: `mixed_currencies`,
+`floor_not_set`, `no_counted_accounts`, `balance_missing`. Everything else is a
+`caution`, which keeps the number but makes it not firm, including stale
+balances and unbound provider accounts. A counted account without any balance
+could hold anything; an unbound account cannot be dismissed yet, so blocking on
+it could block forever.
+
+**R5. The floor must be set.** An unset floor blocks the number, because a silent
+floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
+allowed. A floor of some months of outflows that comes to 0 keeps the number, with
+a caution.
+
+**R6. Plan versus actual** is defined by category (§6.9) and needs no transfer
+links: actuals are categorized splits, and `transfer` is a category kind.
+Uncategorized money is never spending and is reported separately, without
+invested and illiquid accounts.
+
+A report says what happened, so money stays visible. A charge in an `expense`
+category or a deposit in an `income` one, on a transaction its provider removed or
+revised away from its splits, stays out of `actual`, and the row's `left_out` says
+how much. Money that lowers `actual`, such as a refund, keeps counting, as in R10a. A
+possible duplicate counts, and the row's `possible_duplicate` says how much of
+`actual` it is. A split linked to a goal counts only on the goal's line, whose
+`left_out` takes what R10a keeps from a goal, and an inactive goal with linked money
+keeps a line, since that money counts nowhere else. Actuals cover every account: R10's
+balance dates decide what a forecast may trust, not what happened.
+
+Unlike the forecast, which carries no leftovers over, the report shows a rollover per
+category and currency with a budget (R9): what was budgeted over the reported months up
+to today's, less what they spent on it. Spending pays each month's bills and one-offs
+dated up to and including today first, floored at 0 unless the month is a net refund, which adds to
+what is left. Items share a category's pool, so it isn't per item. A bill has none.
+A month's spending counts only while a budget in that category and currency is running,
+from the month of its first occurrence through the month of its end date, so a
+bi-monthly budget's off-month counts and what came before or after doesn't.
+
+The rollover is a window over the reported months, not a running balance, so widening or
+moving `from` changes it, and today's month counts all its budget occurrences. A known
+limit: a refund in a month where a bill absorbs the spending is lost to the rollover,
+because of the floor. `left_out` holds the stale splits, not the transaction's revised
+amount. A category's kind can't change while a goal-linked split uses it, so a linked
+split can't vanish from every report.
+
+A sum too large for the database's integers answers 422, as any other total too large to
+represent does, on the forecast and the report alike. A number too big for the query's
+integer type answers 400, as on the forecast.
+
+**R7. The time zone stays an environment variable** (§8.7). Everything reads one
+zone, and changing it at runtime would raise what happens to days already
+assigned, which is a separate question.
+
+**R8. Goal links on splits.** `SplitInput` gains an optional `goal`, whose
+currency must equal the transaction's, so goal arithmetic stays exact without
+FX. A purchase in another currency cannot be linked until FX exists, which
+overstates that goal's need: the safe direction. Only a split in an `expense`
+category may be linked, and only those lower the need: moving money to savings for
+a goal is not spending it, since the money is still cash. Every split names a
+category, so uncategorized money has no split to link. A split linked to a goal the
+actor can't see (R3) reads `goal: null`, and naming that goal is refused like a
+missing one even on that transaction; a patch sending a split of the same amount
+with no goal keeps the link, since a token can't be asked to send what it isn't
+shown.
+
+**R9. Bills and budgets.** A recurring outflow has a `spending` of `bill` or
+`budget`, which replaces §6.8's reduction of every recurring item. Only a budget is
+reduced by this month's spending, and it counts its whole calendar month, as a household
+reads a budget: its occurrences anywhere in `as_of`'s month, those before `as_of` too, are
+on its line and in the first month. Later months count only inside the window, and an
+occurrence before the budget's start or after its end date does not count. Each category
+and currency has one pool: the month's actual spending, minus the recurring bills and
+one-offs in that category dated this month up to and including `as_of`, floored at 0. It
+reduces the month's budget occurrences in date order, and then in the deterministic order
+items load in, since applied per item, one purchase would reduce every item in the
+category. So this month's budget amount, less the category's spending once bills and
+one-offs have taken their share, floored at 0, is still needed. A paid bill therefore
+never eats a budget. A recurring bill or a one-off, a specific expected payment, counts in
+full until its date passes, so one dated `as_of` counts in full even if paid that day,
+when a balance of that date already shows it: the forecast holds it twice for that day,
+the safe direction. Past its date, spending in its category pays them in date order, and
+any gap is still needed, with a caution naming the category and the amount. If it was paid
+under another category the forecast shows less to invest, the safe direction. A budget can
+simply underspend, so what it still needs is never a gap and raises no caution. Spending
+in a category before a budget's first occurrence this month still reduces it, since a
+budget is a month's envelope for its category. A known
+limit: the data cannot tell where the money went, so spending goes to these before any
+budget, and money spent on a budget can hide an unpaid bill; from a bill's own date, money
+spent on a budget does not reduce it until the bill is covered. A second known limit: the
+look-back is this month only, so a bill or one-off from last month that is still unpaid is
+not counted, and an October bill posting in November counts as paying November's. Goals
+and hypothetical items never owe, and hypothetical items neither reduce nor consume, nor
+look back: an imagined budget counts only inside the window.
+
+**R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
+accounts, on or before that account's balance date, since spending newer than the
+balance is not in it yet and would count twice in the household's favour. Closed
+accounts are left out too: a closed card's debt counts against cash (R16), but its
+spending does not lower the need, which errs safe. Goal-linked spending on a counted
+account has the same balance-date limit, as does one on a closed card switched into
+the forecast, with or without a balance; from an excluded account it does not, since
+it never touched counted cash. Pending charges do not lower the need, and money spent from an excluded
+account did not come out of counted cash. A known limit: a balance has a date and no
+time, so a transaction later on the balance's own date counts as shown.
+
+Money out that a balance may not show raises the caution
+`spending_newer_than_balance`, per currency, which makes the status `provisional`:
+`total` is posted outflows after the account's balance date, up to `as_of`, and
+`pending` is pending outflows dated up to `as_of`, whatever the balance date. A
+transaction is one or the other, and pending alone raises it. It covers open accounts
+with a balance, an open one without being blocked already, and any closed short-term
+liability switched in, with or without a balance, since closing a card settles no debt
+its balance does not show. The number does not change, since a provider's balance date
+may lag what its balance reflects and guessing could count the money twice or not at
+all: the forecast assumes each balance already reflects this money. Where one does not,
+as with pending charges on many depository balances, the cash available is overstated
+by up to these amounts. A bill past its date is still unpaid until spending on or before
+the balance date pays it (R9).
+
+**R10a. Charges that say nothing about what was spent.** An outflow on a transaction
+flagged `source_removed` or `split_mismatch` counts neither as a category's spending nor
+as a goal's, and one flagged `possible_duplicate` does not count as a goal's. The provider
+took the charge back or changed it, so its splits no longer say what happened, and leaving
+it out errs toward holding more: a bill it paid is unpaid again, with a caution. An inflow
+on such a transaction keeps counting, split by split, because leaving a refund out would
+raise net spending, the opposite direction: a reversal the provider revised still reverses
+the charge, and a refund the provider removed still counts, since whether it was real is
+unknown and counting it holds more. A possible duplicate in a category keeps counting
+there, with the caution `possible_duplicates`.
+
+**R11. No base or display currency yet.** §6.8's "in the requester's display
+currency" waits for FX. A fixed floor carries its own currency.
+
+**R12. What-if** is `POST /api/v1/forecast/what-if`, and a `read` token may call
+it. This qualifies §6.3's "`read` (GET only)": scope is decided by the action, and
+this one persists nothing.
+
+**R13. Overrides.** `GET /forecast` takes `as_of`, `horizon_months` and
+`include_income`. A per-call floor override goes only through what-if, which with
+no items also takes `floor` and `stale_after_days`, so a tagged floor is never
+flattened into query parameters.
+
+**R14. Settings are API-only; a small read-only forecast page is added.**
+`GET /forecast` is session-only and renders the same forecast as the API: cash
+available, cash needed, the surplus or the reason there is none, a monthly
+breakdown with expected income, and cautions. It has no write action, the same
+authorization as R2, the default content security policy, no inline script or
+style, and a link in the navigation.
+
+**R15. Income is off by default.** With it on, a caution fires when projected
+cash at a month's end, before an inflow arrives, is below the floor: a later bonus
+cannot pay an earlier bill.
+
+**R16. A planned item hinted at an uncounted account still counts,** with a
+caution. Overstating the need is the safe direction; dropping it silently is not.
+For the same reason a closed short-term liability still owing counts against cash,
+with a caution, though on its own it is no counted account.
+
+**R17. Item model.** `category` is required on stored items and optional on
+hypothetical ones. An outflow needs an `expense` category, an inflow an `income`
+one, and `transfer` is refused. A goal must be an outflow. `spending` is set only on a
+recurring outflow. An item's type never
+changes. Delete is real, and refused with 409 for a goal with linked splits, which
+is marked complete instead.
+
+**R18. Schedules clamp to the month's end and never drift.** The k-th occurrence
+is `anchor + k × every`, always counted from the anchor. Anchoring on the 31st is
+how to say "last day of the month", so §6.7's optional day-of-month semantics get
+no field of their own. A yearly item anchored on February 29 falls on February 28
+in other years. Occurrences are never after an end date, which is inclusive.
+
+**R19. `as_of`** may be any date in range, with a caution unless it is today, since
+what falls due before `as_of`'s month is left out; within that month a passed bill still
+owes its gap and a budget counts its whole month (R9), while a hypothetical item dated
+before `as_of` is left out. Planned inflows, stored or hypothetical, count only from the
+day after `as_of`, also in what `excluded_inflows` reports: a balance dated `as_of` may
+already hold that day's money, so counting it could count it twice, and if it hasn't
+arrived the surplus reads low, the safe direction. The window's end stays where it is, so
+a monthly salary paid on `as_of`'s own day counts once less. A balance is the latest on or
+before `as_of`, and its age runs to the earlier of `as_of` and today, so a future `as_of`
+does not mark a balance dated today as stale. When `as_of` plus the horizon clamps to a shorter month, the
+clamped day stays in the window for outflows, so a bill on it is not lost; one
+anchored on a month's end may count once more, the safe direction. Inflows count only
+up to the unclamped end, so the clamp's extra day never adds income.
+
+**R20. Limits.** Horizon 1 to 60 months, default 3. 500 stored items, 50
+hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every`
+1 to 999. Schedule dates and `as_of` in the years 1970 to 2200, written exactly
+`YYYY-MM-DD`, since a datetime's day depends on its zone. A goal's due date
+after its start date. Stale after 1 to 365 days, default 7. Floor months 1 to 60.
+"M months of outflows" sums unreduced recurring outflow occurrences in `[as_of,
+as_of + M months)`, budgets' earlier days this month not among them, per currency, ending on the clamped day plus one when that
+clamps to a shorter month. Totals past `i64` answer 422, never a wrapped
+number.
+
+**R21. The plan has no history.** Plan versus actual applies today's active items
+to past months, so a plan edit rewrites past months' "planned". "Normalized into
+months" means occurrences bucketed where they fall, not amortized.
+
+**R22. Not in this plan:** MCP (§6.12), rules, transfer links, a starter category
+set, FX and unbinding a provider account (§8.5, §8.8).

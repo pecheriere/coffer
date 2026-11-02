@@ -28,13 +28,13 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-                           frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
+                           frame-ancestors 'none'; form-action 'self'; base-uri 'none'; report-uri /browser-reports";
 const LINK_CSP: &str = "default-src 'self'; \
                         script-src 'self' https://cdn.plaid.com/link/v2/stable/link-initialize.js; \
                         frame-src https://cdn.plaid.com; \
                         connect-src 'self' https://sandbox.plaid.com; \
                         style-src 'self' 'nonce-{nonce}'; img-src 'self'; \
-                        frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
+                        frame-ancestors 'none'; form-action 'self'; base-uri 'none'; report-uri /browser-reports";
 const LINK_SCRIPT: &str = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
 const NEW_PAGE: &str = "/connections/plaid/new";

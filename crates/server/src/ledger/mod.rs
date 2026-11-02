@@ -1,5 +1,5 @@
-//! The ledger: accounts and their balances, categories, transactions and
-//! the resolution of possible duplicates.
+//! The ledger: accounts and their balances, categories, transactions, the
+//! resolution of possible duplicates, and planned items.
 //! Every operation authorizes through the policy, with account access from
 //! the [`AccessResolver`], and writes its audit entry in the same
 //! transaction as its change.
@@ -7,7 +7,12 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod forecast;
+pub mod plan_items;
+pub mod plan_report;
+pub mod settings;
 pub mod transactions;
+mod unseen;
 
 use std::sync::Arc;
 
@@ -21,6 +26,8 @@ use coffer_domain::policy::{
 use coffer_domain::time::Clock;
 use coffer_store::{Store, StoreError, StoreTx};
 use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
 use crate::http::idempotency::IdempotencySlot;
@@ -31,6 +38,8 @@ pub struct Ledger {
     store: Store,
     clock: Arc<dyn Clock>,
     access: Arc<AccessResolver>,
+    /// The household's zone, which decides what day it is (spec §8.7).
+    timezone: TimeZone,
 }
 
 impl std::fmt::Debug for Ledger {
@@ -42,12 +51,23 @@ impl std::fmt::Debug for Ledger {
 impl Ledger {
     /// The service over `store`.
     #[must_use]
-    pub fn new(store: Store, clock: Arc<dyn Clock>, access: Arc<AccessResolver>) -> Self {
+    pub fn new(
+        store: Store,
+        clock: Arc<dyn Clock>,
+        access: Arc<AccessResolver>,
+        timezone: TimeZone,
+    ) -> Self {
         Self {
             store,
             clock,
             access,
+            timezone,
         }
+    }
+
+    /// The household's day.
+    fn today(&self) -> Date {
+        self.clock.now().to_zoned(self.timezone.clone()).date()
     }
 
     /// Whether `actor` may use `account` at `level`, decided before a
@@ -96,6 +116,11 @@ impl Ledger {
     /// [`LedgerError::Denied`] without [`Action::WriteHousehold`] or write
     /// access to every account; a failure to resolve access.
     pub async fn authorize_category_write(&self, actor: &Actor) -> Result<(), LedgerError> {
+        self.authorize_shared_write(actor).await
+    }
+
+    /// Whether `actor` may change data every account shares.
+    async fn authorize_shared_write(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::WriteHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Write)
             .await

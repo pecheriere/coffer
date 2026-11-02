@@ -171,6 +171,10 @@ id_type!(
     /// Identifies one run of a provider sync.
     SyncRunId
 );
+id_type!(
+    /// Identifies a planned item: a recurring bill, a one-off or a goal.
+    PlannedItemId
+);
 
 #[cfg(test)]
 mod tests {
