@@ -261,8 +261,9 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   uncategorizes; otherwise 1 to 50 non-zero splits on categories that are
   not archived, summing exactly to the amount, each with an optional `goal`
   in the transaction's currency; a split sent without one loses its link). A
-  goal the token can't see answers like one that does not exist. A patch that
-  changes nothing records nothing.
+  goal the token can't see answers like one that does not exist, unless the
+  transaction is already linked to it. A patch that changes nothing records
+  nothing.
 - `DELETE /api/v1/transactions/{transaction_id}` (`write`) deletes a manual
   transaction (204); an imported one is a 409 `conflict`.
 - `POST /api/v1/transactions/batch` (`write`) applies

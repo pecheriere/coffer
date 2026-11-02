@@ -9,14 +9,14 @@ use coffer_domain::identity::Scope;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::policy::AccountLevel::{Balances, Transactions, Write};
 use coffer_domain::time::Clock as _;
-use coffer_domain::transactions::CategoryKind;
+use coffer_domain::transactions::{CategoryKind, SplitInput};
 use coffer_server::secrets::SecretToken;
 use coffer_server::sync::apply::{
     AccountBatch, Coverage, NormalizedTransaction, apply_account_batch,
 };
 use coffer_store::{
-    AccountRecord, AuditEvent, AuditFilter, NewConnection, PageRequest, ProviderAccountRecord,
-    ProviderAccountUpsert,
+    AccountRecord, Attribution, AuditEvent, AuditFilter, NewConnection, PageRequest,
+    ProviderAccountRecord, ProviderAccountUpsert,
 };
 use jiff::civil::date;
 use serde_json::{Value, json};
@@ -647,21 +647,193 @@ async fn unchanged_link_to_a_hidden_goal_is_no_change() {
     assert_eq!(world.transaction_audit(&transaction).await.len(), audited);
 }
 
+/// A transaction linked to a goal hinted at a ledger of its own, and a token
+/// with `write` on the transaction's ledger that can't see the goal.
+struct HiddenLink {
+    home: AccountId,
+    transaction: String,
+    goal_id: String,
+    token: SecretToken,
+}
+
+impl World {
+    async fn hidden_link(&self, item: Value) -> HiddenLink {
+        let (home, hidden) = (self.account("Home").await, self.account("Hidden").await);
+        let goal_id = self
+            .create(&with(item, "account_hint", json!(hidden)))
+            .await;
+        let transaction = self.manual(home, -500).await;
+        self.force_link(&transaction, -500, &goal_id).await;
+        let (_, token) = self.token(Scope::Write, vec![on(home, Write)]).await;
+        HiddenLink {
+            home,
+            transaction,
+            goal_id,
+            token,
+        }
+    }
+
+    /// Writes a link straight to the store, past the ledger's checks: the
+    /// only way to a link the checks would now refuse.
+    async fn force_link(&self, transaction: &str, minor_units: i64, goal: &str) {
+        let now = self.server.clock.now();
+        let mut tx = self.server.store.begin().await.unwrap();
+        tx.replace_splits(
+            transaction.parse().unwrap(),
+            &[SplitInput {
+                category: self.expense,
+                minor_units,
+                goal: Some(goal.parse().unwrap()),
+            }],
+            Attribution {
+                member: Some(self.alice.member),
+                agent: None,
+                system: None,
+                at: now,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+}
+
 #[tokio::test]
-async fn changed_splits_recheck_a_kept_link_to_a_hidden_goal() {
+async fn kept_link_to_a_hidden_goal_survives_a_changed_split() {
     let world = world().await;
-    let (home, hidden) = (world.account("Home").await, world.account("Hidden").await);
-    let goal_id = world
-        .create(&with(goal(world.expense), "account_hint", json!(hidden)))
-        .await;
-    let transaction = world.manual(home, -500).await;
-    world.link(&transaction, -500, &goal_id).await;
-    let (_, token) = world.token(Scope::Write, vec![on(home, Write)]).await;
+    let link = world.hidden_link(goal(world.expense)).await;
     let (_, other) = world.category(CategoryKind::Expense).await;
 
-    let splits = linked(other, -500, &goal_id);
-    let (status, answer) = world.set_splits(&token, &transaction, splits).await;
+    let splits = linked(other, -500, &link.goal_id);
+    let (status, _) = world
+        .set_splits(&link.token, &link.transaction, splits)
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let read = world.read_transaction(&link.transaction).await;
+    assert_eq!(read["splits"][0]["category"], json!(other));
+    assert_eq!(read["splits"][0]["goal"], link.goal_id.as_str());
+}
+
+#[tokio::test]
+async fn moving_a_hidden_goal_to_another_transaction_answers_like_a_missing_goal() {
+    let world = world().await;
+    let link = world.hidden_link(goal(world.expense)).await;
+    let elsewhere = world.manual(link.home, -500).await;
+    let missing = linked(world.expense, -500, PlannedItemId::new());
+    let missing = world.set_splits(&link.token, &elsewhere, missing).await;
+    assert_eq!(missing.0, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let splits = linked(world.expense, -500, &link.goal_id);
+    let answer = world.set_splits(&link.token, &elsewhere, splits).await;
+
+    assert!(
+        answer == missing,
+        "a hidden goal answers like a missing one"
+    );
+}
+
+#[tokio::test]
+async fn a_kept_link_opens_no_other_hidden_goal() {
+    let world = world().await;
+    let link = world.hidden_link(goal(world.expense)).await;
+    let another = world
+        .create(&with(
+            goal(world.expense),
+            "account_hint",
+            json!(world.account("Also hidden").await),
+        ))
+        .await;
+    let missing = linked(world.expense, -500, PlannedItemId::new());
+    let missing = world
+        .set_splits(&link.token, &link.transaction, missing)
+        .await;
+    assert_eq!(missing.0, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let splits = linked(world.expense, -500, &another);
+    let answer = world
+        .set_splits(&link.token, &link.transaction, splits)
+        .await;
+
+    assert!(
+        answer == missing,
+        "a hidden goal answers like a missing one"
+    );
+}
+
+/// The rules still hold a kept link, but a hidden item's own refusal would say
+/// what it is: it answers like a missing goal.
+#[tokio::test]
+async fn kept_hidden_link_breaking_a_rule_answers_like_a_missing_goal() {
+    let world = world().await;
+    let (_, other) = world.category(CategoryKind::Expense).await;
+    for item in [
+        with(goal(world.expense), "amount", euros(300_000)),
+        one_off(world.expense),
+    ] {
+        let link = world.hidden_link(item).await;
+        let missing = linked(other, -500, PlannedItemId::new());
+        let missing = world
+            .set_splits(&link.token, &link.transaction, missing)
+            .await;
+
+        let splits = linked(other, -500, &link.goal_id);
+        let answer = world
+            .set_splits(&link.token, &link.transaction, splits)
+            .await;
+
+        assert_eq!(answer.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(answer == missing, "a hidden item's refusal says nothing");
+    }
+}
+
+#[tokio::test]
+async fn kept_visible_link_is_held_to_the_currency_rule() {
+    let world = world().await;
+    let transaction = world.manual(world.account("Home").await, -500).await;
+    let item = world
+        .create(&with(goal(world.expense), "amount", euros(300_000)))
+        .await;
+    world.force_link(&transaction, -500, &item).await;
+    let (_, other) = world.category(CategoryKind::Expense).await;
+
+    let splits = linked(other, -500, &item);
+    let (status, answer) = world.set_splits(&world.admin, &transaction, splits).await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(answer.contains(NO_SUCH_GOAL));
+    assert!(answer.contains("a split's goal must be in the transaction's currency"));
+}
+
+#[tokio::test]
+async fn unmerge_keeps_goal_links() {
+    let world = world().await;
+    let feed = world.feed().await;
+    world
+        .apply(&feed, vec![provider_record("AUTHORIZED", -4_000, true)])
+        .await;
+    let mut settled = provider_record("SETTLED", -4_600, false);
+    settled.replaces_provider_id = Some("AUTHORIZED".into());
+    world.apply(&feed, vec![settled]).await;
+    let joined = world.imported(&feed, "SETTLED").await;
+    let goal_id = world.create(&goal(world.expense)).await;
+    world.link(&joined, -4_600, &goal_id).await;
+    let read = world.read_transaction(&joined).await;
+    let source = read["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["pending"] == false)
+        .unwrap()["id"]
+        .clone();
+
+    let uri = format!("{TRANSACTIONS}/{joined}/unmerge");
+    let body = json!({"source": source});
+    let (status, _) = world
+        .call(Method::POST, &uri, &world.admin, Some(&body))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let kept = world.read_transaction(&joined).await;
+    assert_eq!(kept["splits"][0]["amount"]["minor_units"], -4_000);
+    assert_eq!(kept["splits"][0]["goal"], goal_id.as_str());
 }

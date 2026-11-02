@@ -7002,7 +7002,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlannedItemId",
-                "description": "The goal this part counts towards, which must exist and be in the\ntransaction's currency; a completed or inactive goal may be named.\nLeft out, the part counts towards none."
+                "description": "The goal this part counts towards, which must exist and be in the\ntransaction's currency; a completed or inactive goal may be named. One\nthe token can't see answers as missing, unless the transaction is\nalready linked to it. Left out, the part counts towards none."
               },
               {
                 "type": "null"

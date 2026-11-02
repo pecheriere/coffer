@@ -386,28 +386,47 @@ async fn check_categories(tx: &mut StoreTx, splits: &[SplitInput]) -> Result<(),
     Ok(())
 }
 
-/// Refuses a split whose goal `access` may not see or that does not exist, in
-/// the same words, because a difference would confirm a hidden item exists
-/// (R3). That is decided first, so nothing else about a hidden item shows
-/// through. Then the item must be a goal, in `currency`; a completed or
-/// inactive one may still take late receipts.
+/// Refuses a split naming a goal that does not exist, or one new to this
+/// transaction that `access` may not see, in the same words, because a
+/// difference would confirm a hidden item exists (R3). A goal in `before` may be
+/// sent again unseen: the token already reads its id, and refusing would push it
+/// to drop the link, changing the goal's figures.
+///
+/// Then the item must be a goal, in `currency`; a completed or inactive one may
+/// still take late receipts. A hidden item that fails those also answers as
+/// missing, because its own refusal would say what kind of item it is or that
+/// its currency differs. Nothing the ledger allows leaves a link like that: an
+/// item's type never changes, nor does a linked goal's currency.
 async fn check_goals(
     tx: &mut StoreTx,
     access: &AccountAccess,
     currency: Currency,
+    before: &[SplitInput],
     splits: &[SplitInput],
 ) -> Result<(), LedgerError> {
     for goal in splits.iter().filter_map(|split| split.goal) {
         let item = match tx.get_planned_item(goal).await {
-            Ok(item) if plan_item_visible(access, item.account_hint) => item,
-            Ok(_) | Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
+            Ok(item) => item,
+            Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
             Err(other) => return Err(other.into()),
         };
-        if item.schedule.item_type() != PlanItemType::Goal {
-            return Err(LedgerError::Invalid(NOT_A_GOAL));
+        let visible = plan_item_visible(access, item.account_hint);
+        if !visible && !before.iter().any(|split| split.goal == Some(goal)) {
+            return Err(LedgerError::Invalid(UNKNOWN_GOAL));
         }
-        if item.amount.currency != currency {
-            return Err(LedgerError::Invalid(GOAL_CURRENCY));
+        let refusal = if item.schedule.item_type() != PlanItemType::Goal {
+            Some(NOT_A_GOAL)
+        } else if item.amount.currency != currency {
+            Some(GOAL_CURRENCY)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            return Err(LedgerError::Invalid(if visible {
+                refusal
+            } else {
+                UNKNOWN_GOAL
+            }));
         }
     }
     Ok(())
@@ -517,7 +536,7 @@ async fn apply_patch(
         let before = current_splits(&current);
         if splits != before {
             check_categories(tx, &splits).await?;
-            check_goals(tx, access, current.currency, &splits).await?;
+            check_goals(tx, access, current.currency, &before, &splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
             if current.flags.contains(&TransactionFlag::SplitMismatch) {
                 audited = audited.change("split_mismatch", true, false);
