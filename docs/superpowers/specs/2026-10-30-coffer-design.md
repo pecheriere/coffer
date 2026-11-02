@@ -773,12 +773,18 @@ category and the amount. If it was paid under another category the forecast show
 less to invest, the safe direction. A budget can simply underspend, so its shortfall
 is never a gap. A known limit: the data cannot tell where the money went, so spending
 goes to these before any budget, and money spent on a budget can hide an unpaid
-bill. Goals and hypothetical items never owe, and hypothetical items neither reduce
-nor consume.
+bill. A second known limit: the look-back is this month only, so a bill or one-off
+from last month that is still unpaid is not counted, and an October bill posting in
+November counts as paying November's. Goals and hypothetical items never owe, and
+hypothetical items neither reduce nor consume.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the
-balance is not in it yet and would count twice in the household's favour. Pending charges do not lower the need, and money spent from an excluded
+balance is not in it yet and would count twice in the household's favour. Closed
+accounts are left out too: a closed card's debt counts against cash (R16), but its
+spending does not lower the need, which errs safe. Goal-linked spending on a counted
+account has the same balance-date limit; from an excluded account it does not, since
+it never touched counted cash. Pending charges do not lower the need, and money spent from an excluded
 account did not come out of counted cash.
 
 **R11. No base or display currency yet.** §6.8's "in the requester's display
@@ -825,8 +831,9 @@ in other years. Occurrences are never after an end date, which is inclusive.
 **R19. `as_of`** may be any date in range, with a caution unless it is today, since
 bills between today and `as_of` fall outside the window. A balance is the latest
 on or before `as_of`. When `as_of` plus the horizon clamps to a shorter month, the
-clamped day stays in the window, so a bill on it is not lost; one anchored on a
-month's end may count once more, the safe direction.
+clamped day stays in the window for outflows, so a bill on it is not lost; one
+anchored on a month's end may count once more, the safe direction. Inflows count only
+up to the unclamped end, so the clamp's extra day never adds income.
 
 **R20. Limits.** Horizon 1 to 60 months, default 3. 500 stored items, 50
 hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every`
@@ -834,7 +841,8 @@ hypothetical items. Amounts 1 to 10^15 minor units, a fixed floor from 0. `every
 `YYYY-MM-DD`, since a datetime's day depends on its zone. A goal's due date
 after its start date. Stale after 1 to 365 days, default 7. Floor months 1 to 60.
 "M months of outflows" sums unreduced recurring outflow occurrences in `[as_of,
-as_of + M months)`, per currency. Totals past `i64` answer 422, never a wrapped
+as_of + M months)`, per currency, ending on the clamped day plus one when that
+clamps to a shorter month. Totals past `i64` answer 422, never a wrapped
 number.
 
 **R21. The plan has no history.** Plan versus actual applies today's active items

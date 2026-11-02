@@ -33,7 +33,8 @@ pub struct ForecastInput {
     pub accounts: Vec<AccountInput>,
     /// The active planned items and any hypothetical ones.
     pub items: Vec<ItemInput>,
-    /// Actual spending per category in `as_of`'s month, up to `as_of`.
+    /// Actual spending per category in `as_of`'s month, up to `as_of` and no later
+    /// than its account's balance date, since a balance does not show what is newer.
     pub category_spent: Vec<CategorySpent>,
     /// Spending in `as_of`'s month that is not settled yet.
     pub loose_ends: Vec<LooseEnds>,
@@ -431,7 +432,8 @@ pub enum Caution {
         count: u32,
         total: Money,
     },
-    /// Possible duplicates this month might be inflating a category's spending.
+    /// Possible duplicates this month might be inflating a category's spending, which
+    /// could shrink a reduction or hide an unpaid bill or one-off.
     PossibleDuplicates { count: u32 },
     /// The first month whose closing cash is below the floor: income arriving
     /// later cannot pay for it.

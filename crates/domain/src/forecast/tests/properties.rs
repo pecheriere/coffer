@@ -369,6 +369,19 @@ proptest! {
                 "months list all planned income"
             );
 
+            let income_end = input
+                .as_of
+                .checked_add(i64::from(input.horizon_months).months())
+                .unwrap();
+            let mut expected_inflows = 0;
+            for item in &input.items {
+                if item.direction == PlanDirection::Inflow && item.amount.currency == row.currency
+                {
+                    expected_inflows += dated(item, input.as_of, income_end).unwrap();
+                }
+            }
+            prop_assert_eq!(inflows, expected_inflows, "the clamped day adds no income");
+
             let mut running = wide(row.cash_available);
             for line in &lines {
                 let counted_in = if input.include_income { wide(line.inflows) } else { 0 };

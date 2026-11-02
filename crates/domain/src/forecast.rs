@@ -30,10 +30,12 @@ pub use types::{
 /// `as_of` is before year 0.
 pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError> {
     let end_exclusive = months_after(input.as_of, input.horizon_months);
+    let income_end_exclusive = same_day_after(input.as_of, input.horizon_months);
     let buckets = buckets(input.as_of, end_exclusive)?;
     let window = Window {
         as_of: input.as_of,
         end_exclusive,
+        income_end_exclusive,
         buckets: &buckets,
     };
     let reduction = reduction::reduce(input, end_exclusive)?;
@@ -103,14 +105,19 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
     })
 }
 
-/// The end, exclusive, of the `months` from `date`: the same day that many months
-/// on. A month too short to hold that day clamps to its last day, which then stays
-/// inside the window, so a bill on it is not lost. A bill anchored on a month's end
-/// may count once more for it, which is the safe direction.
+/// `date` plus `months`, clamped to the month's end, and to the calendar's.
+fn same_day_after(date: Date, months: u8) -> Date {
+    date.checked_add(Span::new().months(months))
+        .unwrap_or(Date::MAX)
+}
+
+/// The end, exclusive, of the `months` from `date` for what must be paid: the same
+/// day that many months on. A month too short to hold that day clamps to its last
+/// day, which then stays inside the window, so a bill on it is not lost. A bill
+/// anchored on a month's end may count once more for it, which is the safe direction
+/// for an outflow only: income stops at [`same_day_after`].
 fn months_after(date: Date, months: u8) -> Date {
-    let Ok(same_day) = date.checked_add(Span::new().months(months)) else {
-        return Date::MAX;
-    };
+    let same_day = same_day_after(date, months);
     if same_day.day() == date.day() {
         same_day
     } else {
@@ -134,6 +141,9 @@ fn count(dates: &[Date]) -> Result<u32, ForecastError> {
 struct Window<'a> {
     as_of: Date,
     end_exclusive: Date,
+    /// Where planned inflows stop: never past the same day `horizon_months` on, so
+    /// the clamped day adds no income.
+    income_end_exclusive: Date,
     buckets: &'a [Bucket],
 }
 
@@ -286,9 +296,13 @@ fn dated_line(
     month_counts: &mut [i128],
     book: &mut Book,
 ) -> Result<Option<ItemLine>, ForecastError> {
-    let dates = item
-        .schedule
-        .occurrences(window.as_of, window.end_exclusive);
+    let outflow = item.direction == PlanDirection::Outflow;
+    let end_exclusive = if outflow {
+        window.end_exclusive
+    } else {
+        window.income_end_exclusive
+    };
+    let dates = item.schedule.occurrences(window.as_of, end_exclusive);
     let amount = i128::from(item.amount.minor_units);
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
@@ -313,7 +327,6 @@ fn dated_line(
         }
     }
 
-    let outflow = item.direction == PlanDirection::Outflow;
     let tally = book.tally(currency);
     if outflow {
         tally.outflows += gross - reduced_by + unpaid;
@@ -707,18 +720,19 @@ fn item_cautions(
 }
 
 /// This month's unsettled spending only matters where it could still change the
-/// number.
+/// number. Uncategorized money is more spending, which only helps a budget or closes
+/// a gap. A duplicate is spending that never happened, which also opens a gap where
+/// spending paid an earlier bill or one-off.
 fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &mut Vec<Caution>) {
     let mut possible_duplicates = 0_u32;
     for loose in &input.loose_ends {
-        if !reduction
+        let more_spending_matters = reduction
             .spending_sensitive_currencies
-            .contains(&loose.currency)
-        {
-            continue;
+            .contains(&loose.currency);
+        if more_spending_matters || reduction.paid_currencies.contains(&loose.currency) {
+            possible_duplicates = possible_duplicates.saturating_add(loose.possible_duplicates);
         }
-        possible_duplicates = possible_duplicates.saturating_add(loose.possible_duplicates);
-        if loose.uncategorized_count > 0 {
+        if more_spending_matters && loose.uncategorized_count > 0 {
             cautions.push(Caution::UncategorizedSpending {
                 currency: loose.currency,
                 count: loose.uncategorized_count,

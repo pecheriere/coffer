@@ -17,6 +17,7 @@ use crate::plan::{
 
 mod blockers;
 mod cautions;
+mod clamp_and_duplicates;
 mod goals_and_floor;
 mod golden;
 mod properties;

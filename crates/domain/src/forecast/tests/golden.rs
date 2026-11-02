@@ -173,7 +173,7 @@ fn golden_three_month_forecast() {
     );
     assert_eq!(rent.last_on, Some(date(2027, 2, 1)), "last in the window");
     assert_eq!(rent.gross, usd(600_000), "rent gross");
-    assert_eq!(rent.reduced_by, usd(0), "November's rent ate the pool");
+    assert_eq!(rent.reduced_by, usd(0), "a bill is never reduced");
     assert_eq!(rent.counted, usd(600_000), "rent counted");
 
     let groceries = line(&forecast, "Groceries");

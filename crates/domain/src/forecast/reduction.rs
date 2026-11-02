@@ -23,7 +23,7 @@ use super::count;
 use super::types::{ForecastError, ForecastInput, ItemInput, LineSource};
 use crate::ids::CategoryId;
 use crate::money::Currency;
-use crate::plan::{PlanDirection, PlanSpending};
+use crate::plan::{PlanDirection, PlanSchedule, PlanSpending};
 
 type PoolKey = (CategoryId, Currency);
 
@@ -48,9 +48,12 @@ pub(super) struct Reduction {
     pub(super) by_item: Vec<ItemAdjustment>,
     /// The gaps, per category and currency.
     pub(super) not_seen: BTreeMap<PoolKey, i128>,
-    /// The currencies where this month's unsettled spending could change the
-    /// number: a budget still to reduce, or a gap it might close.
+    /// The currencies where more spending found this month could change the number:
+    /// a budget still to reduce, or a gap it might close.
     pub(super) spending_sensitive_currencies: BTreeSet<Currency>,
+    /// The currencies where spending paid an earlier bill or one-off: were part of it
+    /// a duplicate, a gap would open.
+    pub(super) paid_currencies: BTreeSet<Currency>,
 }
 
 /// A stored outflow's category, the only kind of item that shares a pool.
@@ -99,7 +102,9 @@ pub(super) fn reduce(
         let amount = i128::from(item.amount.minor_units);
         let earlier = item.schedule.occurrences(month_start, input.as_of);
         *planned_earlier.entry(key).or_default() += amount * i128::from(count(&earlier)?);
-        if item.spending == Some(PlanSpending::Budget) {
+        let budget = item.spending == Some(PlanSpending::Budget)
+            && matches!(item.schedule, PlanSchedule::Recurring { .. });
+        if budget {
             let dates = item.schedule.occurrences(input.as_of, reducible_until);
             remaining_budgets.extend(occurrences(dates, index, key, amount));
         } else {
@@ -109,7 +114,10 @@ pub(super) fn reduce(
     }
 
     let mut by_item = vec![ItemAdjustment::default(); input.items.len()];
-    let not_seen = pay_earlier_payments(earlier_payments, &spent, &mut by_item);
+    let Payments {
+        not_seen,
+        paid_currencies,
+    } = pay_earlier_payments(earlier_payments, &spent, &mut by_item);
 
     let mut spending_sensitive_currencies: BTreeSet<Currency> =
         not_seen.keys().map(|&(_, currency)| currency).collect();
@@ -127,7 +135,13 @@ pub(super) fn reduce(
         by_item,
         not_seen,
         spending_sensitive_currencies,
+        paid_currencies,
     })
+}
+
+struct Payments {
+    not_seen: BTreeMap<PoolKey, i128>,
+    paid_currencies: BTreeSet<Currency>,
 }
 
 /// Pays recurring bills and one-offs from their category's spending, earliest first
@@ -137,14 +151,18 @@ fn pay_earlier_payments(
     mut payments: Vec<Occurrence>,
     spent: &BTreeMap<PoolKey, i128>,
     by_item: &mut [ItemAdjustment],
-) -> BTreeMap<PoolKey, i128> {
+) -> Payments {
     payments.sort_by_key(|payment| payment.on);
     let mut left = spent.clone();
     let mut not_seen = BTreeMap::new();
+    let mut paid_currencies = BTreeSet::new();
     for payment in payments {
         let available = left.entry(payment.key).or_default();
         let paid = payment.amount.min((*available).max(0));
         *available -= paid;
+        if paid != 0 {
+            paid_currencies.insert(payment.key.1);
+        }
         let unpaid = payment.amount - paid;
         if unpaid != 0 {
             *not_seen.entry(payment.key).or_default() += unpaid;
@@ -153,7 +171,10 @@ fn pay_earlier_payments(
             }
         }
     }
-    not_seen
+    Payments {
+        not_seen,
+        paid_currencies,
+    }
 }
 
 /// Spends each pool on its budgets, earliest first and in input order on the same
