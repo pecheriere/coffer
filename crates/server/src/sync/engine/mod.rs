@@ -22,8 +22,8 @@ use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, Store, StoreError, StoreTx,
-    SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
+    StoreTx, SyncRunRecord,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -192,7 +192,14 @@ impl SyncService {
             Ok(started) => started,
             Err(StoreError::Conflict(_)) => {
                 drop(tx);
-                let current = self.store.get_sync_run(run).await?;
+                // The start conflicted, so the run is not this caller's to
+                // touch: if the lookup fails, say only that it is held, which
+                // leaves it alone.
+                let current = self
+                    .store
+                    .get_sync_run(run)
+                    .await
+                    .map_err(|_| SyncError::InProgress)?;
                 return Err(if current.status == SyncRunStatus::Running {
                     SyncError::InProgress
                 } else {
@@ -220,26 +227,34 @@ impl SyncService {
             }
             Err(err) => {
                 tracing::error!(run = %run, connection = %started.connection, error = ?err, "sync run failed");
-                self.abandon(run).await;
+                if let Err(abandon_err) = self.abandon(run, QueuedRun::Keep).await {
+                    tracing::error!(run = %run, error = ?abandon_err, "could not mark the sync run failed");
+                }
                 Err(err)
             }
         }
     }
 
-    /// Marks `run` failed after a storage error or a panic, whether it is
-    /// still queued or running, if the store allows; a run that already
-    /// finished is left as it is.
-    pub(super) async fn abandon(&self, run: SyncRunId) {
-        let finished = async {
-            let mut tx = self.store.begin().await?;
-            tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now())
-                .await?;
-            tx.commit().await
-        }
-        .await;
-        if let Err(err) = finished {
-            tracing::error!(run = %run, error = ?err, "could not mark the sync run failed");
-        }
+    /// Marks `run` failed after a storage error or a panic, if it is
+    /// running. A run still queued is failed too when `queued` says so, as
+    /// when it can never start; otherwise it stays queued, to be performed
+    /// again. A run that already finished is left as it is, which says so
+    /// with [`StoreError::Conflict`].
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Conflict`] for a finished run; [`StoreError::NotFound`]
+    /// for an unknown one; any other error means the store did not allow it,
+    /// and the run is as it was.
+    pub(super) async fn abandon(
+        &self,
+        run: SyncRunId,
+        queued: QueuedRun,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.store.begin().await?;
+        tx.fail_sync_run(run, INTERNAL_FAILURE, self.clock.now(), queued)
+            .await?;
+        tx.commit().await
     }
 
     async fn perform(

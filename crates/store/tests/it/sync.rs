@@ -12,7 +12,7 @@ use coffer_domain::money::Currency;
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_store::{
     ConnectionStatus, ConnectionStatusChange, NewAccount, NewConnection, NewMember, NewSyncRun,
-    PageRequest, ProviderAccountUpsert, RawBalance, RunCounts, Store, StoreError,
+    PageRequest, ProviderAccountUpsert, QueuedRun, RawBalance, RunCounts, Store, StoreError,
 };
 use jiff::Timestamp;
 use jiff::civil::date;
@@ -673,9 +673,10 @@ async fn connection_binding_is_per_connection() {
     tx.commit().await.unwrap();
 }
 
-/// A run is failed whether still queued or running; a finished one stays.
+/// A running run is failed; a queued one stays queued unless asked to be
+/// failed; a finished one stays.
 #[tokio::test]
-async fn fail_sync_run_fails_queued_and_running_runs() {
+async fn fail_sync_run_fails_a_running_run_and_a_queued_one_only_when_asked() {
     let (_dir, store) = open().await;
     let owner = member(&store).await;
     let connection = add_connection(&store, owner).await;
@@ -684,22 +685,47 @@ async fn fail_sync_run_fails_queued_and_running_runs() {
 
     let mut tx = store.begin().await.unwrap();
     tx.start_sync_run(running, at(12)).await.unwrap();
-    for id in [queued, running] {
-        let failed = tx.fail_sync_run(id, "broken", at(13)).await.unwrap();
-        assert_eq!(failed.status, SyncRunStatus::Failed);
-        assert_eq!(failed.detail.as_deref(), Some("broken"));
-        assert_eq!(failed.finished_at, Some(at(13)));
-    }
+    let failed = tx
+        .fail_sync_run(running, "broken", at(13), QueuedRun::Keep)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, SyncRunStatus::Failed);
+    assert_eq!(failed.detail.as_deref(), Some("broken"));
+    assert_eq!(failed.finished_at, Some(at(13)));
+    assert_eq!(
+        tx.fail_sync_run(queued, "early", at(13), QueuedRun::Keep)
+            .await
+            .unwrap(),
+        None,
+        "a queued run is left to be performed"
+    );
     assert!(
         matches!(
-            tx.fail_sync_run(queued, "again", at(14)).await,
+            tx.fail_sync_run(running, "again", at(14), QueuedRun::Keep)
+                .await,
             Err(StoreError::Conflict(_))
         ),
         "a finished run stays as it is"
     );
     assert!(matches!(
-        tx.fail_sync_run(SyncRunId::new(), "missing", at(14)).await,
+        tx.fail_sync_run(SyncRunId::new(), "missing", at(14), QueuedRun::Keep)
+            .await,
         Err(StoreError::NotFound)
     ));
+    tx.commit().await.unwrap();
+    assert_eq!(
+        store.get_sync_run(queued).await.unwrap().status,
+        SyncRunStatus::Queued
+    );
+
+    let mut tx = store.begin().await.unwrap();
+    let failed = tx
+        .fail_sync_run(queued, "never started", at(15), QueuedRun::Fail)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, SyncRunStatus::Failed);
+    assert_eq!(failed.detail.as_deref(), Some("never started"));
     tx.commit().await.unwrap();
 }

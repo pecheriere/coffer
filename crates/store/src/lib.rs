@@ -57,7 +57,7 @@ pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
-pub use sync_runs::{NewSyncRun, RunCounts, SyncRunRecord};
+pub use sync_runs::{NewSyncRun, QueuedRun, RunCounts, SyncRunRecord};
 pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,
@@ -226,6 +226,17 @@ pub const INJECTED_FAILURE_RECORD_ID: &str = injected_failure_record_id!();
 #[cfg(any(test, feature = "testkit"))]
 pub const INJECTED_FAILURE_LABEL: &str = injected_failure_record_id!();
 
+/// Which update of a sync run [`Store::inject_sync_run_fault_for_tests`]
+/// makes fail.
+#[cfg(any(test, feature = "testkit"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectedRunUpdate {
+    /// Starting a queued run.
+    Start,
+    /// Recording a run's outcome, failed included.
+    Finish,
+}
+
 #[cfg(any(test, feature = "testkit"))]
 impl Store {
     /// Record `candidate` as a duplicate of `transaction` without the
@@ -330,6 +341,129 @@ impl Store {
         .execute(&self.pool)
         .await
         .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later update that marks a sync run failed fail with a
+    /// backend error that a retry cannot cure, until
+    /// [`Self::clear_sync_run_failures_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_sync_run_failure_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS injected_sync_run_failure \
+             BEFORE UPDATE ON sync_runs WHEN NEW.status = 'failed' \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later update that starts the sync run `run` fail with a
+    /// backend error that a retry cannot cure, until
+    /// [`Self::clear_sync_run_failures_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_sync_run_start_failure_for_tests(
+        &self,
+        run: coffer_domain::ids::SyncRunId,
+    ) -> Result<(), StoreError> {
+        // A run id is a UUID: it cannot alter the statement.
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS injected_sync_run_start_failure \
+             BEFORE UPDATE ON sync_runs WHEN NEW.status = 'running' AND NEW.id = '{run}' \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Make every later update that starts a sync run (`running`), or
+    /// finishes one (`succeeded`, `partial` or `failed`), fail as a database
+    /// fault would, until [`Self::clear_sync_run_failures_for_tests`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be
+    /// created.
+    pub async fn inject_sync_run_fault_for_tests(
+        &self,
+        on: InjectedRunUpdate,
+    ) -> Result<(), StoreError> {
+        let sql = match on {
+            InjectedRunUpdate::Start => {
+                "CREATE TRIGGER IF NOT EXISTS injected_sync_run_start_fault \
+                 BEFORE UPDATE ON sync_runs WHEN NEW.status = 'running' \
+                 BEGIN SELECT RAISE(ABORT, 'injected database fault'); END"
+            }
+            InjectedRunUpdate::Finish => {
+                "CREATE TRIGGER IF NOT EXISTS injected_sync_run_finish_fault \
+                 BEFORE UPDATE ON sync_runs WHEN NEW.status NOT IN ('queued', 'running') \
+                 BEGIN SELECT RAISE(ABORT, 'injected database fault'); END"
+            }
+        };
+        sqlx::query(sql)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Ends every failure the sync run hooks above installed.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or a trigger cannot be dropped.
+    pub async fn clear_sync_run_failures_for_tests(&self) -> Result<(), StoreError> {
+        for sql in [
+            "DROP TRIGGER IF EXISTS injected_sync_run_failure",
+            "DROP TRIGGER IF EXISTS injected_sync_run_start_failure",
+            "DROP TRIGGER IF EXISTS injected_sync_run_start_fault",
+            "DROP TRIGGER IF EXISTS injected_sync_run_finish_fault",
+        ] {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        }
+        Ok(())
+    }
+
+    /// Delete the row of `connection` while its sync runs stay, so a run of
+    /// it finds the connection gone once it started.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or a statement fails.
+    pub async fn delete_connection_row_for_tests(
+        &self,
+        connection: coffer_domain::ids::ConnectionId,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.pool.acquire().await.map_err(StoreError::from_sqlx)?;
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        let deleted = sqlx::query("DELETE FROM connections WHERE id = ?")
+            .bind(connection.to_string())
+            .execute(&mut *conn)
+            .await;
+        let restored = sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await;
+        deleted.map_err(StoreError::from_sqlx)?;
+        restored.map_err(StoreError::from_sqlx)?;
         Ok(())
     }
 
