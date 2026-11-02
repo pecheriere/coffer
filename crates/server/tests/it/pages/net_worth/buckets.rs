@@ -17,7 +17,7 @@ use super::{PAGE, THREE_MONTHS, alice, bob, day_heading, page, written};
 use crate::net_worth::{World, world};
 use crate::pages::forecast::{row, section, text_of};
 
-const HELD: &str = "held";
+pub(super) const HELD: &str = "held";
 const ONE_YEAR: &str = "from=2025-11-02&to=2026-11-02&interval=week";
 
 /// An account of `kind` with a label, or with none.
@@ -33,7 +33,12 @@ async fn bucket_account(
         .await
 }
 
-async fn college(world: &World, name: &str, currency: &str, label: Option<&str>) -> AccountId {
+pub(super) async fn college(
+    world: &World,
+    name: &str,
+    currency: &str,
+    label: Option<&str>,
+) -> AccountId {
     bucket_account(world, name, "education", currency, label).await
 }
 
@@ -50,7 +55,7 @@ async fn golden_with_buckets(world: &World) {
 }
 
 /// The part of the held section under the `h3` reading `heading`.
-fn part<'a>(held: &'a str, heading: &str) -> &'a str {
+pub(super) fn part<'a>(held: &'a str, heading: &str) -> &'a str {
     let (_, rest) = held
         .split_once(&format!("<h3>{heading}</h3>"))
         .unwrap_or_else(|| panic!("no bucket headed {heading}"));
@@ -554,7 +559,7 @@ async fn in_hand_before(world: &World, whose: Whose) {
 }
 
 /// Closes `holder` on 20 October, and comes back to today.
-async fn closed_on_the_20th(world: &World, holder: AccountId) {
+pub(super) async fn closed_on_the_20th(world: &World, holder: AccountId) {
     world.at("2026-10-20");
     world.patch_holding(holder, &json!({"closed": true})).await;
     world.at(crate::net_worth::TODAY);
@@ -614,7 +619,7 @@ caution_reads!(
     household: "Card is a card or loan, but shows 50.00 USD in hand rather than owed. It may have \
                 been entered with the wrong sign, and it counts as it stands.",
     bucket: "Card is a card or loan, but shows 50.00 USD in hand rather than owed. It may have \
-             been entered with the wrong sign, and it's in this bucket's total as it stands.",
+             been entered with the wrong sign, and it's in this bucket's figures as it stands.",
 );
 
 caution_reads!(
@@ -623,7 +628,7 @@ caution_reads!(
     household: "Card showed 50.00 USD in hand on 27 October 2026, though it is a card or loan. It \
                 may have been entered with the wrong sign, and that counted as it stood.",
     bucket: "Card showed 50.00 USD in hand on 27 October 2026, though it is a card or loan. It \
-             may have been entered with the wrong sign, and that was in this bucket's total as \
+             may have been entered with the wrong sign, and that was in this bucket's figures as \
              it stood.",
 );
 
@@ -631,14 +636,14 @@ caution_reads!(
     a_closed_card_still_owing_reads,
     closed_owing,
     household: "Card is closed but still owes 300.00 USD, which keeps counting.",
-    bucket: "Card is closed but still owes 300.00 USD, which stays in this bucket's total.",
+    bucket: "Card is closed but still owes 300.00 USD, which stays in this bucket's figures.",
 );
 
 caution_reads!(
     a_closed_card_paid_off_reads,
     closed_and_paid,
     household: "Card is closed and owed 300.00 USD when last counted, on 24 October 2026.",
-    bucket: "Card is closed and owed 300.00 USD when last in this bucket's total, on 24 October \
+    bucket: "Card is closed and owed 300.00 USD when last in this bucket's figures, on 24 October \
              2026.",
 );
 
@@ -648,8 +653,8 @@ caution_reads!(
     household: "Nothing counts from 20 October 2026 to 2 November 2026, since every account \
                 counted by then has closed. The number here is from before that, not the value \
                 now.",
-    bucket: "Nothing is in this bucket from 20 October 2026 to 2 November 2026, since every \
-             account in it by then has closed. The number here is from before that, not the \
+    bucket: "This bucket has no open account from 20 October 2026 to 2 November 2026, since every \
+             account in it had closed by then. The number here is from before that, not the \
              value now.",
 );
 
@@ -728,7 +733,7 @@ async fn a_stretch_with_nothing_in_a_bucket_is_said() {
     let body = page(&world, "?range=1y").await.body;
 
     let own = part(section(&body, HELD), "Held for Child A");
-    assert!(row(own, "Week to 4 October 2026")[0].contains("Nothing counted"));
+    assert!(row(own, "Week to 4 October 2026")[0].contains("Nothing in this total"));
     assert_eq!(row(own, "Week to 1 November 2026"), ["2,000.00"]);
     assert_eq!(
         row(&body, "Week to 4 October 2026"),

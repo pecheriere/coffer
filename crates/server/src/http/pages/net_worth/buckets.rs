@@ -13,6 +13,9 @@ use super::{
 };
 use crate::http::pages::amounts::{day, money};
 
+/// A bucket's account is never counted in net worth, so the table says what it is left out of.
+const NOT_IN_THIS_TOTAL: &str = "Not in this total";
+
 /// Every bucket in the report's order, or nothing with none.
 pub(super) fn section(report: &NetWorthReport) -> Markup {
     if report.buckets.is_empty() {
@@ -57,7 +60,7 @@ fn one_bucket(report: &NetWorthReport, bucket: &NetWorthBucket) -> Markup {
                     li { (bucket_blocker_sentence(*blocker, sums.is_some())) }
                 }
                 @for caution in &bucket.cautions {
-                    li { (bucket_caution_sentence(caution, &names)) }
+                    li { (bucket_caution_sentence(caution, &names, has_a_total)) }
                 }
             }
         }
@@ -72,6 +75,7 @@ fn one_bucket(report: &NetWorthReport, bucket: &NetWorthBucket) -> Markup {
             latest.map(|point| point.on),
             &accounts_label,
             no_value,
+            NOT_IN_THIS_TOTAL,
         ))
         (every_value(report, bucket, &names, &heading))
     }
@@ -127,7 +131,41 @@ fn every_value(
                 currency.as_str(),
                 names,
                 &label,
+                "Nothing in this total",
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use coffer_domain::accounts::LiquidityClass;
+    use coffer_domain::ids::AccountId;
+    use coffer_domain::money::Currency;
+    use coffer_domain::net_worth::{AccountSeries, NotCountedReason};
+
+    use super::super::account_cells;
+    use super::{NO_VALUE_THAT_DAY, NOT_IN_THIS_TOTAL};
+
+    /// The report never leaves a bucket's account out of its sums, so only a series made here can
+    /// reach this, and its type doesn't rule it out.
+    #[test]
+    fn a_series_left_out_says_the_words_it_is_given() {
+        let series = AccountSeries {
+            account: AccountId::new(),
+            name: "Fund".to_owned(),
+            liquidity: LiquidityClass::Invested,
+            currency: Currency::parse("USD").unwrap(),
+            counted: false,
+            not_counted: Some(NotCountedReason::ExcludedByFlag),
+            first_on: None,
+            closed_on: None,
+            points: Vec::new(),
+        };
+
+        let cells = account_cells(&series, None, NO_VALUE_THAT_DAY, NOT_IN_THIS_TOTAL);
+
+        assert_eq!(cells[0].value, NOT_IN_THIS_TOTAL);
+        assert_eq!(cells[1].value, NOT_IN_THIS_TOTAL);
     }
 }

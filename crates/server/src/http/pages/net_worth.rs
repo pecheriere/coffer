@@ -38,6 +38,7 @@ use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount
 const NO_TOTAL: &str = "No total";
 const NO_VALUE_THAT_DAY: &str = "No value that day";
 const NOTHING_COUNTED: &str = "Nothing counted";
+const NOT_COUNTED: &str = "Not counted";
 /// A table of this many rows opens for a gap anywhere in it.
 const SHORT_TABLE: usize = 30;
 /// On a longer one, a gap in this many of the newest rows opens it.
@@ -434,6 +435,7 @@ fn history(report: &NetWorthReport, currency: Currency, names: &Names<'_>) -> Ma
                     code,
                     names,
                     "Net worth by period",
+                    NOTHING_COUNTED,
                 ))
             }
         }
@@ -489,6 +491,7 @@ fn periods_table(
     code: &str,
     names: &Names<'_>,
     label: &str,
+    nothing_counted: &str,
 ) -> Markup {
     let total_heading = format!("Total, {code}");
     let conversions: BTreeMap<(AccountId, Date), ConversionState> = accounts
@@ -521,7 +524,7 @@ fn periods_table(
                             }
                         }
                         td role="cell" data-label=(total_heading) {
-                            (period_cell(*period, &conversions, &mut said, names))
+                            (period_cell(*period, &conversions, &mut said, names, nothing_counted))
                         }
                     }
                 }
@@ -536,6 +539,7 @@ fn period_cell(
     conversions: &BTreeMap<(AccountId, Date), ConversionState>,
     said: &mut Vec<NoAmount>,
     names: &Names<'_>,
+    nothing_counted: &str,
 ) -> Markup {
     let reasons: Vec<NoAmount> = match period {
         Period::Point(point) if point.total.is_none() => point
@@ -555,7 +559,7 @@ fn period_cell(
     html! {
         @match period {
             Period::Nothing { .. } => {
-                (NOTHING_COUNTED)
+                (nothing_counted)
             }
             Period::Point(NetWorthPoint { total: Some(total), .. }) => {
                 (grouped(total.minor_units, total.currency))
@@ -678,6 +682,7 @@ fn accounts(report: &NetWorthReport) -> Markup {
                 report.points.last().map(|point| point.on),
                 "Accounts at the latest point",
                 NO_VALUE_THAT_DAY,
+                NOT_COUNTED,
             ))
         }
     }
@@ -690,6 +695,7 @@ fn accounts_table(
     latest: Option<Date>,
     label: &str,
     no_value: &str,
+    not_counted: &str,
 ) -> Markup {
     let in_display = display_currency.map_or_else(
         || "Converted".to_owned(),
@@ -711,7 +717,7 @@ fn accounts_table(
                     @let at = latest.and_then(|on| point_on(series, on));
                     tr role="row" {
                         th scope="row" role="rowheader" { (series.name) }
-                        @for (column, cell) in columns.iter().zip(account_cells(series, at, no_value)) {
+                        @for (column, cell) in columns.iter().zip(account_cells(series, at, no_value, not_counted)) {
                             td role="cell" data-label=(column) {
                                 span.cell-stack {
                                     (cell.value)
@@ -738,11 +744,11 @@ fn account_cells(
     series: &AccountSeries,
     at: Option<&AccountPoint>,
     no_value: &str,
+    not_counted: &str,
 ) -> [AccountCell; 3] {
-    const NOT_COUNTED: &str = "Not counted";
     const NOT_APPLICABLE: &str = "\u{2013}";
     if !series.counted {
-        return [NOT_COUNTED, NOT_COUNTED, NOT_APPLICABLE].map(AccountCell::plain);
+        return [not_counted, not_counted, NOT_APPLICABLE].map(AccountCell::plain);
     }
     let first_day = AccountCell::plain(
         &series
@@ -757,7 +763,7 @@ fn account_cells(
         ];
     };
     let amount = match (point.counted, point.amount, point.conversion) {
-        (false, _, _) => NOT_COUNTED.to_owned(),
+        (false, _, _) => not_counted.to_owned(),
         (true, Some(amount), _) => grouped(amount.minor_units, amount.currency),
         (true, None, ConversionState::Missing) => "No rate".to_owned(),
         (true, None, ConversionState::TooLarge) => "Too large".to_owned(),

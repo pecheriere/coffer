@@ -148,33 +148,45 @@ fn rate_reason(reason: RateMissingReason) -> &'static str {
     }
 }
 
-/// Where a caution says the money is: counted in net worth, or in a bucket's total, which
-/// counts in nothing.
-struct WhereItIs {
+/// How a caution speaks of the money: counted in net worth, or in a bucket, which counts in
+/// nothing and may have no total to speak of.
+struct CautionWords {
     stands: &'static str,
     stood: &'static str,
     keeps: &'static str,
     last: &'static str,
-    nothing: &'static str,
-    every: &'static str,
+    nothing_open: &'static str,
+    all_closed: &'static str,
+    from_before: &'static str,
+    out_of_date: &'static str,
 }
 
-const IN_NET_WORTH: WhereItIs = WhereItIs {
+const IN_NET_WORTH: CautionWords = CautionWords {
     stands: "it counts as it stands",
     stood: "that counted as it stood",
     keeps: "which keeps counting",
     last: "when last counted",
-    nothing: "Nothing counts",
-    every: "every account counted",
+    nothing_open: "Nothing counts",
+    all_closed: "every account counted by then has closed",
+    from_before: "The number here is",
+    out_of_date: "the total",
 };
 
-const IN_A_BUCKET: WhereItIs = WhereItIs {
-    stands: "it's in this bucket's total as it stands",
-    stood: "that was in this bucket's total as it stood",
-    keeps: "which stays in this bucket's total",
-    last: "when last in this bucket's total",
-    nothing: "Nothing is in this bucket",
-    every: "every account in it",
+const IN_A_BUCKET: CautionWords = CautionWords {
+    stands: "it's in this bucket's figures as it stands",
+    stood: "that was in this bucket's figures as it stood",
+    keeps: "which stays in this bucket's figures",
+    last: "when last in this bucket's figures",
+    nothing_open: "This bucket has no open account",
+    all_closed: "every account in it had closed by then",
+    from_before: "The number here is",
+    out_of_date: "the total",
+};
+
+const IN_A_BUCKET_WITH_NO_TOTAL: CautionWords = CautionWords {
+    from_before: "The figures here are",
+    out_of_date: "the figures",
+    ..IN_A_BUCKET
 };
 
 /// What might change the numbers.
@@ -182,12 +194,22 @@ pub(super) fn caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> 
     worded_caution(caution, names, &IN_NET_WORTH)
 }
 
-/// What might change a bucket's numbers, in words true of money in no net worth.
-pub(super) fn bucket_caution_sentence(caution: &NetWorthCaution, names: &Names<'_>) -> String {
-    worded_caution(caution, names, &IN_A_BUCKET)
+/// What might change a bucket's numbers, in words true of money in no net worth, and of a
+/// bucket showing no total if it has none.
+pub(super) fn bucket_caution_sentence(
+    caution: &NetWorthCaution,
+    names: &Names<'_>,
+    has_a_total: bool,
+) -> String {
+    let words = if has_a_total {
+        &IN_A_BUCKET
+    } else {
+        &IN_A_BUCKET_WITH_NO_TOTAL
+    };
+    worded_caution(caution, names, words)
 }
 
-fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &WhereItIs) -> String {
+fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &CautionWords) -> String {
     match caution {
         NetWorthCaution::RateMissing {
             currency,
@@ -223,10 +245,11 @@ fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &WhereItI
             on,
             age_days,
         } => format!(
-            "The balance of {} is {} old, from {}, so the total may be out of date.",
+            "The balance of {} is {} old, from {}, so {} may be out of date.",
             names.account(*account),
             days(*age_days),
             day(*on),
+            words.out_of_date,
         ),
         NetWorthCaution::ToDateNotYetFilled { through } => format!(
             "coffer has worked out values up to {}, so later days aren't shown yet.",
@@ -243,12 +266,12 @@ fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &WhereItI
             stretch(*first_on, *last_on),
         ),
         NetWorthCaution::NothingCountedAfterLastPoint { from, to } => format!(
-            "{} from {} to {}, since {} by then has closed. The number here is from before \
-             that, not the value now.",
-            words.nothing,
+            "{} from {} to {}, since {}. {} from before that, not the value now.",
+            words.nothing_open,
             day(*from),
             day(*to),
-            words.every,
+            words.all_closed,
+            words.from_before,
         ),
         NetWorthCaution::LiabilityBalancePositive { account, balance } => {
             positive_liability_sentence(*account, *balance, names, words)
@@ -265,7 +288,7 @@ fn positive_liability_sentence(
     account: AccountId,
     balance: Money,
     names: &Names<'_>,
-    words: &WhereItIs,
+    words: &CautionWords,
 ) -> String {
     let in_hand = |point: &AccountPoint| point.balance.minor_units > 0;
     let name = names.account_first(account);
@@ -290,7 +313,7 @@ fn closed_owing_sentence(
     account: AccountId,
     balance: Money,
     names: &Names<'_>,
-    words: &WhereItIs,
+    words: &CautionWords,
 ) -> String {
     let owing = |point: &AccountPoint| point.balance.minor_units < 0;
     let name = names.account_first(account);
@@ -449,10 +472,13 @@ mod tests {
         let kinds = schema_kinds::<NetWorthCaution>();
         let names = Names::of_accounts(&[], None);
         for caution in &cautions() {
-            let sentence = bucket_caution_sentence(caution, &names);
-            assert_worded(&sentence, &kinds);
-            for word in ["counts", "counted", "counting"] {
-                assert!(!sentence.contains(word), "{sentence}");
+            for has_a_total in [true, false] {
+                let sentence = bucket_caution_sentence(caution, &names, has_a_total);
+                assert_worded(&sentence, &kinds);
+                assert!(
+                    !sentence.replace("account", "").contains("count"),
+                    "{sentence}"
+                );
             }
         }
     }
