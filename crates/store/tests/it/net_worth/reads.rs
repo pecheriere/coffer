@@ -235,6 +235,10 @@ async fn excluded_accounts_have_no_rows_but_are_listed() {
 
 /// A USD account held for Child A, whose flags are off as the table holds.
 async fn held_for_a_child(store: &Store) -> AccountId {
+    outside_the_household(store, BelongsTo::SomeoneElse).await
+}
+
+async fn outside_the_household(store: &Store, belongs_to: BelongsTo) -> AccountId {
     let id = AccountId::new();
     let mut tx = store.begin().await.unwrap();
     tx.insert_account(NewAccount {
@@ -247,7 +251,7 @@ async fn held_for_a_child(store: &Store) -> AccountId {
         include_in_net_worth: false,
         include_in_forecast: false,
         created_at: at(),
-        belongs_to: BelongsTo::SomeoneElse,
+        belongs_to,
         belongs_to_overridden: false,
         beneficiary: Some(Beneficiary::parse("Child A").unwrap()),
     })
@@ -260,15 +264,17 @@ async fn held_for_a_child(store: &Store) -> AccountId {
 /// Its flag is false, which would otherwise read as no rows, and a hole in every bucket.
 #[tokio::test]
 async fn a_bucket_has_its_rows() {
-    let (_dir, store) = open().await;
-    let held = held_for_a_child(&store).await;
-    snap(&store, held, oct(1), 100).await;
-    rebuild(&store, oct(2)).await;
+    for belongs_to in [BelongsTo::SomeoneElse, BelongsTo::GivenAway] {
+        let (_dir, store) = open().await;
+        let held = outside_the_household(&store, belongs_to).await;
+        snap(&store, held, oct(1), 100).await;
+        rebuild(&store, oct(2)).await;
 
-    let data = by_day(&store, &AccountScope::All, oct(1), oct(2)).await;
+        let data = by_day(&store, &AccountScope::All, oct(1), oct(2)).await;
 
-    assert_eq!(holders(&data), [held]);
-    assert_eq!(on_days(&data), days(1, 2));
+        assert_eq!(holders(&data), [held]);
+        assert_eq!(on_days(&data), days(1, 2));
+    }
 }
 
 #[tokio::test]

@@ -91,7 +91,7 @@ pub struct ReportAccount {
     pub beneficiary: Option<String>,
 }
 
-/// Leaves out `beneficiary`, which may be a child's name.
+/// Leaves out `beneficiary`, which may be a child's name, and the account's `name`.
 impl std::fmt::Debug for ReportAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReportAccount")
@@ -184,7 +184,7 @@ pub struct NetWorthBucket {
     pub cautions: Vec<NetWorthCaution>,
 }
 
-/// Leaves out `beneficiary`, which may be a child's name.
+/// Leaves out `beneficiary`, which may be a child's name, and its `accounts`.
 impl std::fmt::Debug for NetWorthBucket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetWorthBucket")
