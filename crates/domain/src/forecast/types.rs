@@ -64,6 +64,9 @@ pub struct AccountInput {
     /// The latest balance on or before `as_of`.
     pub balance: Option<BalanceInput>,
     pub feed_problems: Vec<FeedProblem>,
+    /// Whether spending linked to a goal on this account lowers a goal's need, which it does
+    /// on any account, the household's or not.
+    pub goal_spending: bool,
 }
 
 /// A balance in the account's currency. A card owing money is negative.
@@ -174,9 +177,9 @@ pub struct FeedAlert {
     pub connection: ConnectionId,
     pub label: String,
     pub status: FeedStatus,
-    /// The accounts its provider accounts are bound to, counted or not. It cautions the
-    /// forecast only if it could change the number: one of these counts, or it has a
-    /// provider account in [`ForecastInput::unbound`] that may yet be bound to one that does.
+    /// The accounts its provider accounts are bound to. It cautions the forecast only if it
+    /// could change the number: it has none yet, one of these is read by the number, or it
+    /// has a provider account in [`ForecastInput::unbound`].
     pub serves: Vec<AccountId>,
 }
 

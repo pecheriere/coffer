@@ -273,7 +273,7 @@ fn a_failing_connection_serving_a_counted_and_a_held_account_cautions() {
 }
 
 #[test]
-fn a_failing_connection_serving_only_a_held_account_changes_nothing() {
+fn a_failing_connection_serving_only_a_held_account_with_no_goal_spending_changes_nothing() {
     let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000)), held("Child")], &[1]);
     assert_eq!(forecast.cautions, [], "its money is not in the sum");
     assert_eq!(forecast.status, ForecastStatus::Firm);
@@ -290,13 +290,34 @@ fn a_failing_connection_serving_only_an_excluded_account_changes_nothing() {
     assert_eq!(forecast.status, ForecastStatus::Firm);
 }
 
-/// Nothing is bound or waiting to be: the connection cannot change the number. This is a
-/// change from reporting it, which the forecast did for every failing connection.
+/// A first sync that failed leaves the household believing the bank is connected while none
+/// of its money is in the forecast.
 #[test]
-fn a_failing_connection_with_nothing_bound_changes_nothing() {
+fn a_failing_connection_with_no_provider_account_cautions() {
     let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000))], &[]);
-    assert_eq!(forecast.cautions, []);
-    assert_eq!(forecast.status, ForecastStatus::Firm);
+    assert_eq!(forecast.cautions.len(), 1);
+    assert_provisional(&forecast);
+}
+
+/// Spending linked to a goal lowers its need on any account, so a stalled feed there can
+/// change the number even when the account's balance is not summed.
+#[test]
+fn a_failing_connection_serving_an_account_with_goal_spending_cautions() {
+    for account in [
+        AccountInput {
+            goal_spending: true,
+            ..held("Child")
+        },
+        AccountInput {
+            goal_spending: true,
+            include_in_forecast: false,
+            ..cash("Side", usd(1))
+        },
+    ] {
+        let (forecast, _) = with_failing(vec![cash("Checking", usd(1_000)), account], &[1]);
+        assert_eq!(forecast.cautions.len(), 1);
+        assert_provisional(&forecast);
+    }
 }
 
 /// An account a member may yet bind as counted is a reason to look at the connection.

@@ -261,6 +261,7 @@ fn input(
         settlements,
         goal_spent,
         goals_linked_both_sides,
+        goal_spending_accounts,
         category_spent,
         loose_ends,
         newer_spending,
@@ -277,14 +278,10 @@ fn input(
         .filter(|connection| connection.status == ConnectionStatus::Removed)
         .map(|connection| connection.id)
         .collect();
-    let mut serves: BTreeMap<ConnectionId, Vec<AccountId>> = BTreeMap::new();
-    for record in &provider_accounts {
-        if let Some(account) = record.account {
-            serves.entry(record.connection).or_default().push(account);
-        }
-    }
+    let feeds = feed_alerts(connections, &provider_accounts);
     let (mut problems, unbound) = provider_view(provider_accounts, &currencies, &removed);
     let goal_spent: BTreeMap<PlannedItemId, i64> = goal_spent.into_iter().collect();
+    let goal_spending: BTreeSet<AccountId> = goal_spending_accounts.into_iter().collect();
     let both_sides: BTreeSet<PlannedItemId> = goals_linked_both_sides.into_iter().collect();
     let mut settled = settled_months(&settlements);
     ForecastInput {
@@ -309,6 +306,7 @@ fn input(
                     minor_units: snapshot.balance_minor,
                 }),
                 feed_problems: problems.remove(&account.id).unwrap_or_default(),
+                goal_spending: goal_spending.contains(&account.id),
             })
             .collect(),
         items: items
@@ -345,13 +343,7 @@ fn input(
             })
             .collect(),
         unbound,
-        feeds: connections
-            .into_iter()
-            .filter_map(|connection| {
-                let serves = serves.remove(&connection.id).unwrap_or_default();
-                feed_alert(connection, serves)
-            })
-            .collect(),
+        feeds,
     }
 }
 
@@ -386,6 +378,26 @@ fn provider_view(
         }
     }
     (problems, unbound)
+}
+
+/// The alerts of the connections that aren't syncing, each with the accounts it feeds.
+fn feed_alerts(
+    connections: Vec<ConnectionHealth>,
+    provider_accounts: &[ProviderAccountRecord],
+) -> Vec<FeedAlert> {
+    let mut serves: BTreeMap<ConnectionId, Vec<AccountId>> = BTreeMap::new();
+    for record in provider_accounts {
+        if let Some(account) = record.account {
+            serves.entry(record.connection).or_default().push(account);
+        }
+    }
+    connections
+        .into_iter()
+        .filter_map(|connection| {
+            let serves = serves.remove(&connection.id).unwrap_or_default();
+            feed_alert(connection, serves)
+        })
+        .collect()
 }
 
 /// The alert of a connection that isn't syncing.
