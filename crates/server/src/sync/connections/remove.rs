@@ -1,16 +1,19 @@
 //! Removing a connection and giving its credentials up at the provider.
 
+use std::sync::Arc;
+
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::ConnectionId;
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{ConnectionRecord, ConnectionStatus, ConnectionStatusChange};
+use secrecy::SecretString;
 
 use super::{CONNECTION_CHANGED, audit};
 use crate::sync::SyncError;
 use crate::sync::engine::{CONNECTION_REMOVED, SyncService, ensure_not_removed};
-use crate::sync::provider::{ProviderError, ProviderKind};
-use crate::vault::SealedCredentials;
+use crate::sync::provider::{Provider, ProviderError, ProviderKind};
+use crate::vault::{SealedCredentials, VaultError};
 
 const CANNOT_GIVE_UP: &str = "the provider keeps billing this connection until it is removed there, \
      and coffer cannot reach it: check the server's provider configuration and key, then retry";
@@ -91,6 +94,34 @@ impl SyncService {
         Ok(())
     }
 
+    /// The provider `connection` uses and its credentials in clear, for the
+    /// call that gives them up.
+    fn reach(
+        &self,
+        connection: &ConnectionRecord,
+        sealed: &[u8],
+    ) -> Result<(Arc<dyn Provider>, SecretString), Unreachable> {
+        let provider = self
+            .provider_of(connection)
+            .ok_or(Unreachable::NotOffered)?;
+        let sealed = SealedCredentials::from(sealed.to_vec());
+        let credentials = self
+            .vault
+            .open(connection.id, &sealed)
+            .map_err(Unreachable::Unopenable)?;
+        Ok((provider, credentials))
+    }
+
+    /// Whether removing `connection` is refused for want of a way to give
+    /// its credentials up: its provider bills until told otherwise, and
+    /// either the server no longer offers the provider or the sealed
+    /// credentials do not open.
+    pub(super) fn cannot_give_up(&self, connection: &ConnectionRecord) -> bool {
+        connection.credentials.as_deref().is_some_and(|sealed| {
+            bills_until_removed(connection) && self.reach(connection, sealed).is_err()
+        })
+    }
+
     /// Gives up `connection`'s credentials at its provider, opened only for
     /// the call.
     async fn disconnect(&self, connection: &ConnectionRecord) -> Result<(), SyncError> {
@@ -103,36 +134,22 @@ impl SyncService {
         };
         // A provider that bills until told otherwise must be told: its
         // credentials are the only way to, so they are kept until they work.
-        let must_give_up = connection
-            .provider
-            .parse::<ProviderKind>()
-            .is_ok_and(ProviderKind::bills_until_removed);
-        let Some(provider) = self.provider_of(connection) else {
-            if must_give_up {
-                return Err(SyncError::Conflict(CANNOT_GIVE_UP));
-            }
-            tracing::warn!(
-                connection = %connection.id,
-                "connection removed without disconnecting: its provider is not offered"
-            );
-            return Ok(());
-        };
-        let sealed = SealedCredentials::from(sealed.clone());
-        let credentials = match self.vault.open(connection.id, &sealed) {
-            Ok(credentials) => credentials,
-            Err(err) => {
+        let must_give_up = bills_until_removed(connection);
+        let (provider, credentials) = match self.reach(connection, sealed) {
+            Ok(reached) => reached,
+            Err(unreachable) => {
                 if must_give_up {
                     tracing::warn!(
                         connection = %connection.id,
-                        error = ?err,
-                        "connection kept: its credentials cannot be opened"
+                        error = ?unreachable,
+                        "connection kept: coffer cannot give its credentials up"
                     );
                     return Err(SyncError::Conflict(CANNOT_GIVE_UP));
                 }
                 tracing::warn!(
                     connection = %connection.id,
-                    error = ?err,
-                    "connection removed without disconnecting: its credentials cannot be opened"
+                    error = ?unreachable,
+                    "connection removed without disconnecting: {unreachable}"
                 );
                 return Ok(());
             }
@@ -153,4 +170,21 @@ impl SyncService {
             }
         }
     }
+}
+
+/// Why a connection's credentials cannot be given up at its provider.
+#[derive(Debug, thiserror::Error)]
+enum Unreachable {
+    #[error("its provider is not offered")]
+    NotOffered,
+    #[error("its credentials cannot be opened")]
+    Unopenable(#[source] VaultError),
+}
+
+/// Whether the connection's provider bills it until it is removed there.
+fn bills_until_removed(connection: &ConnectionRecord) -> bool {
+    connection
+        .provider
+        .parse::<ProviderKind>()
+        .is_ok_and(ProviderKind::bills_until_removed)
 }

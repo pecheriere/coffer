@@ -312,6 +312,44 @@ fn household_authorize_never_grants_account_access() {
 }
 
 #[test]
+fn forgetting_a_connection_needs_a_session_and_removals_role() {
+    let member = session(Role::Member);
+    let own = Action::ForgetConnection {
+        owner: member.member,
+    };
+    let others = Action::ForgetConnection {
+        owner: MemberId::new(),
+    };
+    assert_eq!(authorize(&member, own), Ok(()));
+    assert_eq!(
+        authorize(&member, others),
+        Err(Denied {
+            action: others,
+            reason: DenyReason::InsufficientScope {
+                needed: Scope::Admin
+            },
+        })
+    );
+    assert_eq!(authorize(&session(Role::Admin), others), Ok(()));
+    // No token does, whatever its scope.
+    let token = agent(Role::Admin, Scope::Admin);
+    for action in [
+        others,
+        Action::ForgetConnection {
+            owner: token.member,
+        },
+    ] {
+        assert_eq!(
+            authorize(&token, action),
+            Err(Denied {
+                action,
+                reason: DenyReason::SessionRequired,
+            })
+        );
+    }
+}
+
+#[test]
 fn member_cannot_remove_others_connection_but_admin_can() {
     let member = session(Role::Member);
     let other = MemberId::new();

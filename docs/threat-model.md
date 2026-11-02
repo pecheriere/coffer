@@ -84,7 +84,17 @@
   removed, and an Item that needs a new login is not removed until it has been
   reconnected. If coffer cannot reach Plaid to remove it, because Plaid is no
   longer configured or the sealed token no longer opens, the removal is refused
-  and the token kept, so the Item is never orphaned while still billing. Plaid's `error_message` and request id are deliberately not
+  and the token kept, so the Item is never orphaned while still billing.
+  When that state is permanent (the server key is truly lost), the member can
+  instead forget the connection from the Connections page. The action is
+  offered only for a connection whose removal is refused for that reason, needs
+  a passkey session (an agent token cannot do it, and the API's `DELETE` stays
+  refused), the same role as removal and the anti-forgery token, and asks for
+  the connection's label to be typed. It marks the connection removed and
+  erases the sealed token without calling Plaid, so the Item keeps billing at
+  Plaid until the member removes it in Plaid's dashboard; the page says so. It
+  is audited as `connection.forget` with `given_up_at_provider` false, never as
+  `connection.remove`. Plaid's `error_message` and request id are deliberately not
   kept: its free text can quote credentials, so coffer keeps only Plaid's error
   type and code, which are restricted to capitals, digits and underscores.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only

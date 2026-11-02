@@ -30,6 +30,7 @@ use crate::ledger::LedgerError;
 use crate::ledger::accounts::AccountView;
 
 mod binding;
+mod forget;
 pub(super) mod plaid_budget;
 mod reconnect;
 mod remove;

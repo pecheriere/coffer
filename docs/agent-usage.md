@@ -318,7 +318,12 @@ for a sync.
   error and nothing changes: the connection stays and removing can be retried.
   A Plaid connection also answers 409 and stays if the server can no longer
   reach Plaid for it: Plaid is not configured, or its sealed token no longer
-  opens.
+  opens. If that is permanent, only a member can forget the connection from
+  the Connections page, signed in with a passkey and typing its label: no
+  token can, and `DELETE` stays refused. Forgetting erases the sealed token
+  without calling Plaid, so the Item keeps billing at Plaid until the member
+  removes it in Plaid's dashboard; the audit log records `connection.forget`
+  rather than `connection.remove`. Tell the member this instead of retrying.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and

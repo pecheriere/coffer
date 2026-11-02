@@ -351,6 +351,12 @@ pub enum Action {
     RemoveConnection {
         owner: MemberId,
     },
+    /// Forget the connection `owner` added without giving its credentials up
+    /// at the provider, which leaves the provider billing it. Never an agent
+    /// token's: it needs a passkey session, and the same role as removal.
+    ForgetConnection {
+        owner: MemberId,
+    },
 }
 
 /// Why an action was denied.
@@ -406,12 +412,17 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<(), Denied> {
             Requirement::Scope(Scope::Write)
         }
         Action::RemoveConnection { .. } => Requirement::Scope(Scope::Admin),
+        Action::ForgetConnection { owner } if owner == actor.member => {
+            Requirement::SessionWithScope(Scope::Write)
+        }
         Action::AccessAccount { .. } => Requirement::Never(DenyReason::AccountHidden),
         Action::ManageOwnCredentials => Requirement::Session,
         Action::ManageMembers | Action::ManageInvites | Action::ManageHousehold => {
             Requirement::Scope(Scope::Admin)
         }
-        Action::IssueEnrollmentLink => Requirement::SessionWithScope(Scope::Admin),
+        Action::ForgetConnection { .. } | Action::IssueEnrollmentLink => {
+            Requirement::SessionWithScope(Scope::Admin)
+        }
     };
     let session = matches!(actor.via, Via::Session);
     let reason = match requirement {
