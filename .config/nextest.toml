@@ -14,3 +14,10 @@ slow-timeout = { period = "16s", terminate-after = 3 }
 [[profile.default.overrides]]
 filter = "test(grants::proptests::no_endpoint_leaks)"
 slow-timeout = { period = "20s", terminate-after = 3 }
+
+# This compares incremental updates with a full rebuild over generated histories.
+# It takes about 8 s on a busy machine and exceeded 30 s when other builds were
+# running, so it gets 60 s.
+[[profile.default.overrides]]
+filter = "test(net_worth::rebuild::incremental_matches_a_full_rebuild)"
+slow-timeout = { period = "20s", terminate-after = 3 }
