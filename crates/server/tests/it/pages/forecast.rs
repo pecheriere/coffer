@@ -387,6 +387,31 @@ async fn a_settled_item_has_nothing_to_press() {
     assert!(!main.contains("<button"), "no button");
 }
 
+/// A settled item's name is the household's text, so it stays text.
+#[tokio::test]
+async fn a_settled_items_name_is_escaped() {
+    const MARKUP: &str = "<script>alert(1)</script>";
+    let (world, _) = crate::forecast::settled::holding().await;
+    let home = world.expense("Home").await;
+    let item = world
+        .item(&outflow(
+            MARKUP,
+            1_000,
+            home,
+            &json!({"type": "one_off", "on": "2026-11-20"}),
+        ))
+        .await;
+    world.settle(&item, "2026-11", "paid").await;
+
+    let body = page(&world).await.body;
+
+    assert!(!body.contains(MARKUP), "the markup stays text");
+    assert!(
+        section(&body, "answer").contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "and is shown"
+    );
+}
+
 #[tokio::test]
 async fn nothing_settled_says_nothing_of_it() {
     let Golden { world, .. } = golden().await;

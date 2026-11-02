@@ -4,7 +4,7 @@
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
-use coffer_domain::identity::Scope;
+use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::PlannedItemId;
 use coffer_domain::policy::AccountLevel::{Transactions, Write};
 use coffer_domain::transactions::CategoryKind;
@@ -80,6 +80,45 @@ impl World {
             .iter()
             .map(|one| one["month"].as_str().unwrap().to_owned())
             .collect()
+    }
+
+    /// A second member, "bob", with a token of his own at `write`.
+    async fn second_member(
+        &self,
+    ) -> (
+        coffer_domain::ids::MemberId,
+        coffer_domain::ids::AgentTokenId,
+        SecretToken,
+    ) {
+        let invite = self
+            .server
+            .identity
+            .create_invite(&self.alice, Role::Member, None)
+            .await
+            .unwrap();
+        let bob = self
+            .server
+            .authenticator()
+            .enroll(&invite, "bob", "Bob")
+            .await;
+        let actor = Actor {
+            member: bob,
+            role: Role::Member,
+            via: Via::Session,
+        };
+        let (record, secret) = self
+            .server
+            .agent_tokens
+            .create(
+                &actor,
+                TokenName::parse("bobs").unwrap(),
+                Scope::Write,
+                None,
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        (bob, record.id, secret)
     }
 
     /// Whether `token`'s idempotency key `key` is still unused.
@@ -436,15 +475,249 @@ async fn a_settled_bill_cannot_become_a_budget_or_income() {
     );
 }
 
+/// A name or a category says nothing of what was paid.
 #[tokio::test]
-async fn any_other_change_keeps_the_settlement() {
+async fn a_change_to_anything_else_keeps_the_settlement() {
+    let world = settling_world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    let other = world.category(CategoryKind::Expense).await.1;
+    world.settled(&id, "2027-01").await;
+
+    let patched = world
+        .patch(
+            &id,
+            &json!({"name": "Renamed", "category": other, "notes": "Noted", "active": false}),
+        )
+        .await;
+
+    assert_eq!(patched["settlements"][0]["month"], "2027-01");
+    assert_eq!(world.months_of(&id).await, ["2027-01"]);
+    let events = world.audit().await;
+    assert!(
+        !events[0]
+            .changes
+            .iter()
+            .any(|(name, _)| name == "settlements"),
+        "nothing was removed"
+    );
+}
+
+/// The amount and schedule it already has are no change, so nothing goes and nothing is
+/// written.
+#[tokio::test]
+async fn a_patch_that_changes_nothing_keeps_the_settlement() {
+    let world = settling_world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world.settled(&id, "2027-01").await;
+    let before = world.item(&id).await;
+    let audited = world.audit().await.len();
+
+    let patched = world
+        .patch(
+            &id,
+            &json!({"amount": before["amount"], "schedule": before["schedule"]}),
+        )
+        .await;
+
+    assert_eq!(patched["settlements"], before["settlements"]);
+    assert_eq!(world.months_of(&id).await, ["2027-01"]);
+    assert_eq!(world.audit().await.len(), audited);
+}
+
+/// Sending back the amount and schedule it has, beside a real change, is a rename: what was
+/// settled still stands.
+#[tokio::test]
+async fn resending_the_amount_and_schedule_with_a_rename_keeps_the_settlement() {
+    let world = settling_world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world.settled(&id, "2027-01").await;
+    let before = world.item(&id).await;
+
+    let patched = world
+        .patch(
+            &id,
+            &json!({
+                "name": "Renamed",
+                "amount": before["amount"],
+                "schedule": before["schedule"],
+            }),
+        )
+        .await;
+
+    assert_eq!(patched["settlements"], before["settlements"]);
+    assert_eq!(world.months_of(&id).await, ["2027-01"]);
+}
+
+/// From the current month on they go, in one audit entry with the change that ended them;
+/// earlier months are what happened, and stay.
+#[tokio::test]
+async fn a_new_amount_removes_this_month_on_and_keeps_earlier_ones() {
+    let world = settling_world().await;
+    let id = world.create(&long_running(world.expense)).await;
+    for month in ["2026-12", "2027-01", "2027-02"] {
+        world.settled(&id, month).await;
+    }
+    let audited = world.audit().await.len();
+
+    let patched = world
+        .patch(
+            &id,
+            &json!({"amount": {"minor_units": 5000, "currency": "USD"}}),
+        )
+        .await;
+
+    assert_eq!(patched["settlements"][0]["month"], "2026-12");
+    assert_eq!(patched["settlements"].as_array().unwrap().len(), 1);
+    assert_eq!(world.months_of(&id).await, ["2026-12"]);
+    let events = world.audit().await;
+    assert_eq!(events.len(), audited + 1, "one entry");
+    assert_eq!(events[0].action, "planned_item.update");
+    let removed = events[0]
+        .changes
+        .iter()
+        .find(|(name, _)| *name == "settlements")
+        .unwrap()
+        .1;
+    assert_eq!(
+        removed.before,
+        AuditValue::Text(r#"[["2027-01","paid"],["2027-02","paid"]]"#.into())
+    );
+    assert_eq!(removed.after, AuditValue::Null);
+}
+
+#[tokio::test]
+async fn a_new_currency_removes_them_too() {
     let world = settling_world().await;
     let id = world.create(&recurring(world.expense)).await;
     world.settled(&id, "2027-01").await;
 
-    let patched = world.patch(&id, &json!({"name": "Renamed"})).await;
+    let patched = world
+        .patch(
+            &id,
+            &json!({"amount": {"minor_units": 4200, "currency": "EUR"}}),
+        )
+        .await;
 
-    assert_eq!(patched["settlements"][0]["month"], "2027-01");
+    assert_eq!(patched["settlements"], json!([]));
+    assert_eq!(world.months_of(&id).await, Vec::<String>::new());
+}
+
+/// A token short of `all` at `write` gets the same refusal for a hidden item and a missing
+/// one, and its patch removes nothing.
+#[tokio::test]
+async fn restricted_token_cannot_end_a_settlement() {
+    let world = settling_world().await;
+    let (visible, hidden) = (
+        world.account("Visible").await,
+        world.account("Hidden").await,
+    );
+    let id = world
+        .create(&with(
+            recurring(world.expense),
+            "account_hint",
+            json!(hidden),
+        ))
+        .await;
+    world.settled(&id, "2027-01").await;
+    let (_, token) = world.token(Scope::Write, vec![on(visible, Write)]).await;
+    let audited = world.audit().await.len();
+    let patch = json!({"amount": {"minor_units": 5000, "currency": "USD"}});
+
+    let answer = world
+        .send(Method::PATCH, &item_uri(&id), &token, Some(&patch), None)
+        .await;
+    let absent = world
+        .send(
+            Method::PATCH,
+            &item_uri(PlannedItemId::new()),
+            &token,
+            Some(&patch),
+            None,
+        )
+        .await;
+
+    assert_eq!(answer.0, StatusCode::FORBIDDEN);
+    assert!(answer == absent, "byte-identical to a random id's");
+    assert_eq!(world.months_of(&id).await, ["2027-01"]);
+    assert_eq!(world.audit().await.len(), audited);
+}
+
+/// Replacing a month's settlement says who replaced it and when, not who first settled it.
+#[tokio::test]
+async fn replacing_a_settlement_records_the_new_who_and_when() {
+    let world = settling_world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world.settled(&id, "2027-01").await;
+    let (bob, bobs_token_id, bobs_token) = world.second_member().await;
+    world.server.clock.set(at("2027-01-20T12:00:00Z"));
+
+    let (status, _) = world
+        .put_settlement(&bobs_token, &id, "2027-01", &json!({"kind": "skipped"}))
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        world.item(&id).await["settlements"],
+        json!([{
+            "month": "2027-01",
+            "kind": "skipped",
+            "member": bob,
+            "agent": bobs_token_id,
+            "settled_at": "2027-01-20T12:00:00Z",
+        }])
+    );
+}
+
+/// The refusal comes before the month's check on a delete too, so it says nothing of it.
+#[tokio::test]
+async fn restricted_token_is_refused_a_delete_before_the_month_is_checked() {
+    let world = settling_world().await;
+    let visible = world.account("Visible").await;
+    let id = world.create(&recurring(world.expense)).await;
+    let (_, token) = world.token(Scope::Write, vec![on(visible, Write)]).await;
+
+    let (status, _) = world
+        .call(Method::DELETE, &uri(&id, "1969-12"), &token, None)
+        .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// What was removed and who removed it, member and agent.
+#[tokio::test]
+async fn a_delete_is_audited_with_its_kind_member_and_agent() {
+    let world = settling_world().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world
+        .put_settlement(&world.admin, &id, "2027-01", &json!({"kind": "skipped"}))
+        .await;
+    let (token_id, token) = world.token(Scope::Write, Vec::new()).await;
+
+    world
+        .call(Method::DELETE, &uri(&id, "2027-01"), &token, None)
+        .await;
+
+    let events = world.audit().await;
+    assert_eq!(events[0].action, "planned_item.unsettle");
+    assert_eq!(
+        events[0].actor,
+        AuditActor::Member {
+            member: world.alice.member,
+            agent: Some(token_id),
+        }
+    );
+    let before = |field: &str| {
+        events[0]
+            .changes
+            .iter()
+            .find(|(name, _)| *name == field)
+            .unwrap()
+            .1
+            .before
+            .clone()
+    };
+    assert_eq!(before("month"), AuditValue::Text("2027-01".into()));
+    assert_eq!(before("kind"), AuditValue::Text("skipped".into()));
 }
 
 /// All of it for a hidden item and a random id: the same bytes, no audit entry and nothing

@@ -174,14 +174,19 @@ pub(super) async fn get(
                    schedule, and its `type` must stay the item's own. `spending` is refused unless \
                    the item is left a recurring outflow. Changing `direction` to `inflow` drops \
                    its kind; changing it to `outflow` makes it a `bill` unless `spending` says \
-                   otherwise. Needs `write`; a token with account grants also needs `all` at \
-                   `write`.",
+                   otherwise. Changing `amount`, its currency included, or `schedule` removes the \
+                   item's settlements from the household's current month on, since nobody said \
+                   that was paid: the answer shows what is left, the audit entry says which went, \
+                   and earlier months stay. Any other change keeps them, and a settled item can't \
+                   become a budget or income until they are deleted. Needs `write`; a token with \
+                   account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(PlannedItemPath),
     request_body = PlannedItemPatch,
     responses(
         (status = 200, description = "The planned item as it now is.", body = PlannedItemView),
-        (status = 409, description = "A new currency on a goal with linked splits.",
+        (status = 409, description = "A new currency on a goal with linked splits, or a settled \
+                                      item becoming a budget or income.",
          body = ProblemBody, content_type = "application/problem+json"),
         CommonProblems,
     ),

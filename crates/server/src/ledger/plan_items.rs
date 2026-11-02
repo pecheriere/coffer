@@ -13,14 +13,14 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Money;
 use coffer_domain::plan::{
-    MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule, PlanSpending, PlannedItemName,
-    settlement_applies, spending_applies, validate_amount,
+    CalendarMonth, InvalidMonth, MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule,
+    PlanSpending, PlannedItemName, settlement_applies, spending_applies, validate_amount,
 };
 use coffer_domain::policy::{Action, authorize, plan_item_visible};
 use coffer_domain::transactions::{CategoryKind, Notes};
 use coffer_store::{
     AccountRecord, CategoryRecord, NewPlannedItem, PlannedItemChanges, PlannedItemRecord,
-    StoreError, StoreTx,
+    SettlementRecord, StoreError, StoreTx,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,7 @@ const TOO_MANY: &str = "a household holds at most 500 planned items";
 const GOAL_LINKED: &str = "the goal has linked splits; mark it complete instead";
 const GOAL_LINKED_CURRENCY: &str = "the goal has linked splits, which hold it to its currency";
 const SCHEDULE_TEXT_FAILED: &str = "schedule serialization failed";
+const NO_MONTH: &str = "today has no calendar month";
 const SETTLED: &str = "the item is settled for some months: delete those settlements first";
 
 /// A planned item.
@@ -158,6 +159,15 @@ pub struct PlannedItemPatch {
     /// outflow loses its kind; one that becomes an outflow is a `bill` unless
     /// this says otherwise.
     pub spending: Option<PlanSpending>,
+}
+
+fn views_of(settlements: &[SettlementRecord]) -> Vec<SettlementView> {
+    settlements.iter().map(SettlementView::new).collect()
+}
+
+/// A day with no month: before year 0, which the household's day never is.
+fn invalid_month(_: InvalidMonth) -> LedgerError {
+    LedgerError::Internal(NO_MONTH)
 }
 
 /// The message for a rejected plan value; never echoes the input.
@@ -506,7 +516,9 @@ impl Ledger {
         Ok(view)
     }
 
-    /// Changes a planned item. A patch that changes nothing writes nothing.
+    /// Changes a planned item. A patch that changes nothing writes nothing. One that changes
+    /// its amount, currency or schedule removes its settlements from the household's current
+    /// month on, in the same transaction and audit entry, and earlier ones stay.
     ///
     /// # Errors
     ///
@@ -527,15 +539,26 @@ impl Ledger {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_planned_item(id).await?;
-        let (changes, audited) = patch.changes(&mut tx, &current).await?;
-        let settlements = tx
-            .settlements_of_item(id)
-            .await?
-            .iter()
-            .map(SettlementView::new)
-            .collect();
+        let (changes, mut audited) = patch.changes(&mut tx, &current).await?;
+        let mut settlements = tx.settlements_of_item(id).await?;
         if audited.is_empty() {
-            return Ok(PlannedItemView::new(&current, settlements));
+            return Ok(PlannedItemView::new(&current, views_of(&settlements)));
+        }
+        // A settlement was made on what the item then owed and when, so a change to either
+        // ends those still to matter. Earlier months are what happened. It errs toward
+        // counting, and the member can settle again.
+        if changes.amount.is_some() || changes.schedule.is_some() {
+            let this_month = CalendarMonth::of(self.today()).map_err(invalid_month)?;
+            let (ended, earlier): (Vec<_>, Vec<_>) = settlements
+                .into_iter()
+                .partition(|one| one.month >= this_month);
+            for one in &ended {
+                tx.delete_settlement(id, one.month).await?;
+            }
+            if !ended.is_empty() {
+                audited = audited.unset("settlements", settlements_value(&ended)?);
+            }
+            settlements = earlier;
         }
         let record = tx.update_planned_item(id, changes, now).await?;
         audit(
@@ -549,7 +572,7 @@ impl Ledger {
         )
         .await?;
         tx.commit().await?;
-        Ok(PlannedItemView::new(&record, settlements))
+        Ok(PlannedItemView::new(&record, views_of(&settlements)))
     }
 
     /// Deletes a planned item. Its audit entry keeps every field as it was.
@@ -621,8 +644,7 @@ impl Ledger {
             return Err(LedgerError::NotFound);
         }
         let settlements = self.store.settlements_of_item(id).await?;
-        let settlements = settlements.iter().map(SettlementView::new).collect();
-        Ok(PlannedItemView::new(&record, settlements))
+        Ok(PlannedItemView::new(&record, views_of(&settlements)))
     }
 
     /// The planned items the actor may see, ordered by id; inactive ones only

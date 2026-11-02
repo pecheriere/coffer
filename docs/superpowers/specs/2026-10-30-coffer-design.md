@@ -840,6 +840,14 @@ going out may be settled: a budget is reduced by spending, a goal has links, and
 no bill to mark paid. An item with settlements can't become a budget or income until they
 are deleted, so a settlement never says what its item can't have said.
 
+A settlement doesn't outlive the facts it was made on. A `PATCH` that changes an item's amount,
+currency or schedule removes its settlements from the household's current month on, in the same
+transaction and audit entry, and its answer shows what is left: nobody said 5,000.00 was paid
+when they settled a 100.00 bill, or four weekly payments when they settled one monthly one, and
+a one-off moved away and back doesn't bring one back. It errs toward counting, and the member
+can settle again. Earlier months stay as history. A change to anything else, such as a name or
+category, keeps them, and a patch that changes nothing writes nothing.
+
 `PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` follow R3's rules for a plan
 write: `all` at `write`, decided before any lookup, so hidden and missing answer alike;
 audited with member and agent; reads show settlements on the item. Both are idempotent: the

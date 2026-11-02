@@ -11,7 +11,7 @@ use super::{
 };
 
 /// A firm household: 10,000.00 in Checking and a floor of 0.
-async fn holding() -> (World, coffer_domain::ids::AccountId) {
+pub(crate) async fn holding() -> (World, coffer_domain::ids::AccountId) {
     let world = world().await;
     let checking = world.funded("Checking", 1_000_000).await;
     world.floor(0).await;

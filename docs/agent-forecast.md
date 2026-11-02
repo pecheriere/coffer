@@ -282,8 +282,14 @@ objects in its `settlements`, ordered by month.
 - **What may be settled:** a recurring `bill` and a one-off, going out. A budget is
   reduced by spending and a goal has links, so each answers 422, as does income.
   An item that has settlements can't become a budget or income: that `PATCH` is a
-  409 `conflict` until they are deleted. Any other change keeps them, and a
-  settlement applies to whichever occurrences then fall in its month.
+  409 `conflict` until they are deleted.
+- **Changing the item:** a settlement was made on what the item then owed and when.
+  A `PATCH` that really changes its `amount`, currency included, or its `schedule`
+  removes its settlements from the household's current month on, so the occurrences
+  count again until someone settles them again. The answer shows what is left, the
+  `planned_item.update` audit entry says which went under `settlements`, and earlier
+  months stay as history. Any other change, such as a name or category, keeps them.
+  Moving a one-off away and back doesn't bring a settlement back.
 - **Which months:** `YYYY-MM`, in the years 1970 to 2200, at most 12 calendar months
   from today's either way, and holding an occurrence of the item (422 otherwise; a
   malformed month is a 400). Future months count: a bill you know won't come in
