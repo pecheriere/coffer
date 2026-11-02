@@ -64,7 +64,7 @@ impl BalanceView {
 #[derive(Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the API contract: four independent flags an agent reads as JSON booleans"
+    reason = "the API contract: five independent flags an agent reads as JSON booleans"
 )]
 pub struct AccountView {
     pub id: AccountId,
@@ -88,6 +88,9 @@ pub struct AccountView {
     /// chosen, then stays. An account that isn't `household` counts in neither net worth nor
     /// the forecast.
     pub belongs_to: BelongsTo,
+    /// Whether `belongs_to` was chosen rather than defaulted from `kind`. A defaulted one
+    /// follows a change of `kind`; a chosen one stays.
+    pub belongs_to_overridden: bool,
     /// Who or what an account that isn't `household` is held for; `null` when it says nobody.
     #[schema(required)]
     pub beneficiary: Option<String>,
@@ -132,6 +135,7 @@ impl AccountView {
             latest_balance: latest.map(|snapshot| BalanceView::new(snapshot, record.currency)),
             created_at: record.created_at,
             belongs_to: record.belongs_to,
+            belongs_to_overridden: record.belongs_to_overridden,
             beneficiary: record
                 .beneficiary
                 .as_ref()
@@ -180,7 +184,6 @@ pub struct NewAccountInput {
 
 /// Changes to an account; absent (or `null`) fields stay as they are. The
 /// currency cannot change.
-// No `Debug`, so its beneficiary can't reach a log line.
 #[derive(Clone, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountPatch {
@@ -202,9 +205,37 @@ pub struct AccountPatch {
     /// the beneficiary.
     pub belongs_to: Option<BelongsTo>,
     /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
-    /// something visible and no control, format or separator characters. `""` removes it,
-    /// since absent keeps it.
+    /// something visible and no control, format or separator characters. `""` (or only plain
+    /// spaces) removes it, since absent keeps it.
     pub beneficiary: Option<String>,
+}
+
+/// Refuses a type holding a beneficiary as text if it ever implements `Debug`, so that the label
+/// can't reach a log line through one. When `$type: Debug`, both impls below apply and `_` can't
+/// be inferred, which fails the build (`static_assertions` does this too, not worth a dependency).
+macro_rules! assert_no_debug {
+    ($($type:ty),+ $(,)?) => {
+        $(const _: fn() = || {
+            trait AmbiguousIfDebug<Marker> {
+                fn check() {}
+            }
+            impl<T: ?Sized> AmbiguousIfDebug<()> for T {}
+            impl<T: ?Sized + std::fmt::Debug> AmbiguousIfDebug<u8> for T {}
+            let _ = <$type as AmbiguousIfDebug<_>>::check;
+        };)+
+    };
+}
+pub(crate) use assert_no_debug;
+
+assert_no_debug!(NewAccountInput, AccountPatch, ValidNewAccount);
+
+/// What `beneficiary` asks of an account.
+///
+/// # Errors
+///
+/// [`LedgerError::Invalid`] for text that can't be a beneficiary.
+pub(crate) fn parse_beneficiary(asked: Option<&str>) -> Result<BeneficiaryChange, LedgerError> {
+    BeneficiaryChange::parse(asked).map_err(refused)
 }
 
 /// `name` as an account name.
@@ -217,8 +248,10 @@ pub(crate) fn parse_name(name: &str) -> Result<AccountName, LedgerError> {
     AccountName::parse(name).map_err(|_| LedgerError::Invalid(NAME_INVALID))
 }
 
-/// An account to create whose input has been validated, so that a refused
-/// request never takes the write lock.
+/// An account to create whose input has been validated and whose belonging is decided. A
+/// create does this before taking the write lock. A bind has to read the provider's hint
+/// first, so the rule's refusals come inside its transaction, which they roll back; it checks
+/// the syntax of a name and a label before that.
 pub(crate) struct ValidNewAccount {
     name: AccountName,
     belonging: Belonging,
@@ -236,7 +269,7 @@ impl ValidNewAccount {
     pub(crate) fn parse(input: NewAccountInput) -> Result<Self, LedgerError> {
         let asked = BelongingAsked {
             belongs_to: input.belongs_to,
-            beneficiary: BeneficiaryChange::parse(input.beneficiary.as_deref()).map_err(refused)?,
+            beneficiary: parse_beneficiary(input.beneficiary.as_deref())?,
             include_in_net_worth: input.include_in_net_worth,
             include_in_forecast: input.include_in_forecast,
         };
@@ -442,7 +475,7 @@ impl Ledger {
         let name = patch.name.as_deref().map(parse_name).transpose()?;
         let asked = BelongingAsked {
             belongs_to: patch.belongs_to,
-            beneficiary: BeneficiaryChange::parse(patch.beneficiary.as_deref()).map_err(refused)?,
+            beneficiary: parse_beneficiary(patch.beneficiary.as_deref())?,
             include_in_net_worth: patch.include_in_net_worth,
             include_in_forecast: patch.include_in_forecast,
         };

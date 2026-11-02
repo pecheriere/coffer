@@ -8,7 +8,7 @@ use super::{COUNTED_REFUSAL, LABEL_ON_HOUSEHOLD, flags, stored, stored_flags};
 use axum::http::{Method, StatusCode};
 use coffer_domain::accounts::{AccountKind, BelongsTo, LiquidityClass};
 use coffer_domain::identity::Scope;
-use coffer_domain::ids::ConnectionId;
+use coffer_domain::ids::{ConnectionId, ProviderAccountId};
 use coffer_domain::money::DecimalAmount;
 use coffer_domain::sync::SyncTrigger;
 use coffer_domain::time::Clock as _;
@@ -342,6 +342,19 @@ async fn a_bind_refused_by_the_rule_binds_nothing() {
         assert_eq!(problem["code"], "invalid");
         assert_eq!(problem["detail"], words);
         feeds.assert_nothing_bound().await;
+    }
+}
+
+#[tokio::test]
+async fn a_bad_label_is_refused_before_the_feed_is_read() {
+    let feeds = feeds().await;
+    let missing = format!("/api/v1/provider-accounts/{}", ProviderAccountId::new());
+    for body in [
+        json!({"beneficiary": "Child\u{0007}"}),
+        json!({"name": "Bad\u{0007}name"}),
+    ] {
+        let (status, problem) = feeds.create_on(&missing, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
     }
 }
 

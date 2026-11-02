@@ -280,7 +280,7 @@ fn a_label_is_set_cleared_and_kept_on_money_held_for_someone() {
 #[test]
 fn what_a_request_asks_of_a_beneficiary() {
     assert_eq!(BeneficiaryChange::parse(None), Ok(BeneficiaryChange::Keep));
-    for empty in ["", "   ", "\t"] {
+    for empty in ["", " ", "   "] {
         assert_eq!(
             BeneficiaryChange::parse(Some(empty)),
             Ok(BeneficiaryChange::Clear),
@@ -297,6 +297,26 @@ fn what_a_request_asks_of_a_beneficiary() {
             Err(AccountError::InvalidBeneficiary),
             "{}",
             bad.escape_unicode()
+        );
+    }
+}
+
+#[test]
+fn whitespace_other_than_a_plain_space_refuses_rather_than_clears() {
+    for blank in [
+        "\t",
+        "\n",
+        "\u{00A0}",
+        "\u{2003}",
+        "\u{2028}",
+        "\u{3000}",
+        " \u{00A0} ",
+    ] {
+        assert_eq!(
+            BeneficiaryChange::parse(Some(blank)),
+            Err(AccountError::InvalidBeneficiary),
+            "{}",
+            blank.escape_unicode()
         );
     }
 }

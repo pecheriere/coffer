@@ -21,6 +21,7 @@ use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::accounts::{
     AccountPatch, AccountView, BalancePage, BalanceView, NewAccountInput, OpeningBalance,
+    assert_no_debug,
 };
 
 /// Every account the token may see.
@@ -75,7 +76,6 @@ pub struct BalanceQuery {
 }
 
 /// A manual account to create.
-// No `Debug`, so its beneficiary can't reach a log line.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewAccountRequest {
@@ -96,12 +96,14 @@ pub struct NewAccountRequest {
     /// later change of kind.
     pub belongs_to: Option<BelongsTo>,
     /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
-    /// something visible and no control, format or separator characters. `""` is the same as
-    /// absent.
+    /// something visible and no control, format or separator characters. `""` (or only plain spaces) is
+    /// the same as absent.
     pub beneficiary: Option<String>,
     /// A manual balance snapshot to record with the account.
     pub opening_balance: Option<OpeningBalance>,
 }
+
+assert_no_debug!(NewAccountRequest);
 
 /// A manual balance for one day.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -236,8 +238,8 @@ pub(super) async fn get(
                    without `liquidity` re-defaults the liquidity class unless one was chosen. \
                    It also moves `belongs_to` to the new kind's default unless that was chosen, \
                    and `include_in_net_worth` and `include_in_forecast` go with it: both off \
-                   when it moves away from `household`, both on when it moves back, and the \
-                   beneficiary removed. Needs `write` on the account.",
+                   when it moves away from `household`; when it moves back, each on unless this \
+                   request names it `false`, and the beneficiary removed. Needs `write` on the account.",
     security(("bearer" = [])),
     params(AccountPath),
     request_body = AccountPatch,

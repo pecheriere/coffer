@@ -25,16 +25,18 @@ pub enum BeneficiaryChange {
 
 impl BeneficiaryChange {
     /// What the `beneficiary` of a request asks: absent keeps it, since a field left out
-    /// changes nothing, so empty after trimming removes it.
+    /// changes nothing, so empty or only plain spaces removes it.
     ///
     /// # Errors
     ///
-    /// [`AccountError::InvalidBeneficiary`] for text that can't be a beneficiary.
+    /// [`AccountError::InvalidBeneficiary`] for text that can't be a beneficiary, which
+    /// includes any other whitespace with nothing beside it: removing a label is never a
+    /// side effect of a character that can't be seen.
     pub fn parse(asked: Option<&str>) -> Result<Self, AccountError> {
-        match asked.map(str::trim) {
+        match asked {
             None => Ok(Self::Keep),
-            Some("") => Ok(Self::Clear),
-            Some(label) => Beneficiary::parse(label).map(Self::Set),
+            Some(text) if text.trim_matches(' ').is_empty() => Ok(Self::Clear),
+            Some(text) => Beneficiary::parse(text).map(Self::Set),
         }
     }
 }

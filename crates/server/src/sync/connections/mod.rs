@@ -31,7 +31,7 @@ use super::engine::SyncService;
 use super::provider::ProviderKind;
 use crate::http::idempotency::IdempotencySlot;
 use crate::ledger::LedgerError;
-use crate::ledger::accounts::AccountView;
+use crate::ledger::accounts::{AccountView, assert_no_debug};
 
 mod binding;
 mod forget;
@@ -179,6 +179,8 @@ pub struct NewLinkedAccountInput {
     /// Empty is the same as `None`. A provider's text never fills it.
     pub beneficiary: Option<String>,
 }
+
+assert_no_debug!(NewLinkedAccountInput);
 
 /// An account created for a provider account, and the provider account
 /// bound to it.

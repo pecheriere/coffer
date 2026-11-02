@@ -203,9 +203,9 @@ money owed or going out.
   account. An account answers its `belongs_to` and `beneficiary` at `balances`, and
   they change with `write` on it. The currency never changes (sending it is a 400
   `invalid`); a new `kind` re-defaults the liquidity class unless one was chosen, and
-  `belongs_to` unless that was chosen: moving away from `household` turns both flags
+  `belongs_to` unless that was chosen, which `belongs_to_overridden` says: moving away from `household` turns both flags
   off, and moving back turns on any the request doesn't name and removes the
-  beneficiary. `beneficiary: ""` removes it, since leaving it out keeps it;
+  beneficiary. `beneficiary: ""` (or only plain spaces) removes it, since leaving it out keeps it;
   `closed: true` closes the account.
 - `GET /api/v1/accounts/{account_id}/balances` pages the daily balances,
   newest first (`from` inclusive, `to` exclusive, `after`, `limit`).

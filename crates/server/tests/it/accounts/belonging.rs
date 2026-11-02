@@ -456,6 +456,55 @@ async fn an_empty_beneficiary_removes_it() {
 }
 
 #[tokio::test]
+async fn a_whitespace_only_one_is_422_and_keeps_it() {
+    let (world, write) = admin().await;
+    let target = held_529(&world, &write).await;
+    for blank in ["\u{00A0}", "\u{3000}", "\t"] {
+        let (status, problem) = patch(&world, &write, &target, json!({"beneficiary": blank})).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+        assert_eq!(problem["detail"], LABEL_INVALID);
+    }
+    let record = stored(&world, &target).await;
+    assert_eq!(stored_label(&record), Some("Child A"));
+}
+
+#[tokio::test]
+async fn a_whitespace_only_one_on_a_create_is_422() {
+    let (world, write) = admin().await;
+    let body = json!({"name": "Fund", "kind": "education", "currency": "USD",
+                      "beneficiary": "\u{00A0}"});
+    assert_create_refused(&world, &write, body, LABEL_INVALID).await;
+}
+
+#[tokio::test]
+async fn the_answer_says_whether_it_was_chosen() {
+    let (world, write) = admin().await;
+    let defaulted = make(&world, &write, "education").await;
+    assert_eq!(defaulted["belongs_to_overridden"], false);
+
+    let (_, followed) = patch(&world, &write, &defaulted, json!({"kind": "brokerage"})).await;
+    assert_eq!(followed["belongs_to_overridden"], false, "it followed");
+
+    let (_, own) = patch(
+        &world,
+        &write,
+        &defaulted,
+        json!({"belongs_to": "household"}),
+    )
+    .await;
+    assert_eq!(own["belongs_to_overridden"], true, "its own default, asked");
+
+    let chosen = post(
+        &world,
+        &write,
+        json!({"name": "Fund", "kind": "brokerage", "currency": "USD",
+               "belongs_to": "someone_else"}),
+    )
+    .await;
+    assert_eq!(chosen["belongs_to_overridden"], true);
+}
+
+#[tokio::test]
 async fn an_absent_one_keeps_it() {
     let (world, write) = admin().await;
     let target = held_529(&world, &write).await;

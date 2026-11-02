@@ -13,7 +13,9 @@ use jiff::civil::Date;
 
 use super::{LinkedAccountView, NewLinkedAccountInput, ProviderAccountView, audit, visible};
 use crate::ledger::Ledger;
-use crate::ledger::accounts::{AccountView, NewAccountInput, ValidNewAccount, parse_name};
+use crate::ledger::accounts::{
+    AccountView, NewAccountInput, ValidNewAccount, parse_beneficiary, parse_name,
+};
 use crate::sync::SyncError;
 use crate::sync::apply::apply_held;
 use crate::sync::engine::{SyncService, ensure_not_removed, oldest_kept_day, write_balance};
@@ -110,7 +112,9 @@ impl SyncService {
     /// [`SyncError::Denied`] without [`Action::WriteHousehold`],
     /// [`Action::ManageConnections`] or write access to every account;
     /// [`SyncError::NotFound`] for an unknown provider account;
-    /// [`SyncError::Invalid`] without a kind or for an invalid name;
+    /// [`SyncError::Invalid`] without a kind, for an invalid name or
+    /// beneficiary, for a flag asked on for money that isn't the household's,
+    /// or for a beneficiary on money that is;
     /// [`SyncError::CurrencyMismatch`] when the provider's currency is not a
     /// supported ISO 4217 code; the errors of [`SyncService::bind`].
     pub async fn create_account_and_bind(
@@ -121,11 +125,12 @@ impl SyncService {
     ) -> Result<LinkedAccountView, SyncError> {
         authorize(actor, Action::WriteHousehold)?;
         authorize(actor, Action::ManageConnections)?;
+        let access = self.access.resolve(actor).await?;
+        authorize_every_account(actor, &access, AccountLevel::Write)?;
         if let Some(name) = &input.name {
             parse_name(name)?;
         }
-        let access = self.access.resolve(actor).await?;
-        authorize_every_account(actor, &access, AccountLevel::Write)?;
+        parse_beneficiary(input.beneficiary.as_deref())?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let current = tx.get_provider_account(provider_account).await?;

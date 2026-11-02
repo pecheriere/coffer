@@ -375,7 +375,7 @@
           "accounts"
         ],
         "summary": "Changes an account.",
-        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. It also moves `belongs_to` to the new kind's default unless that was chosen, and `include_in_net_worth` and `include_in_forecast` go with it: both off when it moves away from `household`, both on when it moves back, and the beneficiary removed. Needs `write` on the account.",
+        "description": "Changes the fields given. The currency cannot change. A new `kind` without `liquidity` re-defaults the liquidity class unless one was chosen. It also moves `belongs_to` to the new kind's default unless that was chosen, and `include_in_net_worth` and `include_in_forecast` go with it: both off when it moves away from `household`; when it moves back, each on unless this request names it `false`, and the beneficiary removed. Needs `write` on the account.",
         "operationId": "updateAccount",
         "parameters": [
           {
@@ -5987,7 +5987,7 @@
               "string",
               "null"
             ],
-            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` removes it,\nsince absent keeps it."
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain\nspaces) removes it, since absent keeps it."
           },
           "closed": {
             "type": [
@@ -6191,12 +6191,17 @@
           "latest_balance",
           "created_at",
           "belongs_to",
+          "belongs_to_overridden",
           "beneficiary"
         ],
         "properties": {
           "belongs_to": {
             "$ref": "#/components/schemas/BelongsTo",
             "description": "Whose money it is. It defaults from `kind` and follows a change of `kind` until it is\nchosen, then stays. An account that isn't `household` counts in neither net worth nor\nthe forecast."
+          },
+          "belongs_to_overridden": {
+            "type": "boolean",
+            "description": "Whether `belongs_to` was chosen rather than defaulted from `kind`. A defaulted one\nfollows a change of `kind`; a chosen one stays."
           },
           "beneficiary": {
             "type": [
@@ -8981,7 +8986,7 @@
               "string",
               "null"
             ],
-            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` is the same as\nabsent."
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain spaces) is\nthe same as absent."
           },
           "currency": {
             "$ref": "#/components/schemas/Currency",
@@ -9053,7 +9058,7 @@
               "string",
               "null"
             ],
-            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` is the same as\nabsent."
+            "description": "Who or what an account that isn't the household's is held for: 1 to 64 characters with\nsomething visible and no control, format or separator characters. `\"\"` (or only plain spaces) is\nthe same as absent."
           },
           "include_in_forecast": {
             "type": [

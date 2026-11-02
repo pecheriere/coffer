@@ -14,6 +14,7 @@ use super::openapi::tags;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
+use crate::ledger::accounts::assert_no_debug;
 use crate::sync::connections::{LinkedAccountView, NewLinkedAccountInput, ProviderAccountView};
 
 /// The provider accounts the token may see.
@@ -49,7 +50,6 @@ pub struct BindRequest {
 }
 
 /// An account to create for a provider account.
-// No `Debug`, so its beneficiary can't reach a log line.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewLinkedAccountRequest {
@@ -70,10 +70,12 @@ pub struct NewLinkedAccountRequest {
     /// later change of kind.
     pub belongs_to: Option<BelongsTo>,
     /// Who or what an account that isn't the household's is held for: 1 to 64 characters with
-    /// something visible and no control, format or separator characters. `""` is the same as
-    /// absent.
+    /// something visible and no control, format or separator characters. `""` (or only plain spaces) is
+    /// the same as absent.
     pub beneficiary: Option<String>,
 }
+
+assert_no_debug!(NewLinkedAccountRequest);
 
 /// The provider accounts the token may see.
 #[utoipa::path(

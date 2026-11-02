@@ -33,7 +33,7 @@ async fn granted(
 }
 
 /// Every request that could tell an agent something by how it is refused.
-fn asks() -> [Value; 8] {
+fn asks() -> [Value; 9] {
     [
         json!({"belongs_to": "someone_else"}),
         json!({"belongs_to": "household"}),
@@ -43,6 +43,7 @@ fn asks() -> [Value; 8] {
         json!({"include_in_net_worth": true}),
         json!({"include_in_forecast": true}),
         json!({"kind": "education"}),
+        json!({"name": "Bad\u{0007}name"}),
     ]
 }
 
@@ -63,6 +64,7 @@ async fn a_token_reads_it_at_balances_and_changes_it_at_write() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(read["belongs_to"], "someone_else");
     assert_eq!(read["beneficiary"], "Child A");
+    assert_eq!(read["belongs_to_overridden"], false);
 
     let (status, listed) = call(
         &world.server,
@@ -206,6 +208,7 @@ async fn a_create_without_every_row_at_write_is_refused_whatever_is_asked() {
                "beneficiary": "Child\u{0007}"}),
         json!({"name": "Fund", "kind": "checking", "currency": "USD",
                "beneficiary": "Child A"}),
+        json!({"name": "Bad\u{0007}name", "kind": "education", "currency": "USD"}),
     ] {
         answers.push(
             call(
@@ -271,11 +274,7 @@ async fn a_bind_without_every_row_at_write_is_refused_whatever_is_asked() {
     };
     let first = bind(uri.clone(), json!({"kind": "education"})).await;
     assert_eq!(first.0, StatusCode::FORBIDDEN);
-    for body in [
-        json!({"kind": "education", "include_in_net_worth": true}),
-        json!({"kind": "education", "beneficiary": "Child\u{0007}"}),
-        json!({"kind": "checking", "beneficiary": "Child A"}),
-    ] {
+    for body in asks() {
         assert!(
             bind(uri.clone(), body).await == first,
             "a refusal must not depend on what was asked"
