@@ -126,6 +126,18 @@ async fn the_state_can_t_say_current_with_no_day() {
     assert!(refused.is_err());
 }
 
+#[tokio::test]
+async fn the_state_can_t_hold_progress_with_no_rebuild_running() {
+    let (_dir, store) = with_account().await;
+    let refused = sqlx::query(
+        "UPDATE net_worth_state SET filled_through = '2026-10-02', rebuild_needed = 0, \
+         rebuilt_up_to = 'holding'",
+    )
+    .execute(&store.pool)
+    .await;
+    assert!(refused.is_err());
+}
+
 /// Migration 0021 on a database holding accounts, snapshots and rates: all of it
 /// stays, the new table starts empty and asks for a rebuild, no number is read
 /// until then, and the rebuild makes the rows from what was there.
@@ -206,9 +218,7 @@ async fn migration_keeps_a_populated_database_and_asks_for_a_rebuild() {
     assert_eq!(waiting.state.filled_through, None);
     assert_eq!(waiting.rows, []);
 
-    let mut tx = store.begin().await.unwrap();
-    assert_eq!(tx.rebuild_net_worth(through).await.unwrap(), 4);
-    tx.commit().await.unwrap();
+    assert_eq!(store.rebuild_net_worth(through).await.unwrap(), 4);
     let balances: Vec<i64> = store
         .net_worth_data(
             &AccountScope::All,

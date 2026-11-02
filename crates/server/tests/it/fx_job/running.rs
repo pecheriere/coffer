@@ -139,9 +139,11 @@ async fn a_table_far_ahead_warns_once_a_day() {
     }
     assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
 
-    let mut tx = server.store.begin().await.unwrap();
-    tx.rebuild_net_worth(date(2026, 11, 3)).await.unwrap();
-    tx.commit().await.unwrap();
+    server
+        .store
+        .rebuild_net_worth(date(2026, 11, 3))
+        .await
+        .unwrap();
     server.clock.advance(hours(24));
     fx.keep_table_current().await.unwrap();
     assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
@@ -191,6 +193,43 @@ async fn the_migration_s_rebuild_runs_at_start() {
     let state = server.store.net_worth_state().await.unwrap();
     assert!(!state.rebuild_needed);
     assert_eq!(rows_of(&server.store, usd).await.len(), 41);
+}
+
+/// A rebuild a crash left part way goes on where it stopped, up to the day it began with,
+/// and the pass after it fills the days since.
+#[tokio::test]
+async fn a_rebuild_left_part_way_is_finished() {
+    let server = TestServer::new().await;
+    server.clock.set(noon(MONDAY));
+    let (one, two) = (
+        holding(&server.store, "USD").await,
+        holding(&server.store, "USD").await,
+    );
+    let started = date(2026, 9, 30);
+    for account in [one, two] {
+        snap(&server.store, account, date(2026, 9, 23), 100).await;
+    }
+    let mut tx = server.store.begin().await.unwrap();
+    let first = tx.rebuild_net_worth_batch(started, 1).await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(!first.finished);
+    let fx = service(&server, None);
+
+    fx.keep_table_current().await.unwrap();
+
+    let state = server.store.net_worth_state().await.unwrap();
+    assert!(!state.rebuild_needed);
+    assert_eq!(state.filled_through, Some(started));
+    assert_eq!(rows_of(&server.store, two).await.len(), 8);
+
+    fx.keep_table_current().await.unwrap();
+
+    assert_eq!(
+        server.store.net_worth_state().await.unwrap().filled_through,
+        Some(MONDAY)
+    );
+    assert_eq!(rows_of(&server.store, one).await.len(), 41);
+    assert_eq!(rows_of(&server.store, two).await.len(), 41);
 }
 
 /// The table's day moves while a fetch hangs: two tasks, not one.

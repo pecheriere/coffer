@@ -627,17 +627,19 @@
   nothing in the answer contradicts it. The docs say so first and tell an agent to
   check `access.all` in `GET /api/v1/me` and not to report such a sum as the
   household's. Marking it would reveal that other accounts exist.
-- **A display currency change holds the write lock while it rebuilds, and a
-  back-dated balance adds history for good.** A manual balance may be dated as far
-  back as 1970, and the daily values then hold a row for every day since for that
-  account (issue #83). Only a `write` token can set one, and it is audited. A
-  rebuild (a display currency change, or `coffer rebuild-net-worth`) rewrites every
-  row in one transaction, and other writers wait for it, for at most the store's 15
-  s busy timeout and then fail with an error and no damage. 110,000 rows took about
-  0.5 s on a desktop in a release build. On a slow, busy machine (about 5.5 times
-  slower) 30 accounts from 1970 held the lock 10 s, 60 held it 15.9 s and 120 held it
-  38.9 s. A household with a few accounts and recent history is far below that; the
-  Pi has not been measured, and the issue tracks a bound.
+- **A back-dated balance adds history for good.** A manual balance may be dated as
+  far back as 1970, and the daily values then hold a row for every day since for that
+  account. Only a `write` token can set one, and it is audited. It costs disk and
+  rebuild time, not availability: a rebuild takes the write lock one batch of about
+  25,000 rows at a time, so other writers aren't held near the store's 15 s busy
+  timeout, and until it ends reports say `rebuilding` instead of giving a number. With
+  120 accounts from 1970 (2.5 million rows, a 256 MB database) on a busy desktop in a
+  release build, the rebuild took 31 s, the longest batch 0.23 s and the longest wait of a
+  writer 0.2 s, where one transaction would have held the lock 10 s. The account's own
+  transaction rewrites its rows from that date, up to about 20,000 rows. A balance
+  doesn't restart a rebuild, but a display currency change does, so changing it again
+  and again keeps a large table in `rebuilding`: only an admin can, and it is audited.
+  The Pi has not been measured at that size.
 - **A clock that runs ahead moves the one-day limit with it.** A rate may be dated
   up to a day after the household's today, for clock skew, and the daily values are
   filled up to today and never move their last day back by themselves. A host clock

@@ -1039,12 +1039,25 @@ changing them needs no rebuild.
 A changed snapshot rebuilds its account from that date up to its next snapshot, and a bind
 bringing in an unbound account's kept balances rebuilds it from the earliest of them. A new or
 corrected rate rebuilds the accounts it converts, from that date. A changed display
-currency rebuilds everything. Each happens in the same transaction as the change. The
+currency rebuilds everything. Each happens in the same transaction as the change, unless a
+rate or the display currency would rewrite more than 25,000 rows. Then that transaction only
+asks for a full rebuild, and until it has run the read answers `rebuild_needed`. One account's
+whole history always fits, so a back-dated balance or a bind stays in its own transaction. The
 daily job fills days forward up to today. Where a row can't exist yet the read says so
 instead of serving an old number: `through` names the last day filled, later dates aren't
-answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table) answers no number
+answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table, or by a change too large for its own transaction) answers no number
 at all until the rebuild has run. `coffer rebuild-net-worth` rebuilds the whole table, and
 a test holds that incremental updates match it.
+
+A full rebuild runs in batches of whole accounts in id order, at most 25,000 rows unless one
+account alone holds more, each in its own transaction, with a pause between them, so other
+writers get the lock whatever the table's size. `rebuild_needed` stays set throughout, so a
+read never sees old and new rows together. `rebuilt_up_to` records the last account done and
+the day the rebuild runs up to is held in `filled_through`, so a crash or a failure resumes
+where the last batch committed. A write between two batches rewrites its rows as usual if its account's turn
+has passed, and otherwise leaves them to the rebuild, so none is lost. A display currency
+change, or a rate past the limit, starts the rebuild over, since the rows done so far no
+longer hold.
 
 Rows start no earlier than 1970-01-01, so a snapshot dated in the distant past can't make
 hundreds of thousands of rows, and never run past `through`, so a future-dated snapshot has

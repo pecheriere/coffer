@@ -298,8 +298,10 @@ impl FxService {
         tx.commit().await
     }
 
-    /// Brings the table up to today: the rebuild it is waiting for, or the days
-    /// since it was last filled. Reads one row when there is nothing to do.
+    /// Brings the table up to today: the rebuild it is waiting for, going on from
+    /// wherever one stopped, or the days since it was last filled. A rebuild that
+    /// resumes keeps to its own last day, and the next pass fills from there. Reads
+    /// one row when there is nothing to do.
     ///
     /// # Errors
     ///
@@ -313,18 +315,14 @@ impl FxService {
             self.say_if_far_ahead(filled, today);
             return Ok(());
         }
-        let mut tx = self.store.begin().await?;
-        // Asked again under the write lock: `coffer rebuild-net-worth` may have
-        // got there first.
-        if tx.net_worth_state().await?.rebuild_needed {
-            let rows = tx.rebuild_net_worth(today).await?;
-            tx.commit().await?;
-            tracing::info!(rows, through = %today, "the net worth table was rebuilt");
-            Ok(())
-        } else {
-            tx.fill_net_worth(today).await?;
-            tx.commit().await
+        if state.rebuild_needed {
+            let rows = self.store.finish_net_worth_rebuild(today).await?;
+            tracing::info!(rows, "the net worth table was rebuilt");
+            return Ok(());
         }
+        let mut tx = self.store.begin().await?;
+        tx.fill_net_worth(today).await?;
+        tx.commit().await
     }
 }
 

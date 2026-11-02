@@ -55,7 +55,7 @@ pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use kept_balances::{BroughtIn, KeptBalance};
 pub use members::{Member, NewMember};
-pub use net_worth::{NetWorthData, NetWorthState};
+pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};

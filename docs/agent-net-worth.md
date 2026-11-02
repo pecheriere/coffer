@@ -72,7 +72,8 @@ grants) for step 3. `$BASE` is the server's address; ids in answers are UUIDs.
 5. The report: `GET $BASE/api/v1/reports/net-worth?from=2026-10-01&interval=month`.
    With the steps above and rates it is `firm`, as in the example below. Just
    after the server starts, or after an upgrade that adds the daily table, it can
-   be `unavailable` with the blocker `rebuilding` for a moment: ask again.
+   be `unavailable` with the blocker `rebuilding` for a moment: ask again. So can a
+   household with a long history just after its display currency changes.
 
 ## The report
 
@@ -423,7 +424,7 @@ a null total as a drop.
 | `kind` | Means | Do |
 |---|---|---|
 | `display_currency_not_set` | No display currency is chosen. Points still hold `by_currency`, and `total` is `null`. | Ask the owner which currency to show, then `PATCH /household/settings` with `display_currency` (see below). Meanwhile report each of `by_currency` on its own. |
-| `rebuilding` | The daily values are being rebuilt (after an upgrade or a restore), and there are no points. | Wait a moment and ask again. If it lasts minutes, tell the owner: the server's log says whether the rebuild failed, and `coffer rebuild-net-worth` on the host recomputes it. |
+| `rebuilding` | The daily values are being rebuilt (after an upgrade or a restore, or after a change that moves too many of them at once), and there are no points. | Wait a moment and ask again. If it lasts minutes, tell the owner: the server's log says whether the rebuild failed, and `coffer rebuild-net-worth` on the host recomputes it. |
 | `no_counted_accounts` | Nothing you can see of the household's counts in the range: no account, all excluded, or the whole range is before the first balance or after every account closed. | Look at `accounts[].counted`, `first_on` and `closed_on`. An empty `accounts` means nothing you can see is the household's, and `buckets` may still hold money; report those on their own, never as net worth. Otherwise add accounts and balances, or move the range. Never read it as a net worth of 0. |
 
 Here is a report with no display currency (`accounts`, `buckets` and the second

@@ -286,9 +286,9 @@ Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 
 `rebuild-net-worth` recomputes the whole daily table from the balances, the
 rates and the display currency, with today taken from `COFFER_TIMEZONE`. It is
-safe while the server runs: it takes the database's write lock in one
-transaction like any writer, so other writes wait for it, for up to the store's
-15 s busy timeout. Opening the database applies this version's migrations, as
+safe while the server runs: it works in short transactions, so other writes take
+turns with it, and reports say `rebuilding` until it ends if the table takes more
+than one. If it stops part way, the running server's job finishes it. Opening the database applies this version's migrations, as
 `backup` does, so run the same version as the server. It never creates a
 database: no database found, or an empty file, is exit code 1. You rarely need
 it: the first start after the upgrade that adds the table rebuilds it in the

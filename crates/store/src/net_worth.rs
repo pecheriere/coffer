@@ -3,7 +3,19 @@
 //! writes it. Every change to a source calls in here within its own transaction,
 //! so no caller can forget, and every path computes rows with `daily_values`, so
 //! they share one rule. `filled_through` and `rebuild_needed` say what the table
-//! can't hold yet, and while a rebuild is needed nothing is written at all.
+//! can't hold yet.
+//!
+//! A change that rewrites more rows than one transaction should hold asks for a
+//! full rebuild instead, and a full rebuild runs in batches of whole accounts, in id
+//! order, each in its own short transaction, so other writers get their turn
+//! whatever the table's size. While it runs `rebuild_needed` stays set, so no report
+//! reads a mix of old and new rows. `rebuilt_up_to` says how far it has come: a
+//! change keeps the accounts up to there current as usual and leaves the others to
+//! the rebuild, so a write between two batches is never lost, and a crash resumes
+//! from there. A change that alters every row starts it over.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 use coffer_domain::fx::{RateBook, RateLeg};
 use coffer_domain::ids::AccountId;
@@ -16,7 +28,7 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqliteExecutor};
 use crate::convert::{corrupt, int, parsed, parsed_opt, text};
 use crate::fx::load_rate_book;
 use crate::household::fetch_display_currency;
-use crate::{StoreError, StoreTx};
+use crate::{Store, StoreError, StoreTx};
 
 mod reads;
 
@@ -24,6 +36,15 @@ pub use reads::NetWorthData;
 
 /// Rows per `INSERT`: ten binds each stay far below `SQLite`'s limit.
 const BATCH_ROWS: usize = 500;
+
+/// The most rows a transaction here rewrites for a change or a batch of a rebuild,
+/// unless one account alone holds more. That is about an account's whole history from
+/// 1970, which a back-dated balance rewrites in its own transaction anyway.
+const ROWS_PER_TRANSACTION: usize = 25_000;
+
+/// The wait between two batches of a rebuild. A writer waiting for the lock sleeps up
+/// to 100 ms between tries, so a shorter gap could pass unnoticed batch after batch.
+const PAUSE_BETWEEN_BATCHES: Duration = Duration::from_millis(150);
 
 /// How far the daily table can be trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,9 +56,34 @@ pub struct NetWorthState {
 }
 
 impl NetWorthState {
-    /// The last day of a table that can answer and that changes keep current.
-    fn current_through(self) -> Option<Date> {
+    /// The last day of a table that can answer. While a rebuild runs there is none,
+    /// whatever day it is rebuilding up to.
+    #[must_use]
+    pub fn current_through(self) -> Option<Date> {
         self.filled_through.filter(|_| !self.rebuild_needed)
+    }
+}
+
+/// What one batch of a rebuild did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildBatch {
+    /// The rows it wrote.
+    pub written: u64,
+    /// No rebuild is left to run.
+    pub finished: bool,
+}
+
+/// The rows a change to a source has to keep current.
+struct KeptCurrent {
+    through: Date,
+    /// The last account a running rebuild has finished; with none running, every
+    /// account is kept current.
+    up_to: Option<AccountId>,
+}
+
+impl KeptCurrent {
+    fn covers(&self, account: AccountId) -> bool {
+        self.up_to.is_none_or(|last| account <= last)
     }
 }
 
@@ -150,6 +196,52 @@ async fn insert_rows(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result
     Ok(done.rows_affected())
 }
 
+/// The rates converting `holdings` for `[from, through]`.
+async fn rate_book(
+    conn: &mut SqliteConnection,
+    holdings: &[Holding],
+    display: Option<Currency>,
+    from: Date,
+    through: Date,
+) -> Result<RateBook, StoreError> {
+    let Some(display) = display else {
+        return Ok(RateBook::default());
+    };
+    let mut currencies: Vec<_> = holdings.iter().map(|one| one.currency).collect();
+    currencies.push(display);
+    currencies.sort_unstable();
+    currencies.dedup();
+    load_rate_book(conn, &currencies, from, through).await
+}
+
+async fn rows_of_holding(
+    conn: &mut SqliteConnection,
+    holding: &Holding,
+    display: Option<Currency>,
+    book: &RateBook,
+    from: Date,
+    through: Date,
+) -> Result<Vec<DailyValue>, StoreError> {
+    let snapshots = snapshot_points(conn, holding.id, from, through).await?;
+    Ok(daily_values(
+        holding.id,
+        holding.currency,
+        &snapshots,
+        display,
+        book,
+        from,
+        through,
+    ))
+}
+
+async fn insert_all(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result<u64, StoreError> {
+    let mut written = 0;
+    for batch in rows.chunks(BATCH_ROWS) {
+        written += insert_rows(&mut *conn, batch).await?;
+    }
+    Ok(written)
+}
+
 /// Computes `holdings` for `[from, through]` and writes each row, in batches.
 /// Answers how many.
 async fn write_rows(
@@ -159,33 +251,54 @@ async fn write_rows(
     through: Date,
 ) -> Result<u64, StoreError> {
     let display = fetch_display_currency(&mut *conn).await?;
-    let book = match display {
-        Some(display) => {
-            let mut currencies: Vec<_> = holdings.iter().map(|one| one.currency).collect();
-            currencies.push(display);
-            currencies.sort_unstable();
-            currencies.dedup();
-            load_rate_book(&mut *conn, &currencies, from, through).await?
-        }
-        None => RateBook::default(),
-    };
+    let book = rate_book(&mut *conn, holdings, display, from, through).await?;
     let mut written = 0;
     for holding in holdings {
-        let snapshots = snapshot_points(&mut *conn, holding.id, from, through).await?;
-        let rows = daily_values(
-            holding.id,
-            holding.currency,
-            &snapshots,
-            display,
-            &book,
-            from,
-            through,
-        );
-        for batch in rows.chunks(BATCH_ROWS) {
-            written += insert_rows(&mut *conn, batch).await?;
-        }
+        let rows = rows_of_holding(&mut *conn, holding, display, &book, from, through).await?;
+        written += insert_all(&mut *conn, &rows).await?;
     }
     Ok(written)
+}
+
+/// The first snapshot's day of each account that has one.
+async fn first_days(conn: &mut SqliteConnection) -> Result<BTreeMap<AccountId, Date>, StoreError> {
+    sqlx::query("SELECT account_id, MIN(on_date) AS first_on FROM balance_snapshots GROUP BY 1")
+        .fetch_all(conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(|row| Ok((parsed(row, "account_id")?, parsed(row, "first_on")?)))
+        .collect()
+}
+
+/// The rows an account has in `[from, through]`: one per day from its first snapshot,
+/// or from `from` if later, as `daily_values` makes them.
+fn row_count(first_day: Option<Date>, from: Date, through: Date) -> Result<usize, StoreError> {
+    let Some(first_day) = first_day else {
+        return Ok(0);
+    };
+    let start = first_day.max(from).max(MIN_VALUE_DATE);
+    if start > through {
+        return Ok(0);
+    }
+    let days = through.since(start).map_err(StoreError::backend)?;
+    usize::try_from(days.get_days())
+        .map_or_else(|err| Err(StoreError::backend(err)), |days| Ok(days + 1))
+}
+
+/// Whether writing `holdings` for `[from, through]` stays within one transaction's rows.
+async fn fits_one_transaction(
+    conn: &mut SqliteConnection,
+    holdings: &[Holding],
+    from: Date,
+    through: Date,
+) -> Result<bool, StoreError> {
+    let first_days = first_days(conn).await?;
+    let mut total = 0;
+    for holding in holdings {
+        total += row_count(first_days.get(&holding.id).copied(), from, through)?;
+    }
+    Ok(total <= ROWS_PER_TRANSACTION)
 }
 
 impl StoreTx {
@@ -198,16 +311,59 @@ impl StoreTx {
         fetch_state(&mut *self.tx).await
     }
 
-    async fn current_through(&mut self) -> Result<Option<Date>, StoreError> {
-        Ok(self.net_worth_state().await?.current_through())
+    /// What a change has to keep current: nothing while a rebuild needed hasn't
+    /// finished an account yet.
+    async fn kept_current(&mut self) -> Result<Option<KeptCurrent>, StoreError> {
+        let state = self.net_worth_state().await?;
+        let Some(through) = state.filled_through else {
+            return Ok(None);
+        };
+        if !state.rebuild_needed {
+            return Ok(Some(KeptCurrent {
+                through,
+                up_to: None,
+            }));
+        }
+        Ok(self.rebuilt_up_to().await?.map(|last| KeptCurrent {
+            through,
+            up_to: Some(last),
+        }))
     }
 
-    async fn set_filled_through(&mut self, through: Date) -> Result<(), StoreError> {
-        sqlx::query("UPDATE net_worth_state SET filled_through = ?, rebuild_needed = 0")
-            .bind(through.to_string())
+    async fn rebuilt_up_to(&mut self) -> Result<Option<AccountId>, StoreError> {
+        let row = sqlx::query("SELECT rebuilt_up_to FROM net_worth_state WHERE id = 1")
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        parsed_opt(&row, "rebuilt_up_to")
+    }
+
+    /// Asks for a full rebuild, from the first account, within this transaction; a
+    /// running one starts over. This is how a change that alters every row says so
+    /// without holding the lock for them: from its commit a report answers as rebuilding,
+    /// and the daily job runs the rebuild at its next pass, within a minute. A caller
+    /// that can't wait for that calls [`Store::finish_net_worth_rebuild`] after its commit.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn ask_for_net_worth_rebuild(&mut self) -> Result<(), StoreError> {
+        sqlx::query("UPDATE net_worth_state SET rebuild_needed = 1, rebuilt_up_to = NULL")
             .execute(&mut *self.tx)
             .await
             .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    async fn set_filled_through(&mut self, through: Date) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE net_worth_state SET filled_through = ?, rebuild_needed = 0, \
+             rebuilt_up_to = NULL",
+        )
+        .bind(through.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         Ok(())
     }
 
@@ -219,7 +375,7 @@ impl StoreTx {
     ///
     /// Backend failures, including a stored row that no longer parses.
     pub async fn fill_net_worth(&mut self, through: Date) -> Result<u64, StoreError> {
-        let Some(filled) = self.current_through().await? else {
+        let Some(filled) = self.net_worth_state().await?.current_through() else {
             return Ok(0);
         };
         if through <= filled {
@@ -232,27 +388,90 @@ impl StoreTx {
         Ok(written)
     }
 
-    /// Replace every row, computing every account from its first snapshot, up to
-    /// `through`, and clear `rebuild_needed`. `through` becomes `filled_through` even
-    /// if it is earlier: everything is recomputed, so this is how a clock that jumped
-    /// ahead is undone. Answers the rows written.
+    /// One batch of the rebuild that is needed: replaces the rows of the next accounts
+    /// in id order, computing each from its first snapshot, stopping before `max_rows`
+    /// unless the first account alone is more. The last batch clears `rebuild_needed`.
     ///
-    /// It holds the write lock throughout. 110,000 rows took about 0.5 s in a release
-    /// build on a desktop machine; it has not been measured on a small board, and the
-    /// first deploy measures it on the Pi against the store's 15 s busy timeout.
+    /// The first batch makes `through` the day the rebuild runs up to, and that day
+    /// becomes `filled_through` even if it is earlier: everything is recomputed, so this
+    /// is how a clock that jumped ahead is undone. Later batches keep to that day,
+    /// whatever `through` they are given, as the rows before them were computed for it.
+    /// With no rebuild needed this does nothing.
     ///
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
-    pub async fn rebuild_net_worth(&mut self, through: Date) -> Result<u64, StoreError> {
-        sqlx::query("DELETE FROM account_daily_values")
-            .execute(&mut *self.tx)
-            .await
-            .map_err(StoreError::from_sqlx)?;
-        let holdings = every_holding(&mut self.tx).await?;
-        let written = write_rows(&mut self.tx, &holdings, MIN_VALUE_DATE, through).await?;
-        self.set_filled_through(through).await?;
-        Ok(written)
+    pub async fn rebuild_net_worth_batch(
+        &mut self,
+        through: Date,
+        max_rows: usize,
+    ) -> Result<RebuildBatch, StoreError> {
+        let state = self.net_worth_state().await?;
+        if !state.rebuild_needed {
+            return Ok(RebuildBatch {
+                written: 0,
+                finished: true,
+            });
+        }
+        let done = self.rebuilt_up_to().await?;
+        let through = match (done, state.filled_through) {
+            (Some(_), Some(day)) => day,
+            _ => through,
+        };
+        let waiting: Vec<_> = every_holding(&mut self.tx)
+            .await?
+            .into_iter()
+            .filter(|one| done.is_none_or(|last| one.id > last))
+            .collect();
+        let first_days = first_days(&mut self.tx).await?;
+        let mut batch = 0;
+        let mut in_batch = 0;
+        for holding in &waiting {
+            let first_day = first_days.get(&holding.id).copied();
+            let rows = row_count(first_day, MIN_VALUE_DATE, through)?;
+            if batch > 0 && in_batch + rows > max_rows {
+                break;
+            }
+            in_batch += rows;
+            batch += 1;
+        }
+        let (holdings, rest) = waiting.split_at(batch);
+
+        let display = fetch_display_currency(&mut *self.tx).await?;
+        let book = rate_book(&mut self.tx, holdings, display, MIN_VALUE_DATE, through).await?;
+        let mut written = 0;
+        for holding in holdings {
+            sqlx::query("DELETE FROM account_daily_values WHERE account_id = ?")
+                .bind(holding.id.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+            let rows = rows_of_holding(
+                &mut self.tx,
+                holding,
+                display,
+                &book,
+                MIN_VALUE_DATE,
+                through,
+            )
+            .await?;
+            written += insert_all(&mut self.tx, &rows).await?;
+        }
+        match holdings.last().filter(|_| !rest.is_empty()) {
+            Some(last) => {
+                sqlx::query("UPDATE net_worth_state SET filled_through = ?, rebuilt_up_to = ?")
+                    .bind(through.to_string())
+                    .bind(last.id.to_string())
+                    .execute(&mut *self.tx)
+                    .await
+                    .map_err(StoreError::from_sqlx)?;
+            }
+            None => self.set_filled_through(through).await?,
+        }
+        Ok(RebuildBatch {
+            written,
+            finished: rest.is_empty(),
+        })
     }
 
     /// A snapshot's value or source changed: rewrite its stretch, from its day to
@@ -262,9 +481,14 @@ impl StoreTx {
         account: AccountId,
         on: Date,
     ) -> Result<(), StoreError> {
-        let Some(filled) = self.current_through().await? else {
+        let Some(kept) = self
+            .kept_current()
+            .await?
+            .filter(|kept| kept.covers(account))
+        else {
             return Ok(());
         };
+        let filled = kept.through;
         let next: Option<String> = sqlx::query_scalar(
             "SELECT MIN(on_date) FROM balance_snapshots WHERE account_id = ? AND on_date > ?",
         )
@@ -290,10 +514,14 @@ impl StoreTx {
         account: AccountId,
         first_day: Date,
     ) -> Result<(), StoreError> {
-        let Some(filled) = self.current_through().await? else {
+        let Some(kept) = self
+            .kept_current()
+            .await?
+            .filter(|kept| kept.covers(account))
+        else {
             return Ok(());
         };
-        self.refresh_account(account, first_day, filled).await
+        self.refresh_account(account, first_day, kept.through).await
     }
 
     async fn refresh_account(
@@ -314,13 +542,15 @@ impl StoreTx {
 
     /// `currency`'s rate changed from `from` on: rewrite the accounts converted
     /// with it. That is those in `currency`, and when it is the display currency,
-    /// every account in another. With no display currency nothing is converted.
+    /// every account in another. With no display currency nothing is converted. Too
+    /// many rows for one transaction, as a first fetch of a long history can be, asks
+    /// for a rebuild instead.
     pub(crate) async fn refresh_after_rate(
         &mut self,
         currency: Currency,
         from: Date,
     ) -> Result<(), StoreError> {
-        let Some(filled) = self.current_through().await? else {
+        let Some(kept) = self.kept_current().await? else {
             return Ok(());
         };
         let Some(display) = fetch_display_currency(&mut *self.tx).await? else {
@@ -329,20 +559,82 @@ impl StoreTx {
         let holdings: Vec<_> = every_holding(&mut self.tx)
             .await?
             .into_iter()
-            .filter(|one| (one.currency == currency) != (currency == display))
+            .filter(|one| {
+                kept.covers(one.id) && (one.currency == currency) != (currency == display)
+            })
             .collect();
-        write_rows(&mut self.tx, &holdings, from, filled).await?;
-        Ok(())
+        if fits_one_transaction(&mut self.tx, &holdings, from, kept.through).await? {
+            write_rows(&mut self.tx, &holdings, from, kept.through).await?;
+            Ok(())
+        } else {
+            self.ask_for_net_worth_rebuild().await
+        }
     }
 
-    /// The display currency changed: every row, in this one transaction.
+    /// The display currency changed, so every row has to. In this one transaction
+    /// when they fit in one; if not, or if a rebuild is running, whose rows so far are
+    /// in the old currency, a rebuild from the first account.
     pub(crate) async fn refresh_after_display_change(&mut self) -> Result<(), StoreError> {
-        let Some(filled) = self.current_through().await? else {
-            return Ok(());
+        let Some(filled) = self.net_worth_state().await?.current_through() else {
+            return self.ask_for_net_worth_rebuild().await;
         };
         let holdings = every_holding(&mut self.tx).await?;
-        write_rows(&mut self.tx, &holdings, MIN_VALUE_DATE, filled).await?;
-        Ok(())
+        if fits_one_transaction(&mut self.tx, &holdings, MIN_VALUE_DATE, filled).await? {
+            write_rows(&mut self.tx, &holdings, MIN_VALUE_DATE, filled).await?;
+            Ok(())
+        } else {
+            self.ask_for_net_worth_rebuild().await
+        }
+    }
+}
+
+impl Store {
+    /// Recompute the whole table up to `through`, starting over if a rebuild is running.
+    /// A table that fits in one batch changes at one moment. A larger one answers as
+    /// rebuilding until the last batch, and other writers get their turn between batches.
+    /// Answers the rows this call wrote.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored row that no longer parses. What committed
+    /// stays, and [`Self::finish_net_worth_rebuild`] goes on from there.
+    pub async fn rebuild_net_worth(&self, through: Date) -> Result<u64, StoreError> {
+        let mut tx = self.begin().await?;
+        tx.ask_for_net_worth_rebuild().await?;
+        let first = tx
+            .rebuild_net_worth_batch(through, ROWS_PER_TRANSACTION)
+            .await?;
+        tx.commit().await?;
+        if first.finished {
+            return Ok(first.written);
+        }
+        tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
+        Ok(first.written + self.finish_net_worth_rebuild(through).await?)
+    }
+
+    /// Run the rebuild that is needed to its end, resuming one a crash or a failure
+    /// interrupted. `through` is the day it runs up to if no batch has run yet. Dropping
+    /// the future between batches loses nothing, and several callers at once are safe:
+    /// each batch takes the write lock and goes on from where the last one committed.
+    /// Answers the rows this call wrote.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored row that no longer parses.
+    pub async fn finish_net_worth_rebuild(&self, through: Date) -> Result<u64, StoreError> {
+        let mut written = 0;
+        loop {
+            let mut tx = self.begin().await?;
+            let batch = tx
+                .rebuild_net_worth_batch(through, ROWS_PER_TRANSACTION)
+                .await?;
+            tx.commit().await?;
+            written += batch.written;
+            if batch.finished {
+                return Ok(written);
+            }
+            tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
+        }
     }
 }
 
