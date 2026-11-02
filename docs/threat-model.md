@@ -254,11 +254,21 @@
   it (never a provider text), in the API (`held_cursor`) and on the
   Connections page; as with `last_error`, only an actor who sees every account
   gets it. The way out is a button on the page: the connection's owner or an
-  admin, signed in with a passkey, lets the next sync move the cursor past
-  those records. That throws them away for good, only counted as skipped, so
-  the page says so plainly, and the action needs the anti-forgery token, write
-  access to every account and leaves an audit entry naming the provider
-  accounts. An agent token cannot do it, whatever its scope: an agent able to
+  admin, signed in with a passkey, lets the next sync move the cursor past the
+  records that still fail. The form carries the provider accounts the page
+  showed, and a release is refused if the accounts holding the cursor are no
+  longer exactly those. The sync then applies those accounts' records one by
+  one and gives up only the ones that fail twice; the others are stored. A
+  record given up is lost for good, only counted as skipped, so the page says
+  so plainly, with how many records the last fetch could not store. The
+  records are given up, counted and audited (`connection.cursor_passed`, under
+  the sync actor, with their count) only in the transaction that really moves
+  the cursor; if another account still blocks it, the release waits, and a
+  completed fetch without an account ends that account's hold and release, so
+  an old request never passes records that arrive later. The request needs the
+  anti-forgery token, write access to every account and leaves an audit entry
+  naming the provider accounts. An agent token cannot do it, whatever its
+  scope: an agent able to
   discard records could hide a transaction from the household. A provider's
   account id that is empty, holds a control character or is over-long is
   refused when a Plaid answer is read, as a record of no account, so it is

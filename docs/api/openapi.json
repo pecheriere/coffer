@@ -4925,7 +4925,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/HeldCursorView",
-                "description": "Set while the sync cursor is held; `null` otherwise, and for an actor\nwho does not see every account (it names provider accounts, and the\nlast error could too)."
+                "description": "Set while the sync cursor is held; `null` otherwise, for a removed\nconnection, and for an actor who does not see every account (it names\nprovider accounts, and the last error could too). Only the connection\nlist fills it: the responses to creating and reconnecting a\nconnection always have `null`."
               },
               {
                 "type": "null"
@@ -5008,6 +5008,7 @@
         "required": [
           "text",
           "provider_accounts",
+          "records",
           "release_pending"
         ],
         "properties": {
@@ -5017,6 +5018,12 @@
               "$ref": "#/components/schemas/ProviderAccountId"
             },
             "description": "The provider accounts whose records hold the cursor."
+          },
+          "records": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many records of those accounts the last sync fetched and could\nnot store: what a release is about.",
+            "minimum": 0
           },
           "release_pending": {
             "type": "boolean",

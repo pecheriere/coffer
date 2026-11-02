@@ -144,9 +144,11 @@ pub struct ConnectionView {
     /// the first attempt and for connections the schedule skips.
     #[schema(required)]
     pub next_sync_at: Option<Timestamp>,
-    /// Set while the sync cursor is held; `null` otherwise, and for an actor
-    /// who does not see every account (it names provider accounts, and the
-    /// last error could too).
+    /// Set while the sync cursor is held; `null` otherwise, for a removed
+    /// connection, and for an actor who does not see every account (it names
+    /// provider accounts, and the last error could too). Only the connection
+    /// list fills it: the responses to creating and reconnecting a
+    /// connection always have `null`.
     #[schema(required)]
     pub held_cursor: Option<HeldCursorView>,
     /// Its provider accounts the actor may see.
@@ -328,7 +330,11 @@ impl SyncService {
                     .filter(|account| account.connection == connection.id)
                     .cloned()
                     .collect();
-                let held = if sees_errors { held_cursor(&own) } else { None };
+                let held = if sees_errors && connection.status != ConnectionStatus::Removed {
+                    held_cursor(&own)
+                } else {
+                    None
+                };
                 let mut view = self.connection_view(
                     connection,
                     own.into_iter().map(ProviderAccountView::from).collect(),

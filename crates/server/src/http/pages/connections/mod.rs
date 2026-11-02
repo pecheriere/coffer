@@ -18,7 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::ids::{AccountId, ConnectionId};
+use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId};
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::sync::SyncTrigger;
 use jiff::tz::TimeZone;
@@ -40,6 +40,7 @@ use crate::sync::provider::{ConnectInput, ProviderError, ProviderKind};
 use crate::sync::{SyncError, retry_seconds};
 
 const LABEL_INVALID: &str = "The label must be 1 to 100 characters without control characters.";
+const ACCOUNTS_UNREADABLE: &str = "the provider accounts to release could not be read";
 const TOKEN_MISSING: &str = "Paste the setup token from the SimpleFin Bridge.";
 
 pub fn routes() -> Router<AppState> {
@@ -317,6 +318,12 @@ fn held_notice(
     may_release: bool,
     csrf: &str,
 ) -> Markup {
+    let accounts = held
+        .provider_accounts
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     html! {
         div.once.held-cursor {
             h3 { "Sync cursor held" }
@@ -330,14 +337,22 @@ fn held_notice(
                 p { "Release requested: the next sync moves the cursor on." }
             } @else if may_release {
                 p {
-                    "Letting the cursor move on means those records are passed for good. "
-                    "coffer does not fetch them again; they are only counted as skipped "
-                    "in the next sync. Whatever they carry (new transactions, changes, "
-                    "removals) is lost, unless you enter it by hand."
+                    "The last fetch held " (held.records) " records of these accounts that could "
+                    "not be stored."
+                }
+                p {
+                    "If you let the cursor move on, the next sync tries each of them one by one. "
+                    "Those that can be stored are stored. Those that still fail are passed for "
+                    "good: coffer does not fetch them again, they are only counted as skipped in "
+                    "that sync, and the audit log records how many. Whatever they carry (new "
+                    "transactions, changes, removals) is lost, unless you enter it by hand. "
+                    "If another account still blocks the cursor, nothing is passed yet and "
+                    "your request waits."
                 }
                 form method="post" action={ "/connections/" (connection.id) "/release-cursor" } {
                     (csrf_field(csrf))
-                    button.btn type="submit" { "Pass these records for good" }
+                    input type="hidden" name="accounts" value=(accounts);
+                    button.btn type="submit" { "Pass the failing records for good" }
                 }
             }
         }
@@ -536,6 +551,16 @@ struct ReconnectForm {
     setup_token: Option<SecretString>,
 }
 
+/// The provider accounts the page showed as holding the cursor.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseForm {
+    #[serde(default)]
+    csrf: String,
+    #[serde(default)]
+    accounts: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CsrfForm {
@@ -641,11 +666,26 @@ async fn release_cursor(
     State(state): State<AppState>,
     session: PageSession,
     Path(id): Path<String>,
-    PageForm(form): PageForm<CsrfForm>,
+    PageForm(form): PageForm<ReleaseForm>,
 ) -> Result<Response, PageError> {
     let actor = session.verify(&state, &form.csrf)?;
     let id = connection_id(&id)?;
-    match state.sync.release_held_cursor(&actor, id).await {
+    let shown: Result<Vec<ProviderAccountId>, _> = form
+        .accounts
+        .split(',')
+        .filter(|part| !part.is_empty())
+        .map(str::parse)
+        .collect();
+    let Ok(shown) = shown else {
+        return refused(
+            &state,
+            &session,
+            SyncError::Invalid(ACCOUNTS_UNREADABLE),
+            FormKind::Action,
+        )
+        .await;
+    };
+    match state.sync.release_held_cursor(&actor, id, &shown).await {
         Ok(_) => Ok(back()),
         Err(err) => refused(&state, &session, err, FormKind::Action).await,
     }

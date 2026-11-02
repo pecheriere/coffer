@@ -13,6 +13,8 @@ use crate::sync::SyncError;
 use crate::sync::engine::{SyncService, ensure_not_removed};
 
 const NOT_HELD: &str = "the connection's sync cursor is not held";
+const HOLD_CHANGED: &str =
+    "the provider accounts holding the sync cursor changed; check the page and try again";
 
 /// How many syncs in a row must leave the cursor in place because of one
 /// provider account before the connection says it is held.
@@ -31,6 +33,9 @@ pub struct HeldCursorView {
     pub text: &'static str,
     /// The provider accounts whose records hold the cursor.
     pub provider_accounts: Vec<ProviderAccountId>,
+    /// How many records of those accounts the last sync fetched and could
+    /// not store: what a release is about.
+    pub records: u32,
     /// Whether a member already asked for the cursor to move past those
     /// records: the next sync does.
     pub release_pending: bool,
@@ -50,6 +55,7 @@ pub(super) fn held_cursor(accounts: &[ProviderAccountRecord]) -> Option<HeldCurs
     holding.sort_by_key(|account| account.id.to_string());
     Some(HeldCursorView {
         text: CURSOR_HELD_TEXT,
+        records: holding.iter().map(|account| account.held_records).sum(),
         release_pending: holding.iter().all(|account| account.hold_released),
         provider_accounts: holding.iter().map(|account| account.id).collect(),
     })
@@ -57,23 +63,29 @@ pub(super) fn held_cursor(accounts: &[ProviderAccountRecord]) -> Option<HeldCurs
 
 impl SyncService {
     /// Lets the connection's sync cursor move past the records that keep
-    /// failing to store: the next sync passes those of every provider
-    /// account that held it for [`HELD_AFTER_SYNCS`] syncs, for good, and
-    /// only counts them as skipped. Returns those provider accounts. The
-    /// records are lost to coffer, so this needs a passkey session (never an
-    /// agent token) of the connection's owner or an admin, with write
-    /// access to every account like removing the connection. The change is
-    /// audited, without any provider text.
+    /// failing to store. `shown` are the provider accounts the member saw
+    /// holding it: if they are no longer exactly the ones that do, nothing
+    /// changes. The next sync then applies those accounts' records one by
+    /// one and gives up only the ones that still fail, for good; they are
+    /// counted as skipped and the pass is audited with its count. That
+    /// happens only if the sync moves the cursor, so a failure elsewhere
+    /// keeps the release for a later one. The records are lost to coffer, so
+    /// this needs a passkey session (never an agent token) of the
+    /// connection's owner or an admin, with write access to every account
+    /// like removing the connection. The request is audited, without any
+    /// provider text.
     ///
     /// # Errors
     ///
     /// [`SyncError::Denied`] unless the actor may; [`SyncError::NotFound`]
-    /// for an unknown connection; [`SyncError::Conflict`] for a removed one
-    /// or one whose cursor is not held; storage failures.
+    /// for an unknown connection; [`SyncError::Conflict`] for a removed one,
+    /// one whose cursor is not held, or one whose holding accounts are not
+    /// `shown`; storage failures.
     pub async fn release_held_cursor(
         &self,
         actor: &Actor,
         id: ConnectionId,
+        shown: &[ProviderAccountId],
     ) -> Result<Vec<ProviderAccountId>, SyncError> {
         authorize(actor, Action::ManageConnections)?;
         self.authorize_every_account(actor, AccountLevel::Write)
@@ -88,11 +100,18 @@ impl SyncService {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         ensure_not_removed(&mut tx, id).await?;
-        let released = tx.release_cursor_holds(id, HELD_AFTER_SYNCS).await?;
-        if released.is_empty() {
+        let holding = tx.held_provider_accounts(id, HELD_AFTER_SYNCS).await?;
+        if holding.is_empty() {
             return Err(SyncError::Conflict(NOT_HELD));
         }
-        let accounts = released
+        let mut shown = shown.to_vec();
+        shown.sort_by_key(ToString::to_string);
+        shown.dedup();
+        if shown != holding {
+            return Err(SyncError::Conflict(HOLD_CHANGED));
+        }
+        tx.release_cursor_holds(&holding).await?;
+        let accounts = holding
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -107,7 +126,7 @@ impl SyncService {
         )
         .await?;
         tx.commit().await?;
-        tracing::info!(connection = %id, accounts = released.len(), "held sync cursor released");
-        Ok(released)
+        tracing::info!(connection = %id, accounts = holding.len(), "held sync cursor released");
+        Ok(holding)
     }
 }

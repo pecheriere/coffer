@@ -1,10 +1,13 @@
 //! Applying each provider account of a run in its own store transaction.
 
-use coffer_domain::ids::ConnectionId;
+use coffer_domain::audit::{AuditChanges, AuditEntry};
+use coffer_domain::ids::{ConnectionId, ProviderAccountId};
 use coffer_store::{
     ConnectionRecord, ConnectionStatus, ConnectionStatusChange, ProviderAccountRecord,
     ProviderAccountUpsert, RawBalance, StoreError, StoreTx, SyncRunRecord,
 };
+use std::collections::HashSet;
+
 use jiff::Timestamp;
 use jiff::civil::Date;
 
@@ -12,25 +15,27 @@ use super::convert::{Converted, check_account, convert};
 use super::results::{AccountOutcome, Totals, joined_errors, outcome};
 use super::{SyncService, same_credentials, still_current, write_balance};
 use crate::sync::SyncError;
-use crate::sync::apply::{AccountBatch, apply_account_batch, valid_provider_id};
+use crate::sync::apply::{
+    AccountBatch, ApplyReport, Coverage, apply_account_batch, sync_actor, valid_provider_id,
+};
 use crate::sync::provider::{
     FetchMode, FetchResult, ProviderAccountData, sanitize_provider_message,
 };
 
 const BALANCE_UNREPRESENTABLE: &str =
     "the provider reported a balance too large to store, so it was left out";
-const ACCOUNT_NOT_STORED: &str =
+pub(super) const ACCOUNT_NOT_STORED: &str =
     "the account's data could not be stored; the next sync fetches the missing records again";
 
 /// What an account's fetched data means for the cursor.
 #[derive(Clone, Copy)]
-struct Records {
+pub(super) struct Records {
     /// Whether records of it could still be stored by a later fetch, and the
     /// cursor must not pass them. Never for a provider without a cursor.
-    holds: bool,
+    pub(super) holds: bool,
     /// How many records the cursor passes if it moves on without applying
     /// them.
-    count: u32,
+    pub(super) count: u32,
 }
 
 impl Records {
@@ -51,8 +56,8 @@ impl Records {
 
 /// The outcome of an account that was not applied. A cursor is held by it
 /// when `fixable` records of it wait for a later fetch; counted, so that a
-/// hold lasting for good shows. Unless a member asked for the cursor to move
-/// on: then its records are passed for good and only counted.
+/// hold lasting for good shows. Otherwise nothing waits for it, and any hold
+/// or release it had ends.
 async fn settle_failure(
     tx: &mut StoreTx,
     account: &ProviderAccountRecord,
@@ -66,18 +71,44 @@ async fn settle_failure(
             passed: 0,
         });
     }
-    if account.hold_released {
-        tx.clear_cursor_hold(account.id).await?;
-        return Ok(AccountOutcome::Failed {
-            refetch: false,
-            passed: records.count,
-        });
-    }
-    tx.count_cursor_hold(account.id).await?;
+    tx.count_cursor_hold(account.id, records.count).await?;
     Ok(AccountOutcome::Failed {
         refetch: true,
         passed: 0,
     })
+}
+
+/// Gives up, for good, the records of the released accounts `passed`, in the
+/// transaction that moves the cursor past them: their holds end and the pass
+/// is audited with its count.
+async fn record_pass(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    connection: ConnectionId,
+    passed: &[(ProviderAccountId, u32)],
+) -> Result<(), SyncError> {
+    if passed.is_empty() {
+        return Ok(());
+    }
+    let records: u32 = passed.iter().map(|(_, count)| *count).sum();
+    let accounts: Vec<String> = passed.iter().map(|(id, _)| id.to_string()).collect();
+    for (id, _) in passed {
+        tx.clear_cursor_hold(*id).await?;
+    }
+    tx.append_audit(
+        now,
+        &AuditEntry {
+            actor: sync_actor(),
+            action: "connection.cursor_passed".to_owned(),
+            entity_type: "connection".to_owned(),
+            entity_id: connection.to_string(),
+            changes: AuditChanges::new()
+                .set("records", i64::from(records))
+                .set("provider_accounts", accounts.join(", ")),
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 impl SyncService {
@@ -92,8 +123,24 @@ impl SyncService {
     ) -> Result<SyncRunRecord, SyncError> {
         let mut totals = Totals::default();
         let cursor = matches!(mode, FetchMode::Cursor);
+        let present: Vec<String> = result
+            .accounts
+            .iter()
+            .map(|data| data.provider_account_id.clone())
+            .collect();
+        let released: HashSet<String> = self
+            .store
+            .list_provider_accounts(Some(connection.id))
+            .await?
+            .into_iter()
+            .filter(|account| account.hold_released)
+            .map(|account| account.provider_account_id)
+            .collect();
         for data in result.accounts {
-            let outcome = self.apply_account(connection.id, data, today, cursor).await;
+            let release = released.contains(&data.provider_account_id);
+            let outcome = self
+                .apply_account(connection.id, data, today, (cursor, release))
+                .await;
             totals.add(&outcome);
             if totals.connection_removed {
                 // Removed while the run was fetching or applying: nothing
@@ -123,8 +170,31 @@ impl SyncService {
         let stored = tx.get_connection(connection.id).await?;
         let removed = totals.connection_removed || stored.status == ConnectionStatus::Removed;
         let reported_errors = connection_errors.is_some();
-        let (status, detail) = outcome(&totals, removed, reported_errors);
         let current = still_current(&stored, connection);
+        // A cursor belongs to the credentials it was given for, so it outlives
+        // a reauthorization: the records it covers were applied above. Unless
+        // the provider reported errors, which a stale run cannot record: the
+        // cursor then stays, for the next run to fetch and report them itself.
+        let new_cursor = if !removed
+            && same_credentials(&stored, connection)
+            && (current || !reported_errors)
+            && !totals.refetch
+            && matches!(mode, FetchMode::Cursor)
+        {
+            result.cursor
+        } else {
+            None
+        };
+        // Records a member asked to pass are passed only now that the cursor
+        // moves past them; if it does not, the release stays for a later run.
+        let passed = if new_cursor.is_some() {
+            std::mem::take(&mut totals.released)
+        } else {
+            Vec::new()
+        };
+        let passed_records: u32 = passed.iter().map(|(_, count)| *count).sum();
+        totals.report.skipped = totals.report.skipped.saturating_add(passed_records);
+        let (status, detail) = outcome(&totals, removed, reported_errors);
         if !removed && current {
             tx.update_connection_status(
                 connection.id,
@@ -138,16 +208,14 @@ impl SyncService {
             )
             .await?;
         }
-        // A cursor belongs to the credentials it was given for, so it outlives
-        // a reauthorization: the records it covers were applied above. Unless
-        // the provider reported errors, which a stale run cannot record: the
-        // cursor then stays, for the next run to fetch and report them itself.
-        if !removed
-            && same_credentials(&stored, connection)
-            && (current || !reported_errors)
-            && let (FetchMode::Cursor, Some(cursor), false) = (mode, result.cursor, totals.refetch)
-        {
+        if let Some(cursor) = new_cursor {
             tx.set_provider_state(connection.id, Some(cursor)).await?;
+        }
+        record_pass(&mut tx, now, connection.id, &passed).await?;
+        if !removed && same_credentials(&stored, connection) {
+            // A completed fetch without an account says nothing waits for it.
+            tx.clear_cursor_holds_except(connection.id, &present)
+                .await?;
         }
         let finished = tx
             .finish_sync_run(run.id, status, Some(detail), now)
@@ -164,9 +232,13 @@ impl SyncService {
         connection: ConnectionId,
         data: ProviderAccountData,
         today: Date,
-        cursor: bool,
+        (cursor, released): (bool, bool),
     ) -> AccountOutcome {
         let records = Records::of(&data, cursor);
+        // A member asked for the cursor to move past its failing records:
+        // applied one by one, so only the ones that fail are given up.
+        // Only for a delta, whose records stand alone.
+        let release = released && records.holds && matches!(data.coverage, Coverage::Delta);
         if !valid_provider_id(&data.provider_account_id) {
             // Nothing can be recorded on an account without a usable id, and
             // no later fetch could store its records: the run counts it among
@@ -196,7 +268,7 @@ impl SyncService {
             seen_at: now,
         };
         match self
-            .try_apply_account(upsert.clone(), data, today, records)
+            .try_apply_account(upsert.clone(), data, today, (records, release))
             .await
         {
             Ok(outcome) => outcome,
@@ -225,7 +297,7 @@ impl SyncService {
         mut upsert: ProviderAccountUpsert,
         data: ProviderAccountData,
         today: Date,
-        records: Records,
+        (records, release): (Records, bool),
     ) -> Result<AccountOutcome, SyncError> {
         let now = upsert.seen_at;
         let connection = upsert.connection;
@@ -254,6 +326,15 @@ impl SyncService {
             Err(refusal) => {
                 tx.set_provider_account_error(record.id, Some(refusal.text))
                     .await?;
+                if release && !refusal.lasting {
+                    // None of its records can be stored.
+                    tx.commit().await?;
+                    return Ok(AccountOutcome::Released {
+                        account: record.id,
+                        report: ApplyReport::default(),
+                        failing: records.count,
+                    });
+                }
                 let outcome = settle_failure(&mut tx, &record, records, !refusal.lasting).await?;
                 tx.commit().await?;
                 return Ok(outcome);
@@ -274,6 +355,20 @@ impl SyncService {
         };
         if record.error != note {
             tx.set_provider_account_error(record.id, note).await?;
+        }
+        if release {
+            tx.commit().await?;
+            let job = super::released::OneByOne {
+                record,
+                account,
+                transactions,
+                removed: data.removed,
+                skipped: u32::try_from(unusable.len()).unwrap_or(u32::MAX),
+                balance,
+                today,
+                now,
+            };
+            return self.apply_one_by_one(job).await;
         }
         let provider_account = record.id;
         let bound = account.clone();

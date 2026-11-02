@@ -143,6 +143,20 @@ pub struct ApplyReport {
     pub skipped: u32,
 }
 
+impl ApplyReport {
+    /// Adds `other`'s counts to these.
+    pub fn absorb(&mut self, other: &Self) {
+        self.created += other.created;
+        self.possible_duplicates += other.possible_duplicates;
+        self.attached += other.attached;
+        self.updated += other.updated;
+        self.deleted += other.deleted;
+        self.source_removed += other.source_removed;
+        self.held += other.held;
+        self.skipped += other.skipped;
+    }
+}
+
 /// An incoming record with its texts sanitized.
 struct Record {
     provider_id: String,

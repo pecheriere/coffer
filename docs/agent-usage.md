@@ -298,16 +298,19 @@ for a sync.
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
   `next_sync_at`, `held_cursor` and the provider accounts the token may see.
   Credentials are never returned.
-- `held_cursor` is `null`, or says a Plaid sync cursor is held: `text` (fixed),
-  `provider_accounts` (the ids of the provider accounts whose records keep
-  failing to store) and `release_pending`. It appears after three syncs in a
-  row left the cursor in place because of one account. While it is held, each
-  sync fetches those records again, and the account's own `error` says why.
-  Telling the owner is the useful step: letting the cursor move on passes
-  those records for good (coffer only counts them as skipped), so it is a
-  button on the Connections page that needs a passkey session of the
-  connection's owner or an admin. No API call and no agent token, whatever its
-  scope, can do it.
+- `held_cursor` appears on the connection list only (the responses to
+  creating or reconnecting a connection always have `null`). It is `null`, or
+  says a Plaid sync cursor is held: `text` (fixed), `provider_accounts` (the
+  ids of the provider accounts whose records keep failing to store),
+  `records` (how many records the last fetch could not store for them) and
+  `release_pending`. It appears after three syncs in a row left the cursor in
+  place because of one account, and never for a removed connection. While it
+  is held, each sync fetches those records again, and the account's own
+  `error` says why. Telling the owner is the useful step: letting the cursor
+  move on gives up the records that still fail to store for good (coffer only
+  counts them as skipped and audits the count), so it is a button on the
+  Connections page that needs a passkey session of the connection's owner or
+  an admin. No API call and no agent token, whatever its scope, can do it.
 - Plaid connections appear in `GET /api/v1/connections` like any other
   (`provider` is `plaid`), when the server is configured for Plaid. Connecting
   one is a browser step: the member logs in to the bank through Plaid Link
