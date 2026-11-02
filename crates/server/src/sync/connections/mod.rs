@@ -144,7 +144,9 @@ pub struct ConnectionView {
     pub last_success_at: Option<Timestamp>,
     /// When the schedule syncs it next: the last attempt plus the longer of
     /// the server's sync interval and the provider's minimum. `null` before
-    /// the first attempt and for connections the schedule skips.
+    /// the first attempt and for connections the schedule skips. When the
+    /// last attempt is later than now, which came from a clock that ran ahead,
+    /// the connection is due: now, or when its limits allow a run.
     #[schema(required)]
     pub next_sync_at: Option<Timestamp>,
     /// Set while the sync cursor is held; `null` otherwise, for a removed
@@ -274,9 +276,14 @@ impl SyncService {
         let next_sync_at = match connection.status {
             ConnectionStatus::Active | ConnectionStatus::Error => {
                 let interval = self.effective_interval(&connection);
-                connection
-                    .last_attempt_at
-                    .map(|at| at.checked_add(interval).unwrap_or(Timestamp::MAX))
+                let now = self.clock.now();
+                connection.last_attempt_at.map(|at| {
+                    if at > now {
+                        now
+                    } else {
+                        at.checked_add(interval).unwrap_or(Timestamp::MAX)
+                    }
+                })
             }
             ConnectionStatus::ReauthRequired | ConnectionStatus::Removed => None,
         };
@@ -325,30 +332,42 @@ impl SyncService {
         accounts.retain(|account| visible(&access, account));
         let connections = self.store.list_connections().await?;
         let sees_errors = access.sees_every_account(AccountLevel::Transactions);
-        Ok(connections
-            .into_iter()
-            .map(|connection| {
-                let own: Vec<ProviderAccountRecord> = accounts
-                    .iter()
-                    .filter(|account| account.connection == connection.id)
-                    .cloned()
-                    .collect();
-                let held = if sees_errors && connection.status != ConnectionStatus::Removed {
-                    held_cursor(&own)
-                } else {
-                    None
-                };
-                let mut view = self.connection_view(
-                    connection,
-                    own.into_iter().map(ProviderAccountView::from).collect(),
+        let now = self.clock.now();
+        let mut views = Vec::with_capacity(connections.len());
+        for connection in connections {
+            let own: Vec<ProviderAccountRecord> = accounts
+                .iter()
+                .filter(|account| account.connection == connection.id)
+                .cloned()
+                .collect();
+            let held = if sees_errors && connection.status != ConnectionStatus::Removed {
+                held_cursor(&own)
+            } else {
+                None
+            };
+            let mut next_sync_at = None;
+            if connection.last_attempt_at.is_some_and(|at| at > now) {
+                // Due, but a refusal by the limits is what decides when.
+                self.bring_starts_to_now(connection.id, now).await?;
+                next_sync_at = Some(
+                    now.checked_add(self.limits_wait(&connection, now).await?)
+                        .unwrap_or(Timestamp::MAX),
                 );
-                view.held_cursor = held;
-                if !sees_errors {
-                    view.last_error = None;
-                }
-                view
-            })
-            .collect())
+            }
+            let mut view = self.connection_view(
+                connection,
+                own.into_iter().map(ProviderAccountView::from).collect(),
+            );
+            if view.next_sync_at.is_some() && next_sync_at.is_some() {
+                view.next_sync_at = next_sync_at;
+            }
+            view.held_cursor = held;
+            if !sees_errors {
+                view.last_error = None;
+            }
+            views.push(view);
+        }
+        Ok(views)
     }
 
     /// The provider accounts the actor may see, oldest first; only the

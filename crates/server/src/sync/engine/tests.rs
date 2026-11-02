@@ -166,6 +166,30 @@ fn simplefin_first_window_is_within_the_bridge_limit_in_every_time_zone() {
     );
 }
 
+/// A time later than today came from a clock that ran ahead. It is unknown,
+/// so the window is the maximum one: neither after today, which the bridge
+/// refuses, nor only today, which skips records posted late.
+#[test]
+fn a_time_in_the_future_gives_the_maximum_window() {
+    let utc = TimeZone::UTC;
+    let today = date(2026, 10, 31);
+    let earliest = date(2026, 8, 2);
+    let ahead: jiff::Timestamp = "2027-03-01T00:00:00Z".parse().unwrap();
+    assert_eq!(
+        window_start(&[], Some(ahead), today, &utc, 90, 14),
+        earliest
+    );
+    assert_eq!(
+        window_start(&[(ahead, Some(ahead))], None, today, &utc, 90, 14),
+        earliest
+    );
+    let tomorrow: jiff::Timestamp = "2026-11-01T12:00:00Z".parse().unwrap();
+    assert_eq!(
+        window_start(&[], Some(tomorrow), today, &utc, 90, 14),
+        earliest
+    );
+}
+
 #[test]
 fn window_rules() {
     let utc = TimeZone::UTC;

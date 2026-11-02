@@ -456,6 +456,55 @@ async fn sync_run_lifecycle() {
     );
 }
 
+/// A start after `now` came from a clock that ran ahead: it moves to `now`
+/// and keeps counting. The runs of other connections and earlier starts stay.
+#[tokio::test]
+async fn starts_after_now_are_brought_to_now() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let other = add_connection(&store, owner).await;
+    let earlier = queue(&store, connection, SyncTrigger::Schedule, None, 10).await;
+    let ahead = queue(&store, connection, SyncTrigger::Schedule, None, 500).await;
+    let elsewhere = queue(&store, other, SyncTrigger::Schedule, None, 500).await;
+    let mut tx = store.begin().await.unwrap();
+    for (run, started) in [(earlier, 11), (ahead, 501), (elsewhere, 501)] {
+        tx.start_sync_run(run, at(started)).await.unwrap();
+        tx.finish_sync_run(run, SyncRunStatus::Succeeded, None, at(started + 1))
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let mut tx = store.begin().await.unwrap();
+    assert_eq!(
+        tx.bring_sync_run_starts_to(connection, at(100))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        tx.bring_sync_run_starts_to(connection, at(100))
+            .await
+            .unwrap(),
+        0,
+        "once"
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(
+        store.get_sync_run(ahead).await.unwrap().started_at,
+        Some(at(100))
+    );
+    assert_eq!(
+        store.get_sync_run(earlier).await.unwrap().started_at,
+        Some(at(11))
+    );
+    assert_eq!(
+        store.get_sync_run(elsewhere).await.unwrap().started_at,
+        Some(at(501))
+    );
+}
+
 #[tokio::test]
 async fn sync_run_counts_queue_and_interruption() {
     let (_dir, store) = open().await;
