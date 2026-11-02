@@ -189,6 +189,7 @@ impl Ledger {
                 schedule: item.schedule,
                 spending,
                 goal_spent_minor: 0,
+                goal_linked_both_sides: false,
                 settled: BTreeMap::new(),
             });
         }
@@ -259,6 +260,7 @@ fn input(
         items,
         settlements,
         goal_spent,
+        goals_linked_both_sides,
         category_spent,
         loose_ends,
         newer_spending,
@@ -277,6 +279,7 @@ fn input(
         .collect();
     let (mut problems, unbound) = provider_view(provider_accounts, &currencies, &removed);
     let goal_spent: BTreeMap<PlannedItemId, i64> = goal_spent.into_iter().collect();
+    let both_sides: BTreeSet<PlannedItemId> = goals_linked_both_sides.into_iter().collect();
     let mut settled = settled_months(&settlements);
     ForecastInput {
         today,
@@ -306,7 +309,7 @@ fn input(
             .iter()
             .map(|item| {
                 let months = settled.remove(&item.id).unwrap_or_default();
-                stored_item(item, &goal_spent, months)
+                stored_item(item, &goal_spent, &both_sides, months)
             })
             .chain(hypothetical)
             .collect(),
@@ -415,6 +418,7 @@ fn feed_problems(record: &ProviderAccountRecord, expected: Option<Currency>) -> 
 fn stored_item(
     item: &PlannedItemRecord,
     goal_spent: &BTreeMap<PlannedItemId, i64>,
+    both_sides: &BTreeSet<PlannedItemId>,
     settled: BTreeMap<CalendarMonth, SettlementKind>,
 ) -> ItemInput {
     ItemInput {
@@ -427,6 +431,7 @@ fn stored_item(
         schedule: item.schedule,
         spending: item.spending,
         goal_spent_minor: goal_spent.get(&item.id).copied().unwrap_or(0),
+        goal_linked_both_sides: both_sides.contains(&item.id),
         settled,
     }
 }

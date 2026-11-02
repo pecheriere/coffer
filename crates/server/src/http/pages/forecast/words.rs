@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
-    AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, LineSource, SettledLine,
+    AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
+    SettledLine,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
@@ -205,10 +206,29 @@ fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     format!(
         "Bills or one-offs in {} dated earlier this month come to {} more than that category's \
          spending so far, so that much still counts as needed. If they were paid under another \
-         category, there is more to invest than this shows.",
+         category, there is more to invest than this shows. If one was paid from an account \
+         that isn't the household's, even in this category, settle that bill for the month.",
         category.unwrap_or("a category"),
         magnitude(amount),
     )
+}
+
+/// An item hinted at an account that doesn't count, and what became of it.
+fn hint_sentence(item: &str, account: &str, effect: HintEffect) -> String {
+    match effect {
+        HintEffect::StillNeeded => format!(
+            "{item} is expected to be paid from {account}, which doesn't count as cash here. It \
+             still counts as needed, which may overstate what counted cash has to cover."
+        ),
+        HintEffect::StillIncome => format!(
+            "{item} is expected to arrive in {account}, which doesn't count as cash here. It \
+             still counts as income, which may overstate what is free to invest."
+        ),
+        HintEffect::LeftOut => format!(
+            "{item} is expected to arrive in {account}, which isn't the household's money, so it \
+             stays out of the number."
+        ),
+    }
 }
 
 /// A floor of some months of recurring outflows that came to 0.
@@ -326,11 +346,21 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             names.goal(*goal),
             day(*due_on),
         ),
-        Caution::ItemHintNotCounted { item, account } => format!(
-            "{} is expected to be paid from {}, which doesn't count as cash here. It still counts \
-             as needed, which may overstate what counted cash has to cover.",
+        Caution::GoalLinkedBothSides { goal } => format!(
+            "{} has spending linked to it on both counted cash and an account that isn't the \
+             household's. If one paid for the other, the same money lowers what it still needs \
+             twice, so there may be less to invest than this shows. Link the payment or the \
+             contribution, never both.",
+            names.goal(*goal),
+        ),
+        Caution::ItemHintNotCounted {
+            item,
+            account,
+            effect,
+        } => hint_sentence(
             names.item(*item).unwrap_or("A planned item"),
             names.account(*account),
+            *effect,
         ),
         Caution::UncategorizedSpending { count, total, .. } => format!(
             "This month has {} with no category, {} in all. Categorizing that spending could lower \
@@ -363,7 +393,9 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
 mod tests {
     use std::collections::BTreeSet;
 
-    use coffer_domain::forecast::{Blocker, Caution, FeedProblemReason, FeedStatus, LineSource};
+    use coffer_domain::forecast::{
+        Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
+    };
     use coffer_domain::ids::{
         AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId,
     };
@@ -446,9 +478,21 @@ mod tests {
                 category,
             },
             Caution::GoalOverdue { goal, due_on: ON },
+            Caution::GoalLinkedBothSides { goal },
             Caution::ItemHintNotCounted {
                 item: goal,
                 account,
+                effect: HintEffect::StillNeeded,
+            },
+            Caution::ItemHintNotCounted {
+                item: goal,
+                account,
+                effect: HintEffect::StillIncome,
+            },
+            Caution::ItemHintNotCounted {
+                item: goal,
+                account,
+                effect: HintEffect::LeftOut,
             },
             Caution::UncategorizedSpending {
                 currency,
@@ -556,6 +600,22 @@ mod tests {
         assert!(pending.contains("7.00 USD not posted yet."));
         assert!(!pending.contains("posted after"));
         assert!(!pending.contains("0.00 USD"));
+    }
+
+    /// A payment on an account that isn't the household's can't be recategorized into paying.
+    #[test]
+    fn an_unseen_bill_says_to_settle_one_paid_from_a_held_account() {
+        let Named {
+            category, names, ..
+        } = named();
+        let sentence = said(
+            &Caution::BillNotSeen {
+                category,
+                amount: usd(1),
+            },
+            &names,
+        );
+        assert!(sentence.contains("settle that bill for the month"));
     }
 
     #[test]
@@ -689,11 +749,32 @@ mod tests {
                 "A goal and a one-off are both in the same category",
             ),
             (
+                Caution::GoalLinkedBothSides { goal },
+                "A goal has spending linked to it",
+            ),
+            (
                 Caution::ItemHintNotCounted {
                     item: goal,
                     account,
+                    effect: HintEffect::StillNeeded,
                 },
                 "A planned item is expected to be paid from an account,",
+            ),
+            (
+                Caution::ItemHintNotCounted {
+                    item: goal,
+                    account,
+                    effect: HintEffect::StillIncome,
+                },
+                "A planned item is expected to arrive in an account, which doesn't count",
+            ),
+            (
+                Caution::ItemHintNotCounted {
+                    item: goal,
+                    account,
+                    effect: HintEffect::LeftOut,
+                },
+                "A planned item is expected to arrive in an account, which isn't the household's",
             ),
             (
                 Caution::BillNotSeen {

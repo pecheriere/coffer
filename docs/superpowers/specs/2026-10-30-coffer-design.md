@@ -1220,8 +1220,10 @@ accounts sees a bucket of one, and a hidden account's label, currency and existe
 
 **B8. Forecast and allocation.** A forecast lists such an account with `not_counted:
 "not_household"`. A later target allocation and rebalancing (#3) reads `belongs_to = household`
-only, whatever the class: that is why nothing here adds a third flag. A planned item hinted at such
-an account still counts, with R16's caution; hint a contribution at the account paying it.
+only, whatever the class: that is why nothing here adds a third flag. A planned outflow hinted at
+such an account still counts, with R16's caution; hint a contribution at the account paying it. A
+planned inflow hinted at one stays out of the number, with the same caution, since it isn't the
+household's income, and with `include_income` off it raises nothing.
 
 **B9. Money going in is spending.** A contribution from a counted account to one that isn't the
 household's is a real outflow, so it belongs in an `expense` category. It then reads as `actual` in
@@ -1244,6 +1246,13 @@ and currency. A split linked to a goal stays on the goal's line: a member linked
 a tuition goal paid from a 529 does need less from counted cash (R10). It reduces no budget and
 pays no bill, since a forecast's spending is on counted accounts (R10), so a bill paid that way is
 settled (R9a).
+
+Link the payment or the contribution, never both. A goal linked on both counted cash and such an
+account may have its need lowered twice for the same money, once as the contribution and once as
+the tuition it paid, and the data can't tell that from two separate payments. So the number doesn't
+change, and the caution `goal_linked_both_sides` names the goal and makes the forecast `provisional`.
+Each link alone raises nothing. A link newer than its balance is a side already, and a charge R10a
+leaves out is none. A finished goal raises nothing.
 
 **B11. Nothing is reclassified.** Existing accounts stay as they are, `household`, whatever their
 name says, since a guess here moves net worth. A member changes an `other_asset` that is really a

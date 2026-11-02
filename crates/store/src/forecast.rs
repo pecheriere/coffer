@@ -38,6 +38,9 @@ pub struct ForecastData {
     pub settlements: Vec<SettlementRecord>,
     /// Spending linked to each goal, positive for money spent.
     pub goal_spent: Vec<(PlannedItemId, i64)>,
+    /// The goals with spending linked on both counted cash and an account that isn't the
+    /// household's, ordered by id.
+    pub goals_linked_both_sides: Vec<PlannedItemId>,
     pub category_spent: Vec<CategorySpentRow>,
     pub loose_ends: Vec<LooseEndsRow>,
     /// Outflows on counted accounts that their balances may not show yet.
@@ -116,6 +119,26 @@ macro_rules! latest_balance {
 macro_rules! spendable {
     () => {
         "a.liquidity IN ('cash', 'short_term_liability')"
+    };
+}
+
+/// An account `a` whose money is the household's: what happens on any other is no part of
+/// what the household spent (spec §8.11 B10).
+macro_rules! the_households {
+    () => {
+        "a.belongs_to = 'household'"
+    };
+}
+
+/// An account `a` whose spending comes out of counted cash: switched in and of a spendable
+/// class, and open or a closed card, whose debt still counts.
+macro_rules! out_of_counted_cash {
+    () => {
+        concat!(
+            "(a.include_in_forecast = 1 AND ",
+            spendable!(),
+            " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability'))"
+        )
     };
 }
 
@@ -225,11 +248,29 @@ const GOAL_SPENT: &str = concat!(
        AND ",
     counts_against_goal!(),
     " AND t.posted_on <= ?1 AND ( \
-       NOT (a.include_in_forecast = 1 AND ",
-    spendable!(),
-    " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
-       OR t.posted_on <= COALESCE(b.on_date, '') \
+       NOT ",
+    out_of_counted_cash!(),
+    " OR t.posted_on <= COALESCE(b.on_date, '') \
      ) GROUP BY s.goal_id ORDER BY s.goal_id"
+);
+
+/// The goals with money spent on them both out of counted cash and on an account that isn't
+/// the household's: a contribution and the payment it funded may both be linked. What
+/// [`GOAL_SPENT`] would count, but for the balance date: a charge newer than a balance lowers
+/// the need as soon as a balance shows it, so it is one side already.
+const GOALS_LINKED_BOTH_SIDES: &str = concat!(
+    "SELECT s.goal_id AS goal \
+     FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
+     JOIN transactions t ON t.id = s.transaction_id \
+     JOIN accounts a ON a.id = t.account_id \
+     WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
+     AND s.minor_units < 0 AND ",
+    counts_against_goal!(),
+    " AND t.posted_on <= ?1 GROUP BY s.goal_id HAVING MAX(",
+    out_of_counted_cash!(),
+    ") = 1 AND MAX(NOT ",
+    the_households!(),
+    ") = 1 ORDER BY s.goal_id"
 );
 
 /// Outflows up to `as_of` that a balance may not show, on an account switched in and of a
@@ -251,14 +292,6 @@ const NEWER_SPENDING: &str = concat!(
             OR (a.closed_at IS NOT NULL AND a.liquidity = 'short_term_liability')) \
      GROUP BY t.currency ORDER BY t.currency"
 );
-
-/// An account `a` whose money is the household's: what happens on any other is no part of
-/// what the household spent (spec §8.11 B10).
-macro_rules! the_households {
-    () => {
-        "a.belongs_to = 'household'"
-    };
-}
 
 /// What a report takes as actual: posted splits in the window on any of the household's
 /// accounts, counted or not, since it says what happened rather than what a balance shows.
@@ -487,6 +520,14 @@ impl Store {
             .iter()
             .map(|row| Ok((parsed(row, "goal")?, summed(row, "spent_minor")?)))
             .collect::<Result<_, StoreError>>()?;
+        let goals_linked_both_sides = sqlx::query(GOALS_LINKED_BOTH_SIDES)
+            .bind(&day)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(|row| parsed(row, "goal"))
+            .collect::<Result<_, _>>()?;
         let category_spent = sqlx::query(CATEGORY_SPENT)
             .bind(&day)
             .bind(&month_start)
@@ -534,6 +575,7 @@ impl Store {
             items,
             settlements,
             goal_spent,
+            goals_linked_both_sides,
             category_spent,
             loose_ends,
             newer_spending,

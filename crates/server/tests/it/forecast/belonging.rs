@@ -373,9 +373,10 @@ async fn a_goal_paid_from_a_529_lowers_the_need() {
     assert_eq!(forecast["status"], "firm");
 }
 
-/// One month from the 15th: December's 2,000.00 and November's, which the fund's payment
-/// doesn't pay, since it left no counted cash: 10,000.00 - 4,000.00. Settled, November's
-/// goes: 10,000.00 - 2,000.00.
+/// One month from the 15th: December's 2,000.00 and November's, which the payment doesn't
+/// pay, since it left no counted cash: 10,000.00 - 4,000.00. Settled, November's goes:
+/// 10,000.00 - 2,000.00. Of class `cash`, with a balance dated after the charge, so that only
+/// whose money it is keeps the payment from the bill.
 #[tokio::test]
 async fn a_bill_paid_from_a_bucket_stays_unpaid_until_settled() {
     let (world, _) = holding().await;
@@ -383,8 +384,9 @@ async fn a_bill_paid_from_a_bucket_stays_unpaid_until_settled() {
     let bill = world
         .item(&outflow("Term", 200_000, tuition, &monthly("2026-01-01")))
         .await;
-    let fund = world.college_fund().await;
-    world.spend(fund, "2026-11-02", 200_000, tuition).await;
+    let held = world.held_savings("Held savings").await;
+    world.balance(held, BALANCE_ON, 500_000).await;
+    world.spend(held, "2026-11-02", 200_000, tuition).await;
 
     let unpaid = world.forecast_at(ONE_MONTH).await;
     assert_eq!(line(&unpaid, "Term")["unpaid"], usd(200_000));
@@ -454,4 +456,270 @@ async fn the_worked_example_is_the_same_beside_held_accounts() {
     assert_eq!(row["cash_needed"], usd(3_014_000));
     assert_eq!(forecast["surplus"], usd(3_836_000));
     assert_eq!(kinds(&forecast, "cautions"), ["bill_not_seen"]);
+}
+
+/// A Checking with no balance yet, a floor of 0, and a goal of 1,000.00 due in the window:
+/// the world, the Checking, the goal's category and its id.
+async fn saving_for_a_goal() -> (World, AccountId, CategoryId, Value) {
+    let world = world().await;
+    let checking = world
+        .account_with("Checking", "checking", "USD", json!({}))
+        .await;
+    world.floor(0).await;
+    let category = world.expense("College").await;
+    let goal = world
+        .item(&outflow(
+            "First year",
+            100_000,
+            category,
+            &goal_schedule("2026-06-01", "2027-01-31"),
+        ))
+        .await;
+    (world, checking, category, goal)
+}
+
+/// The same 500.00 may be linked twice, as the contribution and as the tuition it paid:
+/// nothing is left of the need, so 2,500.00 with no goal to hold. The data can't say whether
+/// that is right, so the number stays and stops being firm.
+#[tokio::test]
+async fn a_goal_linked_on_both_sides_says_so() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world
+        .spend_linked(checking, "2026-11-02", 50_000, category, &goal)
+        .await;
+    world.balance(checking, BALANCE_ON, 250_000).await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(totals(&forecast)["goals"], usd(0));
+    assert_eq!(forecast["surplus"], usd(250_000));
+    assert_eq!(forecast["status"], "provisional");
+    assert_eq!(kinds(&forecast, "cautions"), ["goal_linked_both_sides"]);
+    assert_eq!(
+        caution(&forecast, "goal_linked_both_sides")["goal"],
+        json!({"kind": "planned_item", "id": goal})
+    );
+}
+
+/// The contribution alone: 2,500.00 less the 500.00 the goal still needs.
+#[tokio::test]
+async fn a_goal_linked_to_the_contribution_alone_raises_nothing() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    world.college_fund().await;
+    world
+        .spend_linked(checking, "2026-11-02", 50_000, category, &goal)
+        .await;
+    world.balance(checking, BALANCE_ON, 250_000).await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["surplus"], usd(200_000));
+    assert_eq!(forecast["cautions"], json!([]));
+    assert_eq!(forecast["status"], "firm");
+}
+
+/// The tuition alone: the same 500.00 is still in Checking at 3,000.00, and the goal needs
+/// 500.00 more.
+#[tokio::test]
+async fn a_goal_linked_to_the_tuition_alone_raises_nothing() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["surplus"], usd(250_000));
+    assert_eq!(forecast["cautions"], json!([]));
+    assert_eq!(forecast["status"], "firm");
+}
+
+/// A household account switched out never touched counted cash, so it isn't one of the sides.
+#[tokio::test]
+async fn a_goal_linked_on_an_excluded_account_and_a_held_one_raises_nothing() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    let side = world
+        .account_with(
+            "Side",
+            "checking",
+            "USD",
+            json!({"include_in_forecast": false}),
+        )
+        .await;
+    let fund = world.college_fund().await;
+    world
+        .spend_linked(side, "2026-11-02", 10_000, category, &goal)
+        .await;
+    world
+        .spend_linked(fund, "2026-11-03", 10_000, category, &goal)
+        .await;
+
+    assert_eq!(world.forecast().await["cautions"], json!([]));
+}
+
+/// Linked on counted cash and newer than its balance, it hasn't lowered the need yet, but it
+/// will on the next balance, so it says so already.
+#[tokio::test]
+async fn a_goal_link_newer_than_the_balance_is_a_side_too() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(checking, AS_OF, 50_000, category, &goal)
+        .await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+
+    let forecast = world.forecast().await;
+
+    assert!(
+        kinds(&forecast, "cautions").contains(&"goal_linked_both_sides".to_owned()),
+        "both sides are linked"
+    );
+}
+
+/// A charge the provider took back says nothing about what was spent (R10a), so it is no side.
+#[tokio::test]
+async fn a_removed_charge_is_no_side_of_a_goal() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    let removed = world
+        .spend_linked(checking, "2026-11-02", 50_000, category, &goal)
+        .await;
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE transactions SET flag_source_removed = 1 WHERE id = ?",
+            removed.as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+
+    assert_eq!(world.forecast().await["cautions"], json!([]));
+}
+
+/// Money back on Checking lowers nothing from it, so it is no side.
+#[tokio::test]
+async fn a_refund_is_no_side_of_a_goal() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(checking, "2026-11-02", -5_000, category, &goal)
+        .await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+
+    assert_eq!(world.forecast().await["cautions"], json!([]));
+}
+
+#[tokio::test]
+async fn a_pending_charge_is_no_side_of_a_goal() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+    let pending = world
+        .spend_linked(checking, "2026-11-02", 50_000, category, &goal)
+        .await;
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE transactions SET pending = 1 WHERE id = ?",
+            pending.as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let forecast = world.forecast().await;
+
+    assert!(
+        !kinds(&forecast, "cautions").contains(&"goal_linked_both_sides".to_owned()),
+        "not posted yet"
+    );
+}
+
+/// What the forecast's day hasn't reached yet isn't a side of it.
+#[tokio::test]
+async fn a_charge_after_as_of_is_no_side_of_a_goal() {
+    let (world, checking, category, goal) = saving_for_a_goal().await;
+    let fund = world.college_fund().await;
+    world.balance(checking, BALANCE_ON, 300_000).await;
+    world
+        .spend_linked(fund, "2026-11-03", 50_000, category, &goal)
+        .await;
+    world
+        .spend_linked(checking, "2026-12-01", 50_000, category, &goal)
+        .await;
+
+    assert_eq!(world.forecast().await["cautions"], json!([]));
+}
+
+/// A gift of 1,000.00 expected in the 529, as `include_income` would otherwise count it.
+async fn gift_into_the_fund(world: &World) -> AccountId {
+    let fund = world.college_fund().await;
+    let gifts = world.category("Gifts", "income").await;
+    world
+        .item(&json!({
+            "name": "Gift",
+            "category": gifts,
+            "amount": usd(100_000),
+            "direction": "inflow",
+            "account_hint": fund,
+            "schedule": one_off_on("2026-12-01"),
+        }))
+        .await;
+    fund
+}
+
+/// 10,000.00 and nothing more: the gift isn't the household's to invest.
+#[tokio::test]
+async fn an_inflow_hinted_at_a_held_account_stays_out() {
+    let (world, _) = holding().await;
+    let fund = gift_into_the_fund(&world).await;
+
+    let forecast = world
+        .forecast_at("?horizon_months=1&include_income=true")
+        .await;
+
+    assert_eq!(forecast["surplus"], usd(1_000_000));
+    assert_eq!(totals(&forecast)["planned_inflows"], usd(0));
+    assert_eq!(line(&forecast, "Gift")["counted"], usd(0));
+    assert_eq!(forecast["months"][0]["lines"][0]["inflows"], usd(0));
+    assert_eq!(forecast["status"], "provisional");
+    let said = caution(&forecast, "item_hint_not_counted");
+    assert!(said["account"] == json!(fund), "names the fund");
+    assert_eq!(said["item"]["id"], line(&forecast, "Gift")["source"]["id"]);
+    assert_eq!(said["effect"], "left_out");
+}
+
+/// With income off it is not "income left out": turning income on wouldn't add it. Nothing
+/// about the number depends on it, so it stays firm.
+#[tokio::test]
+async fn an_inflow_hinted_at_a_held_account_is_not_excluded_income() {
+    let (world, _) = holding().await;
+    gift_into_the_fund(&world).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(totals(&forecast)["excluded_inflows"], usd(0));
+    assert_eq!(forecast["surplus"], usd(1_000_000));
+    assert_eq!(forecast["status"], "firm");
 }

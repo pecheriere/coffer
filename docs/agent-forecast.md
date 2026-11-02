@@ -200,6 +200,12 @@ de-duplicates them: a goal for the holiday and a one-off for the flights
 would count the flights twice. Plan an expense as one or the other. The
 forecast raises `goal_one_off_overlap` when it sees the likely case.
 
+**Link the payment or the contribution, never both.** A goal paid from an account
+that isn't the household's, such as tuition from a 529, may have been funded by a
+contribution from checking. Linking both lowers its need twice for the same money, so
+the surplus reads too high. Either link alone is fine. Linking both raises
+`goal_linked_both_sides`, and the number stays `provisional` until one link goes.
+
 **Goal links on splits.** Spending counts against a goal only when the split
 that records it names the goal, with `goal` on the split:
 
@@ -254,7 +260,10 @@ past months too.
 A bill can be paid in a way the forecast never sees: a transfer between accounts,
 or from an account coffer doesn't track. There is then no transaction to
 recategorize, and without this the forecast would keep counting it until the month
-ends. A settlement records that a recurring bill's or a one-off's occurrences in
+ends. The same goes for a bill paid from an account that isn't the household's, even
+when the transaction is there in the right category: that spending left no counted
+cash, so it pays no bill, and recategorizing can't change that. Settle the bill for
+that month. A settlement records that a recurring bill's or a one-off's occurrences in
 one calendar month are `paid`, or `skipped` because they won't happen. It never
 changes the item.
 
@@ -555,13 +564,14 @@ and the fields shown:
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection is not syncing. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
 | `as_of_not_today` (`today`) | The window does not start today. What falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
-| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. If there is no transaction to recategorize, such as a transfer or a payment from an untracked account, or it won't be paid this month, [settle it](#settling-a-month): `PUT /plan-items/{id}/settlements/{month}`. See the limits below. |
+| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. If there is no transaction to recategorize, such as a transfer or a payment from an untracked account, or the transaction is in the right category but on an account that isn't the household's (`not_counted: "not_household"`), or it won't be paid this month, [settle it](#settling-a-month) for that month: `PUT /plan-items/{id}/settlements/{month}`. See the limits below. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
 | `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
-| `item_hint_not_counted` (`item`, `account`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). It counts anyway, since overstating the need is safe. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
+| `goal_linked_both_sides` (`goal`) | One goal has spending linked to it on both counted cash and an account that isn't the household's, such as a contribution from checking and the tuition it paid from a 529. If so, the same money lowers its need twice and the surplus is too high; the data can't tell, so the number stays. A finished goal raises nothing. | Link the payment or the contribution, never both. Ask which one, and remove the other's link. |
+| `item_hint_not_counted` (`item`, `account`, `effect`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). `effect` says what became of it. `still_needed`: an outflow counts anyway, since overstating the need is safe. `left_out`: an inflow into an account that isn't the household's stays out of the number, since it isn't the household's income. `still_income`: an inflow into any other uncounted account still counts, which may overstate what is free. With `include_income` off, an inflow raises nothing. | Fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. |
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. | Categorize it with the [review workflow](agent-usage.md#review-workflow). |
 | `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget or hide an unpaid bill. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
@@ -849,9 +859,7 @@ average covers, ending at its row's month).
   "uncategorized": [
     {"month": "2026-11", "currency": "USD", "count": 1, "total": {"minor_units": 6000, "currency": "USD"}}
   ],
-  "not_the_households": [
-    {"month": "2026-11", "net": {"minor_units": -30000, "currency": "USD"}}
-  ],
+  "not_the_households": [],
   "settled": [
     {
       "month": "2026-11",
@@ -904,11 +912,15 @@ per list.)
   sweep is neither spending nor drowns the list. A transfer, such as a move to
   savings, is not spending either: give it a `transfer` category, or leave it
   uncategorized, where it shows in `uncategorized`, and it stays out of `actual`.
+  Uncategorized outflows on an account that isn't the household's, a held cash
+  account too, are left out of every list.
 - `not_the_households` is categorized money on accounts that aren't the household's,
   per month and currency, net and negative for money out, and only the months
-  reported. It is never in `actual`, so a grant from a donor-advised fund doesn't count
-  again after the contribution that funded it. Flags don't change it, `transfer`
-  categories aren't in it, and a split linked to a goal stays on the goal's line.
+  reported, for example `{"month": "2026-10", "net": {"minor_units": -30000, "currency":
+  "USD"}}` for a 300.00 grant. It is never in `actual`, so a grant from a donor-advised
+  fund doesn't count again after the contribution that funded it. Its `net` can be 0
+  when money went in and out. Flags don't change it, `transfer` categories aren't in
+  it, and a split linked to a goal stays on the goal's line.
 - `rollovers` has a line per category and currency with a budget: what was
   `budgeted` over the reported months up to today's, what they `spent` while a
   budget was running once bills and one-offs dated up to and including today took

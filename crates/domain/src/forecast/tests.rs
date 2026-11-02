@@ -108,6 +108,7 @@ fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
         schedule,
         spending: spending_applies(direction, &schedule).then_some(PlanSpending::Bill),
         goal_spent_minor: 0,
+        goal_linked_both_sides: false,
         settled: BTreeMap::new(),
     }
 }

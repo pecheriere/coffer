@@ -560,6 +560,13 @@ fn not_household_money_is_in_no_other_list() {
         ..input(1)
     });
 
+    assert_eq!(
+        report.not_the_households,
+        [NotHouseholdRow {
+            month: month("2026-01"),
+            net: dollars(-100),
+        }]
+    );
     assert_eq!(report.rows, []);
     assert_eq!(report.goals, []);
     assert_eq!(report.uncategorized, []);
