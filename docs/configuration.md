@@ -291,7 +291,8 @@ turns with it, and reports say `rebuilding` until it ends if the table takes mor
 than one. One rebuild runs at a time, so it first waits for one the server has
 under way, and the server leaves it alone until it ends. If it stops part way, the
 running server's job finishes it. A file named after the database with
-`.rebuild-lock` added says who is running, and it is safe to leave or delete. Opening the database applies this version's migrations, as
+`.rebuild-lock` added says who is running. It stays there, and deleting it is safe only
+while no rebuild runs. Opening the database applies this version's migrations, as
 `backup` does, so run the same version as the server. It never creates a
 database: no database found, or an empty file, is exit code 1. You rarely need
 it: the first start after the upgrade that adds the table rebuilds it in the
