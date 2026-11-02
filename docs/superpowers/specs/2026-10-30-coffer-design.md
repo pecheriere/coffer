@@ -1018,7 +1018,11 @@ display currency needs `all` at `balances` (N8).
 
 **N3. A daily table holds one row per account per day.** It holds the balance used, the
 date and source of its snapshot, the amount in the display currency, that currency, the
-rate date and the state of the conversion. It is derived: `balance_snapshots`, `fx_rates`
+rate date, `rate_leg` and the state of the conversion. `rate_leg` (`held`, `display` or `both`)
+says which currency's rate the rate date, or a missing rate, is about: a cross rate goes through
+the euro and reports the older of its two dates, and a euro account has only the display
+currency's, so a caution names the currency whose rate is old or missing and never the euro.
+It is derived: `balance_snapshots`, `fx_rates`
 and the display currency are the source of truth, and the table can be dropped and rebuilt.
 Names, `include_in_net_worth`, the liquidity class and closing are applied at read, so
 changing them needs no rebuild.

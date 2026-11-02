@@ -19,7 +19,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It also decides the days of net worth: which day a balance's value starts on, when each new day is filled (shortly after midnight in this zone), the day an account closed and what "today" is for a report. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
 | `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
@@ -78,7 +78,14 @@ makes outbound https requests. It connects only to:
   which currency and from which date, and carries no key or credential. The
   name is a CNAME for the ECB's CDN, `data--api-ecb-europa-eu.ax4z.com` on
   2026-11-02, so a firewall that works from DNS answers must allow that too;
-  don't pin its address. A household with one currency contacts nobody.
+  don't pin its address, and re-check the name when you set the rule, since the
+  CDN's can change: `dig +short CNAME data-api.ecb.europa.eu`. A firewall that
+  allow-lists by SNI needs only `data-api.ecb.europa.eu` on port 443. A household
+  with one currency contacts nobody. Nothing breaks while the host isn't allowed:
+  syncs and everything else go on, and rates are tried again every hour. A
+  currency never fetched reports `rate_missing` with the reason `fetch_failing`;
+  one already held is carried forward at its last rate, with `rate_stale` once that
+  is a week old.
 
 Every other destination is refused before a connection is opened. That
 covers what coffer's server connects to. Plaid Link, the login dialog, runs in

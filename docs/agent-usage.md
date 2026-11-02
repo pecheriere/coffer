@@ -357,6 +357,29 @@ number: `surplus` is `null` and `blockers` say why). **Never report a
 `provisional` number without its cautions**, and never report a number for an
 `unavailable` one: say what blocks it and what to do.
 
+### Net worth and exchange rates
+
+What the household is worth, per day, week or month in one display currency,
+with every rate date and every missing rate stated, is in
+[agent-net-worth.md](agent-net-worth.md), with its blockers and cautions and what
+to do about each. In short:
+
+- `GET /api/v1/reports/net-worth` (`read`) answers `status` (`firm`,
+  `provisional` or `unavailable`), `points` with a `total` (`null` when a rate
+  is missing, never a partial sum), `blockers` and `cautions`. **Never report a
+  `provisional` number without its cautions.**
+- `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` show the exchange rates
+  held (units of a currency per euro, from the ECB). They need `all` at
+  `balances`.
+- The display currency is `display_currency` in `PATCH
+  /api/v1/household/settings`: `admin`, and `all` at `balances` for a token with
+  grants. It starts unset, and until it is there is no total.
+- **A token with grants gets the sum of the accounts it sees, and nothing says
+  so.** Check `access.all` in `GET /api/v1/me`: when it is `null`, don't report the
+  sum as the household's net worth.
+- A forecast doesn't convert between currencies; see
+  [agent-forecast.md](agent-forecast.md).
+
 ### Connections and sync
 
 A connection links coffer to a data provider (SimpleFin or Plaid). It reports

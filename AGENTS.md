@@ -12,14 +12,18 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   audit entry types, money, accounts, transactions, matching, sync run
   triggers and statuses, clock; `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
-  behind the cash forecast and plan versus actual). No I/O.
+  behind the cash forecast and plan versus actual; `fx`, exchange rates held
+  exactly and conversion through the euro; `net_worth`, the daily values, the
+  periods and the report). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate. It holds
   planned items and their settlements, the household settings (with the
-  display currency), exchange rates and their coverage, and the one read
-  transaction that
-  gathers a forecast's or a report's data.
+  display currency), exchange rates and their coverage, the daily net worth
+  table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
+  a snapshot, a rate or the display currency changes it in its own transaction,
+  and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
+  transaction that gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
@@ -30,10 +34,15 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
   household forecast `settings`, the `forecast` and its what-if, the
-  `plan_report`, transactions and their splits, merging, un-merging and
-  dismissing possible duplicates; `unseen.rs` holds what a token with grants
+  `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
+  what the actor sees at `balances`, and hands it to the domain's report),
+  transactions and their splits, merging, un-merging and dismissing possible duplicates; `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates in accounts it
-  can't read and goal links it can't see); `egress` (the one outbound
+  can't read and goal links it can't see); `fx` (the `RateProvider` interface,
+  the ECB's data API over `egress`, and the two jobs `serve` starts: fetching the
+  rates a household needs and filling the daily table forward); `tasks`
+  (supervision shared by the sync scheduler and these jobs: a panic is logged and the task restarts);
+  `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
@@ -113,7 +122,10 @@ worktree when its branch has merged.
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
-- Every mutation goes through a `StoreTx` together with its audit entry.
+- Every mutation goes through a `StoreTx` together with its audit entry. The one
+  exception is exchange rates and the daily net worth rows (spec §8.10 N10): public
+  reference data and derived values, written in the transaction of whatever changes
+  them. What changes them is audited.
 - Every handler authorizes through `coffer_domain::policy`: `authorize` for
   household actions, `authorize_account` for anything tied to an account,
   `authorize_every_account` for what spans every account (the rule table in

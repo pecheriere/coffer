@@ -129,7 +129,7 @@ pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
         Blocker::MixedCurrencies { currencies } => {
             let codes: Vec<&str> = currencies.iter().map(Currency::as_str).collect();
             format!(
-                "The household uses {}. coffer doesn't convert between currencies yet, so there \
+                "The household uses {}. A forecast doesn't convert between currencies, so there \
                  is no single total. Any sums below are per currency, and are never added \
                  together.",
                 listed(&codes)

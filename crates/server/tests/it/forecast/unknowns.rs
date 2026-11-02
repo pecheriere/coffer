@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::accounts::AccountKind;
+use coffer_domain::fx::{FxSource, RateObservation};
 use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId};
+use coffer_domain::money::Currency;
 use coffer_domain::sync::SyncTrigger;
 use coffer_domain::time::Clock as _;
 use coffer_server::sync::apply::Coverage;
@@ -359,6 +361,41 @@ async fn mixed_currencies_answer_200_without_a_surplus() {
     let row = |currency: &str| rows.iter().find(|row| row["currency"] == currency).unwrap();
     assert_eq!(row("EUR")["surplus"]["minor_units"], 2_000, "own number");
     assert_eq!(row("USD")["surplus"]["minor_units"], 900, "after its floor");
+}
+
+/// A forecast doesn't convert (spec §8.10 N1): a rate can't lift the blocker. It passes
+/// at once by design, and fails only if someone wires exchange rates into the forecast.
+#[tokio::test]
+async fn rates_don_t_lift_the_mixed_currencies_blocker() {
+    let world = world().await;
+    world.funded("Checking", 1_000).await;
+    let euros = world
+        .account_with("Euros", "checking", "EUR", json!({}))
+        .await;
+    world.balance(euros, super::BALANCE_ON, 2_000).await;
+    world.floor(100).await;
+    let before = world.forecast().await;
+
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.upsert_fx_rates(
+        Currency::parse("USD").unwrap(),
+        FxSource::Ecb,
+        &[RateObservation {
+            on: "2026-11-13".parse().unwrap(),
+            rate: "1.1".parse().unwrap(),
+        }],
+        world.server.clock.now(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    world.settings(&json!({"display_currency": "USD"})).await;
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["status"], "unavailable");
+    assert_eq!(forecast["surplus"], Value::Null);
+    assert_eq!(kinds(&forecast, "blockers"), ["mixed_currencies"]);
+    assert_eq!(forecast["totals"], before["totals"], "each currency's own");
 }
 
 #[tokio::test]
