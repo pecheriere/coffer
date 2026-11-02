@@ -548,7 +548,7 @@ async fn a_bucket_in_another_currency_converts() {
     let fx = FxService::new(
         world.server.store.clone(),
         world.server.clock.clone(),
-        world.server.config.timezone.clone(),
+        world.server.config.default_timezone.clone(),
         Some(Arc::new(OneRate) as Arc<dyn RateProvider>),
     );
 

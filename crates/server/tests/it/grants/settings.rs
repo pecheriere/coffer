@@ -26,6 +26,8 @@ fn settings_with(floor: &Value) -> Value {
         "default_horizon_months": 6,
         "stale_after_days": 7,
         "display_currency": null,
+        "timezone": "UTC",
+        "timezone_setting": null,
     })
 }
 

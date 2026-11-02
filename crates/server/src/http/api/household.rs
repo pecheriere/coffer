@@ -18,8 +18,11 @@ use crate::ledger::settings::{ForecastSettingsPatch, HouseholdSettings};
     tag = tags::HOUSEHOLD,
     description = "The settings: the safety floor (`null` until one is set, and a forecast has \
                    no number without it), whether planned income counts, the default horizon, \
-                   when a balance counts as stale, and the display currency net worth is shown \
-                   in (`null` until an admin sets it: it is never guessed). Needs `read`. A \
+                   when a balance counts as stale, the display currency net worth is shown \
+                   in (`null` until an admin sets it: it is never guessed), and the time zone \
+                   that decides which day is today (`timezone`, always a name) with what an \
+                   admin chose (`timezone_setting`, `null` while the server's default applies). \
+                   Needs `read`. A \
                    token with account grants below `all` at `transactions` reads `floor` as \
                    `null`, the same as none set: a floor is a figure of the whole household's \
                    plan, and that is the access a forecast needs. The other settings read the \
@@ -48,8 +51,13 @@ pub(super) async fn get(
                    currency can be replaced but never unset: `floor: null` or \
                    `display_currency: null` leaves it. A patch that changes nothing writes \
                    nothing. A new display currency recomputes all net worth history before this \
-                   answers, and is audited with the old and new codes. A number out of range is \
-                   422; one outside the field's type (such as 300 months) or an unknown currency \
+                   answers, and is audited with the old and new codes. `timezone` takes an IANA \
+                   name, and alone among these `null` clears it, returning to the server's \
+                   default. A new zone applies at once, is audited with the old and new names, \
+                   and rewrites no day already recorded: only new days use it. If it makes today \
+                   earlier than the net worth table's last day, the table is rebuilt to end today \
+                   before this answers. A name that isn't a zone is 422, and so is a number out \
+                   of range; one outside the field's type (such as 300 months) or an unknown currency \
                    code is 400. Needs `admin`, whatever the token's account grants, but the \
                    answer shows `floor` only as `getHouseholdSettings` would to that token. A \
                    patch naming `display_currency`, whatever it names, also needs `all` at \

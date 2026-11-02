@@ -692,16 +692,45 @@ rounded: a record that does not convert exactly is unusable.
 
 ### 8.7 Household timezone
 
-Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
-default `UTC`). It stays an environment variable, and household settings do not
-take it over (§8.9, R7). The forecast's "today" is the household's day in this
-zone.
+The household has one time zone, an IANA name. An admin chooses it in the household
+settings (the page and `PATCH /api/v1/household/settings`, audited); until then, and
+after they clear it, `COFFER_TIMEZONE` (default `UTC`) applies. Anything else is
+refused, by the copy of the time zone database built into the binary, so what counts
+as a name doesn't depend on the machine.
+
+Provider timestamps become calendar days in this zone, and every "today" and current
+month is the household's day in it: the forecast, the plan report, net worth, sync
+windows, settlements, the daily jobs, page times and `coffer rebuild-net-worth`. Each
+reads the zone at the time it asks, from the database, and nothing keeps it: a change
+applies to the next request and the next job with no restart.
+
+**A change moves nothing already stored.** A transaction's day, a balance snapshot and
+a kept balance were right when they were recorded, and rewriting them could move money
+between months. Only new days use the new zone. So that a provider's next report can't
+undo this, a source record remembers the chosen zone its day was worked out in
+(`dated_in`; none means `COFFER_TIMEZONE`, as for every record from before this
+setting). A record dated by an instant, reported again, keeps its day unless that
+instant falls on another day in that same zone, which means the provider moved it; only
+then does it take the zone now in force. A balance reported with the amount of the
+latest one, on an earlier day, is what the same report looks like once the zone moved
+back, and writes nothing: it would replace what that day really ended on.
+
+**The daily table.** A change that leaves today on or after the table's last day needs
+nothing, as the table is right as far as it goes, and the job adds any new day within a
+minute, as at midnight. A change that puts today before the last day would leave a row
+for a day still to come, so the table is rebuilt to end today in the change's own
+transaction (§8.10 N3 explains what a rebuild holds), and the later days return one at
+a time as they arrive, from the same snapshots: no gap, no day twice. The job and the
+command read the zone under the write lock, so neither can write a day from the zone
+before. A `COFFER_TIMEZONE` changed at a restart is not a setting and has no such step;
+`coffer rebuild-net-worth` resets a table left ahead, and reports never answer past
+today in any case.
 
 ### 8.8 Deferred
 
 Rules (a §2 goal), transfer links, a starter category set and unbinding a
 provider account move to a later plan (FX: §8.10), as does MCP (§6.12). Household settings
-arrive in plan 3, without the time zone (§8.7, §8.9).
+arrive in plan 3, the time zone later (§8.7).
 
 ### 8.9 Plan and forecast
 
@@ -792,7 +821,8 @@ integer type answers 400, as on the forecast.
 
 **R7. The time zone stays an environment variable** (§8.7). Everything reads one
 zone, and changing it at runtime would raise what happens to days already
-assigned, which is a separate question.
+assigned, which is a separate question. A later change settled that question and moved
+it into the household settings, with the variable as the default: §8.7 governs.
 
 **R8. Goal links on splits.** `SplitInput` gains an optional `goal`, whose
 currency must equal the transaction's, so goal arithmetic stays exact without

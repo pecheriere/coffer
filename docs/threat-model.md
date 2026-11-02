@@ -324,8 +324,8 @@
   the figures from a stored copy. `/net-worth` also shows the buckets a member can see.
   The count stays at two: `/connections` holds no such figures, but its bind forms now
   hold a beneficiary label, so it stays in that table with its rejections withheld, as
-  the accepted risks below describe. `/admin/household` gains one form, for the
-  display currency: admins only (checked before the form is read), the
+  the accepted risks below describe. `/admin/household` gains two forms, for the
+  display currency and the time zone: admins only (checked before the form is read), the
   anti-forgery token and the `Origin` rule like every page form, and the same
   service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries
@@ -627,6 +627,12 @@
   nothing in the answer contradicts it. The docs say so first and tell an agent to
   check `access.all` in `GET /api/v1/me` and not to report such a sum as the
   household's. Marking it would reveal that other accounts exist.
+- **A change of time zone can hold the write lock while it rebuilds,** only when it
+  puts today before the table's last day (spec §8.7), and only an admin can make one,
+  as with the display currency below. It takes `admin` whatever the token's account
+  grants: it shows no amount and says nothing of what is hidden, though it decides the
+  day of new records on accounts the token can't see. The name is checked against the
+  copy of the database in the binary before anything looks for a file by it.
 - **A display currency change holds the write lock while it rebuilds, and a
   back-dated balance adds history for good.** A manual balance may be dated as far
   back as 1970, and the daily values then hold a row for every day since for that

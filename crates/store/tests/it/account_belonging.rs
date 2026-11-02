@@ -156,10 +156,19 @@ fn every_migration() -> Migrator {
 }
 
 fn before_belonging() -> Migrator {
+    migrations_before(22)
+}
+
+/// This migration and those before it, without what later ones add.
+fn through_belonging() -> Migrator {
+    migrations_before(23)
+}
+
+fn migrations_before(version: i64) -> Migrator {
     let mut upto = every_migration();
     upto.migrations = Cow::Owned(
         upto.iter()
-            .filter(|migration| migration.version < 22)
+            .filter(|migration| migration.version < version)
             .cloned()
             .collect(),
     );
@@ -375,7 +384,7 @@ async fn migration_keeps_the_shape_of_the_schema() {
     let foreign = strings(&pool, keys).await;
     let found = strings(&pool, indexes).await;
 
-    every_migration().run(&pool).await.unwrap();
+    through_belonging().run(&pool).await.unwrap();
 
     assert_eq!(strings(&pool, schema).await, others);
     assert_eq!(strings(&pool, &columns("provider_accounts")).await, fed);

@@ -35,7 +35,7 @@ impl World {
         self.server
             .clock
             .now()
-            .to_zoned(self.server.config.timezone.clone())
+            .to_zoned(self.server.config.default_timezone.clone())
             .date()
     }
 
@@ -163,6 +163,45 @@ async fn two_syncs_in_a_day_keep_the_last() {
     assert_eq!(
         world.kept(world.connection).await,
         [(world.day(1).to_string(), 1550)]
+    );
+}
+
+/// What a report of the same moment looks like after the household's zone moved back: the
+/// same amount a day earlier. The day before keeps what it ended on.
+#[tokio::test]
+async fn the_latest_amount_on_an_earlier_day_is_not_kept() {
+    let world = world().await;
+    world.report(1, "10.00", "USD").await;
+    world.report(0, "20.00", "USD").await;
+
+    world.report(1, "20.00", "USD").await;
+
+    assert_eq!(
+        world.kept(world.connection).await,
+        [
+            (world.day(1).to_string(), 1000),
+            (world.today().to_string(), 2000),
+        ]
+    );
+}
+
+/// The same on a bound account, whose snapshots stay as they are.
+#[tokio::test]
+async fn the_latest_amount_on_an_earlier_day_writes_no_snapshot() {
+    let world = world().await;
+    world.report(1, "10.00", "USD").await;
+    let target = world.account("Checking", "USD").await;
+    world.bind_feed(target).await;
+    world.report(0, "20.00", "USD").await;
+
+    world.report(1, "20.00", "USD").await;
+
+    assert_eq!(
+        world.history(target).await,
+        [
+            (world.today().to_string(), 2000, "sync".to_owned()),
+            (world.day(1).to_string(), 1000, "sync".to_owned()),
+        ]
     );
 }
 

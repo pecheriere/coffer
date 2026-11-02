@@ -203,7 +203,7 @@ impl Ledger {
         options: ForecastOptions,
         hypothetical: Vec<ItemInput>,
     ) -> Result<Forecast, LedgerError> {
-        let today = self.today();
+        let today = self.today().await?;
         let as_of = options.as_of.unwrap_or(today);
         validate_as_of(as_of).map_err(plan_items::invalid)?;
         let data = self

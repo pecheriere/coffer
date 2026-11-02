@@ -51,6 +51,7 @@ pub use forecast::{
     CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
     PlanReportData,
 };
+pub use household::HouseholdSettingsRecord;
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use kept_balances::{BroughtIn, KeptBalance};

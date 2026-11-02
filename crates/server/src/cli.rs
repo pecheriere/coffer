@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use coffer_domain::identity::Username;
-use coffer_domain::time::{Clock as _, SystemClock};
+use coffer_domain::time::SystemClock;
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -23,6 +23,7 @@ use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
 use crate::fx::{self, FxService, rate_provider};
+use crate::household_time::HouseholdTime;
 use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
 use crate::ledger::Ledger;
@@ -258,10 +259,15 @@ async fn execute(
         }
         ConfiguredCommand::RebuildNetWorth => {
             let store = open_existing_store(&config).await?;
-            let today = SystemClock.now().to_zoned(config.timezone).date();
+            let time = HouseholdTime::new(
+                store.clone(),
+                Arc::new(SystemClock),
+                config.default_timezone,
+            );
             // One transaction, under the write lock like any writer's: other
             // writes wait for it, and it holds what they committed before it.
             let mut tx = store.begin().await?;
+            let today = time.today_seen_by(&mut tx).await?;
             let rows = tx.rebuild_net_worth(today).await?;
             tx.commit().await?;
             writeln!(out, "net worth rebuilt: {rows} rows, through {today}")?;
@@ -365,7 +371,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         store.clone(),
         clock.clone(),
         Arc::clone(&access),
-        config.timezone.clone(),
+        config.default_timezone.clone(),
         config.fx_provider,
     ));
     let egress = Egress::from_config(&config)?;
@@ -381,7 +387,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
     let fx = Arc::new(FxService::new(
         store.clone(),
         clock.clone(),
-        config.timezone.clone(),
+        config.default_timezone.clone(),
         rate_provider(&config, &egress)?,
     ));
     Ok(AppState {

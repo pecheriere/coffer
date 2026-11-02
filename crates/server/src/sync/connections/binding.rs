@@ -86,10 +86,11 @@ impl SyncService {
         authorize(actor, Action::ManageConnections)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
+        let today = self.time.today_seen_by(&mut tx).await?;
         let (view, _) = bind_in(
             &mut tx,
             now,
-            self.today(),
+            today,
             actor,
             &access,
             provider_account,
@@ -194,10 +195,11 @@ impl SyncService {
         })?;
         let (record, _) = Ledger::insert_account(&mut tx, now, actor, valid).await?;
         authorize_account(actor, &access, record.id, AccountLevel::Write)?;
+        let today = self.time.today_seen_by(&mut tx).await?;
         let (bound, balance) = bind_in(
             &mut tx,
             now,
-            self.today(),
+            today,
             actor,
             &access,
             provider_account,

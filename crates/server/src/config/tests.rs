@@ -241,9 +241,12 @@ fn with_var(var: &str, value: &str) -> Result<Config, ConfigError> {
 #[test]
 fn timezone_defaults_to_utc_and_reads_iana_names() {
     let config = with_public_url("https://coffer.example").unwrap();
-    assert_eq!(config.timezone, TimeZone::UTC);
+    assert_eq!(config.default_timezone, TimeZone::UTC);
     let config = with_var("COFFER_TIMEZONE", "Pacific/Auckland").unwrap();
-    assert_eq!(config.timezone.iana_name(), Some("Pacific/Auckland"));
+    assert_eq!(
+        config.default_timezone.iana_name(),
+        Some("Pacific/Auckland")
+    );
     assert!(format!("{config:?}").contains("Pacific/Auckland"));
     for bad in ["", "Not/AZone", "../../etc/passwd", "UTC+25"] {
         let err = with_var("COFFER_TIMEZONE", bad).unwrap_err();

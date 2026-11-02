@@ -111,7 +111,7 @@ impl Ledger {
         kind: SettlementKind,
     ) -> Result<SettlementView, LedgerError> {
         self.authorize_plan_write(actor).await?;
-        validate_settlement_month(month, self.today()).map_err(invalid)?;
+        validate_settlement_month(month, self.today().await?).map_err(invalid)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let item = tx.get_planned_item(id).await?;

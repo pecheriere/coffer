@@ -36,6 +36,7 @@ use super::connections::plaid_budget::PlaidBudget;
 use super::provider::ProviderRegistry;
 use crate::auth::AccessResolver;
 use crate::config::Config;
+use crate::household_time::HouseholdTime;
 use crate::ledger::transactions::AttributionView;
 use crate::vault::CredentialVault;
 
@@ -108,6 +109,8 @@ pub struct SyncService {
     /// The only source of account access.
     pub(super) access: Arc<AccessResolver>,
     pub(super) config: Config,
+    /// The household's zone and day.
+    pub(super) time: HouseholdTime,
     /// See [`FETCH_DEADLINE`].
     pub(super) fetch_deadline: Duration,
     /// Wakes the scheduler's worker when a run is queued.
@@ -141,6 +144,11 @@ impl SyncService {
         config: Config,
     ) -> Self {
         Self {
+            time: HouseholdTime::new(
+                store.clone(),
+                Arc::clone(&clock),
+                config.default_timezone.clone(),
+            ),
             store,
             clock,
             vault,
@@ -270,8 +278,10 @@ impl SyncService {
             .iter()
             .map(|account| (account.last_seen_at, account.last_applied_at))
             .collect();
-        let today = self.today();
-        match self.fetch(&connection, &accounts, today).await {
+        // One zone for the whole run: its window, its records and its balance's day.
+        let zone = self.time.zone().await?;
+        let today = self.time.today_in(&zone);
+        match self.fetch(&connection, &accounts, &zone, today).await {
             Ok((result, mode)) => {
                 self.apply(run, &connection, result, mode, today, started_at)
                     .await
@@ -281,14 +291,6 @@ impl SyncService {
                     .await
             }
         }
-    }
-
-    /// The household's current day.
-    pub(super) fn today(&self) -> Date {
-        self.clock
-            .now()
-            .to_zoned(self.config.timezone.clone())
-            .date()
     }
 }
 
@@ -353,10 +355,18 @@ pub(super) async fn record_balance(
 ) -> Result<(), SyncError> {
     let on = balance.on.min(today);
     if let Some(account) = account {
+        let latest = tx.latest_balance(account).await?;
+        if latest.is_some_and(|latest| repeats(&balance, on, latest.on, latest.balance_minor)) {
+            return Ok(());
+        }
         return write_balance(tx, now, account, on, balance.balance_minor).await;
     }
     if on < oldest_kept_day(today) {
         tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
+        return Ok(());
+    }
+    let latest = tx.latest_kept_balance(provider_account).await?;
+    if latest.is_some_and(|(day, minor)| repeats(&balance, on, day, minor)) {
         return Ok(());
     }
     tx.keep_balance(KeptBalance {
@@ -368,6 +378,14 @@ pub(super) async fn record_balance(
     })
     .await?;
     Ok(())
+}
+
+/// Whether `balance`, on `on`, says only what the latest stored balance says, from an
+/// earlier day. It tells nothing new. It is what a report of the same moment looks like
+/// after the household's zone moved back (spec §8.7), and written it would replace the
+/// balance that day really ended on.
+fn repeats(balance: &ReportedBalance, on: Date, latest_on: Date, latest_minor: i64) -> bool {
+    on < latest_on && balance.balance_minor == latest_minor
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes

@@ -138,11 +138,16 @@ async fn render(
     let csrf = &viewer.csrf;
     let plaid_offered = state.config.plaid.is_some();
     let forgettable = state.sync.forgettable(&actor).await.map_err(page_error)?;
+    let timezone = state
+        .ledger
+        .timezone()
+        .await
+        .map_err(|err| PageError(err.into()))?;
     let shared = Shared {
         forgettable: &forgettable,
         accounts: &account_views,
         binding: &binding,
-        timezone: &state.config.timezone,
+        timezone: &timezone,
         csrf,
         can_manage,
         plaid_offered,

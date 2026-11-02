@@ -13,7 +13,7 @@ use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo
 use coffer_domain::identity::{Actor, Role, Username, Via};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
-use coffer_domain::time::{Clock as _, SystemClock};
+use coffer_domain::time::{Clock as _, IanaZone, SystemClock};
 use coffer_server::cli;
 use coffer_server::testkit::{TestServer, capture_logs, captured_log_text};
 use coffer_store::{BalanceSnapshot, NewAccount, Store};
@@ -419,6 +419,37 @@ async fn rebuild_net_worth_uses_the_household_s_day() {
         .unwrap();
 
     assert!(west < east, "{west} is not before {east}");
+}
+
+/// The command is a process of its own, so it finds the chosen zone in the database.
+#[tokio::test]
+async fn rebuild_net_worth_uses_the_zone_chosen_in_the_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = env(&dir);
+    let (store, _account, _first) = populated_database(&dir).await;
+    env.insert("COFFER_TIMEZONE", "Pacific/Kiritimati".to_owned());
+    let filled = async |store: &Store, env| {
+        assert_eq!(
+            run(&["rebuild-net-worth"], env).await.code,
+            ExitCode::SUCCESS
+        );
+        store
+            .net_worth_state()
+            .await
+            .unwrap()
+            .filled_through
+            .unwrap()
+    };
+    let east = filled(&store, &env).await;
+
+    let west = IanaZone::parse("Pacific/Pago_Pago").unwrap();
+    let mut tx = store.begin().await.unwrap();
+    tx.set_household_zone(Some(&west), date(2099, 1, 1))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(filled(&store, &env).await < east);
 }
 
 #[tokio::test]

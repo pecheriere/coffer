@@ -212,8 +212,9 @@ impl StoreTx {
     }
 
     /// Add the rows of `(filled_through, through]` and move `filled_through` to
-    /// `through`. It never moves back, so a changed time zone can't lose a day,
-    /// and while a rebuild is needed it does nothing. Answers the rows written.
+    /// `through`. It never moves back, so a `COFFER_TIMEZONE` changed at a restart
+    /// can't lose a day, and while a rebuild is needed it does nothing. Answers the
+    /// rows written.
     ///
     /// # Errors
     ///
@@ -332,6 +333,26 @@ impl StoreTx {
             .filter(|one| (one.currency == currency) != (currency == display))
             .collect();
         write_rows(&mut self.tx, &holdings, from, filled).await?;
+        Ok(())
+    }
+
+    /// The household's zone changed, and its day is now `today`. A table ending on
+    /// or before that is right, and the daily job fills any day it lacks. One past it
+    /// holds a day still to come, so it is rebuilt to end today, in this transaction;
+    /// the days after come back one at a time as they arrive, from the same snapshots,
+    /// so there is no gap and no day twice. A table waiting for a rebuild gets it from
+    /// the job, in whatever zone applies by then.
+    pub(crate) async fn refresh_after_zone_change(
+        &mut self,
+        today: Date,
+    ) -> Result<(), StoreError> {
+        if self
+            .current_through()
+            .await?
+            .is_some_and(|filled| filled > today)
+        {
+            self.rebuild_net_worth(today).await?;
+        }
         Ok(())
     }
 

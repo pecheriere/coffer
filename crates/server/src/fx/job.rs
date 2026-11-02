@@ -22,6 +22,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use super::{RateError, RateProvider};
+use crate::household_time::HouseholdTime;
 use crate::tasks::{Backoff, pause, stopped, supervise};
 
 /// How often each task looks for something to do.
@@ -146,8 +147,8 @@ fn not_stored(currency: Currency, err: StoreError) -> StoreError {
 pub struct FxService {
     store: Store,
     clock: Arc<dyn Clock>,
-    /// The household's zone, which decides what day it is.
-    timezone: TimeZone,
+    /// The household's zone and day.
+    time: HouseholdTime,
     provider: Option<Arc<dyn RateProvider>>,
     tick: Duration,
     /// The household's day it was last said that the table runs ahead of it.
@@ -170,9 +171,9 @@ impl FxService {
         provider: Option<Arc<dyn RateProvider>>,
     ) -> Self {
         Self {
+            time: HouseholdTime::new(store.clone(), Arc::clone(&clock), timezone),
             store,
             clock,
-            timezone,
             provider,
             tick: TICK,
             ahead_said_on: Mutex::new(None),
@@ -194,11 +195,6 @@ impl FxService {
         self.provider.as_ref().map(|provider| provider.source())
     }
 
-    /// The household's day.
-    fn today(&self) -> Date {
-        self.clock.now().to_zoned(self.timezone.clone()).date()
-    }
-
     /// Asks for each currency that is due, one at a time, and answers how many
     /// were asked for. The attempt commits before the call, so a store that
     /// can't write means no request, and a crash during one or an answer that
@@ -218,7 +214,7 @@ impl FxService {
         let display = self.store.display_currency().await?;
         let coverage = self.store.fx_coverage().await?;
         let wanted = needed(&accounts, display);
-        let today = self.today();
+        let today = self.time.today().await?;
         let mut asked = 0;
         let mut failure = None;
         for currency in due(self.clock.now(), &wanted, &coverage) {
@@ -305,7 +301,7 @@ impl FxService {
     ///
     /// Backend failures, including a stored row that no longer parses.
     pub async fn keep_table_current(&self) -> Result<(), StoreError> {
-        let today = self.today();
+        let today = self.time.today().await?;
         let state = self.store.net_worth_state().await?;
         if let (false, Some(filled)) = (state.rebuild_needed, state.filled_through)
             && filled >= today
@@ -315,7 +311,8 @@ impl FxService {
         }
         let mut tx = self.store.begin().await?;
         // Asked again under the write lock: `coffer rebuild-net-worth` may have
-        // got there first.
+        // got there first, and a change of zone may have moved today back.
+        let today = self.time.today_seen_by(&mut tx).await?;
         if tx.net_worth_state().await?.rebuild_needed {
             let rows = tx.rebuild_net_worth(today).await?;
             tx.commit().await?;
@@ -330,8 +327,9 @@ impl FxService {
 
 impl FxService {
     /// Says, at most once a day, that the table's last day is more than a day
-    /// past today. A changed time zone can do one day; more is a clock that ran
-    /// ahead, which nothing here undoes, since a fill never moves back.
+    /// past today. A `COFFER_TIMEZONE` changed at a restart can do one day; more is
+    /// a clock that ran ahead, which nothing here undoes, since a fill never moves
+    /// back. A zone chosen in the settings leaves no such table.
     fn say_if_far_ahead(&self, filled: Date, today: Date) {
         if today.tomorrow().is_ok_and(|tomorrow| filled <= tomorrow) {
             return;

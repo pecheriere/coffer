@@ -355,7 +355,7 @@ the token's grants) hold the forecast's defaults:
 - `default_horizon_months` (1 to 60, default 3) and `stale_after_days` (1 to
   365, default 7: how old a balance may be before the forecast flags it).
 
-A `PATCH` takes any of the four; a field left out stays. A floor can be
+A `PATCH` takes any of these; a field left out stays. A floor can be
 replaced but never unset (`floor: null` leaves it), and a patch that changes
 nothing writes nothing. A value out of range is a 422, one outside its type
 (300 months) a 400. A change is audited as `household.settings`.
@@ -365,8 +365,12 @@ answer), the same as none set: a fixed floor's currency could show money the
 token isn't granted. Do not conclude from `null` that the household has no
 floor; the forecast will say.
 
-The time zone is not a setting. The server's `COFFER_TIMEZONE` decides which
-day "today" is, which is `as_of`'s default and which month is the current one.
+`timezone` is the IANA name of the zone that decides which day "today" is, which is
+`as_of`'s default and which month is the current one. `timezone_setting` is what an
+admin chose, or `null` while the server's `COFFER_TIMEZONE` applies. A `PATCH` with a
+name chooses it, and `timezone: null` clears it: it is the one setting `null` clears. A
+name that isn't an IANA zone is a 422. A change applies to the next request, and
+days already recorded stay as they are: only new days use the new zone.
 
 ## Forecast
 

@@ -486,7 +486,8 @@ async fn an_admin_token_with_grants_gets_the_setting_not_the_sum() {
     assert_eq!(
         parsed(&answers[0].1),
         json!({"floor": null, "include_income": false, "default_horizon_months": 3,
-               "stale_after_days": 7, "display_currency": "CHF"})
+               "stale_after_days": 7, "display_currency": "CHF",
+               "timezone": "UTC", "timezone_setting": null})
     );
 }
 

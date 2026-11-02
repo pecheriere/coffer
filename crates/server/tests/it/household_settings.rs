@@ -138,7 +138,8 @@ async fn unset_settings_read_as_defaults() {
     assert_eq!(
         settings,
         json!({"floor": null, "include_income": false,
-               "default_horizon_months": 3, "stale_after_days": 7, "display_currency": null}),
+               "default_horizon_months": 3, "stale_after_days": 7, "display_currency": null,
+               "timezone": "UTC", "timezone_setting": null}),
         "no row reads as the defaults, with the floor present and null"
     );
 }
@@ -160,7 +161,8 @@ async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
     assert_eq!(status, StatusCode::OK, "an admin token may change settings");
     let expected = json!({"floor": fixed(500_000), "include_income": true,
                           "default_horizon_months": 6, "stale_after_days": 14,
-                          "display_currency": null});
+                          "display_currency": null,
+                          "timezone": "UTC", "timezone_setting": null});
     assert_eq!(
         answer, expected,
         "the answer is the settings as they now are"
@@ -305,7 +307,7 @@ async fn invalid_values_are_422() {
     }
     for body in [
         json!({"floor": {"kind": "percent", "months": 3}}),
-        json!({"timezone": "UTC"}),
+        json!({"time_zone": "UTC"}),
     ] {
         let (status, _) = patch(&world.server, &admin, body).await;
         assert_eq!(

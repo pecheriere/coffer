@@ -98,6 +98,7 @@ async fn a_store_failure_is_no_removal_in_a_one_by_one_apply() {
         memo: None,
         pending: false,
         replaces_provider_id: None,
+        dating: None,
     };
 
     for transactions in [vec![one], Vec::new()] {

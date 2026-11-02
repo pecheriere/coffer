@@ -2,9 +2,13 @@
 
 use super::{World, fetched, provider_account, txn, world, world_on};
 use coffer_domain::sync::SyncRunStatus;
+use coffer_server::ledger::settings::ForecastSettingsPatch;
+use coffer_server::ledger::transactions::Patch;
+use coffer_server::testkit::browser::Browser;
 use coffer_server::testkit::{INJECTED_FAILURE_RECORD_ID, TestServer};
 use jiff::civil::date;
 use jiff::{SignedDuration, Span, Timestamp};
+use secrecy::ExposeSecret as _;
 
 #[tokio::test]
 async fn first_window_is_max_then_overlap() {
@@ -42,7 +46,7 @@ async fn first_window_is_max_then_overlap() {
         "the first run asks for the provider's maximum window"
     );
     let success_day = first_success
-        .to_zoned(world.server.config.timezone.clone())
+        .to_zoned(world.server.config.default_timezone.clone())
         .date();
     assert_eq!(
         requests[1].window_start,
@@ -137,6 +141,65 @@ async fn fetch_request_carries_household_today() {
     let requests = world.fake.requests();
     assert_eq!(requests[0].today, date(2026, 11, 1));
     assert_eq!(requests[0].timezone, "Pacific/Auckland");
+}
+
+/// A change of the household's zone reaches the next run, with no restart, and the times
+/// on the connections page with it.
+#[tokio::test]
+async fn a_new_zone_reaches_the_next_run_and_the_page() {
+    let mut server = TestServer::with_env(&[("COFFER_TIMEZONE", "Pacific/Auckland")]).await;
+    let fake = server.use_fake_provider();
+    let world = world_on(server, fake).await;
+    world
+        .server
+        .clock
+        .set("2026-10-31T12:00:00Z".parse::<Timestamp>().unwrap());
+    let session = world
+        .server
+        .sessions
+        .create(world.alice.member)
+        .await
+        .unwrap();
+    let mut browser = Browser::new(&world.server);
+    browser.cookie = Some(session.expose_secret().to_owned());
+    world.fake.push(Ok(fetched(Vec::new())));
+    world.sync().await;
+    assert!(
+        browser
+            .get("/connections")
+            .await
+            .body
+            .contains("2026-11-01 01:00"),
+        "in Auckland"
+    );
+
+    world
+        .server
+        .ledger
+        .update_forecast_settings(
+            &world.alice,
+            ForecastSettingsPatch {
+                timezone: Patch::Set("America/Los_Angeles".to_owned()),
+                ..ForecastSettingsPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    world.fake.push(Ok(fetched(Vec::new())));
+    world.sync().await;
+
+    let requests = world.fake.requests();
+    assert_eq!(requests[0].today, date(2026, 11, 1));
+    assert_eq!(requests[1].today, date(2026, 10, 31));
+    assert_eq!(requests[1].timezone, "America/Los_Angeles");
+    assert!(
+        browser
+            .get("/connections")
+            .await
+            .body
+            .contains("2026-10-31 05:00"),
+        "in Los Angeles"
+    );
 }
 
 /// A provider asked for a window has no cursor to hold, so an account that

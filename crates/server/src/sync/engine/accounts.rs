@@ -445,7 +445,14 @@ impl SyncService {
         let Converted {
             transactions,
             unusable,
-        } = convert(data.transactions, data.unusable, currency, today);
+        } = convert(
+            data.transactions,
+            data.unusable,
+            currency,
+            today,
+            &self.time,
+            tx.household_zone().await?.as_ref(),
+        );
         let (balance, note) = readable_balance(data.balance, currency);
         if record.error != note {
             tx.set_provider_account_error(record.id, note).await?;
