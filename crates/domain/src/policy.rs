@@ -26,6 +26,7 @@
 //! | Read plan versus actual                  | `Transactions`                |
 //! | Read the safety floor                    | `Transactions`                |
 //! | Create, change or delete a planned item  | `Write`                       |
+//! | Read FX rates and coverage               | `Balances`                    |
 //!
 //! The safety floor is not refused without it: the settings answer with `floor: null`.
 //!
@@ -40,6 +41,12 @@
 //! on at least one account, named or through an `all` grant. An actor holding
 //! only `Balances` sees no planned items: an empty list, not a refusal. A split
 //! linked to an item the actor can't see reads as linked to nothing.
+//!
+//! Net worth needs no `all` grant: it sums what
+//! `AccountAccess::scope(AccountLevel::Balances)` holds, unmarked, and answers
+//! from visible accounts alone (spec §8.10 N2), so nothing in it shows a hidden
+//! account's balance, currency, rate state, age or existence. Which rates are
+//! stored depends on the currencies in use, so reading them spans every account.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
