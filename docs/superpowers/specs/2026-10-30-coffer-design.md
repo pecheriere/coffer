@@ -690,6 +690,32 @@ reason (too large) is left out and noted on the provider account, while its
 records still apply and the cursor can move. Transaction amounts are never
 rounded: a record that does not convert exactly is unusable.
 
+A provider chooses the day of the balance it reports, and a balance's date may
+honestly be when it last changed, so an old date alone doesn't lose the amount. What
+must not happen is a report rewriting or extending history backward. A date within
+31 days of the household's today (§8.7) is believed; a later one is dated today. For
+an older date on a bound account:
+
+1. **No snapshot yet, or the latest is before the reported day:** the amount is
+   taken, dated 31 days back. This dates it later than reported, on purpose: a date
+   in 1970 adds no history and a long-past row can't change a year of carried net
+   worth, and the account has a balance, so the forecast isn't blocked for want of
+   one. So a dormant account's history starts on that day, and the age shown for its
+   balance can be less than its real age. The audit entry gives `reported_on`.
+2. **The amount of the latest snapshot, or the day and amount of any snapshot:**
+   nothing is written and nothing said. The first is needed as well as the second,
+   because an account taken under rule 1 goes on reporting its real, earlier date.
+3. **Anything else** would add or change history at or before the latest snapshot.
+   It is refused, and the provider account shows a fixed note, `old_balance_note`.
+
+A bind judges the balance last reported the same way, never over a snapshot already
+there. An unbound account's balance is kept only if its date is believed, as #77 set.
+A refused report's records still apply and the cursor can move. The note is not
+`error`, because the bank reported no error: it raises no forecast caution, and the
+age of the balance kept stays the only signal (`balance_stale`). A report not refused
+clears it, and so does a balance set by hand on or after the latest day. A balance a
+member or a token sets by hand is no report, and none of this limits it.
+
 ### 8.7 Household timezone
 
 Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
