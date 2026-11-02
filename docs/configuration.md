@@ -51,6 +51,9 @@ are `Secure`. Requirements for the proxy:
   request outside `/api/` whose `Origin` differs from the public origin.
 - Do not log request paths under `/setup/` or `/invite/`: they carry
   single-use secrets in the URL. coffer itself never logs request paths.
+- Add the client's address as the last entry of `X-Forwarded-For`, as Caddy,
+  nginx with `$proxy_add_x_forwarded_for` and Tailscale do. It is read only to
+  limit [browser reports](#browser-reports) per client, and never logged.
 - Keep `COFFER_LISTEN` on a loopback or private interface that only the proxy
   can reach.
 
@@ -154,8 +157,58 @@ often do not support popups. Tell them to open coffer in a normal browser.
 
 - `GET /healthz` returns `200 ok` when the database answers, otherwise `503`.
   It needs no credentials and reveals nothing else.
+- `POST /browser-reports` takes [browser reports](#browser-reports). It needs
+  no credentials and always answers an empty `204`.
 - `/api/v1/*` is the JSON API (see `agent-usage.md`); everything else is the
   web UI.
+
+## Browser reports
+
+When something fails in a browser, the operator can find it in the log. coffer's
+pages report uncaught script errors, unhandled promise rejections, failed passkey
+ceremonies and Plaid Link failures, at most 5 per page load, and the browser
+reports violations of the content security policy. All of them go to coffer's own
+`POST /browser-reports`, never to a third party, and nothing is stored.
+
+Each report kept writes one `WARN` event with the message `browser report
+(client-reported, untrusted)`. **Anyone on the network can send one, so treat its
+fields as claims.** With `COFFER_LOG_FORMAT=json`, on one line:
+
+```json
+{"timestamp":"...","level":"WARN","fields":{"message":"browser report (client-reported, untrusted)","source":"browser","trust":"untrusted","kind":"passkey","page":"/invite/{token}","script":"none","line":0,"column":0,"client_message":"enroll: NotAllowedError: The operation either timed out or was not allowed. [url]"},"target":"coffer_server::http::browser_reports::fields"}
+```
+
+| Field | What it holds |
+|-------|---------------|
+| `kind` | `error`, `unhandled_rejection`, `passkey`, `plaid` or `csp`. |
+| `page` | The page's route template, such as `/invite/{token}`, never its real path, query or fragment. A path that is no known page is `other`. |
+| `script` | The path of `coffer.js` or `plaid-link.js`, `none` if the report names no script, and `other` for anything else, another origin included. |
+| `line`, `column` | Numbers in that script, `0` when unknown. |
+| `client_message` | At most 200 characters of letters, numbers, punctuation and symbols, with whitespace reduced to single spaces. A word shaped like a credential (`eyJ` with a dot, `-----BEGIN`) is replaced by `[token]`, and one that looks like an address by `[url]`. For `csp` it is built from fixed values, such as `img-src blocked inline`. It is `[withheld]` from a page that is `other`, and for an `error` whose script is not one of coffer's. |
+
+To find them in JSON logs:
+
+```sh
+docker logs coffer 2>&1 | jq -Rc 'fromjson? | select(.fields.trust == "untrusted") | .fields'
+```
+
+In the text format, search for `client-reported`.
+
+A report can't be trusted to be free of what your log alerts look for, despite
+the `[token]` rule: if you alert on secrets in logs, ignore events with `trust` =
+`untrusted`.
+
+Limits: 5 reports per client and 20 in all per minute; a body of at most 8 KiB.
+Only a report that passes every other check spends the limit. What is over a limit
+or refused is dropped without a line. At most every 5 minutes,
+and only when the next request arrives, one `WARN` event `browser reports dropped`
+gives the counts (`over_limit`, `refused`); a restart loses a count not yet logged.
+Many `over_limit` drops with reports you can't explain mean something on your
+network is sending them.
+
+The one `style-src-elem` violation that Plaid's script causes on each Link page is
+expected, so it is neither logged nor counted. Any other violation on those pages
+is a finding.
 
 ## Panics
 

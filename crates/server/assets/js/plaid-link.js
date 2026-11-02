@@ -1,6 +1,7 @@
 // The Plaid Link pages: opens Link with the page's link token and reports the
 // result to coffer. Plaid's own script defines `Plaid`; this file loads
-// nothing. It never logs a token and never writes Plaid's text into the page.
+// nothing. It never logs a token and never writes Plaid's text into the page
+// or a report. coffer.js, loaded first, catches this page's uncaught errors.
 'use strict';
 
 (() => {
@@ -12,6 +13,13 @@
   const CONTROL_CHARACTER = /\p{Cc}/u;
   // How long Link may take to show a sign of life once opened.
   const OPEN_TIMEOUT_MS = 15000;
+
+  // Plaid's codes are capitals, digits and underscores; its messages stay out.
+  const PLAID_CODE = /^[A-Z0-9_]{1,64}$/;
+
+  const report = (message) => {
+    if (window.coffer) window.coffer.report('plaid', message);
+  };
 
   const show = (text, ok) => {
     const result = document.getElementById('result');
@@ -32,7 +40,11 @@
     } catch (_) {
       data = {};
     }
-    if (!response.ok) throw new Error(data.detail || data.title || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const refused = new Error(data.detail || data.title || `HTTP ${response.status}`);
+      refused.status = response.status;
+      throw refused;
+    }
     return data;
   };
 
@@ -44,6 +56,7 @@
       show(text, false);
     };
     if (typeof Plaid === 'undefined') {
+      report('script not loaded');
       fail(LOAD_FAILED);
       return;
     }
@@ -76,6 +89,7 @@
             window.location.assign(done.redirect);
           } catch (error) {
             // A link token and a public token work once: only a new page helps.
+            report(error.status ? `saving: the server answered ${error.status}` : 'saving failed');
             show(`${error.message} Reload the page to try again.`, false);
           }
         },
@@ -83,6 +97,8 @@
           alive();
           if (error) {
             // The link token may be dead: only a new page mints another.
+            const code = PLAID_CODE.test(error.error_code) ? error.error_code : 'no code';
+            report(`link exited: ${code}`);
             fail(STOPPED);
           } else {
             button.disabled = false;
@@ -90,6 +106,7 @@
         },
       });
     } catch (_) {
+      report('create failed');
       fail(LOAD_FAILED);
       return;
     }
@@ -106,12 +123,14 @@
       show('', true);
       silent = setTimeout(() => {
         gaveUp = true;
+        report('open timed out');
         fail(LOAD_FAILED);
       }, OPEN_TIMEOUT_MS);
       try {
         handler.open();
       } catch (_) {
         clearTimeout(silent);
+        report('open failed');
         fail(LOAD_FAILED);
       }
     });
