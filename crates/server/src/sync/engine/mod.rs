@@ -13,6 +13,7 @@
 //! logged.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
@@ -46,6 +47,11 @@ pub(super) const CONNECTION_REMOVED: &str = "the connection is removed";
 pub(super) const PROVIDER_NOT_OFFERED: &str =
     "the connection's provider is not offered by this server";
 const INTERNAL_FAILURE: &str = "the sync failed on the server";
+
+/// The longest one provider fetch may take: the worker runs one sync at a
+/// time, so a slow upstream delays every other connection until this ends.
+/// A large first Plaid sync is some tens of pages of a few seconds each.
+pub const FETCH_DEADLINE: Duration = Duration::from_mins(10);
 
 /// A sync run, as the API shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -99,6 +105,8 @@ pub struct SyncService {
     /// The only source of account access.
     pub(super) access: Arc<AccessResolver>,
     pub(super) config: Config,
+    /// See [`FETCH_DEADLINE`].
+    pub(super) fetch_deadline: Duration,
     /// Wakes the scheduler's worker when a run is queued.
     pub(super) queued: tokio::sync::Notify,
     /// How often each member's Link pages may call Plaid.
@@ -133,8 +141,20 @@ impl SyncService {
             registry,
             access,
             config,
+            fetch_deadline: FETCH_DEADLINE,
             queued: tokio::sync::Notify::new(),
             plaid_budget: PlaidBudget::default(),
+        }
+    }
+
+    /// This service with fetches limited to `deadline`, so a test can reach
+    /// the limit without waiting for [`FETCH_DEADLINE`].
+    #[cfg(feature = "testkit")]
+    #[must_use]
+    pub fn with_fetch_deadline(self, deadline: Duration) -> Self {
+        Self {
+            fetch_deadline: deadline,
+            ..self
         }
     }
 

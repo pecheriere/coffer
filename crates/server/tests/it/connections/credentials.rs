@@ -201,6 +201,7 @@ async fn reconnect_reseals_and_keeps_bindings() {
     world.fake.push(Ok(FetchResult {
         accounts: Vec::new(),
         connection_errors: Vec::new(),
+        skipped: 0,
         cursor: None,
     }));
     world.server.sync.run(runs[0].id).await.unwrap();
@@ -430,6 +431,7 @@ async fn reconnect_during_a_successful_sync_keeps_the_new_state() {
     world.fake.push(Ok(FetchResult {
         accounts: vec![reported("acct-1", "USD", None, vec![txn("t-1", "-4.50")])],
         connection_errors: Vec::new(),
+        skipped: 0,
         cursor: None,
     }));
     let run = world

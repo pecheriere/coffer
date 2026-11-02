@@ -9,12 +9,14 @@ use jiff::{Span, Timestamp};
 use super::results::{Failure, failure};
 use super::{CONNECTION_REMOVED, PROVIDER_NOT_OFFERED, SyncService, still_current};
 use crate::sync::SyncError;
-use crate::sync::provider::{FetchMode, FetchRequest, FetchResult, ProviderKind};
+use crate::sync::provider::{FetchMode, FetchRequest, FetchResult, ProviderError, ProviderKind};
 use crate::vault::SealedCredentials;
+
+const FETCH_TOO_SLOW: &str = "the provider did not finish within the time one sync may take";
 
 impl SyncService {
     /// Calls the provider with the connection's credentials, opened only
-    /// for the call. `applied` is when each provider account it still
+    /// for the call, for at most [`super::FETCH_DEADLINE`]. `applied` is when each provider account it still
     /// reports was last applied (see [`window_start`]).
     pub(super) async fn fetch(
         &self,
@@ -58,15 +60,18 @@ impl SyncService {
                 .vault
                 .open(connection.id, &sealed)
                 .map_err(|err| failure(&SyncError::Vault(err)))?;
-            provider
-                .fetch(FetchRequest {
-                    credentials: &credentials,
-                    window_start,
-                    cursor,
-                    today,
-                    timezone: &self.config.timezone,
-                })
+            let request = provider.fetch(FetchRequest {
+                credentials: &credentials,
+                window_start,
+                cursor,
+                today,
+                timezone: &self.config.timezone,
+            });
+            // No store transaction is open here. Dropping the call on expiry
+            // drops all it gathered, and the cursor moves only when applying.
+            tokio::time::timeout(self.fetch_deadline, request)
                 .await
+                .unwrap_or_else(|_| Err(ProviderError::Unavailable(FETCH_TOO_SLOW.into())))
         };
         fetched
             .map(|result| (result, mode))

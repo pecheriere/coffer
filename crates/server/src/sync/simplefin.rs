@@ -363,6 +363,7 @@ fn parse_account_set(
     Ok(FetchResult {
         accounts,
         connection_errors,
+        skipped: 0,
         cursor: None,
     })
 }
@@ -698,6 +699,7 @@ mod tests {
                 "password pw-2 rejected".to_owned(),
                 "kept".to_owned(),
             ],
+            skipped: 0,
             cursor: None,
         };
         let withheld = withhold_credentials(result, &["user-1", "pw-2", ""]);
