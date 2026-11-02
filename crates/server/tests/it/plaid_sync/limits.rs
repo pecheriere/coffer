@@ -172,6 +172,29 @@ async fn a_page_is_counted_across_its_three_lists() {
     );
 }
 
+/// A page written as a JSON array, which serde reads by position, is held to
+/// the same limit: `added`, `modified`, `removed`, the cursor, `has_more`.
+#[tokio::test]
+async fn a_page_written_as_an_array_is_held_to_the_record_limit() {
+    let world = world().await;
+    let checking = world.bound("acct-checking").await;
+    first_sync(&world).await;
+    let list = vec!["{}"; MAX_PAGE_RECORDS + 1].join(",");
+    world
+        .script
+        .page(format!(r#"[[{list}],[],[],"lost",false]"#));
+
+    let run = world.sync().await;
+
+    assert_eq!(run.status, SyncRunStatus::Failed);
+    assert_eq!(run.detail.as_deref(), Some(TOO_MANY_RECORDS_IN_A_PAGE));
+    assert_eq!(
+        world.connection().await.provider_state.as_deref(),
+        Some("saved")
+    );
+    assert_eq!(world.transactions(checking).await.len(), 1);
+}
+
 /// Pages each within the limit still add up: a fetch of exactly the record
 /// cap is read, and one more record in a later page fails it.
 #[tokio::test]
