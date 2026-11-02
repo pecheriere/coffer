@@ -158,7 +158,7 @@ impl Ledger {
         } else {
             Vec::new()
         };
-        let mut checked = Vec::with_capacity(items.len());
+        let mut checked = Vec::new();
         for (index, item) in (0_u32..).zip(items) {
             let name = PlannedItemName::parse(&item.name).map_err(plan_items::invalid)?;
             validate_amount(item.amount).map_err(plan_items::invalid)?;
