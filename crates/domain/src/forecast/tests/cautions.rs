@@ -211,11 +211,11 @@ fn feed_alert_reported() {
 #[test]
 fn as_of_other_than_today_is_a_caution() {
     let other = CategoryId::new();
-    let today = date(2026, 11, 1);
+    let today = date(2026, 10, 20);
     let forecast = run(&ForecastInput {
         today,
         items: vec![
-            one_off("Before", usd(10_000), date(2026, 11, 10), other),
+            one_off("Before", usd(10_000), date(2026, 10, 25), other),
             one_off("After", usd(1_000), date(2026, 11, 20), other),
         ],
         ..household()

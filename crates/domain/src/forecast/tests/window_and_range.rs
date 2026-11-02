@@ -74,6 +74,12 @@ fn the_window_includes_as_of_and_excludes_its_end() {
             one_off("Last", usd(100), date(2027, 2, 14), other),
             one_off("End", usd(1_000), date(2027, 2, 15), other),
         ],
+        // Yesterday's has been seen, so it adds no gap.
+        category_spent: vec![crate::forecast::CategorySpent {
+            category: other,
+            currency: super::currency("USD"),
+            spent_minor: 1,
+        }],
         ..household()
     });
     assert_eq!(

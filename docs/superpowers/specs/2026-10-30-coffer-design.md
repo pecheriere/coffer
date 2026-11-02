@@ -766,12 +766,15 @@ month's actual spending, minus planned outflows in that category dated earlier t
 month, bills first, floored at 0. It reduces this month's remaining budget
 occurrences in date order, and then in the deterministic order items load in, since
 applied per item, one purchase would reduce every item in the category. A paid bill
-therefore never eats a budget. A bill counts in full until its date passes. Past
-it, spending in its category pays recurring bills in date order, and any gap is
-still needed, with a caution naming the category and the amount. If it was paid
-under another category the forecast shows less to invest, the safe direction. A
-budget can simply underspend, so its shortfall is never a gap. Hypothetical items
-neither reduce, consume nor owe.
+therefore never eats a budget. A recurring bill or a one-off, a specific expected
+payment, counts in full until its date passes. Past it, spending in its category
+pays them in date order, and any gap is still needed, with a caution naming the
+category and the amount. If it was paid under another category the forecast shows
+less to invest, the safe direction. A budget can simply underspend, so its shortfall
+is never a gap. A known limit: the data cannot tell where the money went, so spending
+goes to these before any budget, and money spent on a budget can hide an unpaid
+bill. Goals and hypothetical items never owe, and hypothetical items neither reduce
+nor consume.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the

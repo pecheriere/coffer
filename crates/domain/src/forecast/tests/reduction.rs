@@ -6,7 +6,7 @@ use super::{
     AS_OF, budget, cash, eur, fixed_floor, household, hypothetical, line, monthly, one_off, run,
 };
 use super::{assert_provisional, currency, usd};
-use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus};
+use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule};
 
@@ -580,23 +580,142 @@ fn a_foreign_bills_gap_is_a_second_currency() {
     assert_eq!(forecast.totals.len(), 2, "both currencies have a row");
 }
 
+/// A one-off is a specific expected payment, so nothing about it underspends.
 #[test]
-fn only_stored_recurring_bills_can_be_unpaid() {
-    let other = CategoryId::new();
+fn an_earlier_one_off_counts_its_gap_and_warns() {
+    let car = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![one_off("Tyres", usd(30_000), date(2026, 11, 10), car)],
+        ..household()
+    });
+    let tyres = line(&forecast, "Tyres");
+    assert_eq!(tyres.occurrences, 0, "its date is before the window");
+    assert_eq!(tyres.gross, usd(0), "so no gross");
+    assert_eq!(tyres.unpaid, usd(30_000), "nothing was seen against it");
+    assert_eq!(tyres.counted, usd(30_000), "so it still counts");
+    assert_eq!(
+        forecast.cautions,
+        [Caution::BillNotSeen {
+            category: car,
+            amount: usd(30_000),
+        }],
+        "the same caution as a bill"
+    );
+    assert_provisional(&forecast);
+    assert_eq!(forecast.surplus, Some(usd(970_000)), "1,000,000 - 30,000");
+    let november = forecast.months.first().unwrap().lines.first().unwrap();
+    assert_eq!(
+        november.outflows,
+        usd(30_000),
+        "it lands in the first month"
+    );
+}
+
+#[test]
+fn an_earlier_one_off_spent_in_full_adds_nothing() {
+    let car = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![one_off("Tyres", usd(30_000), date(2026, 11, 10), car)],
+        category_spent: vec![spent(car, 30_000)],
+        ..household()
+    });
+    assert!(forecast.items.is_empty(), "nothing left to show");
+    assert_eq!(forecast.cautions, [], "no caution");
+    assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)), "no extra need");
+}
+
+#[test]
+fn a_partly_spent_one_off_counts_the_gap() {
+    let car = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![one_off("Tyres", usd(30_000), date(2026, 11, 10), car)],
+        category_spent: vec![spent(car, 20_000)],
+        ..household()
+    });
+    assert_eq!(line(&forecast, "Tyres").unpaid, usd(10_000), "the gap");
+    assert_eq!(forecast.surplus, Some(usd(990_000)), "1,000,000 - 10,000");
+}
+
+/// Spending pays bills and one-offs alike, earliest first: 150 covers the 100 on the
+/// 5th and half of the 100 on the 10th, whichever kind each is.
+#[test]
+fn one_offs_and_bills_are_paid_in_date_order() {
+    let home = CategoryId::new();
     let forecast = run(&ForecastInput {
         items: vec![
-            hypothetical(0, monthly("What if", usd(1_000), date(2026, 1, 10), other)),
-            one_off("Earlier one-off", usd(1_000), date(2026, 11, 10), other),
-            super::inflow(monthly("Pay", usd(1_000), date(2026, 1, 10), other)),
+            monthly("Rent", usd(100), date(2026, 1, 10), home),
+            one_off("Boiler", usd(100), date(2026, 11, 5), home),
+        ],
+        category_spent: vec![spent(home, 150)],
+        ..household()
+    });
+    assert!(
+        !forecast.items.iter().any(|line| line.name == "Boiler"),
+        "the earlier is paid, so nothing is left of it"
+    );
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(50), "then the later");
+    assert_eq!(
+        forecast.cautions,
+        [Caution::BillNotSeen {
+            category: home,
+            amount: usd(50),
+        }],
+        "one caution per category"
+    );
+}
+
+#[test]
+fn an_earlier_one_off_reaches_back_to_the_first_of_the_month() {
+    let car = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![
+            one_off("On the first", usd(100), date(2026, 11, 1), car),
+            one_off("Last month", usd(1_000), date(2026, 10, 31), car),
+            one_off("On as_of", usd(10_000), AS_OF, car),
         ],
         ..household()
     });
     assert_eq!(
-        forecast.cautions,
-        [],
-        "the ruling covers recurring bills only"
+        line(&forecast, "On the first").unpaid,
+        usd(100),
+        "this month"
     );
-    assert_eq!(line(&forecast, "What if").unpaid, usd(0), "not a what-if");
+    assert!(
+        !forecast.items.iter().any(|line| line.name == "Last month"),
+        "a one-off before this month stays out"
+    );
+    let on_as_of = line(&forecast, "On as_of");
+    assert_eq!(on_as_of.unpaid, usd(0), "still to come");
+    assert_eq!(on_as_of.counted, usd(10_000), "and counted once");
+    assert_eq!(forecast.surplus, Some(usd(989_900)), "1,000,000 - 10,100");
+}
+
+#[test]
+fn what_can_never_be_unpaid() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        items: vec![
+            hypothetical(0, monthly("What if", usd(1_000), date(2026, 1, 10), other)),
+            hypothetical(
+                1,
+                one_off("What if once", usd(1_000), date(2026, 11, 10), other),
+            ),
+            super::inflow(monthly("Pay", usd(1_000), date(2026, 1, 10), other)),
+            super::inflow(one_off("Refund", usd(1_000), date(2026, 11, 10), other)),
+            budget(monthly("Upkeep", usd(1_000), date(2026, 1, 10), other)),
+            ItemInput {
+                category: Some(other),
+                ..super::goal("Fund", usd(1_000), date(2026, 1, 1), date(2027, 6, 1), 0)
+            },
+        ],
+        ..household()
+    });
+    assert_eq!(forecast.cautions, [], "none of these owes anything");
+    assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
+    for item in &forecast.items {
+        assert_eq!(item.unpaid, usd(0), "no gap on any line");
+    }
 }
 
 /// Rent of 2,000 on the 1st and a budget of 300 on the 20th in one category.

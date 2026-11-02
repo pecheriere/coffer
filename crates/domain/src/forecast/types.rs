@@ -284,8 +284,8 @@ pub struct ItemLine {
     pub gross: Money,
     /// What this month's actual spending takes off `gross`.
     pub reduced_by: Money,
-    /// What a bill dated earlier this month, before the window, still needs: the
-    /// part its category's spending does not cover.
+    /// What a recurring bill or one-off dated earlier this month, before the window,
+    /// still needs: the part its category's spending does not cover.
     pub unpaid: Money,
     /// What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow
     /// unless `include_income`.
@@ -395,9 +395,11 @@ pub enum Caution {
     },
     /// The window does not start today, so whatever falls between is left out.
     AsOfNotToday { today: Date },
-    /// Bills dated earlier this month exceed the category's spending so far. The
-    /// gap counts as still needed; if it was paid under another category, the
-    /// number shows less to invest, which is the safe direction.
+    /// Recurring bills and one-offs dated earlier this month exceed the category's
+    /// spending so far. The gap counts as still needed; if it was paid under another
+    /// category, the number shows less to invest, which is the safe direction. The
+    /// category's spending is taken to pay these before any budget, since the data
+    /// cannot tell which it was for, so money spent on a budget can hide a gap.
     BillNotSeen { category: CategoryId, amount: Money },
     /// A closed card still owes money, which counts against cash.
     ClosedLiabilityOwing { account: AccountId, balance: Money },

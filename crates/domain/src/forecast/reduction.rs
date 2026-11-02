@@ -1,10 +1,12 @@
 //! What this month's actual spending does to the plan (spec §6.8, §8.9 R9). Only
-//! stored recurring outflows are touched: a hypothetical item neither reduces nor
-//! consumes, and a one-off is only ever consumed against.
+//! stored outflows are touched: a hypothetical item neither reduces, consumes nor
+//! owes, and a goal has spending of its own.
 //!
-//! A bill counts in full until its date passes. Past it, spending in its category
-//! pays bills in date order, and whatever it does not cover is still needed: a gap,
-//! reported, since the money may have gone under another category.
+//! A recurring bill or a one-off counts in full until its date passes. Past it,
+//! spending in its category pays them in date order, and whatever it does not cover
+//! is still needed: a gap, reported, since the money may have gone under another
+//! category. Spending goes to them before any budget, since the data cannot tell
+//! which it was for, so money spent on a budget can hide an unpaid bill.
 //!
 //! A budget is reduced. Each category and currency has one pool: the month's
 //! spending less every planned outflow dated earlier this month, bills first, since
@@ -21,7 +23,7 @@ use super::count;
 use super::types::{ForecastError, ForecastInput, ItemInput, LineSource};
 use crate::ids::CategoryId;
 use crate::money::Currency;
-use crate::plan::{PlanDirection, PlanSchedule, PlanSpending};
+use crate::plan::{PlanDirection, PlanSpending};
 
 type PoolKey = (CategoryId, Currency);
 
@@ -37,7 +39,7 @@ struct Occurrence {
 pub(super) struct ItemAdjustment {
     /// What comes off a budget in the window.
     pub(super) reduced_by: i128,
-    /// What a bill dated earlier this month still needs.
+    /// What a recurring bill or one-off dated earlier this month still needs.
     pub(super) unpaid: i128,
 }
 
@@ -88,7 +90,7 @@ pub(super) fn reduce(
     }
 
     let mut planned_earlier: BTreeMap<PoolKey, i128> = BTreeMap::new();
-    let mut earlier_bills = Vec::new();
+    let mut earlier_payments = Vec::new();
     let mut remaining_budgets = Vec::new();
     for (index, item) in input.items.iter().enumerate() {
         let Some(key) = pool_key(item) else {
@@ -97,18 +99,17 @@ pub(super) fn reduce(
         let amount = i128::from(item.amount.minor_units);
         let earlier = item.schedule.occurrences(month_start, input.as_of);
         *planned_earlier.entry(key).or_default() += amount * i128::from(count(&earlier)?);
-        if matches!(item.schedule, PlanSchedule::Recurring { .. }) {
-            if item.spending == Some(PlanSpending::Budget) {
-                let dates = item.schedule.occurrences(input.as_of, reducible_until);
-                remaining_budgets.extend(occurrences(dates, index, key, amount));
-            } else {
-                earlier_bills.extend(occurrences(earlier, index, key, amount));
-            }
+        if item.spending == Some(PlanSpending::Budget) {
+            let dates = item.schedule.occurrences(input.as_of, reducible_until);
+            remaining_budgets.extend(occurrences(dates, index, key, amount));
+        } else {
+            // A goal has no occurrences, so this is recurring bills and one-offs.
+            earlier_payments.extend(occurrences(earlier, index, key, amount));
         }
     }
 
     let mut by_item = vec![ItemAdjustment::default(); input.items.len()];
-    let not_seen = pay_earlier_bills(earlier_bills, &spent, &mut by_item);
+    let not_seen = pay_earlier_payments(earlier_payments, &spent, &mut by_item);
 
     let mut spending_sensitive_currencies: BTreeSet<Currency> =
         not_seen.keys().map(|&(_, currency)| currency).collect();
@@ -129,24 +130,25 @@ pub(super) fn reduce(
     })
 }
 
-/// Pays bills from their category's spending, earliest first and in input order on
-/// the same day, and returns what is left unpaid per category and currency.
-fn pay_earlier_bills(
-    mut bills: Vec<Occurrence>,
+/// Pays recurring bills and one-offs from their category's spending, earliest first
+/// and in input order on the same day, and returns what is left unpaid per category
+/// and currency.
+fn pay_earlier_payments(
+    mut payments: Vec<Occurrence>,
     spent: &BTreeMap<PoolKey, i128>,
     by_item: &mut [ItemAdjustment],
 ) -> BTreeMap<PoolKey, i128> {
-    bills.sort_by_key(|bill| bill.on);
+    payments.sort_by_key(|payment| payment.on);
     let mut left = spent.clone();
     let mut not_seen = BTreeMap::new();
-    for bill in bills {
-        let available = left.entry(bill.key).or_default();
-        let paid = bill.amount.min((*available).max(0));
+    for payment in payments {
+        let available = left.entry(payment.key).or_default();
+        let paid = payment.amount.min((*available).max(0));
         *available -= paid;
-        let unpaid = bill.amount - paid;
+        let unpaid = payment.amount - paid;
         if unpaid != 0 {
-            *not_seen.entry(bill.key).or_default() += unpaid;
-            if let Some(item) = by_item.get_mut(bill.index) {
+            *not_seen.entry(payment.key).or_default() += unpaid;
+            if let Some(item) = by_item.get_mut(payment.index) {
                 item.unpaid += unpaid;
             }
         }

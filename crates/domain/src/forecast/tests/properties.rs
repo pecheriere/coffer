@@ -220,7 +220,7 @@ struct PoolFigures {
     spent: i128,
     /// Stored outflows dated earlier this month.
     earlier: i128,
-    /// The part of `earlier` that is recurring bills.
+    /// The part of `earlier` that is recurring bills and one-offs.
     earlier_bills: i128,
     /// Budgets' occurrences from `as_of` to the month's end.
     remaining_budgets: i128,
@@ -259,12 +259,11 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
         let figures = pools.entry((category, item.amount.currency)).or_default();
         let earlier = dated(item, month_start, input.as_of)?;
         figures.earlier += earlier;
-        if matches!(item.schedule, PlanSchedule::Recurring { .. }) {
-            if item.spending == Some(PlanSpending::Budget) {
-                figures.remaining_budgets += dated(item, input.as_of, month_end)?;
-            } else {
-                figures.earlier_bills += earlier;
-            }
+        if item.spending == Some(PlanSpending::Budget) {
+            figures.remaining_budgets += dated(item, input.as_of, month_end)?;
+        } else {
+            // A goal has no occurrences, so this is recurring bills and one-offs.
+            figures.earlier_bills += earlier;
         }
     }
     for (&(category, code), figures) in &pools {
