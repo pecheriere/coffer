@@ -30,6 +30,7 @@ pub(super) mod tags {
     pub const PLAN: &str = "plan";
     pub const FORECAST: &str = "forecast";
     pub const REPORTS: &str = "reports";
+    pub const FX: &str = "fx";
     pub const CONNECTIONS: &str = "connections";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
@@ -44,7 +45,7 @@ pub fn document() -> OpenApi {
 }
 
 /// What each of [`tags`] covers.
-fn operation_tags() -> [Tag; 12] {
+fn operation_tags() -> [Tag; 13] {
     let tag = |name: &str, description: &str| {
         TagBuilder::new()
             .name(name)
@@ -56,8 +57,8 @@ fn operation_tags() -> [Tag; 12] {
         tag(tags::MEMBERS, "The household's members."),
         tag(
             tags::HOUSEHOLD,
-            "The household-wide forecast settings: safety floor, income, horizon and \
-             stale-balance threshold.",
+            "The household-wide settings: safety floor, income, horizon, stale-balance \
+             threshold and display currency.",
         ),
         tag(
             tags::ACCOUNTS,
@@ -88,8 +89,14 @@ fn operation_tags() -> [Tag; 12] {
         ),
         tag(
             tags::REPORTS,
-            "What happened against what was planned, by category and month. `actual` is \
-             positive for what the category's kind counts.",
+            "What happened against what was planned, by category and month, where `actual` \
+             is positive for what the category's kind counts; and net worth over time, in \
+             the display currency.",
+        ),
+        tag(
+            tags::FX,
+            "The exchange rates stored and what is known of fetching them: units of a \
+             currency per one euro, exact decimals written as text.",
         ),
         tag(
             tags::CONNECTIONS,

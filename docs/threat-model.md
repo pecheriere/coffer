@@ -25,7 +25,11 @@
    connection's credentials, and treats every answer as untrusted input: amounts are
    parsed as decimal text into integer minor units, texts are sanitized and
    bounded before they are stored, and provider error texts are reduced to
-   fixed messages. The provider is trusted only for the data it reports.
+   fixed messages. The provider is trusted only for the data it reports. The
+   rate source, the European Central Bank's data API, is the same kind of
+   boundary with no credential: it publishes public data and is asked for the
+   currencies a household holds. Its answer is untrusted input, read strictly
+   (below).
 
 ## Design
 
@@ -112,6 +116,23 @@
   `connection.remove`. Plaid's `error_message` and request id are deliberately not
   kept: its free text can quote credentials, so coffer keeps only Plaid's error
   type and code, which are restricted to capitals, digits and underscores.
+- **Exchange rates are untrusted input with no credential** (spec §8.10 N6, N7).
+  `COFFER_FX_PROVIDER` is `ecb` or `none`; `ecb` reaches only
+  `data-api.ecb.europa.eu`, through the same egress client as every provider
+  (allow-list, https, no redirect, public addresses or the operator's proxy or
+  relay, time and size caps). Nothing the source says reaches a log, an error or
+  the store except rates and dates, and a status. The CSV is read strictly and as
+  a whole: a fixed header and key on every row, a date written exactly
+  `YYYY-MM-DD`, strictly increasing, not before 1990-01-01 or the start asked for
+  and not after tomorrow, and a rate of at most 10 digits with 6 decimals, above
+  zero, as text and never a float. A row with an empty value is a day with no rate
+  and yields nothing. Every line must end, since a row cut off by the connection
+  closing could read as a false rate (`1.1172` as `1.1`). One bad row refuses all
+  of the answer, so rates go missing rather than wrong. An answer replaces the
+  days it speaks for, from the start of its window to its own last row. Rates are
+  public reference data and the daily values derived from them, so neither is
+  audited (N10); the settings and snapshots that change them are. A household
+  holding one currency contacts nobody, and the forecast never reads a rate.
 - Passkey ceremonies are single use, expire after 120 seconds, and live only
   in memory.
 - Sessions have idle and absolute limits; sign-in ends any previous session
@@ -171,6 +192,25 @@
     own, is checked the same way, so it can't be used to probe an account. A
     what-if is a `POST` that persists nothing (no item, setting, audit entry or
     idempotency key), so a `read` token may call it.
+  - **Net worth is the one report with a partial answer** (spec §8.10 N2), unlike
+    a forecast (R2), because the sum of the accounts a token holds at `balances` is
+    true: it is what a balance grant is for. It is the sum of what the token sees,
+    and nothing marks it as partial, since a mark would reveal that other accounts
+    exist; the docs tell an agent not to report it as the household's. Everything
+    in the answer comes from visible accounts and household settings alone: the
+    query that gathers it is filtered by the token's accounts, so a hidden
+    account's currency, rate state, balance age, dates, first day and closing do not
+    appear, in `by_currency`, a caution or a point's date, and a token seeing no
+    counted account reads exactly like an empty household. Rates are stored once
+    for the household and depend on the currencies in use, so the FX endpoints
+    (`/api/v1/fx/coverage`, `/api/v1/fx/rates`) span every account and need `all`
+    at `balances`, refused the same whether or not an account is hidden. So does a
+    patch naming `display_currency`, whatever it names: a visible row converts at
+    once if the code's rates are held, so a token held to one account could try
+    each code and read from its own report which ones the household uses. The
+    display currency starts unset and is never guessed, since a guess from the
+    oldest account would reveal that account's currency. What is left is a
+    residual risk below.
   - The plan is shared by every account, as categories are. Creating, changing,
     deleting or settling a planned item needs `all` at `write`, decided before the
     item is looked up. Reading one needs
@@ -253,18 +293,25 @@
   browsers send `Origin: null` on plain form POSTs, which the origin rule
   refuses; `same-origin` lets them send the real origin, and the rule stays
   strict (it never accepts `null`).
-- **One page holds financial data.** `/forecast` shows the household's totals,
-  monthly figures and the names in its cautions, the only page that does (spec
-  §6.4, §8.9 R14). It takes the session cookie only, never a bearer token, calls
-  the same service as `GET /api/v1/forecast`, so with the same access (R2), and has
-  no form or other write action, no inline script or style, and only the default
-  content security policy. Like every
-  page it is sent with `Cache-Control: no-store`, so neither the browser's nor an
-  intermediary's cache keeps it, and `Referrer-Policy: same-origin`, so following a
-  link off it tells another site nothing. The back button after signing out depends
-  on that `no-store`: signing out ends the session on the server but can't reach
-  into the browser, so it is `no-store` that makes the browser ask again and be sent
-  to sign in rather than redraw the figures from a stored copy.
+- **Two pages hold financial data.** `/forecast` shows the household's totals,
+  monthly figures and the names in its cautions (spec §6.4, §8.9 R14), and
+  `/net-worth` shows what the accounts a member can see come to, period by period,
+  with each account's name, balance and rate date (§8.10 N13). Each takes the session
+  cookie only, never a bearer token, calls the same service as its API endpoint
+  (`GET /api/v1/forecast`, `GET /api/v1/reports/net-worth`), so with the same access
+  (R2, N2), and has no form or other write action, no inline script or style, and only
+  the default content security policy: the net worth chart is SVG drawn on the server,
+  with classes only. Neither is in the browser reports' table of pages, so a report
+  from one has its message withheld and names no page. Like every page they are sent
+  with `Cache-Control: no-store`, so neither the browser's nor an intermediary's cache
+  keeps them, and `Referrer-Policy: same-origin`, so following a link off one tells
+  another site nothing. The back button after signing out depends on that `no-store`:
+  signing out ends the session on the server but can't reach into the browser, so it is
+  `no-store` that makes the browser ask again and be sent to sign in rather than redraw
+  the figures from a stored copy. `/admin/household` gains one form, for the
+  display currency: admins only (checked before the form is read), the
+  anti-forgery token and the `Origin` rule like every page form, and the same
+  service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries
   record the member and the agent token involved.
 
@@ -478,6 +525,72 @@
   token can't know it did. The audit log records the split list before and
   after, with the goal's id, and a member can link it again. Until then the goal
   looks less spent, and the money counts as its category's spending instead.
+- **A rate already held shows through a restricted token's net worth.** Rates are
+  stored once for the household. A token with an account in a currency a hidden
+  account already caused to be fetched gets an amount where, alone, it would read
+  `not_fetched_yet` until the first fetch, and `fetch_failing` or `provider_off`
+  for as long as an outage lasts or the provider stays off. Its `rate_on` then shows
+  about when the last fetch was. That is one bit about a currency the token already
+  sees, plus that date, and it can't tell a hidden account from a closed one or a
+  past display currency; it shows no amount, count, name or id, and no other
+  currency. No token can bring it about, since creating an account needs `all` at
+  `write` and changing the display currency needs `all` at `balances` (spec §8.10
+  N2, N8). An outage or a provider kept off lengthens how long the bit can be read
+  without adding to it, and hiding a true rate from one token would make its number
+  wrong, so the answer stays. Timing of any answer was not examined.
+- **A compromised or wrong rate source can feed false rates.** They move the net
+  worth reported until corrected. A rate is bounded in form (at most 10 digits,
+  6 of them decimals, above zero, a real date inside the bounds, no malformed or cut
+  off row) and not in value, since a real rate can move a long way: a false rate that
+  parses is stored, and coffer has no second source to compare it with. Nothing
+  flags it except a rate older than 7 days (`rate_stale`); it isn't audited (N10),
+  and the log says nothing of a fetch that succeeded. It is visible to anyone who
+  reads `GET /api/v1/fx/rates` or a report's `rate_on` and knows the real value.
+  A correction to a currency's last 7 days of rates arrives by itself at the next
+  fetch, since each one asks from 7 days before the currency's last rate, and a
+  false rate on a day the source has none is removed by the same answer. An older
+  one isn't fetched again. The forecast never reads a rate, so it can't be moved by
+  one.
+- **A forged rate after a series has ended stays.** An answer only speaks for the
+  days from the start of its window to its own last row, since one cut at the end of
+  a line looks like a shorter one. So with no later publication nothing removes a
+  row after the series' last real one, and it is carried forward, with `rate_stale`
+  once it is 7 days old. A forged `last_on` also moves the window, which starts 7
+  days before it (never later than 7 days before today), so the days before that
+  stop being asked about, and for an ended series the answers turn empty: they are
+  logged, change nothing and keep every stored rate. Either needs a false rate from
+  the source itself or a hand-edited database, which already holds everything. A
+  series still publishing corrects it at its next rate.
+- **The ECB learns which currencies a household asks about, and when.** Each
+  request names a currency and a start date, from the host's address or the
+  relay's; no key, name, amount or account goes with it. A household with one
+  currency, or `COFFER_FX_PROVIDER=none`, contacts nobody. An operator relay learns
+  only that coffer asks, since TLS to the ECB is verified end to end.
+- **A restricted token is not told its sum is partial,** by design (N2). An agent
+  holding `balances` on one account may report that as the household's net worth;
+  nothing in the answer contradicts it. The docs say so first and tell an agent to
+  check `access.all` in `GET /api/v1/me` and not to report such a sum as the
+  household's. Marking it would reveal that other accounts exist.
+- **A display currency change holds the write lock while it rebuilds, and a
+  back-dated balance adds history for good.** A manual balance may be dated as far
+  back as 1970, and the daily values then hold a row for every day since for that
+  account (issue #83). Only a `write` token can set one, and it is audited. A
+  rebuild (a display currency change, or `coffer rebuild-net-worth`) rewrites every
+  row in one transaction, and other writers wait for it, for at most the store's 15
+  s busy timeout and then fail with an error and no damage. 110,000 rows took about
+  0.5 s on a desktop in a release build. On a slow, busy machine (about 5.5 times
+  slower) 30 accounts from 1970 held the lock 10 s, 60 held it 15.9 s and 120 held it
+  38.9 s. A household with a few accounts and recent history is far below that; the
+  Pi has not been measured, and the issue tracks a bound.
+- **A clock that runs ahead moves the one-day limit with it.** A rate may be dated
+  up to a day after the household's today, for clock skew, and the daily values are
+  filled up to today and never move their last day back by themselves. A host clock
+  set ahead therefore accepts rates dated beyond the real date (which only a false
+  source would send) and fills days that haven't happened, and `through` shows a
+  day that hasn't come. After correcting the clock, `coffer rebuild-net-worth` resets the last
+  filled day to today and removes the days after it. The rate job treats a fetch
+  recorded in the future as due, so a clock that ran ahead doesn't silence a
+  currency.
 - **No rate limiting beyond ceremony caps and browser reports.** Brute-forcing a
   256-bit token is infeasible; password-style guessing does not exist. Network
   access control is the defense against abuse volume.

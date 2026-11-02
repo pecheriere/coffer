@@ -26,6 +26,7 @@ pub struct Viewer {
 pub enum Nav {
     Account,
     Forecast,
+    NetWorth,
     Connections,
     Members,
     Invites,
@@ -147,6 +148,7 @@ fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
             nav.nav aria-label="Main" {
                 (link(Nav::Account, "/account", "Account"))
                 (link(Nav::Forecast, "/forecast", "Forecast"))
+                (link(Nav::NetWorth, "/net-worth", "Net worth"))
                 (link(Nav::Connections, "/connections", "Connections"))
                 @if viewer.can_manage_members {
                     (link(Nav::Members, "/admin/members", "Members"))

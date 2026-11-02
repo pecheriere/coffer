@@ -9,6 +9,7 @@
 mod admin_grants;
 mod forecast;
 mod members;
+mod net_worth;
 mod rendering;
 mod security;
 mod sign_in;

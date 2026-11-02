@@ -19,7 +19,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It also decides the days of net worth: which day a balance's value starts on, when each new day is filled (shortly after midnight in this zone), the day an account closed and what "today" is for a report. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
 | `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
@@ -27,6 +27,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_PLAID_ENV` | required with Plaid | `sandbox` or `production`; it selects the one Plaid API host coffer may reach (see [Outbound network](#outbound-network)). `development` is refused, since Plaid retired it. |
 | `COFFER_PLAID_COUNTRY_CODES` | `US` | Comma-separated ISO 3166-1 alpha-2 codes in capitals, such as `US,CA`: the countries whose institutions Link offers. Only the shape is checked; Plaid refuses a country it does not serve. |
 | `HTTPS_PROXY` | unset | Egress proxy for every outbound https request (`https_proxy` is read when `HTTPS_PROXY` is unset; an empty value counts as unset): `http://` or `https://` with a host, optional port and optional `user:password@`, nothing after the host but an optional `/`. coffer sends `CONNECT <host>:443` and never resolves target hosts itself, so the proxy enforces the public-address rule; the proxy's own address may be private. Its credentials never appear in logs or errors. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. |
+| `COFFER_FX_PROVIDER` | `ecb` | Where exchange rates come from: `ecb`, the European Central Bank's public data API, or `none`, which asks nobody, so reports say rates are missing. Anything else is refused. See [Outbound network](#outbound-network). |
 | `COFFER_EGRESS_RELAY` | unset | One IP address, IPv4 or IPv6, of an SNI-forwarding relay you control: no port, no host name, no brackets, no zone. Addresses nothing can connect to are refused (`0.0.0.0/8`, `::`, link-local `fe80::/10`, multicast and broadcast), and so is an empty value; private and loopback addresses are accepted. Every outbound connection goes to this address, on port 443, and coffer resolves nothing; see [Outbound network](#outbound-network). Setting it together with `HTTPS_PROXY` or `https_proxy` is refused. |
 | `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). |
 | `COFFER_LOG_FORMAT` | text | `json` switches to JSON lines. Logs go to stderr. |
@@ -72,8 +73,21 @@ makes outbound https requests. It connects only to:
 - when Plaid is configured, only the host `COFFER_PLAID_ENV` selects,
   `sandbox.plaid.com` or `production.plaid.com`, on port 443. The other
   Plaid environment's host is refused;
-- in a later release, the exchange-rate source's host, documented here when
-  it is added.
+- unless `COFFER_FX_PROVIDER` is `none`, the European Central Bank's data API,
+  `data-api.ecb.europa.eu`, on port 443, for exchange rates. A request says
+  which currency and from which date, and carries no key or credential. The
+  name is a CNAME for the ECB's CDN, `data--api-ecb-europa-eu.ax4z.com` on
+  2026-11-02, so a firewall that works from DNS answers must allow that too;
+  don't pin its address, and re-check the name when you set the rule, since the
+  CDN's can change: `dig +short CNAME data-api.ecb.europa.eu`. A firewall that
+  allow-lists by SNI needs only `data-api.ecb.europa.eu` on port 443. A household
+  with one currency contacts nobody. Nothing breaks while the host isn't allowed:
+  syncs and everything else go on, and rates are tried again every hour. Each
+  currency logs one warning, then another only when its failure changes, and one
+  when it recovers; repeats are at `debug`, and a restart isn't a change. A
+  currency never fetched reports `rate_missing` with the reason `fetch_failing`;
+  one already held is carried forward at its last rate, with `rate_stale` once that
+  is a week old.
 
 Every other destination is refused before a connection is opened. That
 covers what coffer's server connects to. Plaid Link, the login dialog, runs in
@@ -258,6 +272,7 @@ coffer serve                    # run the server
 coffer bootstrap-link           # print a single-use first-admin link; exit 1 if an admin exists
 coffer recover-admin <username> # print a re-enroll link for an admin who lost every passkey
 coffer backup <dest>            # consistent copy of the database, mode 0600; refuses an existing file
+coffer rebuild-net-worth        # recompute the daily net worth table up to today; prints rows and last day
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
 
@@ -268,6 +283,20 @@ invalidates a link printed before it. Both stop once an admin exists.
 
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.
+
+`rebuild-net-worth` recomputes the whole daily table from the balances, the
+rates and the display currency, with today taken from `COFFER_TIMEZONE`. It is
+safe while the server runs: it takes the database's write lock in one
+transaction like any writer, so other writes wait for it, for up to the store's
+15 s busy timeout. Opening the database applies this version's migrations, as
+`backup` does, so run the same version as the server. It never creates a
+database: no database found, or an empty file, is exit code 1. You rarely need
+it: the first start after the upgrade that adds the table rebuilds it in the
+background while the server already answers, and until then a report says so
+instead of showing a number. It is also how to undo a clock that ran ahead: the
+table never moves its last day back by itself, and the command resets it to
+today and removes the days after. The server warns once a day while that last
+day is more than a day past today.
 
 `healthcheck` is meant for container health checks and process supervisors.
 It sends `GET /healthz` to `COFFER_LISTEN`, connecting to loopback

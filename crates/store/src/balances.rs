@@ -97,7 +97,8 @@ impl StoreTx {
     }
 
     /// Record `snapshot`, replacing any snapshot of the same account and day,
-    /// and return the one it replaced.
+    /// and return the one it replaced. If its value or source changed, the daily
+    /// rows it moves are rewritten in this transaction.
     ///
     /// # Errors
     ///
@@ -124,6 +125,13 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
+        let unchanged = previous.as_ref().is_some_and(|known| {
+            known.balance_minor == snapshot.balance_minor && known.source == snapshot.source
+        });
+        if !unchanged {
+            self.refresh_after_snapshot(snapshot.account, snapshot.on)
+                .await?;
+        }
         Ok(previous)
     }
 }

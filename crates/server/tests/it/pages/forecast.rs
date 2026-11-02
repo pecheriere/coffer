@@ -44,7 +44,7 @@ async fn words(world: &World) -> String {
 }
 
 /// `html` without its tags, each tag read as a space, and spaces collapsed.
-fn text_of(html: &str) -> String {
+pub(super) fn text_of(html: &str) -> String {
     let mut text = String::new();
     let mut in_tag = false;
     for c in html.chars() {
@@ -78,7 +78,7 @@ fn found_row<'a>(body: &'a str, heading: &str) -> &'a str {
 }
 
 /// The data cells of the table row whose heading starts with `heading`.
-fn row(body: &str, heading: &str) -> Vec<String> {
+pub(super) fn row(body: &str, heading: &str) -> Vec<String> {
     found_row(body, heading)
         .split("<td")
         .skip(1)
@@ -87,7 +87,7 @@ fn row(body: &str, heading: &str) -> Vec<String> {
 }
 
 /// The `<section>` of the page with this id.
-fn section<'a>(body: &'a str, id: &str) -> &'a str {
+pub(super) fn section<'a>(body: &'a str, id: &str) -> &'a str {
     let from = body.find(&format!("id=\"{id}\"")).unwrap();
     let len = body[from..].find("</section>").unwrap();
     &body[from..from + len]

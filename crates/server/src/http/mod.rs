@@ -29,6 +29,7 @@ use self::idempotency::RequestHasher;
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, Identity, Sessions};
 use crate::config::Config;
+use crate::fx::FxService;
 use crate::ledger::Ledger;
 use crate::sync::engine::SyncService;
 
@@ -44,6 +45,8 @@ pub struct AppState {
     pub access: Arc<AccessResolver>,
     /// Connections, sync runs and provider accounts.
     pub sync: Arc<SyncService>,
+    /// Exchange rates and the daily table's days.
+    pub fx: Arc<FxService>,
     /// Hashes requests made with an `Idempotency-Key`.
     pub idempotency: Arc<RequestHasher>,
     pub store: Store,
