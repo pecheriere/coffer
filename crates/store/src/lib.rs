@@ -193,6 +193,31 @@ pub const INJECTED_FAILURE_LABEL: &str = injected_failure_record_id!();
 
 #[cfg(any(test, feature = "testkit"))]
 impl Store {
+    /// Record `candidate` as a duplicate of `transaction` without the
+    /// same-account check of [`StoreTx::add_duplicate_candidates`], to plant
+    /// a pair the store refuses so tests can prove that what reads such a
+    /// pair stays safe.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a transaction that does not exist.
+    pub async fn add_duplicate_candidate_unchecked_for_tests(
+        &self,
+        transaction: coffer_domain::ids::TransactionId,
+        candidate: coffer_domain::ids::TransactionId,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO duplicate_candidates (transaction_id, candidate_id) VALUES (?, ?) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(transaction.to_string())
+        .bind(candidate.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
     /// Make every later insertion of a source record with the provider id
     /// [`INJECTED_FAILURE_RECORD_ID`] fail with a backend error, so tests
     /// can prove that a failure mid-way through a write leaves nothing

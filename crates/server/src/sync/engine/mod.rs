@@ -30,6 +30,7 @@ use utoipa::ToSchema;
 
 use super::SyncError;
 use super::apply::sync_actor;
+use super::connections::plaid_budget::PlaidBudget;
 use super::provider::ProviderRegistry;
 use crate::auth::AccessResolver;
 use crate::config::Config;
@@ -108,6 +109,8 @@ pub struct SyncService {
     pub(super) fetch_deadline: Duration,
     /// Wakes the scheduler's worker when a run is queued.
     pub(super) queued: tokio::sync::Notify,
+    /// How often each member's Link pages may call Plaid.
+    pub(super) plaid_budget: PlaidBudget,
 }
 
 impl std::fmt::Debug for SyncService {
@@ -140,6 +143,7 @@ impl SyncService {
             config,
             fetch_deadline: FETCH_DEADLINE,
             queued: tokio::sync::Notify::new(),
+            plaid_budget: PlaidBudget::default(),
         }
     }
 
@@ -256,12 +260,19 @@ impl SyncService {
     }
 }
 
-/// Whether the outcome of a run that opened `opened` may still be recorded
-/// on the connection, now `stored`: it is not removed and holds the same
-/// sealed credentials. A reconnect while the run was fetching replaces
-/// them, and the run's outcome then says nothing about the new ones.
-fn still_current(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
+/// Whether the connection, now `stored`, still holds what a run that read
+/// `opened` used: it is not removed and has the same sealed credentials. A
+/// reconnect while the run was fetching replaces them.
+fn same_credentials(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
     stored.status != ConnectionStatus::Removed && stored.credentials == opened.credentials
+}
+
+/// Whether the outcome of a run that read `opened` may still be recorded on
+/// the connection, now `stored`: it has the same credentials and was not
+/// reauthorized since. Otherwise the run's outcome says nothing about the
+/// connection as it is now.
+fn still_current(stored: &ConnectionRecord, opened: &ConnectionRecord) -> bool {
+    same_credentials(stored, opened) && stored.reauth_generation == opened.reauth_generation
 }
 
 /// Refuses, with [`SyncError::Conflict`] and [`CONNECTION_REMOVED`], a

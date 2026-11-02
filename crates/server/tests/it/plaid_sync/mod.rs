@@ -11,6 +11,7 @@ mod credentials;
 mod failures;
 mod limits;
 mod providers;
+mod reauthorized;
 mod removal;
 mod transactions;
 
@@ -32,7 +33,7 @@ use coffer_server::http::router;
 use coffer_server::ledger::accounts::NewAccountInput;
 use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
 use coffer_server::sync::provider::ProviderKind;
-use coffer_server::testkit::{FakeProvider, MockUpstream, TestServer};
+use coffer_server::testkit::{CallGate, FakeProvider, MockUpstream, TestServer};
 use coffer_store::{
     AuditEvent, AuditFilter, ConnectionRecord, NewSyncRun, PageRequest, ProviderAccountRecord,
     ProviderAccountUpsert, SyncRunRecord, TransactionFilter, TransactionRecord,
@@ -72,9 +73,19 @@ struct Script {
     seen: Arc<Mutex<Vec<(String, Value)>>>,
     /// Paths whose next request is never answered.
     silent: Arc<Mutex<HashSet<String>>>,
+    /// Holds the next request once it has been seen.
+    gate: Arc<Mutex<Option<CallGate>>>,
 }
 
 impl Script {
+    /// Makes the next request wait, whatever its path, until the returned
+    /// gate is released; its answer is chosen after that.
+    fn hold_next(&self) -> CallGate {
+        let gate = CallGate::default();
+        *self.gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
     fn reply(&self, path: &str, status: StatusCode, body: impl Into<String>) {
         self.replies
             .lock()
@@ -129,6 +140,10 @@ async fn answer(State(script): State<Script>, uri: Uri, body: String) -> Respons
     let silent = script.silent.lock().unwrap().remove(&path);
     if silent {
         std::future::pending::<()>().await;
+    }
+    let gate = script.gate.lock().unwrap().take();
+    if let Some(gate) = gate {
+        gate.hold().await;
     }
     let scripted = script
         .replies

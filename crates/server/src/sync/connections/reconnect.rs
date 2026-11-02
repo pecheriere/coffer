@@ -70,11 +70,10 @@ async fn reactivate(
             .await?;
             Ok(())
         }
-        // A queued run uses the current credentials when it starts; a
-        // running one cannot undo a reconnect that replaced them (the engine
-        // updates the status only for the credentials it used; update mode
-        // keeps them, so that case can be undone, see issue #22). Otherwise
-        // the schedule syncs it once the limits allow.
+        // A queued run reads the connection when it starts; a running one
+        // cannot undo this (the engine updates the status only if the
+        // credentials it used are still there and no reauthorization came
+        // since). Otherwise the schedule syncs it once the limits allow.
         Err(SyncError::InProgress | SyncError::RateLimited { .. }) => Ok(()),
         Err(err) => Err(err),
     }
@@ -206,6 +205,7 @@ impl SyncService {
     ///
     /// The errors of [`Self::confirm_reauthorized`];
     /// [`SyncError::Vault`] when the credentials cannot be opened;
+    /// [`SyncError::PlaidBudgetSpent`] when the member asked Plaid too often;
     /// [`SyncError::Provider`] when Plaid refuses.
     pub async fn update_link_token(
         &self,
@@ -223,6 +223,7 @@ impl SyncService {
             .vault
             .open(id, &SealedCredentials::from(sealed))
             .map_err(SyncError::Vault)?;
+        self.plaid_budget.spend(actor.member, self.clock.now())?;
         provider
             .link_token(actor.member, Some(&credentials))
             .await
@@ -233,7 +234,10 @@ impl SyncService {
     /// token did not change, so nothing is resealed and the saved cursor
     /// stays valid: the connection is `active` again with its error cleared,
     /// and a `manual` run is queued when its limits allow one, which also
-    /// shows whether the login really is back.
+    /// shows whether the login really is back. A run already in flight still
+    /// applies its data and saves its cursor, unless the provider reported
+    /// errors it can no longer record, but no longer changes the connection's
+    /// status; the schedule then syncs it once it is due.
     ///
     /// # Errors
     ///
@@ -254,6 +258,8 @@ impl SyncService {
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
         let before = ensure_not_removed(&mut tx, id).await?;
+        // The credentials stay, so this is how a run in flight can tell.
+        tx.bump_reauth_generation(id).await?;
         reactivate(&mut tx, now, actor, &before, false, provider.capabilities()).await?;
         tx.commit().await?;
         self.queued.notify_one();

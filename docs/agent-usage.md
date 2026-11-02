@@ -22,8 +22,8 @@ operation, parameter and schema.
    too.
 4. Copy the token now. It starts with `coffer_` and is shown exactly once;
    coffer keeps only a keyed hash. Revoke it from the same page if it leaks;
-   an admin can also see and revoke every member's tokens from
-   `/admin/members`.
+   an admin can also see, revoke and change the account access of every
+   member's tokens from `/admin/members`.
 
 Tokens act as you: whatever the agent does is attributed to your member and
 to that token in the audit log. You can create tokens only from a passkey
@@ -336,7 +336,9 @@ before it has passed.
 
 When a connection's status is `reauth_required`, the provider no longer
 accepts its access. For Plaid, the member logs in again from the connection's
-Reconnect button in the browser; its accounts stay bound. For SimpleFin, ask the owner for a new setup token and send
+Reconnect button in the browser; its accounts stay bound. A sync already
+running when they finish no longer changes the status, and the schedule syncs
+the connection when it is next due. For SimpleFin, ask the owner for a new setup token and send
 it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
 `{"setup_token": "..."}`: the connection becomes `active` again and keeps
 its provider accounts, bindings and history.

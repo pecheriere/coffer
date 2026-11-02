@@ -289,9 +289,8 @@ async fn reconnect_resolves_access_before_spending_the_setup_token() {
     );
 }
 
-/// The server makes candidate pairs within one account only, and merges
-/// only within one account, so these cross-account pairs are seeded. Should
-/// one ever exist, a token that cannot read the other account's transactions
+/// The store refuses candidate pairs across accounts, so these are seeded
+/// past that check as defence in depth. Should one ever exist, a token that cannot read the other account's transactions
 /// is not told its id, by any answer that shows the candidates.
 #[tokio::test]
 async fn duplicate_candidates_in_hidden_accounts_are_not_named() {
