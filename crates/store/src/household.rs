@@ -140,6 +140,23 @@ impl Store {
         fetch_forecast_settings(&self.pool).await
     }
 
+    /// The forecast settings and the display currency, seen at one moment: read apart,
+    /// a patch changing both could show between them as a state that never existed.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored row that is not valid settings or a stored
+    /// code that is not a currency.
+    pub async fn household_settings(
+        &self,
+    ) -> Result<(ForecastSettings, Option<Currency>), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
+        let settings = fetch_forecast_settings(&mut *tx).await?;
+        let display = fetch_display_currency(&mut *tx).await?;
+        tx.commit().await.map_err(StoreError::from_sqlx)?;
+        Ok((settings, display))
+    }
+
     /// The household theme, or `None` if none was chosen. A stored value
     /// that is not a valid theme name reads as `None`, like a member's.
     ///

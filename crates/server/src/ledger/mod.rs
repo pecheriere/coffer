@@ -32,6 +32,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
+use crate::config::FxProviderKind;
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::{Problem, ProblemCode};
 
@@ -60,14 +61,14 @@ impl Ledger {
         clock: Arc<dyn Clock>,
         access: Arc<AccessResolver>,
         timezone: TimeZone,
-        rate_provider_configured: bool,
+        fx_provider: FxProviderKind,
     ) -> Self {
         Self {
             store,
             clock,
             access,
             timezone,
-            rate_provider_configured,
+            rate_provider_configured: fx_provider != FxProviderKind::Off,
         }
     }
 

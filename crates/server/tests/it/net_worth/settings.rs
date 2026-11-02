@@ -1,10 +1,13 @@
 //! The display currency (spec §8.10 N8): set by an admin, audited, never guessed, and
 //! the same for every reader.
 
+use std::sync::Arc;
+
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
 use coffer_domain::identity::Scope;
 use coffer_domain::policy::AccountLevel::Write;
+use coffer_server::ledger::settings::ForecastSettingsPatch;
 use coffer_server::secrets::SecretToken;
 use serde_json::{Value, json};
 
@@ -164,6 +167,76 @@ async fn same_value_writes_nothing() {
 
     assert_eq!(world.settings_events().await.len(), logged);
     assert!(world.rows().await == rows, "nothing rebuilt");
+}
+
+/// One value in a patch refused is the whole patch refused: no rebuild, no setting and no
+/// log entry from the part that was good.
+#[tokio::test]
+async fn a_refused_mixed_patch_changes_nothing() {
+    let world = world().await;
+    world.golden().await;
+    let (rows, settings, logged) = (
+        world.rows().await,
+        world.settings_as(&world.admin).await,
+        world.audit_count().await,
+    );
+
+    let (status, _) = world
+        .send(
+            Method::PATCH,
+            SETTINGS,
+            &world.admin,
+            Some(&json!({"display_currency": "EUR", "default_horizon_months": 61})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(world.rows().await == rows, "nothing rebuilt");
+    assert_eq!(world.settings_as(&world.admin).await, settings);
+    assert_eq!(world.audit_count().await, logged);
+}
+
+/// A read sees one state of the row. Each patch here changes both values, so a read
+/// holding EUR with income off, or USD with income on, saw a state that never existed.
+/// A race can only pass by luck, never fail by it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_never_mixes_two_patches() {
+    const FLIPS: usize = 200;
+    let world = world().await;
+    let ledger = Arc::clone(&world.server.ledger);
+    let alice = world.alice;
+    let flip = |currency: &str, income: bool| -> ForecastSettingsPatch {
+        serde_json::from_value(json!({"display_currency": currency, "include_income": income}))
+            .unwrap()
+    };
+    let (eur, usd) = (flip("EUR", true), flip("USD", false));
+    ledger
+        .update_forecast_settings(&alice, usd.clone())
+        .await
+        .unwrap();
+
+    let writer = tokio::spawn({
+        let ledger = Arc::clone(&ledger);
+        async move {
+            for round in 0..FLIPS {
+                let patch = if round % 2 == 0 { &eur } else { &usd };
+                ledger
+                    .update_forecast_settings(&alice, patch.clone())
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    while !writer.is_finished() {
+        let read = ledger.household_settings(&alice).await.unwrap();
+        let currency = read.display_currency.map(|known| known.as_str().to_owned());
+        assert_eq!(
+            currency.as_deref() == Some("EUR"),
+            read.include_income,
+            "a state no patch left"
+        );
+    }
+    writer.await.unwrap();
 }
 
 /// A patch of another field on its own rebuilds nothing.

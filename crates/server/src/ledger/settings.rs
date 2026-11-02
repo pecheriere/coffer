@@ -54,6 +54,7 @@ pub struct HouseholdSettings {
     /// The safety floor. Until one is set a forecast has no number: a silent
     /// floor of 0 would overstate what can be invested. A token without the access a
     /// forecast needs reads `null` whether or not one is set.
+    #[schema(required)]
     pub floor: Option<SafetyFloor>,
     /// Whether planned inflows reduce the cash needed.
     pub include_income: bool,
@@ -126,8 +127,7 @@ impl Ledger {
     ) -> Result<HouseholdSettings, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let access = self.access.resolve(actor).await?;
-        let settings = self.store.forecast_settings().await?;
-        let display_currency = self.store.display_currency().await?;
+        let (settings, display_currency) = self.store.household_settings().await?;
         Ok(HouseholdSettings::new(
             as_shown(actor, &access, settings),
             display_currency,

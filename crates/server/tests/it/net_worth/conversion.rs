@@ -1,9 +1,17 @@
 //! Rates through the API: missing ones are said, old ones are said, and what can't be
 //! converted is never dropped (spec §8.10 N5).
 
+use std::collections::HashMap;
+
 use axum::http::StatusCode;
+use coffer_domain::accounts::AccountKind;
 use coffer_domain::fx::{FxErrorCode, FxFetchStatus};
-use coffer_domain::ids::AccountId;
+use coffer_domain::identity::{Actor, Role, Via};
+use coffer_domain::ids::{AccountId, MemberId};
+use coffer_domain::money::Currency;
+use coffer_server::cli;
+use coffer_server::config::Config;
+use coffer_server::ledger::accounts::NewAccountInput;
 use coffer_server::testkit::TestServer;
 use serde_json::{Value, json};
 
@@ -62,6 +70,93 @@ async fn a_server_with_no_provider_says_so() {
     let report = world.report(ONE_DAY).await;
 
     assert_eq!(rate_missing(&report, "THB")["reason"], "provider_off");
+}
+
+/// What production builds, not the testkit's copy: `open_state` with this configuration
+/// answers a rate missing for a holding of THB, on the system clock's day.
+async fn reason_in_production(vars: &[(&str, &str)]) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    // `open_state` refuses a data directory others can read.
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let mut env = HashMap::from([
+        ("COFFER_PUBLIC_URL", "https://coffer.example".to_owned()),
+        ("COFFER_DATA_DIR", dir.path().to_str().unwrap().to_owned()),
+    ]);
+    env.extend(vars.iter().map(|&(name, value)| (name, value.to_owned())));
+    let config = Config::from_env(|name| env.get(name).cloned()).unwrap();
+    let state = cli::open_state(config).await.unwrap();
+    let alice = Actor {
+        member: MemberId::new(),
+        role: Role::Admin,
+        via: Via::Session,
+    };
+    let today = state
+        .clock
+        .now()
+        .to_zoned(state.config.timezone.clone())
+        .date();
+    state
+        .ledger
+        .update_forecast_settings(
+            &alice,
+            serde_json::from_value(json!({"display_currency": "USD"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut tx = state.store.begin().await.unwrap();
+    tx.rebuild_net_worth(today).await.unwrap();
+    tx.commit().await.unwrap();
+    let holder = state
+        .ledger
+        .create_account(
+            &alice,
+            NewAccountInput {
+                name: "Baht".to_owned(),
+                kind: AccountKind::Checking,
+                currency: Currency::parse("THB").unwrap(),
+                liquidity: None,
+                include_in_net_worth: true,
+                include_in_forecast: true,
+                opening_balance: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    state
+        .ledger
+        .set_manual_balance(&alice, holder.id, today, 50_000)
+        .await
+        .unwrap();
+    let report = state
+        .ledger
+        .net_worth(
+            &alice,
+            serde_json::from_value(json!({"interval": "day", "from": today.to_string()})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    rate_missing(&report, "THB")["reason"].clone()
+}
+
+#[tokio::test]
+async fn production_says_when_no_provider_is_configured() {
+    let reason = reason_in_production(&[("COFFER_FX_PROVIDER", "none")]).await;
+
+    assert_eq!(reason, "provider_off");
+}
+
+#[tokio::test]
+async fn production_fetches_rates_by_default() {
+    let reason = reason_in_production(&[]).await;
+
+    assert_eq!(reason, "not_fetched_yet");
 }
 
 #[tokio::test]

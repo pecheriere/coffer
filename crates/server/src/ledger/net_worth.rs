@@ -39,7 +39,8 @@ const RATE_RANGE_INVERTED: &str = "the range starts after it ends";
 #[serde(deny_unknown_fields)]
 pub struct NetWorthQuery {
     /// The first day, written exactly `YYYY-MM-DD`, in the years 1970 to 2200: by default
-    /// one year before `to`.
+    /// one year before `to` or today, whichever is earlier. A `from` after today, or after
+    /// `to`, is refused with 422.
     #[serde(default, deserialize_with = "strict_date::deserialize_option")]
     pub from: Option<Date>,
     /// The last day, written exactly `YYYY-MM-DD`, in the years 1970 to 2200: by default
@@ -140,9 +141,11 @@ impl Ledger {
         let today = self.today();
         let to = query.to.unwrap_or(today);
         validate_as_of(to).map_err(plan_items::invalid)?;
+        // No day after today is answered, so that is where a default year ends.
+        let answerable = to.min(today);
         let from = match query.from {
             Some(from) => from,
-            None => to
+            None => answerable
                 .checked_sub(1.year())
                 .map_err(|_| refused(NetWorthError::OutOfRange))?
                 .max(MIN_VALUE_DATE),
@@ -153,7 +156,6 @@ impl Ledger {
         // Refused from the query alone, before any read, so a refusal says nothing of what
         // the table holds. The store is asked up to the same day the report ends on: a
         // table filled past today mustn't move the last period's end.
-        let answerable = to.min(today);
         period_ends(from, answerable, interval).map_err(refused)?;
         let data = self
             .store

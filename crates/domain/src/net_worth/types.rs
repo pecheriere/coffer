@@ -119,17 +119,23 @@ pub struct NetWorthReport {
     #[cfg_attr(feature = "openapi", schema(required))]
     pub display_currency: Option<Currency>,
     pub interval: NetWorthInterval,
+    /// The first day of the range answered.
     pub from: Date,
+    /// The last day of the range as asked: it can be later than the last point, which is
+    /// never after today or `through`.
     pub to: Date,
     /// The last day with values: no later date is answered.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub through: Option<Date>,
+    /// How far to trust the numbers: `firm`, `provisional` or `unavailable`.
     pub status: NetWorthStatus,
     /// One per period holding a counted balance or a missing value, oldest first.
     pub points: Vec<NetWorthPoint>,
     /// Every visible account, with whether it counts.
     pub accounts: Vec<AccountSeries>,
+    /// Why there is no number; not empty exactly when `status` is `unavailable`.
     pub blockers: Vec<NetWorthBlocker>,
+    /// What keeps the numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
 }
 
@@ -152,6 +158,7 @@ pub enum NetWorthStatus {
 pub struct NetWorthPoint {
     /// The day valued: the last of the period, or the last available.
     pub on: Date,
+    /// The first day of the period inside the range: never before the range's `from`.
     pub period_start: Date,
     /// `on` is not the natural end of the period.
     pub partial: bool,
@@ -200,7 +207,8 @@ pub struct AccountSeries {
     /// a drop on that day is an account closing, not money.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub closed_on: Option<Date>,
-    /// Its value at each point, if it had one by then.
+    /// Its value at each point, if it had one by then. An account switched out of net
+    /// worth (`not_counted`) has none.
     pub points: Vec<AccountPoint>,
 }
 
@@ -235,7 +243,10 @@ pub struct AccountPoint {
     pub conversion: ConversionState,
 }
 
-/// Why there is no number to trust.
+/// Why there is no number to trust. `display_currency_not_set`: an admin has to choose
+/// one, and points still hold their sums per currency. `rebuilding`: the daily values are
+/// being rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in
+/// this range, which is not a net worth of zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -258,7 +269,9 @@ pub enum NetWorthCaution {
     RateMissing {
         currency: Currency,
         reason: RateMissingReason,
+        /// The first point lacking it.
         first_on: Date,
+        /// The last point lacking it.
         last_on: Date,
     },
     /// The point at which an amount used the oldest rate, older than a week.

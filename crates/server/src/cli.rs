@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
-use crate::config::{Config, ConfigError, FxProviderKind};
+use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
 use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
@@ -339,7 +339,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         clock.clone(),
         Arc::clone(&access),
         config.timezone.clone(),
-        config.fx_provider != FxProviderKind::Off,
+        config.fx_provider,
     ));
     let egress = Egress::from_config(&config)?;
     let registry = Arc::new(ProviderRegistry::from_config(&config, &egress)?);

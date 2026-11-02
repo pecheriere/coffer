@@ -11,6 +11,7 @@ mod access;
 mod answer;
 mod bind;
 mod conversion;
+mod documented;
 mod fx_api;
 mod settings;
 

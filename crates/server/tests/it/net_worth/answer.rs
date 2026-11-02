@@ -137,6 +137,31 @@ async fn a_default_from_stays_inside_the_years_answered() {
     assert_eq!(report["from"], "1970-01-01");
 }
 
+/// A `to` past today still answers the last year: only days up to today can be points, so
+/// a year before a future `to` would be a range that starts after it ends.
+#[tokio::test]
+async fn a_to_after_today_answers_the_year_up_to_today() {
+    let world = world().await;
+    world.golden().await;
+
+    let report = world.report("to=2030-01-01").await;
+
+    assert_eq!(report["from"], "2025-11-02");
+    assert_eq!(report["to"], "2030-01-01");
+    assert_eq!(days(&report), ["2026-10-31", TODAY]);
+}
+
+#[tokio::test]
+async fn a_from_after_today_is_refused() {
+    let world = world().await;
+
+    let (status, text) = world.report_as(&world.admin, "from=2026-11-03").await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body["detail"], "the range starts after it ends");
+}
+
 #[tokio::test]
 async fn account_points_false_keeps_the_summaries() {
     let world = world().await;
