@@ -40,6 +40,7 @@ use crate::vault::CredentialVault;
 mod accounts;
 mod convert;
 mod fetch;
+mod released;
 mod results;
 
 const RUN_FINISHED: &str = "the sync run has already finished";

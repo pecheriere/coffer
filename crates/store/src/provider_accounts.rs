@@ -8,7 +8,7 @@ use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Sqlite, SqliteExecutor};
 
-use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time, time_opt};
+use crate::convert::{corrupt, int, parsed, parsed_opt, text, text_opt, time, time_opt};
 use crate::members::expect_one;
 use crate::{Store, StoreError, StoreTx};
 
@@ -16,7 +16,8 @@ macro_rules! columns {
     () => {
         "id, connection_id, provider_account_id, name, institution, currency_raw, kind_hint, \
          account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at, \
-         last_applied_at"
+         last_applied_at, held_syncs, hold_released, released_records, release_withdrawn, \
+         held_records"
     };
 }
 
@@ -67,6 +68,20 @@ pub struct ProviderAccountRecord {
     pub last_seen_at: Timestamp,
     /// When its data was last applied in full; `None` until then.
     pub last_applied_at: Option<Timestamp>,
+    /// How many syncs in a row left the sync cursor in place because this
+    /// account's records could not be stored.
+    pub held_syncs: u32,
+    /// Whether a member asked for the cursor to move past this account's
+    /// failing records, which stands until a sync moves it.
+    pub hold_released: bool,
+    /// How many of its records the member agreed to when asking.
+    pub released_records: u32,
+    /// Whether such a request was withdrawn because what is wrong with the
+    /// account, or how many records it has, changed after the member asked.
+    pub release_withdrawn: bool,
+    /// How many records the last sync that held the cursor fetched for this
+    /// account and could not store.
+    pub held_records: u32,
 }
 
 /// A provider account as a fetch reports it: created the first time it is
@@ -107,6 +122,14 @@ fn provider_account_from_row(row: &SqliteRow) -> Result<ProviderAccountRecord, S
         first_seen_at: time(row, "first_seen_at")?,
         last_seen_at: time(row, "last_seen_at")?,
         last_applied_at: time_opt(row, "last_applied_at")?,
+        held_syncs: u32::try_from(int(row, "held_syncs")?)
+            .map_err(|_| corrupt("a negative hold count"))?,
+        hold_released: int(row, "hold_released")? != 0,
+        released_records: u32::try_from(int(row, "released_records")?)
+            .map_err(StoreError::backend)?,
+        release_withdrawn: int(row, "release_withdrawn")? != 0,
+        held_records: u32::try_from(int(row, "held_records")?)
+            .map_err(|_| corrupt("a negative record count"))?,
     })
 }
 
@@ -222,7 +245,8 @@ impl StoreTx {
         expect_one(result.rows_affected())
     }
 
-    /// Record that a provider account's data was applied in full at `at`.
+    /// Record that a provider account's data was applied in full at `at`,
+    /// which ends any hold of the sync cursor it caused.
     ///
     /// # Errors
     ///
@@ -232,12 +256,163 @@ impl StoreTx {
         id: ProviderAccountId,
         at: Timestamp,
     ) -> Result<(), StoreError> {
-        let result = sqlx::query("UPDATE provider_accounts SET last_applied_at = ? WHERE id = ?")
-            .bind(at.as_millisecond())
+        let result = sqlx::query(
+            "UPDATE provider_accounts SET last_applied_at = ?, held_syncs = 0, \
+             hold_released = 0, released_records = 0, release_withdrawn = 0, held_records = 0 WHERE id = ?",
+        )
+        .bind(at.as_millisecond())
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// Record that a sync left the sync cursor in place because this
+    /// provider account's `records` could not be stored.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn count_cursor_hold(
+        &mut self,
+        id: ProviderAccountId,
+        records: u32,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE provider_accounts SET held_syncs = held_syncs + 1, held_records = ? \
+             WHERE id = ?",
+        )
+        .bind(i64::from(records))
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// Record that the sync cursor no longer waits for this provider
+    /// account: its records were passed for good, or fetching them again
+    /// cannot help.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn clear_cursor_hold(&mut self, id: ProviderAccountId) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, released_records = 0, release_withdrawn = 0, \
+             held_records = 0 WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// End the cursor hold of every provider account of `connection` whose
+    /// provider id is not in `present`: a sync that completed without them
+    /// says nothing is waiting for them, and an old release must not pass
+    /// records they get later.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn clear_cursor_holds_except(
+        &mut self,
+        connection: ConnectionId,
+        present: &[String],
+    ) -> Result<(), StoreError> {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "UPDATE provider_accounts SET held_syncs = 0, hold_released = 0, released_records = 0, release_withdrawn = 0, \
+             held_records = 0 WHERE connection_id = ",
+        );
+        query.push_bind(connection.to_string());
+        query.push(" AND (held_syncs != 0 OR hold_released != 0)");
+        if !present.is_empty() {
+            query.push(" AND provider_account_id NOT IN (");
+            let mut ids = query.separated(", ");
+            for id in present {
+                ids.push_bind(id.as_str());
+            }
+            query.push(")");
+        }
+        query
+            .build()
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// The provider accounts of `connection` whose records have held the
+    /// sync cursor for at least `min_held_syncs` syncs, by id.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or an id that no longer parses.
+    pub async fn held_provider_accounts(
+        &mut self,
+        connection: ConnectionId,
+        min_held_syncs: u32,
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM provider_accounts WHERE connection_id = ? AND held_syncs >= ? \
+             ORDER BY id",
+        )
+        .bind(connection.to_string())
+        .bind(i64::from(min_held_syncs))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        rows.into_iter()
+            .map(|(id,)| id.parse().map_err(StoreError::backend))
+            .collect()
+    }
+
+    /// Ask that a sync pass the failing records of the provider accounts
+    /// `ids`, as soon as one can move the cursor. The number of records each
+    /// last held is what the member agrees to.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if one does not exist.
+    pub async fn release_cursor_holds(
+        &mut self,
+        ids: &[ProviderAccountId],
+    ) -> Result<(), StoreError> {
+        for id in ids {
+            let result = sqlx::query(
+                "UPDATE provider_accounts SET hold_released = 1, \
+                 released_records = held_records, release_withdrawn = 0 WHERE id = ?",
+            )
             .bind(id.to_string())
             .execute(&mut *self.tx)
             .await
             .map_err(StoreError::from_sqlx)?;
+            expect_one(result.rows_affected())?;
+        }
+        Ok(())
+    }
+
+    /// Take back a member's request to pass the failing records of the
+    /// provider account `id`, which stays held, and say so on it.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn withdraw_cursor_release(
+        &mut self,
+        id: ProviderAccountId,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE provider_accounts SET hold_released = 0, released_records = 0, \
+             release_withdrawn = 1 WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         expect_one(result.rows_affected())
     }
 

@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 
 use crate::config::PlaidConfig;
 use crate::egress::{Egress, EgressError, HostAllowList, OutboundRequest};
-use crate::sync::apply::MAX_PROVIDER_ID_CHARS;
+use crate::sync::apply::{MAX_PROVIDER_ID_CHARS, valid_provider_id};
 
 const PLAID_VERSION: HeaderName = HeaderName::from_static("plaid-version");
 const PLAID_VERSION_VALUE: HeaderValue = HeaderValue::from_static("2020-09-14");
@@ -602,7 +602,7 @@ impl UnreadableAccount {
                 name: None,
             },
             |ids| Self {
-                account_id: storable_id(ids.account_id),
+                account_id: usable_account_id(ids.account_id),
                 name: text(ids.name),
             },
         )
@@ -618,7 +618,7 @@ impl UnusableRecord {
             },
             |ids| Self {
                 transaction_id: storable_id(ids.transaction_id),
-                account_id: storable_id(ids.account_id),
+                account_id: usable_account_id(ids.account_id),
             },
         )
     }
@@ -629,7 +629,7 @@ impl PlaidAccount {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawAccount<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
-        if over_long(&raw.account_id) {
+        if !valid_provider_id(&raw.account_id) {
             return Err(PlaidError::Invalid(RECORD_UNREADABLE));
         }
         let current = raw.balances.current.map(amount).transpose()?;
@@ -651,7 +651,7 @@ impl PlaidTransaction {
     fn parse(record: &str) -> Result<Self, PlaidError> {
         let raw: RawTransaction<'_> =
             serde_json::from_str(record).map_err(|_| PlaidError::Invalid(RECORD_UNREADABLE))?;
-        if over_long(&raw.transaction_id) || over_long(&raw.account_id) {
+        if over_long(&raw.transaction_id) || !valid_provider_id(&raw.account_id) {
             return Err(PlaidError::Invalid(RECORD_UNREADABLE));
         }
         Ok(Self {
@@ -680,7 +680,8 @@ impl SyncPage {
         for record in &raw.removed {
             match serde_json::from_str::<RawRemoved>(record.get()) {
                 Ok(parsed)
-                    if !over_long(&parsed.transaction_id) && !over_long(&parsed.account_id) =>
+                    if !over_long(&parsed.transaction_id)
+                        && valid_provider_id(&parsed.account_id) =>
                 {
                     removed.push(RemovedTransaction {
                         transaction_id: parsed.transaction_id,
@@ -759,6 +760,11 @@ fn over_long(id: &str) -> bool {
 /// The id `raw` holds, if it holds one coffer can store.
 fn storable_id(raw: Option<&RawValue>) -> Option<String> {
     text(raw).filter(|id| !over_long(id))
+}
+
+/// The account id `raw` holds, if it holds one coffer can use.
+fn usable_account_id(raw: Option<&RawValue>) -> Option<String> {
+    text(raw).filter(|id| valid_provider_id(id))
 }
 
 /// A JSON number as an exact decimal: a string, an exponent or any other

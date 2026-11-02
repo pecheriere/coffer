@@ -138,3 +138,31 @@ async fn fetch_request_carries_household_today() {
     assert_eq!(requests[0].today, date(2026, 11, 1));
     assert_eq!(requests[0].timezone, "Pacific/Auckland");
 }
+
+/// A provider asked for a window has no cursor to hold, so an account that
+/// keeps failing is no hold, however many syncs it fails.
+#[tokio::test]
+async fn a_window_provider_has_no_cursor_to_hold() {
+    let world = world().await;
+    let failing = world.account("Failing", "USD").await;
+    world.bound("acct-x", "USD", failing).await;
+    world.server.inject_source_insert_failure().await;
+    for _ in 0..4 {
+        world.fake.push(Ok(fetched(vec![provider_account(
+            "acct-x",
+            "USD",
+            world.days_ago(88),
+            vec![txn(INJECTED_FAILURE_RECORD_ID, world.days_ago(1), "-3")],
+        )])));
+        assert_eq!(world.sync().await.status, SyncRunStatus::Partial);
+    }
+
+    assert_eq!(world.provider_account("acct-x").await.held_syncs, 0);
+    let views = world
+        .server
+        .sync
+        .list_connections(&world.alice)
+        .await
+        .unwrap();
+    assert!(views.iter().all(|view| view.held_cursor.is_none()));
+}

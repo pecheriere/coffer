@@ -196,6 +196,78 @@ async fn failed_report_creates_an_account_but_changes_no_known_field() {
 }
 
 #[tokio::test]
+async fn cursor_holds_are_counted_released_and_ended() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let mut tx = store.begin().await.unwrap();
+    let connection = tx
+        .insert_connection(NewConnection {
+            provider: "testbank",
+            label: ConnectionLabel::parse("Bank").unwrap(),
+            owner,
+            credentials: vec![1],
+            created_at: at(0),
+        })
+        .await
+        .unwrap();
+    let holding = tx
+        .upsert_provider_account(upsert(connection.id, "Holding", None, 1))
+        .await
+        .unwrap();
+    let mut other = upsert(connection.id, "Brief", None, 1);
+    other.provider_account_id = "acct-2".into();
+    let brief = tx.upsert_provider_account(other).await.unwrap();
+    assert_eq!((holding.held_syncs, holding.hold_released), (0, false));
+    for _ in 0..3 {
+        tx.count_cursor_hold(holding.id, 7).await.unwrap();
+    }
+    tx.count_cursor_hold(brief.id, 2).await.unwrap();
+
+    let held = tx.held_provider_accounts(connection.id, 3).await.unwrap();
+    assert_eq!(held, [holding.id], "only the accounts that held long");
+    tx.release_cursor_holds(&held).await.unwrap();
+    let holding = tx.get_provider_account(holding.id).await.unwrap();
+    assert_eq!((holding.held_syncs, holding.hold_released), (3, true));
+    assert_eq!(holding.held_records, 7);
+    let brief = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!((brief.held_syncs, brief.hold_released), (1, false));
+
+    tx.clear_cursor_hold(holding.id).await.unwrap();
+    let cleared = tx.get_provider_account(holding.id).await.unwrap();
+    assert_eq!((cleared.held_syncs, cleared.hold_released), (0, false));
+
+    tx.count_cursor_hold(brief.id, 2).await.unwrap();
+    tx.set_provider_account_applied(brief.id, at(2))
+        .await
+        .unwrap();
+    let applied = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!((applied.held_syncs, applied.hold_released), (0, false));
+    assert_eq!(applied.held_records, 0);
+
+    // A completed fetch without an account ends its hold and release.
+    tx.count_cursor_hold(holding.id, 1).await.unwrap();
+    tx.release_cursor_holds(&[holding.id]).await.unwrap();
+    tx.count_cursor_hold(brief.id, 1).await.unwrap();
+    tx.clear_cursor_holds_except(connection.id, &["acct-2".to_owned()])
+        .await
+        .unwrap();
+    let absent = tx.get_provider_account(holding.id).await.unwrap();
+    assert_eq!((absent.held_syncs, absent.hold_released), (0, false));
+    let present = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!(present.held_syncs, 1, "an account the fetch had is left");
+    tx.clear_cursor_holds_except(connection.id, &[])
+        .await
+        .unwrap();
+    let none_left = tx.get_provider_account(brief.id).await.unwrap();
+    assert_eq!(none_left.held_syncs, 0);
+    assert!(matches!(
+        tx.count_cursor_hold(coffer_domain::ids::ProviderAccountId::new(), 1)
+            .await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+#[tokio::test]
 async fn provider_account_refresh_keeps_binding_and_balance() {
     let (_dir, store) = open().await;
     let owner = member(&store).await;
