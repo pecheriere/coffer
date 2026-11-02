@@ -16,6 +16,7 @@ mod duplicates;
 mod egress;
 mod egress_relay;
 mod forecast;
+mod fx_ecb;
 mod grants;
 mod healthcheck;
 mod household_settings;

@@ -658,3 +658,39 @@ fn simplefin_hosts_default_to_the_public_bridges() {
         );
     }
 }
+
+#[test]
+fn fx_provider_defaults_to_ecb() {
+    let config = with_public_url("https://coffer.example").unwrap();
+    assert_eq!(config.fx_provider, FxProviderKind::Ecb);
+}
+
+#[test]
+fn fx_provider_none_is_accepted() {
+    let config = with_var("COFFER_FX_PROVIDER", "none").unwrap();
+    assert_eq!(config.fx_provider, FxProviderKind::Off);
+    let config = with_var("COFFER_FX_PROVIDER", "ecb").unwrap();
+    assert_eq!(config.fx_provider, FxProviderKind::Ecb);
+}
+
+#[test]
+fn unknown_fx_provider_is_refused_without_echo() {
+    for value in ["xe-rates", "ECB", "NONE", " ecb", "ecb ", "off", ""] {
+        let err = with_var("COFFER_FX_PROVIDER", value).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::Invalid {
+                    var: "COFFER_FX_PROVIDER",
+                    ..
+                }
+            ),
+            "the error must blame the variable"
+        );
+        assert_eq!(
+            err.to_string(),
+            "COFFER_FX_PROVIDER is invalid: expected ecb or none",
+            "the error must hold a fixed text, never the value"
+        );
+    }
+}
