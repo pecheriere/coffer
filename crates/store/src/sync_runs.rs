@@ -49,7 +49,9 @@ pub struct RunCounts {
     /// Runs queued or running, plus finished runs started after the given
     /// instant.
     pub started_or_pending: u32,
-    /// When the most recent run started.
+    /// When the most recent run started at or before the given `now`. A start
+    /// later than that came from a clock that ran ahead and says nothing of
+    /// when to start next; the run still counts in `started_or_pending`.
     pub last_started_at: Option<Timestamp>,
     /// Whether a run is queued or running.
     pub in_flight: bool,
@@ -261,8 +263,8 @@ impl StoreTx {
     }
 
     /// The counts rate limits use for `connection`: runs queued, running or
-    /// started after `since`, the last start, and whether a run is in
-    /// flight. Read inside the transaction that queues a run, so two
+    /// started after `since`, the last start at or before `now`, and whether a
+    /// run is in flight. Read inside the transaction that queues a run, so two
     /// requests cannot both pass a limit.
     ///
     /// # Errors
@@ -272,15 +274,17 @@ impl StoreTx {
         &mut self,
         connection: ConnectionId,
         since: Timestamp,
+        now: Timestamp,
     ) -> Result<RunCounts, StoreError> {
         let row = sqlx::query(
             "SELECT \
              COALESCE(SUM(status IN ('queued', 'running') OR started_at > ?), 0) AS counted, \
-             MAX(started_at) AS last_started_at, \
+             MAX(CASE WHEN started_at <= ? THEN started_at END) AS last_started_at, \
              COALESCE(MAX(status IN ('queued', 'running')), 0) AS in_flight \
              FROM sync_runs WHERE connection_id = ?",
         )
         .bind(since.as_millisecond())
+        .bind(now.as_millisecond())
         .bind(connection.to_string())
         .fetch_one(&mut *self.tx)
         .await

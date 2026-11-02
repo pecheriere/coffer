@@ -24,7 +24,10 @@ const BUDGET_WINDOW: SignedDuration = SignedDuration::from_hours(24);
 /// [`SyncError::InProgress`] while a run is queued or running, else
 /// [`SyncError::RateLimited`] with the wait until both the minimum interval
 /// since the last start (`min_scheduled_interval` for the schedule,
-/// `min_interval` otherwise) and the daily budget allow one.
+/// `min_interval` otherwise) and the daily budget allow one. A start later
+/// than `now` came from a clock that ran ahead: it counts against the daily
+/// budget, which is what the provider enforces, but sets no minimum interval,
+/// or the connection would wait for that date.
 pub(super) async fn check_limits(
     tx: &mut StoreTx,
     connection: ConnectionId,
@@ -33,7 +36,7 @@ pub(super) async fn check_limits(
     now: Timestamp,
 ) -> Result<(), SyncError> {
     let since = now.checked_sub(BUDGET_WINDOW).unwrap_or(Timestamp::MIN);
-    let counts = tx.sync_run_counts(connection, since).await?;
+    let counts = tx.sync_run_counts(connection, since, now).await?;
     if counts.in_flight {
         return Err(SyncError::InProgress);
     }

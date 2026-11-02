@@ -144,7 +144,9 @@ pub struct ConnectionView {
     pub last_success_at: Option<Timestamp>,
     /// When the schedule syncs it next: the last attempt plus the longer of
     /// the server's sync interval and the provider's minimum. `null` before
-    /// the first attempt and for connections the schedule skips.
+    /// the first attempt and for connections the schedule skips. Not later
+    /// than now when the last attempt is: that came from a clock that ran
+    /// ahead, and the connection is due.
     #[schema(required)]
     pub next_sync_at: Option<Timestamp>,
     /// Set while the sync cursor is held; `null` otherwise, for a removed
@@ -274,9 +276,14 @@ impl SyncService {
         let next_sync_at = match connection.status {
             ConnectionStatus::Active | ConnectionStatus::Error => {
                 let interval = self.effective_interval(&connection);
-                connection
-                    .last_attempt_at
-                    .map(|at| at.checked_add(interval).unwrap_or(Timestamp::MAX))
+                let now = self.clock.now();
+                connection.last_attempt_at.map(|at| {
+                    if at > now {
+                        now
+                    } else {
+                        at.checked_add(interval).unwrap_or(Timestamp::MAX)
+                    }
+                })
             }
             ConnectionStatus::ReauthRequired | ConnectionStatus::Removed => None,
         };

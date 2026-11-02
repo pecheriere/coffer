@@ -250,7 +250,11 @@ async fn daily_budget_frees_exactly_after_24_hours() {
     world.server.clock.set(first.checked_add(day).unwrap());
     let mut tx = world.server.store.begin().await.unwrap();
     let counts = tx
-        .sync_run_counts(world.connection, world.now().checked_sub(day).unwrap())
+        .sync_run_counts(
+            world.connection,
+            world.now().checked_sub(day).unwrap(),
+            world.now(),
+        )
         .await
         .unwrap();
     drop(tx);
@@ -258,4 +262,93 @@ async fn daily_budget_frees_exactly_after_24_hours() {
     sync.request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
         .await
         .unwrap();
+}
+
+/// Runs once on a clock 30 days ahead, then sets the clock right again, and
+/// checks that `trigger` is accepted: a run started on a clock that ran ahead
+/// sets no minimum interval, or the connection would wait for that date.
+async fn assert_accepted_after_a_start_in_the_future(trigger: SyncTrigger) {
+    let world = world().await;
+    let sync = &world.server.sync;
+    let right = world.now();
+    world.server.clock.set(
+        right
+            .checked_add(SignedDuration::from_hours(24 * 30))
+            .unwrap(),
+    );
+    let run = sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .unwrap();
+    sync.run(run.id).await.unwrap();
+
+    world.server.clock.set(right);
+    let actor = (trigger == SyncTrigger::Manual).then_some(&world.alice);
+    sync.request_sync(actor, world.connection, trigger)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_start_in_the_future_does_not_hold_back_a_manual_sync() {
+    assert_accepted_after_a_start_in_the_future(SyncTrigger::Manual).await;
+}
+
+#[tokio::test]
+async fn a_start_in_the_future_does_not_hold_back_a_scheduled_sync() {
+    assert_accepted_after_a_start_in_the_future(SyncTrigger::Schedule).await;
+}
+
+/// What the provider counts is the requests made, not the dates written down:
+/// runs started on a clock that ran ahead still use the daily budget when the
+/// clock is right again, so a clock that flips cannot spend it twice.
+#[tokio::test]
+async fn starts_in_the_future_still_use_the_daily_budget() {
+    let world = world().await;
+    let sync = &world.server.sync;
+    let right = world.now();
+    world.server.clock.set(
+        right
+            .checked_add(SignedDuration::from_hours(24 * 30))
+            .unwrap(),
+    );
+    for _ in 0..16 {
+        let run = sync
+            .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+            .await
+            .unwrap();
+        sync.run(run.id).await.unwrap();
+        world.server.clock.advance(SignedDuration::from_hours(1));
+    }
+
+    world.server.clock.set(right);
+    let err = sync
+        .request_sync(Some(&world.alice), world.connection, SyncTrigger::Manual)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, SyncError::RateLimited { .. }));
+}
+
+/// The date shown for the next sync is not a date in the future that the
+/// schedule no longer waits for.
+#[tokio::test]
+async fn next_sync_is_now_when_the_last_attempt_is_in_the_future() {
+    let world = world().await;
+    let right = world.now();
+    world.server.clock.set(
+        right
+            .checked_add(SignedDuration::from_hours(24 * 30))
+            .unwrap(),
+    );
+    world.sync_once(Vec::new()).await;
+
+    world.server.clock.set(right);
+    let views = world
+        .server
+        .sync
+        .list_connections(&world.alice)
+        .await
+        .unwrap();
+    assert_eq!(views[0].next_sync_at, Some(right));
 }

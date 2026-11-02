@@ -166,6 +166,20 @@ fn simplefin_first_window_is_within_the_bridge_limit_in_every_time_zone() {
     );
 }
 
+/// A time later than today came from a clock that ran ahead, and the bridge
+/// refuses a window that starts in the future.
+#[test]
+fn a_window_never_starts_after_today() {
+    let utc = TimeZone::UTC;
+    let today = date(2026, 10, 31);
+    let ahead: jiff::Timestamp = "2027-03-01T00:00:00Z".parse().unwrap();
+    assert_eq!(window_start(&[], Some(ahead), today, &utc, 90, 14), today);
+    assert_eq!(
+        window_start(&[(ahead, Some(ahead))], None, today, &utc, 90, 14),
+        today
+    );
+}
+
 #[test]
 fn window_rules() {
     let utc = TimeZone::UTC;

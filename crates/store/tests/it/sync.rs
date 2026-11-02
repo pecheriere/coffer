@@ -451,6 +451,36 @@ async fn sync_run_lifecycle() {
     );
 }
 
+/// A start after `now` came from a clock that ran ahead: it counts toward the
+/// budget but is not the last start.
+#[tokio::test]
+async fn sync_run_counts_ignore_a_start_after_now_as_the_last_start() {
+    let (_dir, store) = open().await;
+    let owner = member(&store).await;
+    let connection = add_connection(&store, owner).await;
+    let earlier = queue(&store, connection, SyncTrigger::Schedule, None, 10).await;
+    let ahead = queue(&store, connection, SyncTrigger::Schedule, None, 500).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.start_sync_run(earlier, at(11)).await.unwrap();
+    tx.finish_sync_run(earlier, SyncRunStatus::Succeeded, None, at(12))
+        .await
+        .unwrap();
+    tx.start_sync_run(ahead, at(501)).await.unwrap();
+    tx.finish_sync_run(ahead, SyncRunStatus::Succeeded, None, at(502))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let counts = store
+        .begin()
+        .await
+        .unwrap()
+        .sync_run_counts(connection, at(0), at(100))
+        .await
+        .unwrap();
+    assert_eq!(counts.last_started_at, Some(at(11)));
+    assert_eq!(counts.started_or_pending, 2);
+}
+
 #[tokio::test]
 async fn sync_run_counts_queue_and_interruption() {
     let (_dir, store) = open().await;
@@ -462,7 +492,7 @@ async fn sync_run_counts_queue_and_interruption() {
             .begin()
             .await
             .unwrap()
-            .sync_run_counts(connection, at(0))
+            .sync_run_counts(connection, at(0), at(1_000))
             .await
             .unwrap(),
         RunCounts {
@@ -491,7 +521,7 @@ async fn sync_run_counts_queue_and_interruption() {
             .begin()
             .await
             .unwrap()
-            .sync_run_counts(connection, at(50))
+            .sync_run_counts(connection, at(50), at(1_000))
             .await
             .unwrap(),
         RunCounts {
@@ -507,7 +537,7 @@ async fn sync_run_counts_queue_and_interruption() {
             .begin()
             .await
             .unwrap()
-            .sync_run_counts(connection, at(50))
+            .sync_run_counts(connection, at(50), at(1_000))
             .await
             .unwrap(),
         RunCounts {

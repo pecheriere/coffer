@@ -30,6 +30,7 @@ mod plaid_link;
 mod plaid_sync;
 mod plan_items;
 mod plan_vs_actual;
+mod scheduler_clock;
 mod serve;
 mod sessions;
 mod simplefin;
