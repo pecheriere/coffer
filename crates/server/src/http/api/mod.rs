@@ -14,6 +14,7 @@ mod members;
 pub mod openapi;
 mod plan_items;
 mod provider_accounts;
+mod reports;
 mod router;
 mod transactions;
 
@@ -68,6 +69,7 @@ fn routes() -> ApiRouter {
         ))
         .op(routes!(forecast::get))
         .op(routes!(forecast::what_if))
+        .op(routes!(reports::plan_vs_actual))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

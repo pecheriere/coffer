@@ -17,6 +17,7 @@ mod schedule;
 mod settings;
 pub mod strict_date;
 
+pub(crate) use goal::div_half_even;
 pub use goal::{goal_accrued, goal_need, goal_remaining};
 pub use month::{CalendarMonth, InvalidMonth};
 pub use settings::{ForecastSettings, SafetyFloor};

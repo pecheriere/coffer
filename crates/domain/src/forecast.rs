@@ -125,7 +125,7 @@ fn months_after(date: Date, months: u8) -> Date {
     }
 }
 
-fn money(minor_units: i128, currency: Currency) -> Result<Money, ForecastError> {
+pub(crate) fn money(minor_units: i128, currency: Currency) -> Result<Money, ForecastError> {
     Ok(Money {
         minor_units: i64::try_from(minor_units).map_err(|_| ForecastError::OutOfRange)?,
         currency,

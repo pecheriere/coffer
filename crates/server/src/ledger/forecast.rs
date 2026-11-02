@@ -99,7 +99,7 @@ pub struct WhatIfRequest {
 impl Ledger {
     /// Whether `actor` may have a forecast: it sums every account (R2), so an `all`
     /// grant at `transactions`, decided before anything is read.
-    async fn authorize_forecast(&self, actor: &Actor) -> Result<(), LedgerError> {
+    pub(super) async fn authorize_forecast(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Transactions)
             .await

@@ -29,6 +29,7 @@ pub(super) mod tags {
     pub const TRANSACTIONS: &str = "transactions";
     pub const PLAN: &str = "plan";
     pub const FORECAST: &str = "forecast";
+    pub const REPORTS: &str = "reports";
     pub const CONNECTIONS: &str = "connections";
     pub const AUDIT: &str = "audit";
     pub const META: &str = "meta";
@@ -43,7 +44,7 @@ pub fn document() -> OpenApi {
 }
 
 /// What each of [`tags`] covers.
-fn operation_tags() -> [Tag; 11] {
+fn operation_tags() -> [Tag; 12] {
     let tag = |name: &str, description: &str| {
         TagBuilder::new()
             .name(name)
@@ -84,6 +85,11 @@ fn operation_tags() -> [Tag; 11] {
              that could be invested. A planned amount is a positive magnitude with a \
              direction; a balance, `cash_available`, `projected_cash` and `surplus` carry a \
              sign, and a negative `surplus` is a shortfall.",
+        ),
+        tag(
+            tags::REPORTS,
+            "What happened against what was planned, by category and month. `actual` is \
+             positive for what the category's kind counts.",
         ),
         tag(
             tags::CONNECTIONS,
