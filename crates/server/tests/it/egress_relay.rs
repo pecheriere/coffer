@@ -17,6 +17,9 @@ use std::time::Duration;
 
 use coffer_server::config::{Config, ConfigError};
 use coffer_server::egress::{Egress, EgressError, HostAllowList, OutboundRequest};
+use coffer_server::fx::ecb::ECB_HOST;
+use coffer_server::fx::rate_provider;
+use jiff::civil::date;
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
 use openssl::ec::{EcGroup, EcKey};
@@ -35,6 +38,7 @@ use url::Url;
 
 const HOST: &str = "bridge.example";
 const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok";
+const EMPTY: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
 const REDIRECT: &[u8] = b"HTTP/1.1 302 Found\r\nlocation: https://bridge.example/next\r\n\
     content-length: 0\r\nconnection: close\r\n\r\n";
 
@@ -414,6 +418,37 @@ async fn configured_relay_replaces_the_public_address_filter() {
         matches!(err, EgressError::Resolution),
         "without the relay the public-address filter must refuse the name"
     );
+}
+
+/// The provider the configuration registers reaches the rate host through the
+/// relay: its name in SNI and `Host`, its certificate verified.
+#[tokio::test]
+async fn the_rate_host_goes_through_the_relay_under_its_own_name() {
+    let ca = TestCa::new();
+    let mut relay = start_relay(ca.server_identity(ECB_HOST), EMPTY);
+    let egress = Egress::relay_for_tests(relay.addr, ca.root());
+    let config = config_with(&[]).unwrap();
+    let provider = rate_provider(&config, &egress).unwrap().unwrap();
+
+    let usd = coffer_domain::money::Currency::parse("USD").unwrap();
+    let rates = provider.fetch(usd, None, date(2026, 11, 2)).await.unwrap();
+    assert!(rates.is_empty(), "an empty answer must be no rates");
+
+    let seen = relay.seen.recv().await.unwrap();
+    assert_eq!(seen.sni.as_deref(), Some(ECB_HOST));
+    let head = seen.head.unwrap();
+    assert!(
+        head.starts_with(
+            "GET /service/data/EXR/D.USD.EUR.SP00.A?format=csvdata&detail=dataonly HTTP/1.1\r\n"
+        ),
+        "the request line must name the series"
+    );
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("\r\nhost: data-api.ecb.europa.eu\r\n"),
+        "the Host header must be the real host"
+    );
+    assert_eq!(relay.accepted.load(Ordering::SeqCst), 1);
 }
 
 /// Accepts one connection, sends its request line down the channel and

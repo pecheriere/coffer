@@ -8,6 +8,7 @@ pub mod accounts;
 pub mod categories;
 pub mod duplicates;
 pub mod forecast;
+pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;
 pub mod settings;
@@ -31,6 +32,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
+use crate::config::FxProviderKind;
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::{Problem, ProblemCode};
 
@@ -41,6 +43,8 @@ pub struct Ledger {
     access: Arc<AccessResolver>,
     /// The household's zone, which decides what day it is (spec §8.7).
     timezone: TimeZone,
+    /// Whether this server fetches rates at all, which is why one may be missing.
+    rate_provider_configured: bool,
 }
 
 impl std::fmt::Debug for Ledger {
@@ -57,17 +61,19 @@ impl Ledger {
         clock: Arc<dyn Clock>,
         access: Arc<AccessResolver>,
         timezone: TimeZone,
+        fx_provider: FxProviderKind,
     ) -> Self {
         Self {
             store,
             clock,
             access,
             timezone,
+            rate_provider_configured: fx_provider != FxProviderKind::Off,
         }
     }
 
     /// The household's day.
-    fn today(&self) -> Date {
+    pub(crate) fn today(&self) -> Date {
         self.clock.now().to_zoned(self.timezone.clone()).date()
     }
 

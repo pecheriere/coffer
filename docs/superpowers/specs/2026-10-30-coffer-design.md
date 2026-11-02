@@ -69,7 +69,7 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 ## 3. Non-goals (v1)
 
 - A real UI (dashboards, transaction lists). Only the auth/admin pages and the
-  read-only forecast page in §6.4.
+  read-only forecast and net worth pages in §6.4.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
   local change, but no tables or code for it exist in v1 (superseded for agent
@@ -325,8 +325,8 @@ small page helpers such as copy buttons, and reporting browser errors to
 coffer's own log (`docs/configuration.md`, "Browser reports"). Pages:
 setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
-No financial data pages in v1, except one small read-only forecast page (§8.9,
-R14). (Connections get a page because pasting a setup token is a human step.)
+No financial data pages in v1, except a small read-only forecast page (§8.9,
+R14) and a read-only net worth page (§8.10, N13). (Connections get a page because pasting a setup token is a human step.)
 
 ### 6.5 Authorization
 
@@ -640,7 +640,7 @@ differs: all its records write as they always did.
 §5's "limited to SimpleFin and the FX rate source" now reads: SimpleFin Bridge
 hosts (`COFFER_SIMPLEFIN_HOSTS`, default `bridge.simplefin.org`,
 `beta-bridge.simplefin.org`), Plaid's API host when Plaid is configured (plan
-2b), and the FX source (a later plan). HTTPS on port 443 only, no redirects, and
+2b), and the FX source (`data-api.ecb.europa.eu`, §8.10, N6). HTTPS on port 443 only, no redirects, and
 targets must resolve to public addresses. `HTTPS_PROXY` is honoured when set;
 then coffer does not resolve target hosts, and the public-address check is the
 proxy's job. `COFFER_EGRESS_RELAY`, one IP address and refused together with
@@ -694,8 +694,8 @@ zone.
 
 ### 8.8 Deferred
 
-Rules (a §2 goal), transfer links, FX, a starter category set and unbinding a
-provider account move to a later plan, as does MCP (§6.12). Household settings
+Rules (a §2 goal), transfer links, a starter category set and unbinding a
+provider account move to a later plan (FX: §8.10), as does MCP (§6.12). Household settings
 arrive in plan 3, without the time zone (§8.7, §8.9).
 
 ### 8.9 Plan and forecast
@@ -712,8 +712,8 @@ with a direction; `Money` on accounts and splits keeps its sign.
 **R1. Several currencies report; they are not refused.** FX is not built. A
 forecast with several currencies answers 200 with `surplus: null`, status
 `unavailable`, blocker `mixed_currencies`, and full per-currency totals, each
-with its own surplus. Currencies are never netted. When FX arrives `surplus`
-fills in and the blocker goes.
+with its own surplus. Currencies are never netted. FX exists now (§8.10), and
+the blocker stays until a forecast across currencies has rules of its own (N1).
 
 **R2. Forecast access.** A forecast, a what-if or a plan-versus-actual report
 sums every account's balances and category spending, so it needs an `all` grant
@@ -980,3 +980,165 @@ months" means occurrences bucketed where they fall, not amortized.
 
 **R22. Not in this plan:** MCP (§6.12), rules, transfer links, a starter category
 set, FX and unbinding a provider account (§8.5, §8.8).
+
+### 8.10 Net worth and FX
+
+Decisions made while planning net worth history and exchange rates (§6.9, §6.10,
+plan 4). Where they differ from an earlier section, they govern.
+
+**N1. The forecast's `mixed_currencies` blocker stays.** What a household can invest
+is held per currency: euros don't pay a dollar bill without a conversion at a rate not
+yet known, a fixed floor is in one currency, and goals stay in their own. A converted
+surplus would be one confident number over all of that, the failure §1 fears most, while
+each currency's own surplus is true today. A forecast across currencies needs rules of
+its own, which is a separate issue. R1's "when FX arrives" no longer applies.
+
+**N2. A token's net worth is the sum of what it can see.** Unlike a forecast (R2), net
+worth has a partial answer that is true: the sum of the accounts visible at `balances`.
+Nothing marks it partial, since that would reveal hidden accounts. Everything in the
+answer comes from visible accounts and household settings alone, so a hidden account's
+currency, rate state, age and existence don't show, and a token seeing no counted account
+reads exactly like an empty household. Which rates are stored depends on the currencies in
+use, so the FX endpoints span every account and need `all` at `balances`.
+
+One thing crosses that line, and it is accepted. A rate is reference data the household
+stores once, so a visible currency a hidden account already caused to be fetched has rates
+sooner than it would have alone. A row needing a rate means that currency and the display
+currency make more than one, so N7 fetches them with or without the hidden account: only
+the order differs, and the same rates give the same bytes whoever caused them. Before the first fetch for
+that currency, or for as long as an outage lasts or the provider stays off, a token can
+compare `not_fetched_yet`, `fetch_failing` or `provider_off` with an amount at an old
+`rate_on`. That is one bit about a currency it already sees, and a date: some use of the
+currency predates this, and the last fetch was about then. The use could be an account now
+closed, a past display currency or a visible account. It shows no amount, count, name or
+id, and no other currency. An outage lengthens how long the bit can be read without adding to it,
+and hiding a true rate from one token would make its number wrong, so the answer stays. No
+token can make this happen: creating an account needs `all` at `write`, and changing the
+display currency needs `all` at `balances` (N8).
+
+**N3. A daily table holds one row per account per day.** It holds the balance used, the
+date and source of its snapshot, the amount in the display currency, that currency, the
+rate date, `rate_leg` and the state of the conversion. `rate_leg` (`held`, `display` or `both`)
+says which currency's rate the rate date, or a missing rate, is about: a cross rate goes through
+the euro and reports the older of its two dates, and a euro account has only the display
+currency's, so a caution names the currency whose rate is old or missing and never the euro.
+It is derived: `balance_snapshots`, `fx_rates`
+and the display currency are the source of truth, and the table can be dropped and rebuilt.
+Names, `include_in_net_worth`, the liquidity class and closing are applied at read, so
+changing them needs no rebuild.
+
+A changed snapshot rebuilds its account from that date up to its next snapshot, and a bind
+bringing in an unbound account's kept balances rebuilds it from the earliest of them. A new or
+corrected rate rebuilds the accounts it converts, from that date. A changed display
+currency rebuilds everything. Each happens in the same transaction as the change. The
+daily job fills days forward up to today. Where a row can't exist yet the read says so
+instead of serving an old number: `through` names the last day filled, later dates aren't
+answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table) answers no number
+at all until the rebuild has run. `coffer rebuild-net-worth` rebuilds the whole table, and
+a test holds that incremental updates match it.
+
+Rows start no earlier than 1970-01-01, so a snapshot dated in the distant past can't make
+hundreds of thousands of rows, and never run past `through`, so a future-dated snapshot has
+no row until its day.
+
+**N4. Each account is rounded on its own.** §6.1's "rounds once, at the end" applies per
+account and day: half-even, in `i128`, from the exact rates. Totals sum the rounded rows, so
+a breakdown always adds up to its total and a restricted token's sum is the sum of the rows
+it sees. A total can differ from converting a one-currency sum in one go by a few minor units.
+Exact rates are text in a canonical form, at most 10 digits with at most 6 of them decimals,
+so no conversion can pass `i128`.
+
+**N5. Missing and old rates.** A currency's rate for a day is its most recent rate on or
+before that day, never a later one. A cross rate goes through EUR and reports the older of
+its two dates. With no such rate the row has no amount. A period holding such a row has
+`total: null`, names the account in `unconverted`, and the report carries a caution saying
+which currency and why (not fetched yet, not published, fetch failing, provider off, none
+that early). Sums per currency are always present, so nothing is omitted. A rate more than 7
+days older than its day raises a `rate_stale` caution: a discontinued currency would otherwise
+be converted at its last rate for ever (the ECB's rouble ends on 2022-03-01). A conversion
+past `i64` is treated the same way, as `too_large`. So is a hole: an included account with no
+row on a day after its first has no amount, so that period's `total` and its class are null
+and `unconverted` names it, with the caution `daily_value_missing`, since a sum without it
+would read as money leaving. Its balance can't be in that day's sum per currency.
+
+**N6. The default provider is the ECB's data API.** `RateProvider` is the interface, and
+providers answer in units of a currency per one euro. `COFFER_FX_PROVIDER` is `ecb` (the
+default) or `none`. `ecb` asks `https://data-api.ecb.europa.eu/service/data/EXR/D.<CCY>.EUR.SP00.A?format=csvdata&detail=dataonly`,
+per currency, with `startPeriod` once it holds rates. That is the only host, through
+`egress::Egress`. It needs no key and no new crate: the answer is an unquoted CSV of a fixed
+shape, read strictly, and one bad row refuses all of it. A row with an empty value is a day
+with no rate, which the ECB's series hold on some holidays up to 2012 and which would otherwise
+refuse most currencies' first fetch; it yields nothing and passes every other check. Every line
+must end, since a row cut off by the connection closing could read as a false rate. No date
+may be before 1990-01-01 or the `startPeriod` asked for, or after tomorrow. The ECB can see which currencies a household asks for, an accepted risk.
+
+**N7. A household with one currency contacts nobody.** A currency is needed when it is an
+account's or the display currency, EUR aside, and only when those come to more than one
+currency. First use of a currency fetches its whole history. After that the job asks every
+6 hours from 7 days before its last rate, so a missed day or a correction arrives by itself.
+A failure is logged with fixed text, recorded as a fixed code and retried. A warning comes with
+the first failure and each change of status or code, and repeats are at `debug`, judged by the
+coverage so a restart isn't a change. It never touches
+sync, which has its own worker.
+
+Such an answer replaces the days it speaks for, from the start of the window to its own last
+row: a stored rate absent there is removed and the rows from that day rewritten, in one
+transaction, so a false rate on a weekend or holiday doesn't last. Rates after its last row
+stay, since an answer cut at the end of a line looks like a shorter one, and the next answer
+to pass them settles them. An empty answer or a failure removes nothing. An empty answer can't
+be true of a window holding a rate that was published, so it is logged, rates are kept and only
+the time of the attempt moves. On first use an empty answer reads as `not_published`, which is
+what it looks like, at the cost of a 24 hour wait. Each attempt commits before its request, so a
+store that can't write sends none, and an attempt dated after now, from a clock that ran ahead,
+is due.
+
+**N8. The display currency is a household setting,** set by an admin through
+`PATCH /api/v1/household/settings` or `/admin/household`, audited, and replaceable but never
+unset. A token with grants also needs `all` at `balances` to name one in a patch, whatever it
+names: a visible row converts at once if the code's rates are held, so a token held to one
+account could otherwise try each code and read from its own report which ones the household
+uses (the report answers an amount where a code nobody uses says `not_fetched_yet`). It starts unset and is never guessed, since a guess from the oldest account would
+reveal that account's currency to a restricted token. Until it is set a report has sums per
+currency, no totals, and the blocker `display_currency_not_set`. This replaces §6.1's base
+currency and each member's display currency.
+
+**N9. A closed account counts up to the day it closed.** Its rows go on being filled, and
+closing is applied at read. From its closing day on it counts only if its balance is
+negative, since a debt doesn't close with the card (R16), with the caution
+`closed_account_owing`. Reopening an account restores those days. Each account in a report
+says its `closed_on`, so a drop is explained even without its points. When nothing counts in
+a range's later periods, the last point stops short of the range, and the caution
+`nothing_counted_after_last_point` says from when: it makes the report `provisional`, since a
+reader would take the last point as the value now.
+
+**N10. Rates and rows aren't audited.** They are public reference data and derived values,
+and an entry per row would bury the log. What changes them is: a snapshot's write and the
+display currency are audited as before.
+
+**N11. Sign and age.** A report sums balances as stored. A positive balance on a liability
+class raises the caution `liability_balance_positive`, and a counted balance older than the
+forecast's `stale_after_days` on the latest point raises `balance_stale`. Neither changes the
+number, as in the forecast (R4).
+
+**N12. Periods.** `GET /api/v1/reports/net-worth` takes `from`, `to`, `interval` (`day`,
+`week` ending on Sunday, or `month`, the default) and `account_points`. A point is the value
+on the last day of its period, or on the last day available, when it says `partial`. At most
+1,000 points; beyond that 422. Dates are in the years 1970 to 2200.
+
+**N13. The net worth page.** `/net-worth` is the second page holding financial data, on the
+forecast page's rules (R14): session only, calls the same service, computes nothing, the
+default content security policy, no script or inline style of its own, and no form. Its chart
+is server-rendered SVG drawn in integers, beside a table of the same numbers, and it takes a
+range through plain links. `/admin/household` gains a form for the display currency, for
+admins, with the anti-forgery token.
+
+**N14. Derived balances are optional and asked for.** `balance_snapshots.source` gains
+`derived`, for balances worked back from a reported balance through posted transactions, on
+`cash` and `short_term_liability` accounts only, since an investment moves with no
+transaction. Nothing derives them unless a member calls for it on one account, a dry run by
+default. They never replace a reported balance, a forecast ignores them, and every report
+naming one says so. Unbuilt until the owner asks for it (plan 4, Task 10).
+
+**N15. Not in this plan:** a forecast across currencies (N1), entering a rate by hand for a currency the ECB doesn't publish,
+each member's display currency, separate buckets (#38) and unvested RSUs (#44). Buckets
+filter accounts at read and vesting adds accounts or balances, so neither changes the table.

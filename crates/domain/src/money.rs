@@ -224,6 +224,13 @@ impl Currency {
             .ok_or(MoneyError::UnknownCurrency)
     }
 
+    /// Every currency, sorted by code.
+    pub fn all() -> impl Iterator<Item = Self> {
+        CURRENCIES
+            .iter()
+            .map(|&(code, exponent)| Self { code, exponent })
+    }
+
     /// The number of decimal places of the minor unit (USD 2, JPY 0).
     #[must_use]
     pub fn exponent(self) -> u8 {
@@ -490,6 +497,18 @@ mod tests {
             assert!(code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()));
             assert!([0, 2, 3].contains(&exponent), "{code}");
         }
+    }
+
+    #[test]
+    fn all_lists_the_table_in_order() {
+        let all: Vec<Currency> = Currency::all().collect();
+        assert_eq!(all.len(), CURRENCIES.len());
+        assert!(all.is_sorted());
+        assert!(all.contains(&usd()));
+        assert_eq!(
+            all.iter().find(|currency| currency.as_str() == "KWD"),
+            Some(&Currency::parse("KWD").unwrap())
+        );
     }
 
     #[test]

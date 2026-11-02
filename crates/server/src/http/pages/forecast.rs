@@ -14,16 +14,14 @@ use coffer_domain::money::{Currency, Money};
 use maud::{Markup, html};
 
 use super::account::viewer;
+use super::amounts::{day, grouped, magnitude, money};
 use super::layout::{Frame, Nav, page};
 use super::{PageError, PageSession};
 use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
-use words::{
-    Names, blocker_sentence, caution_sentence, day, grouped, magnitude, money, month_name, months,
-    settled_sentence,
-};
+use words::{Names, blocker_sentence, caution_sentence, month_name, months, settled_sentence};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/forecast", get(forecast_page))

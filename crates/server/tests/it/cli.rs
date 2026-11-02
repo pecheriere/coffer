@@ -9,9 +9,15 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
+use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, LiquidityClass};
 use coffer_domain::identity::{Actor, Role, Username, Via};
+use coffer_domain::ids::AccountId;
+use coffer_domain::money::Currency;
+use coffer_domain::time::{Clock as _, SystemClock};
 use coffer_server::cli;
 use coffer_server::testkit::{TestServer, capture_logs, captured_log_text};
+use coffer_store::{BalanceSnapshot, NewAccount, Store};
+use jiff::civil::{Date, date};
 
 struct Outcome {
     code: ExitCode,
@@ -307,4 +313,185 @@ async fn serve_keeps_an_installed_subscriber_and_says_so() {
         captured_log_text().contains("an installed tracing subscriber is kept"),
         "the kept subscriber is reported"
     );
+}
+
+/// A household with a day's history, in a database nothing has rebuilt.
+async fn populated_database(dir: &tempfile::TempDir) -> (Store, AccountId, Date) {
+    let store = Store::open(&dir.path().join("coffer.db")).await.unwrap();
+    let first = date(2026, 1, 1);
+    let id = holding(&store).await;
+    snapshot(&store, id, first).await;
+    (store, id, first)
+}
+
+async fn holding(store: &Store) -> AccountId {
+    let id = AccountId::new();
+    let mut tx = store.begin().await.unwrap();
+    tx.insert_account(NewAccount {
+        id,
+        name: AccountName::parse("Holding").unwrap(),
+        kind: AccountKind::Checking,
+        currency: Currency::parse("USD").unwrap(),
+        liquidity: LiquidityClass::Cash,
+        liquidity_overridden: false,
+        include_in_net_worth: true,
+        include_in_forecast: true,
+        created_at: SystemClock.now(),
+    })
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+async fn snapshot(store: &Store, account: AccountId, on: Date) {
+    let mut tx = store.begin().await.unwrap();
+    tx.upsert_balance(BalanceSnapshot {
+        account,
+        on,
+        balance_minor: 100,
+        source: BalanceSource::Manual,
+        recorded_at: SystemClock.now(),
+    })
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn rebuild_net_worth_reports_what_it_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env(&dir);
+    let (store, account, first) = populated_database(&dir).await;
+
+    let done = run(&["rebuild-net-worth"], &env).await;
+
+    assert_eq!(done.code, ExitCode::SUCCESS);
+    let state = store.net_worth_state().await.unwrap();
+    assert!(!state.rebuild_needed);
+    let last = state.filled_through.unwrap();
+    let rows = store.daily_values_for_tests().await.unwrap();
+    assert_eq!(
+        rows.iter().filter(|row| row.account == account).count(),
+        rows.len()
+    );
+    assert_eq!(rows.first().unwrap().on, first);
+    assert_eq!(rows.last().unwrap().on, last);
+    let count = rows.len();
+    assert_eq!(
+        done.out,
+        format!("net worth rebuilt: {count} rows, through {last}\n")
+    );
+    assert_eq!(done.err, "");
+}
+
+/// Two zones 25 hours apart are never on the same day.
+#[tokio::test]
+async fn rebuild_net_worth_uses_the_household_s_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = env(&dir);
+    let (store, _account, _first) = populated_database(&dir).await;
+
+    env.insert("COFFER_TIMEZONE", "Pacific/Kiritimati".to_owned());
+    assert_eq!(
+        run(&["rebuild-net-worth"], &env).await.code,
+        ExitCode::SUCCESS
+    );
+    let east = store
+        .net_worth_state()
+        .await
+        .unwrap()
+        .filled_through
+        .unwrap();
+    env.insert("COFFER_TIMEZONE", "Pacific/Pago_Pago".to_owned());
+    assert_eq!(
+        run(&["rebuild-net-worth"], &env).await.code,
+        ExitCode::SUCCESS
+    );
+    let west = store
+        .net_worth_state()
+        .await
+        .unwrap()
+        .filled_through
+        .unwrap();
+
+    assert!(west < east, "{west} is not before {east}");
+}
+
+#[tokio::test]
+async fn rebuild_net_worth_never_creates_a_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env(&dir);
+
+    let failed = run(&["rebuild-net-worth"], &env).await;
+
+    assert_eq!(failed.code, ExitCode::from(1));
+    assert!(failed.err.contains("no database"));
+    assert_eq!(failed.out, "");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+/// Beside a running server it queues behind a writer, and so sees what that
+/// writer committed: it can't lose a change or read half of one.
+#[tokio::test]
+async fn rebuild_net_worth_waits_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env(&dir);
+    let (store, _account, first) = populated_database(&dir).await;
+    let later = holding(&store).await;
+    let mut writer = store.begin().await.unwrap();
+    writer
+        .upsert_balance(BalanceSnapshot {
+            account: later,
+            on: first,
+            balance_minor: 7,
+            source: BalanceSource::Manual,
+            recorded_at: SystemClock.now(),
+        })
+        .await
+        .unwrap();
+
+    let command = run(&["rebuild-net-worth"], &env);
+    tokio::pin!(command);
+    tokio::select! {
+        _ = &mut command => panic!("the command did not wait"),
+        () = tokio::time::sleep(std::time::Duration::from_millis(300)) => {}
+    }
+    writer.commit().await.unwrap();
+
+    assert_eq!(command.await.code, ExitCode::SUCCESS);
+    let rows = store.daily_values_for_tests().await.unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row.account == later && row.balance_minor == 7)
+    );
+}
+
+/// An empty file isn't a database: opening it would migrate it into an empty one,
+/// and a backup or a rebuild of that would read as if all were well.
+#[tokio::test]
+async fn an_empty_database_file_is_refused() {
+    let dest_dir = tempfile::tempdir().unwrap();
+    let dest = dest_dir.path().join("backup.db");
+    let commands = [
+        vec!["rebuild-net-worth"],
+        vec!["backup", dest.to_str().unwrap()],
+    ];
+    for command in commands {
+        let dir = tempfile::tempdir().unwrap();
+        let env = env(&dir);
+        let database = dir.path().join("coffer.db");
+        std::fs::write(&database, b"").unwrap();
+
+        let failed = run(&command, &env).await;
+
+        assert_eq!(failed.code, ExitCode::from(1), "{command:?}");
+        assert!(failed.err.contains("empty"), "{command:?}");
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().len(),
+            0,
+            "{command:?}"
+        );
+        assert!(!dest.exists(), "{command:?}");
+    }
 }

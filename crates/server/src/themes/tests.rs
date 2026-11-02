@@ -267,6 +267,25 @@ fn negative_amounts_stand_apart_from_the_accent() {
     assert!(oklab_distance(rgb("#B3410C"), rgb("#C2386A")) < NEGATIVE_ACCENT_MIN_DISTANCE);
 }
 
+/// The line carries the chart: a graphic against what's behind it needs 3:1 (WCAG 1.4.11).
+#[test]
+fn chart_line_contrasts_with_its_surface() {
+    for theme in THEMES {
+        let tokens = tokens_of(theme);
+        for scheme in SCHEMES {
+            let colour = |token: &str| {
+                tokens
+                    .resolve(token, scheme)
+                    .ok()
+                    .and_then(|value| Rgb::parse(&value))
+                    .unwrap_or_else(|| panic!("{} {token} {scheme:?} is not #RRGGBB", theme.name))
+            };
+            let ratio = contrast_ratio(colour("accent"), colour("surface"));
+            assert!(ratio >= 3.0, "{} {scheme:?}: {ratio:.2}", theme.name);
+        }
+    }
+}
+
 #[test]
 fn every_theme_file_is_registered() {
     let served: BTreeSet<&str> = ALL

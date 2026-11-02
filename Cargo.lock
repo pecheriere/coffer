@@ -485,6 +485,7 @@ version = "0.2.1"
 dependencies = [
  "coffer-domain",
  "jiff",
+ "proptest",
  "serde_json",
  "sqlx",
  "tempfile",

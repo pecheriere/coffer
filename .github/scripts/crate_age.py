@@ -321,6 +321,11 @@ def annotation(message: str) -> str:
     return f"::error file={LOCKFILE},title=Crate age::{escaped}"
 
 
+def current_time() -> datetime:
+    """Return the time crate ages are measured from; tests replace it."""
+    return datetime.now(UTC)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the check and print its errors; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -333,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         base = None if args.no_base else file_at(args.base, LOCKFILE)
         head, allow_text = head_files(args.head)
-        errors = check(base, head, allow_text, CratesIo(user_agent()), datetime.now(UTC))
+        errors = check(base, head, allow_text, CratesIo(user_agent()), current_time())
     except (ValueError, TypeError, OSError) as err:
         errors = [str(err)]
 

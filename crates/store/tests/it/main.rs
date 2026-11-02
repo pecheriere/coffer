@@ -4,7 +4,9 @@
 mod duplicates;
 mod forecast;
 mod foundation;
+mod fx;
 mod identity;
 mod ledger;
+mod net_worth;
 mod plan;
 mod sync;

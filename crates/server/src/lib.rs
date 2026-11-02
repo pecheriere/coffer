@@ -7,10 +7,12 @@ pub mod canonical;
 pub mod cli;
 pub mod config;
 pub mod egress;
+pub mod fx;
 pub mod http;
 pub mod ledger;
 pub mod secrets;
 pub mod sync;
+mod tasks;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 pub mod themes;

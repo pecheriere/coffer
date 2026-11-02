@@ -13,7 +13,9 @@ use coffer_domain::policy::{
     AccountLevel, AccountScope, DenyReason, GrantTarget, TokenGrant, authorize_account,
     grant_ceiling,
 };
+use coffer_domain::time::Clock as _;
 use coffer_server::secrets::SecretToken;
+use jiff::tz::TimeZone;
 use proptest::strategy::Strategy as _;
 use proptest::test_runner::TestCaseError;
 use std::collections::BTreeMap;
@@ -106,12 +108,14 @@ proptest::proptest! {
 }
 
 /// One generated household: per account, its level for the token (`None`:
-/// not named), and the token's `all` grant.
+/// not named), the token's `all` grant, and whether a hidden account holds a large
+/// balance in a currency no visible account uses, with its rates stored.
 #[derive(Debug, Clone)]
 struct Household {
     scope: Scope,
     all: Option<AccountLevel>,
     accounts: Vec<Option<AccountLevel>>,
+    hidden_foreign: bool,
 }
 
 fn capped(scope: Scope, level: AccountLevel) -> AccountLevel {
@@ -132,8 +136,9 @@ fn household_with_hidden_accounts() -> impl proptest::strategy::Strategy<Value =
         proptest::sample::select(vec![Scope::Read, Scope::Write]),
         proptest::collection::vec(level(), 1..=3),
         1..=2_usize,
+        proptest::bool::ANY,
     )
-        .prop_map(|(scope, visible, hidden)| Household {
+        .prop_map(|(scope, visible, hidden, hidden_foreign)| Household {
             scope,
             all: None,
             accounts: visible
@@ -141,6 +146,7 @@ fn household_with_hidden_accounts() -> impl proptest::strategy::Strategy<Value =
                 .map(|level| Some(capped(scope, level)))
                 .chain(std::iter::repeat_n(None, hidden))
                 .collect(),
+            hidden_foreign,
         })
 }
 
@@ -159,6 +165,7 @@ fn household_with_all_grant() -> impl proptest::strategy::Strategy<Value = House
                 .into_iter()
                 .map(|level| level.map(|level| capped(scope, level)))
                 .collect(),
+            hidden_foreign: false,
         })
 }
 
@@ -185,6 +192,10 @@ fn read_uris(
         "/api/v1/forecast".to_owned(),
         "/api/v1/reports/plan-vs-actual?from=2026-10".to_owned(),
         "/api/v1/household/settings".to_owned(),
+        "/api/v1/reports/net-worth?from=2026-01-01&interval=day".to_owned(),
+        "/api/v1/reports/net-worth?from=2026-01-01&interval=month".to_owned(),
+        "/api/v1/fx/coverage".to_owned(),
+        "/api/v1/fx/rates?currency=JPY&from=2026-01-01&to=2026-12-31".to_owned(),
     ];
     for account in accounts {
         uris.push(format!("/api/v1/accounts/{account}"));
@@ -269,6 +280,33 @@ async fn seed_plan(
     goals
 }
 
+/// Display USD and the rates the household needs, and, if it has one, the hidden account in
+/// a currency no visible account uses, which goes in `hidden` whole: its balance, name, id and
+/// currency code. Then the daily table is built, so a report has rows to answer from.
+async fn seed_net_worth(
+    world: &World,
+    household: &Household,
+    marker: &str,
+    hidden: &mut Vec<String>,
+) -> Option<AccountId> {
+    let foreign = if household.hidden_foreign {
+        let name = format!("foreign{marker}");
+        let account = world.holding(&name, "JPY").await;
+        let minor_units = 7_346_197_000;
+        world.balance_on(account, "2026-10-01", minor_units).await;
+        world.rates("JPY", &[("2026-10-01", "175.68")]).await;
+        world.rates("USD", &[("2026-10-01", "1.1188")]).await;
+        hidden.extend([s(account), name, minor_units.to_string(), "JPY".to_owned()]);
+        Some(account)
+    } else {
+        None
+    };
+    world.display("USD").await;
+    let today = world.server.clock.now().to_zoned(TimeZone::UTC).date();
+    world.rebuild(&today.to_string()).await;
+    foreign
+}
+
 /// Every read endpoint, called with a token holding `household`'s grants:
 /// `/accounts` lists exactly the visible accounts, and no body holds a
 /// hidden account's id, name, provider account name, transaction id or
@@ -276,7 +314,8 @@ async fn seed_plan(
 /// hinted at an account the token holds below `transactions`, though another
 /// account's split links to it, and none holds an unhinted item when it holds
 /// `transactions` on nothing. Without an `all` grant at `transactions` no body
-/// holds an unbound provider account or a connection's last error.
+/// holds an unbound provider account or a connection's last error. No body holds
+/// the hidden foreign account's balance, name, id or currency.
 async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseError> {
     let world = world().await;
     let marker = uuid_marker();
@@ -374,6 +413,9 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
     listed.sort();
     visible.sort();
     proptest::prop_assert_eq!(listed, visible, "every visible account is listed");
+
+    let foreign = seed_net_worth(&world, household, &marker, &mut hidden).await;
+    accounts.extend(foreign);
 
     let uris = read_uris(connection, &accounts, &transactions, &goals);
     check_no_body_reveals(&world, &token, &uris, &hidden).await

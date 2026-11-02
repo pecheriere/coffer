@@ -26,6 +26,8 @@
 //! | Read plan versus actual                  | `Transactions`                |
 //! | Read the safety floor                    | `Transactions`                |
 //! | Create, change or delete a planned item  | `Write`                       |
+//! | Read FX rates and coverage               | `Balances`                    |
+//! | Change the display currency              | `Balances`                    |
 //! | Settle a planned item for a month        | `Write`                       |
 //!
 //! The safety floor is not refused without it: the settings answer with `floor: null`.
@@ -41,6 +43,16 @@
 //! on at least one account, named or through an `all` grant. An actor holding
 //! only `Balances` sees no planned items: an empty list, not a refusal. A split
 //! linked to an item the actor can't see reads as linked to nothing.
+//!
+//! Net worth needs no `all` grant: it sums what
+//! `AccountAccess::scope(AccountLevel::Balances)` holds, unmarked, and answers
+//! from visible accounts alone (spec §8.10 N2), so nothing in it shows a hidden
+//! account's balance, currency, rate state, age or existence. Which rates are
+//! stored depends on the currencies in use, so reading them spans every account,
+//! and so does changing the display currency, since a row converts at once if the
+//! rates of a code tried are held. A rate is shared, though: a visible currency a
+//! hidden account already caused to be fetched has rates sooner (N2 says how much
+//! that tells).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

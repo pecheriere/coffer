@@ -13,7 +13,8 @@ plus a safety floor), so that everything above that can be invested.
 > a web UI and the container image, plus accounts, balances, categories and
 > transactions with SimpleFin and Plaid sync, and per-account limits for agent
 > tokens, and a spending plan, a cash forecast with what-if, and a plan-versus-actual
-> report, through the API and on one read-only page. The API, the database schema and
+> report, and net worth history in one display currency with exchange rates from the
+> ECB, through the API and on two read-only pages. The API, the database schema and
 > the configuration will change without migration paths between 0.x releases. Do not
 > put financial data you care about in it yet.
 
@@ -31,9 +32,11 @@ What exists and what comes next:
 - **Unreleased:** a spending plan (recurring bills and budgets, one-offs and
   sinking-fund goals, goal links on splits), the household's safety floor, a cash
   forecast with a what-if, plan versus actual with rollovers, and a read-only
-  forecast page.
-- **Next:** FX with a base and display currency, rules, transfer links, and an
-  MCP server for agents. See the
+  forecast page; net worth per day, week or month in a display currency, converted
+  at the European Central Bank's daily rates (fetched only when the household holds
+  more than one currency), with a read-only net worth page and chart.
+- **Next:** rules, transfer links, a forecast across currencies, entering a rate by
+  hand, and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
 Configuration is in [docs/configuration.md](docs/configuration.md); to run
@@ -43,7 +46,8 @@ configured, to sync; which hosts it
 reaches and how to restrict them is in
 [docs/configuration.md](docs/configuration.md#outbound-network). Agents use
 the API as described in [docs/agent-usage.md](docs/agent-usage.md), and plan
-and forecast as described in [docs/agent-forecast.md](docs/agent-forecast.md).
+and forecast as described in [docs/agent-forecast.md](docs/agent-forecast.md), and net
+worth and exchange rates as described in [docs/agent-net-worth.md](docs/agent-net-worth.md).
 
 ## Dependency age
 

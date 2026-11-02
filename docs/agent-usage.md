@@ -8,11 +8,15 @@ operation, parameter and schema.
 
 ## Create a token
 
-1. Sign in to coffer with your passkey and open `/account`.
+1. Sign in to coffer with your passkey and open `/account`. The first admin
+   gets in through the single-use setup link that `coffer serve` logs on its
+   first start, or `coffer bootstrap-link` prints (see
+   [Commands](configuration.md#commands)).
 2. Create an agent token: give it a name (for example `claude`), choose a
    scope and, preferably, an expiry.
 3. To limit it to chosen accounts, set the levels on the same form. It lists
-   one level select per open account, so a household with no accounts yet has
+   one level select per open account (a closed account can't be granted
+   through the form), so a household with no accounts yet has
    only "All accounts" (see
    [Account grants](#account-grants)). Left as they are, "All accounts" at
    `write` and every account at `none`, the token has no grants: it sees
@@ -37,7 +41,7 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates`. |
 | `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration, such as changing the forecast settings. Only admins can create `admin` tokens. |
 
@@ -80,7 +84,13 @@ token's access.
   answers likewise, and a split linked to such a goal reads `goal: null`.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
-  same for every token.
+  same for every token. A patch naming `display_currency` also needs `all` at
+  `balances`, whatever it names, even with `admin`: a 403 whose detail is "this
+  action needs balances access to every account". A patch of other settings doesn't.
+- `GET /api/v1/reports/net-worth` needs only `read`, and sums the accounts the token
+  sees at `balances`. **Nothing marks that sum as partial**, so don't report it as the
+  whole household's. `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
+  at `balances`: which rates are stored depends on the currencies in use.
 - The forecast, a what-if and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
   detail is "this action needs transactions access to every account",
@@ -350,6 +360,29 @@ warn about), `provisional` (a number with `cautions`) or `unavailable` (no
 number: `surplus` is `null` and `blockers` say why). **Never report a
 `provisional` number without its cautions**, and never report a number for an
 `unavailable` one: say what blocks it and what to do.
+
+### Net worth and exchange rates
+
+What the household is worth, per day, week or month in one display currency,
+with every rate date and every missing rate stated, is in
+[agent-net-worth.md](agent-net-worth.md), with its blockers and cautions and what
+to do about each. In short:
+
+- `GET /api/v1/reports/net-worth` (`read`) answers `status` (`firm`,
+  `provisional` or `unavailable`), `points` with a `total` (`null` when a rate
+  is missing, never a partial sum), `blockers` and `cautions`. **Never report a
+  `provisional` number without its cautions.**
+- `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` show the exchange rates
+  held (units of a currency per euro, from the ECB). They need `all` at
+  `balances`.
+- The display currency is `display_currency` in `PATCH
+  /api/v1/household/settings`: `admin`, and `all` at `balances` for a token with
+  grants. It starts unset, and until it is there is no total.
+- **A token with grants gets the sum of the accounts it sees, and nothing says
+  so.** Check `access.all` in `GET /api/v1/me`: when it is `null`, don't report the
+  sum as the household's net worth.
+- A forecast doesn't convert between currencies; see
+  [agent-forecast.md](agent-forecast.md).
 
 ### Connections and sync
 
