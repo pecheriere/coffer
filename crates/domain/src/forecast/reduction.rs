@@ -17,6 +17,8 @@
 //! planned for, floored at 0. The pool then pays for the month's budget occurrences in
 //! date order, so one purchase never reduces two items, and a paid bill never eats a
 //! budget.
+//!
+//! A settled occurrence (R9a) is out of all of this: it owes no gap and takes no spending.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +26,7 @@ use jiff::Span;
 use jiff::civil::Date;
 
 use super::count;
+use super::settled::is_settled;
 use super::types::{ForecastError, ForecastInput, ItemInput, LineSource};
 use crate::ids::CategoryId;
 use crate::money::Currency;
@@ -132,8 +135,10 @@ pub(super) fn reduce(
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs. Today's
             // spending may be one dated `as_of`, so it takes its share of the pool, but it
-            // has not passed, so it owes no gap.
-            let so_far = item.schedule.occurrences(month_start, through_as_of);
+            // has not passed, so it owes no gap. A settled one does neither, so spending
+            // in its category goes to the next bill or a budget.
+            let mut so_far = item.schedule.occurrences(month_start, through_as_of);
+            so_far.retain(|&on| !is_settled(item, on));
             *planned_so_far.entry(key).or_default() += amount * i128::from(count(&so_far)?);
             let passed = so_far.into_iter().filter(|&on| on < input.as_of).collect();
             earlier_payments.extend(occurrences(passed, index, key, amount));

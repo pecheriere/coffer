@@ -15,12 +15,17 @@ mod goal;
 mod month;
 mod schedule;
 mod settings;
+mod settlement;
 pub mod strict_date;
 
 pub(crate) use goal::div_half_even;
 pub use goal::{goal_accrued, goal_need, goal_remaining};
 pub use month::{CalendarMonth, InvalidMonth};
 pub use settings::{ForecastSettings, SafetyFloor};
+pub use settlement::{
+    MAX_ITEM_SETTLEMENTS, SETTLEMENT_WINDOW_MONTHS, occurrences_in, settlement_applies,
+    validate_settlement_month,
+};
 
 /// The largest amount of a planned item or a fixed floor, in minor units.
 pub const MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000;
@@ -84,6 +89,10 @@ pub enum PlanError {
     UnknownItemType,
     #[error("unknown plan spending kind")]
     UnknownSpending,
+    #[error("a settlement must fall within {SETTLEMENT_WINDOW_MONTHS} months of today")]
+    SettlementOutOfWindow,
+    #[error("unknown settlement kind")]
+    UnknownSettlementKind,
 }
 
 string_enum!(
@@ -124,6 +133,17 @@ string_enum!(
     {
         Bill => "bill",
         Budget => "budget",
+    }
+);
+
+string_enum!(
+    /// How a planned item's occurrences in one month were settled: `paid` some way the
+    /// forecast can't see, or `skipped`. The forecast treats both alike, and the word
+    /// says what the person meant.
+    SettlementKind, PlanError::UnknownSettlementKind,
+    {
+        Paid => "paid",
+        Skipped => "skipped",
     }
 );
 

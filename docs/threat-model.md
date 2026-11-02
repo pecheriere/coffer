@@ -171,8 +171,9 @@
     own, is checked the same way, so it can't be used to probe an account. A
     what-if is a `POST` that persists nothing (no item, setting, audit entry or
     idempotency key), so a `read` token may call it.
-  - The plan is shared by every account, as categories are. Creating, changing or
-    deleting a planned item needs `all` at `write`. Reading one needs
+  - The plan is shared by every account, as categories are. Creating, changing,
+    deleting or settling a planned item needs `all` at `write`, decided before the
+    item is looked up. Reading one needs
     `transactions` on its hinted account, or, for an item with no hint, on at least
     one account (R3), so a token holding only `balances` sees an empty list, not a
     403, and one hinted at an account the token can't read is a 404, never a 403

@@ -16,8 +16,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate. It holds
-  planned items, the household settings (with the display currency), exchange
-  rates and their coverage, and the one read transaction that
+  planned items and their settlements, the household settings (with the
+  display currency), exchange rates and their coverage, and the one read
+  transaction that
   gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
@@ -26,7 +27,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   with a content security policy of their own, and whose `forecast.rs` is the
   read-only forecast page; `browser_reports/`, the
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
-  the household forecast `settings`, the `forecast` and its what-if, the
+  `settlements` (one month of a planned item marked paid or skipped), the
+  household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, transactions and their splits, merging, un-merging and
   dismissing possible duplicates; `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates in accounts it

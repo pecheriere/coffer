@@ -14,13 +14,14 @@ use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_
 use reduction::{ItemAdjustment, Reduction};
 
 mod reduction;
+mod settled;
 mod types;
 
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
     ForecastStatus, GoalLine, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
-    MonthCurrency, MonthItem, NewerSpending, NotCountedReason, UnboundAccount,
+    MonthCurrency, MonthItem, NewerSpending, NotCountedReason, SettledLine, UnboundAccount,
 };
 
 /// Computes the forecast for `input`, which the caller has validated.
@@ -102,6 +103,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         months,
         blockers,
         cautions,
+        settled: settled::settled_lines(input, end_exclusive)?,
     })
 }
 
@@ -302,9 +304,10 @@ fn dated_line(
     } else {
         window.income_end_exclusive
     };
-    let dates = item
+    let mut dates = item
         .schedule
         .occurrences(reduction::counts_from(item, window.as_of), end_exclusive);
+    dates.retain(|&on| !settled::is_settled(item, on));
     let amount = i128::from(item.amount.minor_units);
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
@@ -728,6 +731,7 @@ fn item_cautions(
                 && item.direction == PlanDirection::Outflow
                 && item.category == Some(category)
                 && (earliest..=latest).contains(&on)
+                && !settled::is_settled(item, on)
             {
                 cautions.push(Caution::GoalOneOffOverlap {
                     goal: line.source,

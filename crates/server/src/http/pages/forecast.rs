@@ -22,6 +22,7 @@ use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
     Names, blocker_sentence, caution_sentence, day, grouped, magnitude, money, month_name, months,
+    settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -116,6 +117,14 @@ fn answer(forecast: &Forecast, names: &Names<'_>) -> Markup {
                 ul.reasons id="reasons" {
                     @for caution in &forecast.cautions {
                         li { (caution_sentence(caution, forecast.as_of, names)) }
+                    }
+                }
+            }
+            @if !forecast.settled.is_empty() {
+                h3 { "Settled, so not counted" }
+                ul.reasons id="settled" {
+                    @for line in &forecast.settled {
+                        li { (settled_sentence(line)) }
                     }
                 }
             }

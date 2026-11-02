@@ -733,7 +733,7 @@ much more. Unhinted items are household data, which need `transactions` on at
 least one account, named or through an `all` grant, for the same reason. A token
 holding only `balances` sees no planned items at all: an empty list, not a 403.
 Uniform access always qualifies. Creating,
-changing or deleting an item needs `WriteHousehold` and an `all` grant at
+changing, deleting or settling an item needs `WriteHousehold` and an `all` grant at
 `write`, like a category. An unhinted item's name can mention an account: that
 is an accepted risk, and hinting the item hides it.
 
@@ -768,7 +768,7 @@ balance dates decide what a forecast may trust, not what happened.
 Unlike the forecast, which carries no leftovers over, the report shows a rollover per
 category and currency with a budget (R9): what was budgeted over the reported months up
 to today's, less what they spent on it. Spending pays each month's bills and one-offs
-dated up to and including today first, floored at 0 unless the month is a net refund, which adds to
+dated up to and including today first, those settled (R9a) excepted, floored at 0 unless the month is a net refund, which adds to
 what is left. Items share a category's pool, so it isn't per item. A bill has none.
 A month's spending counts only while a budget in that category and currency is running,
 from the month of its first occurrence through the month of its end date, so a
@@ -828,7 +828,50 @@ spent on a budget does not reduce it until the bill is covered. A second known l
 look-back is this month only, so a bill or one-off from last month that is still unpaid is
 not counted, and an October bill posting in November counts as paying November's. Goals
 and hypothetical items never owe, and hypothetical items neither reduce nor consume, nor
-look back: an imagined budget counts only inside the window.
+look back: an imagined budget counts only inside the window. What a person settled for a
+month is out of all of this (R9a).
+
+**R9a. Settling a month.** A bill can be paid with no transaction to categorize, such as a
+transfer or from an account coffer doesn't track, and the safe default of R9 would then
+count it until the month ends. A settlement records that one item's occurrences in one
+calendar month are `paid` or `skipped`, with who and when, in a table keyed by item and
+month. It never changes the item and is deleted with it. Only a recurring bill or a one-off
+going out may be settled: a budget is reduced by spending, a goal has links, and income has
+no bill to mark paid. An item with settlements can't become a budget or income until they
+are deleted, so a settlement never says what its item can't have said.
+
+A settlement doesn't outlive the facts it was made on. A `PATCH` that changes an item's amount,
+currency or schedule removes its settlements from the household's current month on, in the same
+transaction and audit entry, and its answer shows what is left: nobody said 5,000.00 was paid
+when they settled a 100.00 bill, or four weekly payments when they settled one monthly one, and
+a one-off moved away and back doesn't bring one back. It errs toward counting, and the member
+can settle again. Earlier months stay as history. A change to anything else, such as a name or
+category, keeps them, and a patch that changes nothing writes nothing.
+
+`PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` follow R3's rules for a plan
+write: `all` at `write`, decided before any lookup, so hidden and missing answer alike;
+audited with member and agent; reads show settlements on the item. Both are idempotent: the
+same `PUT` again writes nothing and keeps its who and when, another `kind` replaces it, and
+a `DELETE` of nothing answers the same. A `PUT`'s month must be in the plan's years, at most
+12 calendar months from today's either way, and hold an occurrence of the item. An item holds
+at most 60; a `DELETE` may clear any month of the plan's years, so one that has aged out can
+make room.
+
+In a forecast a settled item's occurrences in that month count as nothing, in the current
+month or a later one in the window: no gross, no gap, no `bill_not_seen`, no share of the
+category's pool, so spending goes on to the next bill or a budget, and a settled one-off
+raises no `goal_one_off_overlap`. A months floor keeps them, since it says how much to hold
+rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
+month the window reaches with its amount, so no number silently differs, and settling raises
+no caution, so it doesn't make a forecast `provisional` of itself: a person decided. A
+what-if reads settlements as they stand and can't add one, and a hypothetical item has none.
+
+Plan versus actual keeps a settled occurrence in `planned`, since it is what was planned; a
+row's `settled` says how much of `planned` is, and the report's `settled` which item, month
+and kind, so the difference is no surprise. A settled occurrence takes no share of a rollover's
+spending, so the rollover and the forecast agree: a settlement says that bill was paid some other
+way, so spending in its category wasn't for it. The forecast page stays read-only (R14): it
+says what is settled in plain words, and acting on it is API only for now.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the

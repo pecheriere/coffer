@@ -21,6 +21,7 @@ mod passkeys;
 mod planned_items;
 mod provider_accounts;
 mod sessions;
+mod settlements;
 mod sources;
 mod sync_runs;
 mod token_grants;
@@ -57,6 +58,7 @@ pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use sessions::{NewSession, SessionRecord};
+pub use settlements::SettlementRecord;
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
 pub use sync_runs::{NewSyncRun, QueuedRun, RunCounts, SyncRunRecord};
 pub use transactions::{
