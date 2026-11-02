@@ -12,6 +12,7 @@ pub mod http;
 pub mod ledger;
 pub mod secrets;
 pub mod sync;
+mod tasks;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 pub mod themes;

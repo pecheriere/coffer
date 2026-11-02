@@ -236,6 +236,12 @@ enum Op {
         on: i8,
         rate: &'static str,
     },
+    /// An answer about the days from `from` on, which may remove rates.
+    Window {
+        currency: &'static str,
+        from: i8,
+        answer: Vec<(i8, &'static str)>,
+    },
     Display(&'static str),
     Fill(i8),
     Bind {
@@ -278,8 +284,8 @@ fn minor() -> impl Strategy<Value = i64> {
 
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        code().prop_map(Op::Create),
-        (0_usize..8, offset(), minor(), proptest::bool::ANY).prop_map(
+        2 => code().prop_map(Op::Create),
+        2 => (0_usize..8, offset(), minor(), proptest::bool::ANY).prop_map(
             |(account, on, minor, manual)| Op::Snapshot {
                 account,
                 on,
@@ -287,15 +293,33 @@ fn op() -> impl Strategy<Value = Op> {
                 manual
             }
         ),
-        (
+        3 => (
             sample::select(vec!["USD", "JPY", "KWD"]),
             offset(),
             sample::select(vec!["0.34", "1.1", "1.2", "170"])
         )
             .prop_map(|(currency, on, rate)| Op::Rates { currency, on, rate }),
-        code().prop_map(Op::Display),
-        (1_i8..10).prop_map(Op::Fill),
-        (
+        // Weighted, as a removal needs a rate stored first and a later answer that
+        // passes it without holding it: at an equal weight it rarely moved a row.
+        3 => (
+            sample::select(vec!["USD", "JPY", "KWD"]),
+            0_i8..20,
+            collection::btree_map(0_i8..40, sample::select(vec!["1.1", "1.2", "170"]), 0..4),
+            proptest::bool::weighted(0.7),
+        )
+            .prop_map(|(currency, from, mut answer, reaches_the_end)| {
+                if reaches_the_end {
+                    answer.insert(39, "1.1");
+                }
+                Op::Window {
+                    currency,
+                    from,
+                    answer: answer.into_iter().collect(),
+                }
+            }),
+        1 => code().prop_map(Op::Display),
+        1 => (1_i8..10).prop_map(Op::Fill),
+        1 => (
             0_usize..8,
             collection::vec((offset(), minor(), proptest::bool::weighted(0.8)), 0..5)
         )
@@ -349,6 +373,24 @@ impl World {
                     cur(currency),
                     FxSource::Ecb,
                     &observations(&[(day(on), rate)]),
+                    at(),
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+            Op::Window {
+                currency,
+                from,
+                answer,
+            } => {
+                let answer: Vec<_> = answer.iter().map(|&(on, rate)| (day(on), rate)).collect();
+                let mut tx = self.store.begin().await.unwrap();
+                tx.replace_fx_rates(
+                    cur(currency),
+                    FxSource::Ecb,
+                    day(from),
+                    &observations(&answer),
                     at(),
                 )
                 .await

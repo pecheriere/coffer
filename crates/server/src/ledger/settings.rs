@@ -6,7 +6,10 @@
 //! is worked out and how numbers are shown, not what the household holds or plans.
 //!
 //! The display currency starts unset and is never guessed: a guess from the accounts
-//! would tell a restricted token a hidden account's currency.
+//! would tell a restricted token a hidden account's currency. For the same reason
+//! changing it spans every account (N8): a visible row converts at once if the new
+//! currency's rates are held, so a token could otherwise try a code and read from its own
+//! report whether the household uses that currency.
 
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
@@ -141,7 +144,8 @@ impl Ledger {
     ///
     /// # Errors
     ///
-    /// [`LedgerError::Denied`] without [`Action::ManageHousehold`];
+    /// [`LedgerError::Denied`] without [`Action::ManageHousehold`], or for a patch naming a
+    /// display currency, whatever it names, without `balances` access to every account;
     /// [`LedgerError::Invalid`] for a value out of range; a failure to resolve
     /// access; storage failures.
     pub async fn update_forecast_settings(
@@ -151,6 +155,10 @@ impl Ledger {
     ) -> Result<HouseholdSettings, LedgerError> {
         authorize(actor, Action::ManageHousehold)?;
         let access = self.access.resolve(actor).await?;
+        // Decided from the request alone, before anything is read or checked.
+        if patch.display_currency.is_some() {
+            authorize_every_account(actor, &access, AccountLevel::Balances)?;
+        }
         let now = self.clock.now();
         // `begin` takes `BEGIN IMMEDIATE`, so no writer can change the row
         // between this read and the no-op check below.

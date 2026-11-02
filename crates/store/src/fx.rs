@@ -2,6 +2,8 @@
 //! canonical text of an `FxRate`, so two texts are equal exactly when the
 //! rates are, and the euro has no row.
 
+use std::collections::BTreeSet;
+
 use coffer_domain::fx::{
     FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory,
     RateObservation,
@@ -20,6 +22,14 @@ const MAX_RATES_PER_READ: i64 = 1_000;
 
 /// Rows per `INSERT`: five binds each stay far below `SQLite`'s limit.
 const UPSERT_CHUNK: usize = 500;
+
+/// The earlier of two days, either of which may be missing.
+fn earlier(one: Option<Date>, other: Option<Date>) -> Option<Date> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (one, other) => one.or(other),
+    }
+}
 
 fn observation_from_row(row: &SqliteRow) -> Result<RateObservation, StoreError> {
     Ok(RateObservation {
@@ -156,7 +166,75 @@ impl Store {
     }
 }
 
+#[cfg(any(test, feature = "testkit"))]
+impl Store {
+    /// Make every later write of GBP's coverage fail, as a store that can read
+    /// and can't write would for that row.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or a trigger cannot be created.
+    pub async fn inject_fx_coverage_fault_for_tests(&self) -> Result<(), StoreError> {
+        for trigger in [
+            "CREATE TRIGGER injected_fx_coverage_insert_fault BEFORE INSERT ON fx_coverage \
+             WHEN NEW.currency = 'GBP' BEGIN SELECT RAISE(ABORT, 'injected fault'); END",
+            "CREATE TRIGGER injected_fx_coverage_update_fault BEFORE UPDATE ON fx_coverage \
+             WHEN NEW.currency = 'GBP' BEGIN SELECT RAISE(ABORT, 'injected fault'); END",
+        ] {
+            sqlx::query(trigger)
+                .execute(&self.pool)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        }
+        Ok(())
+    }
+
+    /// Make every later write of a GBP rate fail, so an answer can't be stored
+    /// though its attempt can.
+    ///
+    /// # Errors
+    ///
+    /// Fails if no connection is available or the trigger cannot be created.
+    pub async fn inject_fx_rate_fault_for_tests(&self) -> Result<(), StoreError> {
+        sqlx::query(
+            "CREATE TRIGGER injected_fx_rate_fault BEFORE INSERT ON fx_rates \
+             WHEN NEW.quote = 'GBP' BEGIN SELECT RAISE(ABORT, 'injected fault'); END",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+}
+
 impl StoreTx {
+    /// Record that `currency`'s rates are being asked for, before asking, so a
+    /// store that can't write means no request and a crash during one still
+    /// counts as a try. What is known stays. A currency never tried reads as
+    /// `failing`, with no code, until the answer settles it: if none comes, it
+    /// is tried again within the hour.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn record_fx_attempt(
+        &mut self,
+        currency: Currency,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO fx_coverage (currency, status, last_attempt_at) \
+             VALUES (?, 'failing', ?) \
+             ON CONFLICT (currency) DO UPDATE SET last_attempt_at = excluded.last_attempt_at",
+        )
+        .bind(currency.as_str())
+        .bind(now.as_millisecond())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
     /// Store `rates` of `currency`, writing only those that are new or differ
     /// from what is stored, and mark the currency `ready` when it has any
     /// rate; with none stored, even after an empty answer, it is
@@ -167,6 +245,102 @@ impl StoreTx {
     ///
     /// Backend failures, including the schema refusing the euro.
     pub async fn upsert_fx_rates(
+        &mut self,
+        currency: Currency,
+        source: FxSource,
+        rates: &[RateObservation],
+        now: Timestamp,
+    ) -> Result<Option<Date>, StoreError> {
+        let written = self.write_rates(currency, source, rates, now).await?;
+        self.settle_rates(currency, written, now).await?;
+        Ok(written)
+    }
+
+    /// As [`StoreTx::upsert_fx_rates`], for an answer about the days from `from`
+    /// on: also removes the stored rates of the days the answer speaks for and
+    /// doesn't hold, such as a false rate on a day with none.
+    ///
+    /// An answer speaks for the days from `from` to its own last row. Rates after
+    /// that stay, since an answer cut off at the end of a line looks just like a
+    /// shorter one; the next answer to pass them settles them. So an empty answer
+    /// removes nothing: it can't be the whole truth about a window holding a rate
+    /// the source published, and it must not cost every rate there. With a rate
+    /// stored it says nothing of the source's health either, so only the time of
+    /// the attempt moves. Since a non-empty answer leaves its own rows behind,
+    /// this can't empty a currency.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including the schema refusing the euro.
+    pub async fn replace_fx_rates(
+        &mut self,
+        currency: Currency,
+        source: FxSource,
+        from: Date,
+        rates: &[RateObservation],
+        now: Timestamp,
+    ) -> Result<Option<Date>, StoreError> {
+        if rates.is_empty() && self.holds_a_rate(currency).await? {
+            self.record_fx_attempt(currency, now).await?;
+            return Ok(None);
+        }
+        let removed = self.remove_absent_rates(currency, from, rates).await?;
+        let written = self.write_rates(currency, source, rates, now).await?;
+        let earliest = earlier(removed, written);
+        self.settle_rates(currency, earliest, now).await?;
+        Ok(earliest)
+    }
+
+    async fn holds_a_rate(&mut self, currency: Currency) -> Result<bool, StoreError> {
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM fx_rates WHERE quote = ?)")
+            .bind(currency.as_str())
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)
+    }
+
+    /// Removes `currency`'s rates from `from` to the last of `rates` on days
+    /// `rates` doesn't hold. Answers the earliest it removed.
+    async fn remove_absent_rates(
+        &mut self,
+        currency: Currency,
+        from: Date,
+        rates: &[RateObservation],
+    ) -> Result<Option<Date>, StoreError> {
+        let Some(last) = rates.iter().map(|rate| rate.on).max() else {
+            return Ok(None);
+        };
+        let answered: BTreeSet<Date> = rates.iter().map(|rate| rate.on).collect();
+        let stored = sqlx::query(
+            "SELECT on_date FROM fx_rates WHERE quote = ? AND on_date BETWEEN ? AND ? \
+             ORDER BY on_date",
+        )
+        .bind(currency.as_str())
+        .bind(from.to_string())
+        .bind(last.to_string())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        let mut earliest = None;
+        for row in &stored {
+            let day: Date = parsed(row, "on_date")?;
+            if answered.contains(&day) {
+                continue;
+            }
+            sqlx::query("DELETE FROM fx_rates WHERE quote = ? AND on_date = ?")
+                .bind(currency.as_str())
+                .bind(day.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+            earliest = earliest.or(Some(day));
+        }
+        Ok(earliest)
+    }
+
+    /// Writes those of `rates` that are new or differ from what is stored.
+    /// Answers the earliest day that changed.
+    async fn write_rates(
         &mut self,
         currency: Currency,
         source: FxSource,
@@ -197,9 +371,20 @@ impl StoreTx {
                 .map_err(StoreError::from_sqlx)?
             {
                 let day: Date = parsed(&row, "on_date")?;
-                earliest = Some(earliest.map_or(day, |known| known.min(day)));
+                earliest = earlier(earliest, Some(day));
             }
         }
+        Ok(earliest)
+    }
+
+    /// After a change to `currency`'s rates: brings its coverage up to what is
+    /// stored and rewrites the daily rows from `changed` on.
+    async fn settle_rates(
+        &mut self,
+        currency: Currency,
+        changed: Option<Date>,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO fx_coverage (currency, status, first_on, last_on, last_attempt_at, \
              last_success_at, last_error) \
@@ -216,10 +401,10 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
-        if let Some(earliest) = earliest {
-            self.refresh_after_rate(currency, earliest).await?;
+        if let Some(changed) = changed {
+            self.refresh_after_rate(currency, changed).await?;
         }
-        Ok(earliest)
+        Ok(())
     }
 
     /// Record that fetching `currency`'s rates did not give rates. What is

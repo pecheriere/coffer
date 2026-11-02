@@ -189,6 +189,8 @@ async fn hostile_text_stays_inside_one_json_line() {
 async fn drops_are_not_logged_one_by_one() {
     let serving = Serving::start(&[]);
     let addr = listen_address(&serving.wait_for("coffer is serving").await);
+    // The last line of a start, from a task of its own, so it isn't counted.
+    serving.wait_for("the net worth table was rebuilt").await;
     let before = serving.lines().len();
     let body = json!({
         "kind": "error",

@@ -6,6 +6,7 @@
 //! leaves rates missing, never wrong.
 
 pub mod ecb;
+pub mod job;
 
 use std::sync::Arc;
 
@@ -18,6 +19,8 @@ use self::ecb::{ECB_HOST, Ecb};
 use crate::config::{Config, ConfigError, FxProviderKind};
 use crate::egress::{Egress, HostAllowList};
 use crate::sync::provider::ProviderFuture;
+
+pub use self::job::{FxService, due, needed, spawn};
 
 /// A source of exchange rates.
 pub trait RateProvider: Send + Sync {

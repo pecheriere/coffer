@@ -482,3 +482,341 @@ async fn forecast_settings_leave_the_display_currency() {
     assert_eq!(store.display_currency().await.unwrap(), Some(cur("USD")));
     assert_eq!(store.forecast_settings().await.unwrap(), custom_settings());
 }
+
+// An answer about a window replaces what it speaks for.
+
+async fn replace(
+    store: &Store,
+    code: &str,
+    from: Date,
+    rates: &[RateObservation],
+    now: Timestamp,
+) -> Option<Date> {
+    let mut tx = store.begin().await.unwrap();
+    let changed = tx
+        .replace_fx_rates(cur(code), FxSource::Ecb, from, rates, now)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    changed
+}
+
+/// The days holding a rate, oldest first.
+async fn days_of(store: &Store, code: &str) -> Vec<Date> {
+    let mut days: Vec<_> = store
+        .fx_rates(cur(code), date(1990, 1, 1), date(2100, 1, 1))
+        .await
+        .unwrap()
+        .iter()
+        .map(|one| one.on)
+        .collect();
+    days.reverse();
+    days
+}
+
+#[tokio::test]
+async fn a_replacement_removes_what_the_answer_does_not_hold() {
+    let (_dir, store) = open().await;
+    let (fri, sat, mon) = (date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 2));
+    upsert(
+        &store,
+        "USD",
+        &[obs(fri, "1.1"), obs(sat, "9"), obs(mon, "1.2")],
+        at(0),
+    )
+    .await;
+
+    let changed = replace(
+        &store,
+        "USD",
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await;
+
+    assert_eq!(changed, Some(sat));
+    assert_eq!(days_of(&store, "USD").await, [fri, mon]);
+}
+
+#[tokio::test]
+async fn a_replacement_keeps_what_is_before_the_window() {
+    let (_dir, store) = open().await;
+    let (old, from, mon) = (date(2026, 9, 1), date(2026, 10, 26), date(2026, 11, 2));
+    upsert(&store, "USD", &[obs(old, "1.1"), obs(mon, "1.2")], at(0)).await;
+
+    let changed = replace(&store, "USD", from, &[obs(mon, "1.2")], at(1)).await;
+
+    assert_eq!(changed, None);
+    assert_eq!(days_of(&store, "USD").await, [old, mon]);
+}
+
+#[tokio::test]
+async fn a_replacement_keeps_what_is_after_its_last_row() {
+    let (_dir, store) = open().await;
+    let (fri, mon) = (date(2026, 10, 30), date(2026, 11, 2));
+    upsert(&store, "USD", &[obs(fri, "1.1"), obs(mon, "1.2")], at(0)).await;
+
+    let changed = replace(&store, "USD", fri, &[obs(fri, "1.1")], at(1)).await;
+
+    assert_eq!(changed, None);
+    assert_eq!(days_of(&store, "USD").await, [fri, mon]);
+}
+
+#[tokio::test]
+async fn an_empty_replacement_removes_nothing() {
+    let (_dir, store) = open().await;
+    let (fri, mon) = (date(2026, 10, 30), date(2026, 11, 2));
+    upsert(&store, "USD", &[obs(fri, "1.1"), obs(mon, "1.2")], at(0)).await;
+
+    let changed = replace(&store, "USD", fri, &[], at(1)).await;
+
+    assert_eq!(changed, None);
+    assert_eq!(days_of(&store, "USD").await, [fri, mon]);
+    let coverage = coverage_of(&store, "USD").await;
+    assert_eq!(coverage.status, FxFetchStatus::Ready);
+    assert_eq!(coverage.last_attempt_at, at(1));
+}
+
+#[tokio::test]
+async fn an_empty_replacement_with_nothing_stored_is_not_published() {
+    let (_dir, store) = open().await;
+
+    replace(&store, "USD", date(2026, 10, 30), &[], at(0)).await;
+
+    assert_eq!(
+        coverage_of(&store, "USD").await.status,
+        FxFetchStatus::NotPublished
+    );
+}
+
+#[tokio::test]
+async fn a_replacement_writes_corrections_and_answers_the_earliest_change() {
+    let (_dir, store) = open().await;
+    let (thu, fri, sat, mon) = (
+        date(2026, 10, 29),
+        date(2026, 10, 30),
+        date(2026, 10, 31),
+        date(2026, 11, 2),
+    );
+    upsert(
+        &store,
+        "USD",
+        &[obs(thu, "1.1"), obs(sat, "9"), obs(mon, "1.2")],
+        at(0),
+    )
+    .await;
+
+    let correction = replace(
+        &store,
+        "USD",
+        thu,
+        &[obs(thu, "1.15"), obs(sat, "9"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await;
+    assert_eq!(correction, Some(thu));
+
+    let removal = replace(
+        &store,
+        "USD",
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(2),
+    )
+    .await;
+    assert_eq!(removal, Some(fri));
+
+    let earlier = replace(
+        &store,
+        "USD",
+        thu,
+        &[obs(thu, "1.15"), obs(mon, "1.2")],
+        at(3),
+    )
+    .await;
+    assert_eq!(earlier, Some(fri), "the removal is the earliest change");
+}
+
+#[tokio::test]
+async fn a_replacement_keeps_the_coverage_true() {
+    let (_dir, store) = open().await;
+    let (first, second, third) = (date(2026, 10, 28), date(2026, 10, 29), date(2026, 10, 30));
+    upsert(
+        &store,
+        "USD",
+        &[obs(first, "9"), obs(second, "1.1"), obs(third, "1.2")],
+        at(0),
+    )
+    .await;
+
+    replace(
+        &store,
+        "USD",
+        first,
+        &[obs(second, "1.1"), obs(third, "1.2")],
+        at(1),
+    )
+    .await;
+
+    let coverage = coverage_of(&store, "USD").await;
+    assert_eq!(coverage.first_on, Some(second));
+    assert_eq!(coverage.last_on, Some(third));
+    assert_eq!(coverage.last_success_at, Some(at(1)));
+}
+
+#[tokio::test]
+async fn a_replacement_leaves_other_currencies_alone() {
+    let (_dir, store) = open().await;
+    let (fri, sat, mon) = (date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 2));
+    upsert(&store, "GBP", &[obs(sat, "0.9")], at(0)).await;
+    upsert(
+        &store,
+        "USD",
+        &[obs(fri, "1.1"), obs(sat, "9"), obs(mon, "1.2")],
+        at(0),
+    )
+    .await;
+
+    replace(
+        &store,
+        "USD",
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await;
+
+    assert_eq!(days_of(&store, "GBP").await, [sat]);
+}
+
+#[tokio::test]
+async fn a_replacement_rolled_back_changes_nothing() {
+    let (_dir, store) = open().await;
+    let (fri, sat, mon) = (date(2026, 10, 30), date(2026, 10, 31), date(2026, 11, 2));
+    upsert(
+        &store,
+        "USD",
+        &[obs(fri, "1.1"), obs(sat, "9"), obs(mon, "1.2")],
+        at(0),
+    )
+    .await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.replace_fx_rates(
+        cur("USD"),
+        FxSource::Ecb,
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await
+    .unwrap();
+    drop(tx);
+
+    assert_eq!(days_of(&store, "USD").await, [fri, sat, mon]);
+    assert_eq!(coverage_of(&store, "USD").await.last_attempt_at, at(0));
+}
+
+#[tokio::test]
+async fn a_replacement_removing_two_days_answers_the_earlier() {
+    let (_dir, store) = open().await;
+    let (fri, sat, sun, mon) = (
+        date(2026, 10, 30),
+        date(2026, 10, 31),
+        date(2026, 11, 1),
+        date(2026, 11, 2),
+    );
+    upsert(
+        &store,
+        "USD",
+        &[
+            obs(fri, "1.1"),
+            obs(sat, "9"),
+            obs(sun, "9"),
+            obs(mon, "1.2"),
+        ],
+        at(0),
+    )
+    .await;
+
+    let changed = replace(
+        &store,
+        "USD",
+        fri,
+        &[obs(fri, "1.1"), obs(mon, "1.2")],
+        at(1),
+    )
+    .await;
+
+    assert_eq!(changed, Some(sat));
+    assert_eq!(days_of(&store, "USD").await, [fri, mon]);
+}
+
+/// An empty answer about a window holding a rate says nothing of the source's
+/// health: what is known stays, and only the time of the attempt moves.
+#[tokio::test]
+async fn an_empty_replacement_changes_only_the_attempt() {
+    let (_dir, store) = open().await;
+    let fri = date(2026, 10, 30);
+    upsert(&store, "USD", &[obs(fri, "1.1")], at(0)).await;
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_failure(
+        cur("USD"),
+        FxFetchStatus::Failing,
+        Some(FxErrorCode::Network),
+        at(1),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let before = coverage_of(&store, "USD").await;
+
+    replace(&store, "USD", fri, &[], at(2)).await;
+
+    let after = coverage_of(&store, "USD").await;
+    assert_eq!(
+        after,
+        FxCoverage {
+            last_attempt_at: at(2),
+            ..before
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_attempt_changes_only_its_time() {
+    let (_dir, store) = open().await;
+    upsert(&store, "USD", &[obs(date(2026, 10, 30), "1.1")], at(0)).await;
+    let before = coverage_of(&store, "USD").await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_attempt(cur("USD"), at(5)).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let after = coverage_of(&store, "USD").await;
+    assert_eq!(
+        after,
+        FxCoverage {
+            last_attempt_at: at(5),
+            ..before
+        }
+    );
+}
+
+/// A first attempt that never gets an answer, as after a crash, is tried again
+/// soon rather than a day later, and claims no rate.
+#[tokio::test]
+async fn a_first_attempt_reads_as_failing_with_no_code() {
+    let (_dir, store) = open().await;
+
+    let mut tx = store.begin().await.unwrap();
+    tx.record_fx_attempt(cur("USD"), at(5)).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let coverage = coverage_of(&store, "USD").await;
+    assert_eq!(coverage.status, FxFetchStatus::Failing);
+    assert_eq!(coverage.last_error, None);
+    assert_eq!(coverage.last_on, None);
+    assert_eq!(coverage.last_attempt_at, at(5));
+}

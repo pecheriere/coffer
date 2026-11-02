@@ -263,6 +263,7 @@ coffer serve                    # run the server
 coffer bootstrap-link           # print a single-use first-admin link; exit 1 if an admin exists
 coffer recover-admin <username> # print a re-enroll link for an admin who lost every passkey
 coffer backup <dest>            # consistent copy of the database, mode 0600; refuses an existing file
+coffer rebuild-net-worth        # recompute the daily net worth table up to today; prints rows and last day
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
 
@@ -273,6 +274,19 @@ invalidates a link printed before it. Both stop once an admin exists.
 
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.
+
+`rebuild-net-worth` recomputes the whole daily table from the balances, the
+rates and the display currency, with today taken from `COFFER_TIMEZONE`. It is
+safe while the server runs: it takes the database's write lock in one
+transaction like any writer, so other writes wait for it, for up to the store's
+15 s busy timeout. Opening the database applies this version's migrations, as
+`backup` does, so run the same version as the server. It never creates a
+database: no database found, or an empty file, is exit code 1. You rarely need
+it: the first start after the upgrade that adds the table rebuilds it in the
+background while the server already answers, and until then a report says so
+instead of showing a number. It is also how to undo a clock that ran ahead: the
+table never moves its last day back by itself, and the command resets it to
+today and removes the days after.
 
 `healthcheck` is meant for container health checks and process supervisors.
 It sends `GET /healthz` to `COFFER_LISTEN`, connecting to loopback
