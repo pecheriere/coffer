@@ -39,6 +39,27 @@ fn default_account_name(provider_account: &ProviderAccountRecord) -> String {
 }
 
 impl SyncService {
+    /// How many provider accounts the actor could set up now: the unbound
+    /// ones of connections that are not removed, or none unless the actor
+    /// could create an account for them (the rules of
+    /// [`SyncService::create_account_and_bind`]).
+    ///
+    /// # Errors
+    ///
+    /// Storage failures.
+    pub async fn count_provider_accounts_to_set_up(&self, actor: &Actor) -> Result<u32, SyncError> {
+        if authorize(actor, Action::WriteHousehold).is_err()
+            || authorize(actor, Action::ManageConnections).is_err()
+        {
+            return Ok(0);
+        }
+        let access = self.access.resolve(actor).await?;
+        if authorize_every_account(actor, &access, AccountLevel::Write).is_err() {
+            return Ok(0);
+        }
+        Ok(self.store.count_unbound_provider_accounts().await?)
+    }
+
     /// Binds the provider account to `account` and turns the records held
     /// while it was unbound into transactions, in one transaction.
     ///

@@ -26,7 +26,7 @@ async fn household(
     session: PageSession,
 ) -> Result<Response, PageError> {
     authorize(&session.actor(), Action::ManageHousehold).map_err(AuthError::from)?;
-    let viewer = viewer(&state, &session);
+    let viewer = viewer(&state, &session).await;
     let look = session.look(&state).await;
     let current = state.appearance.household_theme().await;
     let content = html! {

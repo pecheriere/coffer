@@ -111,7 +111,7 @@ async fn render(
     let Some(plaid) = &state.config.plaid else {
         return Err(PageError::not_found());
     };
-    let viewer = viewer(state, session);
+    let viewer = viewer(state, session).await;
     let (title, submit) = match link {
         Link::New => ("Connect with Plaid", EXCHANGE_PATH.to_owned()),
         Link::Update(id) => (

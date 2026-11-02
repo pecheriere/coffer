@@ -293,6 +293,24 @@ impl StoreTx {
 }
 
 impl Store {
+    /// How many provider accounts are unbound and belong to a connection
+    /// that is not removed: the ones that wait for an account to feed.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn count_unbound_provider_accounts(&self) -> Result<u32, StoreError> {
+        let count: i64 = sqlx::query_scalar(concat!(
+            "SELECT COUNT(*) FROM provider_accounts p ",
+            "JOIN connections c ON c.id = p.connection_id ",
+            "WHERE p.account_id IS NULL AND c.status != 'removed'"
+        ))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+
     /// The provider accounts of `connection`, or of every connection, oldest
     /// first.
     ///

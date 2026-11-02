@@ -7,6 +7,9 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod bind;
+mod setup;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -135,11 +138,16 @@ impl World {
     }
 
     async fn sync_fixture(&self, connection: ConnectionId) {
+        self.sync_reply(connection, ACCOUNTS_FIRST).await;
+    }
+
+    /// Runs a sync of `connection` that the bridge answers with `reply`.
+    async fn sync_reply(&self, connection: ConnectionId, reply: &str) {
         self.script
             .bridge_replies
             .lock()
             .unwrap()
-            .push_back(ACCOUNTS_FIRST.to_owned());
+            .push_back(reply.to_owned());
         let mut tx = self.server.store.begin().await.unwrap();
         tx.insert_sync_run(NewSyncRun {
             connection,
