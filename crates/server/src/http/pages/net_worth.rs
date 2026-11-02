@@ -1,0 +1,635 @@
+//! The read-only net worth page (spec §8.10, N13): what `GET /api/v1/reports/net-worth`
+//! answers for a range, in words, a chart and a table of the same numbers. It calls the
+//! same service and adds nothing up, so the two cannot differ, and it has no form.
+
+mod chart;
+mod words;
+
+use std::collections::BTreeMap;
+
+use axum::Router;
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use coffer_domain::money::{Currency, Money};
+use coffer_domain::net_worth::{
+    AccountPoint, AccountSeries, ConversionState, MIN_VALUE_DATE, NetWorthBlocker,
+    NetWorthInterval, NetWorthPoint, NetWorthReport, NetWorthStatus, period_ends,
+};
+use jiff::civil::Date;
+use jiff::{Span, ToSpan as _};
+use maud::{Markup, html};
+use serde::Deserialize;
+
+use super::account::viewer;
+use super::amounts::{day, grouped, money};
+use super::layout::{Frame, Nav, page};
+use super::{PageError, PageSession};
+use crate::http::AppState;
+use crate::http::problem::{Problem, ProblemCode};
+use crate::ledger::net_worth::NetWorthQuery;
+use chart::{ChartPoint, ChartSize, line_chart};
+use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount_sentence};
+
+const NO_TOTAL: &str = "No total";
+const NOTHING_COUNTED: &str = "Nothing counted";
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/net-worth", get(net_worth_page))
+}
+
+/// The ranges the page offers. There are no free dates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+enum Range {
+    #[serde(rename = "3m")]
+    ThreeMonths,
+    #[default]
+    #[serde(rename = "1y")]
+    OneYear,
+    #[serde(rename = "5y")]
+    FiveYears,
+    #[serde(rename = "all")]
+    All,
+}
+
+impl Range {
+    const ALL: [Self; 4] = [Self::ThreeMonths, Self::OneYear, Self::FiveYears, Self::All];
+
+    fn word(self) -> &'static str {
+        match self {
+            Self::ThreeMonths => "3m",
+            Self::OneYear => "1y",
+            Self::FiveYears => "5y",
+            Self::All => "all",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::ThreeMonths => "3 months",
+            Self::OneYear => "1 year",
+            Self::FiveYears => "5 years",
+            Self::All => "All",
+        }
+    }
+
+    /// How far back it reaches, or `None` for everything, and how long its periods are.
+    fn reach(self) -> (Option<Span>, NetWorthInterval) {
+        match self {
+            Self::ThreeMonths => (Some(3.months()), NetWorthInterval::Day),
+            Self::OneYear => (Some(1.year()), NetWorthInterval::Week),
+            Self::FiveYears => (Some(5.years()), NetWorthInterval::Month),
+            Self::All => (None, NetWorthInterval::Month),
+        }
+    }
+
+    fn query(self, today: Date) -> NetWorthQuery {
+        let (reach, interval) = self.reach();
+        let from = reach
+            .and_then(|reach| today.checked_sub(reach).ok())
+            .map_or(MIN_VALUE_DATE, |from| from.max(MIN_VALUE_DATE));
+        NetWorthQuery {
+            from: Some(from),
+            to: Some(today),
+            interval: Some(interval),
+            account_points: Some(true),
+        }
+    }
+}
+
+/// Anything else in the address is refused.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageQuery {
+    range: Option<Range>,
+}
+
+fn bad_range() -> PageError {
+    PageError(
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            ProblemCode::Invalid,
+            "Invalid request",
+        )
+        .with_detail("the range must be 3m, 1y, 5y or all".to_owned()),
+    )
+}
+
+async fn net_worth_page(
+    State(state): State<AppState>,
+    session: PageSession,
+    query: Result<Query<PageQuery>, QueryRejection>,
+) -> Result<Response, PageError> {
+    let Query(query) = query.map_err(|_| bad_range())?;
+    let range = query.range.unwrap_or_default();
+    let report = state
+        .ledger
+        .net_worth(&session.actor(), range.query(state.ledger.today()))
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
+    let viewer = viewer(&state, &session).await;
+    let frame = Frame {
+        look: session.look(&state).await,
+        viewer: Some(&viewer),
+        current: Some(Nav::NetWorth),
+        narrow: false,
+    };
+    let content = content(&report, range, viewer.can_manage_household);
+    Ok(page(&frame, "Net worth", &content).into_response())
+}
+
+fn content(report: &NetWorthReport, range: Range, may_choose: bool) -> Markup {
+    let names = Names::of_accounts(&report.accounts);
+    html! {
+        h1 { "Net worth" }
+        (range_links(range))
+        (answer(report, &names, may_choose))
+        @if let Some(currency) = report.display_currency {
+            (history(report, currency, &names))
+        }
+        (latest(report))
+        (accounts(report))
+    }
+}
+
+/// One row of plain links above everything they scope.
+fn range_links(current: Range) -> Markup {
+    html! {
+        nav.ranges aria-label="Range" {
+            @for range in Range::ALL {
+                a href={ "/net-worth?range=" (range.word()) }
+                    aria-current=[(range == current).then_some("page")] { (range.name()) }
+            }
+        }
+    }
+}
+
+/// The answer, how far to trust it and why, all together.
+fn answer(report: &NetWorthReport, names: &Names<'_>, may_choose: bool) -> Markup {
+    let blocked = !report.blockers.is_empty();
+    html! {
+        section.card id="answer" {
+            (headline(report))
+            (status(report.status))
+            @if blocked {
+                h3 { "Why there's no number" }
+                ul.reasons {
+                    @for blocker in &report.blockers {
+                        li { (blocker_sentence(*blocker)) }
+                    }
+                }
+                @if report.blockers.contains(&NetWorthBlocker::DisplayCurrencyNotSet) {
+                    (way_forward(may_choose))
+                }
+            }
+            @if !report.cautions.is_empty() {
+                h3 { (if blocked { "Also worth knowing" } else { "Why it isn't firm" }) }
+                ul.reasons id="reasons" {
+                    @for caution in &report.cautions {
+                        li { (caution_sentence(caution, names)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn way_forward(may_choose: bool) -> Markup {
+    html! {
+        p.way-forward {
+            @if may_choose {
+                a href="/admin/household" { "Choose a display currency" }
+            } @else {
+                "An admin can choose one."
+            }
+        }
+    }
+}
+
+/// The latest point's total, or plainly that it has none. An earlier total is not offered
+/// instead: it would read as the value now.
+fn headline(report: &NetWorthReport) -> Markup {
+    html! {
+        @match report.points.last() {
+            Some(NetWorthPoint { on, total: Some(total), .. }) => {
+                h2.answer-label { "Net worth on " (day(*on)) }
+                p.hero-figure.answer-short[total.minor_units < 0] { (money(*total)) }
+            }
+            Some(NetWorthPoint { on, .. }) => {
+                h2.answer-label { (NO_TOTAL) " on " (day(*on)) }
+                @if report.display_currency.is_some() {
+                    p.fine {
+                        "Part of it can't be added up"
+                        ", and a total without it would look like money leaving. The sums per currency are below."
+                    }
+                }
+            }
+            None => {
+                h2.answer-label { "No number yet" }
+            }
+        }
+    }
+}
+
+fn status(status: NetWorthStatus) -> Markup {
+    let (word, class, meaning) = match status {
+        NetWorthStatus::Firm => (
+            "Firm:",
+            "status-firm",
+            "coffer has nothing to warn you about.",
+        ),
+        NetWorthStatus::Provisional => (
+            "Provisional:",
+            "status-provisional",
+            "these are coffer's best numbers, but the points below could change them.",
+        ),
+        NetWorthStatus::Unavailable => (
+            "Unavailable:",
+            "status-unavailable",
+            "coffer can't give a number yet, for the reasons below.",
+        ),
+    };
+    html! {
+        p.status { strong class=(class) { (word) } " " (meaning) }
+    }
+}
+
+/// One period between the first point and the last.
+#[derive(Clone, Copy)]
+enum Period<'a> {
+    Point(&'a NetWorthPoint),
+    /// The report leaves out a period with nothing counted. Between two points that's a
+    /// stretch with no value, which the line and the table say rather than pass over.
+    Nothing {
+        on: Date,
+        partial: bool,
+    },
+}
+
+impl Period<'_> {
+    fn on(self) -> Date {
+        match self {
+            Self::Point(point) => point.on,
+            Self::Nothing { on, .. } => on,
+        }
+    }
+
+    fn partial(self) -> bool {
+        match self {
+            Self::Point(point) => point.partial,
+            Self::Nothing { partial, .. } => partial,
+        }
+    }
+
+    fn total(self) -> Option<Money> {
+        match self {
+            Self::Point(point) => point.total,
+            Self::Nothing { .. } => None,
+        }
+    }
+
+    /// The period's amount as text, or what stands for it.
+    fn written(self) -> String {
+        match (self, self.total()) {
+            (_, Some(total)) => money(total),
+            (Self::Point(_), None) => "no total".to_owned(),
+            (Self::Nothing { .. }, None) => "nothing counted".to_owned(),
+        }
+    }
+}
+
+/// The report's points, oldest first, with the periods left out between them.
+fn periods(report: &NetWorthReport) -> Vec<Period<'_>> {
+    let (Some(first), Some(last)) = (report.points.first(), report.points.last()) else {
+        return Vec::new();
+    };
+    let by_day: BTreeMap<Date, &NetWorthPoint> = report
+        .points
+        .iter()
+        .map(|point| (point.on, point))
+        .collect();
+    // The report was answered for these dates, so they can't be refused now; if they
+    // were, its own points are still all true.
+    let Ok(ends) = period_ends(report.from, last.on, report.interval) else {
+        return report.points.iter().map(Period::Point).collect();
+    };
+    ends.into_iter()
+        .filter(|end| end.on >= first.on)
+        .map(|end| {
+            by_day.get(&end.on).map_or(
+                Period::Nothing {
+                    on: end.on,
+                    partial: end.partial,
+                },
+                |point| Period::Point(point),
+            )
+        })
+        .collect()
+}
+
+/// A period's heading in the table and its tooltip.
+fn period_name(on: Date, interval: NetWorthInterval) -> String {
+    match interval {
+        NetWorthInterval::Day => day(on),
+        NetWorthInterval::Week => format!("Week to {}", day(on)),
+        NetWorthInterval::Month => on.strftime("%B %Y").to_string(),
+    }
+}
+
+/// What marks a period that ends early, because the range does.
+fn partial_mark(on: Date, interval: NetWorthInterval) -> String {
+    match interval {
+        NetWorthInterval::Week => "part of the week".to_owned(),
+        NetWorthInterval::Day | NetWorthInterval::Month => format!("to {}", day(on)),
+    }
+}
+
+fn chart_points(periods: &[Period<'_>], interval: NetWorthInterval) -> Vec<ChartPoint> {
+    periods
+        .iter()
+        .map(|period| {
+            let written = period.written();
+            ChartPoint {
+                on: period.on(),
+                value: period.total().map(|total| total.minor_units),
+                title: format!("{}: {written}", period_name(period.on(), interval)),
+                label: written,
+            }
+        })
+        .collect()
+}
+
+/// The chart and the table of the same numbers.
+fn history(report: &NetWorthReport, currency: Currency, names: &Names<'_>) -> Markup {
+    let periods = periods(report);
+    if periods.is_empty() {
+        return html! {};
+    }
+    let points = chart_points(&periods, report.interval);
+    let code = currency.as_str();
+    let gaps = periods.iter().any(|period| period.total().is_none());
+    html! {
+        section.card id="history" {
+            h2 { "Net worth over time, in " (code) }
+            (line_chart(&points, currency, ChartSize::Wide))
+            (line_chart(&points, currency, ChartSize::Narrow))
+            p.fine {
+                "Each point is the value on the last day of its period. "
+                @if gaps {
+                    "A break in the line is a period with no total, not a fall to zero."
+                }
+            }
+            (jumps(report, names))
+            // Open when there's a gap, since the table is where each one is explained.
+            details.values open[gaps] {
+                summary { "Every value, as a table" }
+                (periods_table(report, &periods, code))
+            }
+        }
+    }
+}
+
+/// Why the line may jump or drop without any money moving.
+fn jumps(report: &NetWorthReport, names: &Names<'_>) -> Markup {
+    let (Some(first), Some(last)) = (report.points.first(), report.points.last()) else {
+        return html! {};
+    };
+    let inside = |on: Date| first.on < on && on <= last.on;
+    html! {
+        ul.reasons.jumps {
+            @for account in report.accounts.iter().filter(|account| account.counted) {
+                @if let Some(on) = account.first_on.filter(|on| inside(*on)) {
+                    li {
+                        (names.account(account.account)) " first has a value on " (day(on))
+                        ", so a jump then is the account arriving, not money."
+                    }
+                }
+                @if let Some(on) = account.closed_on.filter(|on| inside(*on)) {
+                    li {
+                        (names.account(account.account)) " closed on " (day(on))
+                        ", so a drop then is the account closing, not money."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Newest first, so the numbers nearest now are nearest the chart.
+fn periods_table(report: &NetWorthReport, periods: &[Period<'_>], code: &str) -> Markup {
+    let total_heading = format!("Total, {code}");
+    html! {
+        table.months.amounts-wrap role="table" aria-label="Net worth by period" {
+            thead role="rowgroup" {
+                tr role="row" {
+                    th scope="col" role="columnheader" { "Period" }
+                    th scope="col" role="columnheader" { (total_heading) }
+                }
+            }
+            tbody role="rowgroup" {
+                @for period in periods.iter().rev() {
+                    tr role="row" {
+                        th scope="row" role="rowheader" {
+                            (period_name(period.on(), report.interval))
+                            @if period.partial() {
+                                " " span.chip.chip-quiet { (partial_mark(period.on(), report.interval)) }
+                            }
+                        }
+                        td role="cell" data-label=(total_heading) {
+                            (period_cell(report, *period))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn period_cell(report: &NetWorthReport, period: Period<'_>) -> Markup {
+    let names = Names::of_accounts(&report.accounts);
+    html! {
+        @match period {
+            Period::Nothing { .. } => {
+                (NOTHING_COUNTED)
+            }
+            Period::Point(NetWorthPoint { total: Some(total), .. }) => {
+                (grouped(total.minor_units, total.currency))
+            }
+            Period::Point(point) => {
+                span.no-total {
+                    (NO_TOTAL) ":"
+                    @for account in &point.unconverted {
+                        " " (no_amount_sentence(names.account(*account), conversion_of(report, *account, point.on)))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// How `account` stood on `on`; `None` when it had no value that day.
+fn conversion_of(
+    report: &NetWorthReport,
+    account: coffer_domain::ids::AccountId,
+    on: Date,
+) -> Option<ConversionState> {
+    report
+        .accounts
+        .iter()
+        .find(|series| series.account == account)
+        .and_then(|series| point_on(series, on))
+        .map(|point| point.conversion)
+}
+
+fn point_on(series: &AccountSeries, on: Date) -> Option<&AccountPoint> {
+    series.points.iter().find(|point| point.on == on)
+}
+
+/// The latest point by liquidity class and by currency.
+fn latest(report: &NetWorthReport) -> Markup {
+    let Some(point) = report.points.last() else {
+        return html! {};
+    };
+    html! {
+        section.card id="latest" {
+            h2 { "What it's made of, on " (day(point.on)) }
+            @if report.display_currency.is_some() && !point.by_liquidity.is_empty() {
+                table.sums.amounts-wrap {
+                    tbody {
+                        @for line in &point.by_liquidity {
+                            tr {
+                                th scope="row" { (liquidity_name(line.liquidity)) }
+                                td {
+                                    @match line.amount {
+                                        Some(amount) => { (grouped(amount.minor_units, amount.currency)) }
+                                        None => { (NO_TOTAL) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            h3 { "By currency, unconverted" }
+            table.sums.amounts-wrap {
+                tbody {
+                    @for sum in &point.by_currency {
+                        tr {
+                            th scope="row" { (sum.currency.as_str()) }
+                            td { (money(*sum)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One cell of the accounts table: its value, and the date it rests on.
+struct AccountCell {
+    value: String,
+    note: Option<String>,
+}
+
+impl AccountCell {
+    fn plain(value: &str) -> Self {
+        Self {
+            value: value.to_owned(),
+            note: None,
+        }
+    }
+}
+
+/// Each visible account at the latest point, and what its numbers rest on.
+fn accounts(report: &NetWorthReport) -> Markup {
+    if report.accounts.is_empty() {
+        return html! {};
+    }
+    let in_display = report.display_currency.map_or_else(
+        || "Converted".to_owned(),
+        |currency| format!("In {}", currency.as_str()),
+    );
+    let columns = ["Balance", in_display.as_str(), "First day"];
+    let latest = report.points.last().map(|point| point.on);
+    html! {
+        section.card id="accounts" {
+            h2 { "Accounts" }
+            table.months.amounts-wrap role="table" aria-label="Accounts at the latest point" {
+                thead role="rowgroup" {
+                    tr role="row" {
+                        th scope="col" role="columnheader" { "Account" }
+                        @for column in columns {
+                            th scope="col" role="columnheader" { (column) }
+                        }
+                    }
+                }
+                tbody role="rowgroup" {
+                    @for series in &report.accounts {
+                        @let at = latest.and_then(|on| point_on(series, on));
+                        tr role="row" {
+                            th scope="row" role="rowheader" { (series.name) }
+                            @for (column, cell) in columns.iter().zip(account_cells(series, at)) {
+                                td role="cell" data-label=(column) {
+                                    span.cell-stack {
+                                        (cell.value)
+                                        @if let Some(note) = &cell.note {
+                                            span.cell-note { (note) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A shorter date, for a table of several.
+fn short_day(date: Date) -> String {
+    date.strftime("%-d %b %Y").to_string()
+}
+
+/// An account's cells: balance and its date, amount and its rate's date, and first day.
+fn account_cells(series: &AccountSeries, at: Option<&AccountPoint>) -> [AccountCell; 3] {
+    const NOT_COUNTED: &str = "Not counted";
+    if !series.counted {
+        return [NOT_COUNTED; 3].map(AccountCell::plain);
+    }
+    let first_day = AccountCell::plain(
+        &series
+            .first_on
+            .map_or_else(|| "None yet".to_owned(), short_day),
+    );
+    let Some(point) = at else {
+        return [
+            AccountCell::plain("No value that day"),
+            AccountCell::plain("None"),
+            first_day,
+        ];
+    };
+    let amount = match (point.counted, point.amount, point.conversion) {
+        (false, _, _) => NOT_COUNTED.to_owned(),
+        (true, Some(amount), _) => grouped(amount.minor_units, amount.currency),
+        (true, None, ConversionState::Missing) => "No rate".to_owned(),
+        (true, None, ConversionState::TooLarge) => "Too large".to_owned(),
+        (true, None, ConversionState::NoDisplayCurrency) => "No display currency".to_owned(),
+        (true, None, ConversionState::Same | ConversionState::Converted) => "None".to_owned(),
+    };
+    [
+        AccountCell {
+            value: money(point.balance),
+            note: Some(format!("from {}", short_day(point.balance_on))),
+        },
+        AccountCell {
+            value: amount,
+            note: point
+                .rate_on
+                .map(|on| format!("at the rate of {}", short_day(on))),
+        },
+        first_day,
+    ]
+}

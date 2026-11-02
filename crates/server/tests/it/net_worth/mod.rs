@@ -38,18 +38,18 @@ use tower::ServiceExt as _;
 const REPORT: &str = "/api/v1/reports/net-worth";
 const SETTINGS: &str = "/api/v1/household/settings";
 /// The golden example's day.
-const TODAY: &str = "2026-11-02";
+pub(crate) const TODAY: &str = "2026-11-02";
 
 pub(crate) struct World {
-    server: TestServer,
+    pub(crate) server: TestServer,
     /// Alice's token without grants, which may do anything.
-    admin: SecretToken,
+    pub(crate) admin: SecretToken,
     admin_id: AgentTokenId,
-    alice: Actor,
+    pub(crate) alice: Actor,
 }
 
 /// Admin "alice" on the day `TODAY` in UTC, with the daily table built and empty.
-async fn world() -> World {
+pub(crate) async fn world() -> World {
     world_on(TestServer::new().await).await
 }
 
@@ -61,7 +61,7 @@ async fn world_on(server: TestServer) -> World {
 }
 
 /// As [`world_on`], with the table as the migration leaves it.
-async fn unbuilt(server: TestServer) -> World {
+pub(crate) async fn unbuilt(server: TestServer) -> World {
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     let alice = Actor {
@@ -187,7 +187,7 @@ fn rate_missing<'a>(report: &'a Value, currency: &str) -> &'a Value {
 }
 
 impl World {
-    fn at(&self, day: &str) {
+    pub(crate) fn at(&self, day: &str) {
         self.server.clock.set(noon(day));
     }
 
@@ -253,14 +253,14 @@ impl World {
     }
 
     /// The report for `?query` as the household's admin, which must be 200.
-    async fn report(&self, query: &str) -> Value {
+    pub(crate) async fn report(&self, query: &str) -> Value {
         let (status, text) = self.report_as(&self.admin, query).await;
         assert_eq!(status, StatusCode::OK, "the report answers");
         serde_json::from_str(&text).unwrap()
     }
 
     /// An account with `extra` on top of its name, kind and currency.
-    async fn holding_with(
+    pub(crate) async fn holding_with(
         &self,
         name: &str,
         kind: &str,
@@ -278,12 +278,12 @@ impl World {
     }
 
     /// A checking account in `currency`.
-    async fn holding(&self, name: &str, currency: &str) -> AccountId {
+    pub(crate) async fn holding(&self, name: &str, currency: &str) -> AccountId {
         self.holding_with(name, "checking", currency, json!({}))
             .await
     }
 
-    async fn balance(&self, holder: AccountId, on: &str, minor_units: i64) {
+    pub(crate) async fn balance(&self, holder: AccountId, on: &str, minor_units: i64) {
         self.admin_send(
             Method::PUT,
             &format!("/api/v1/accounts/{holder}/balances/{on}"),
@@ -292,12 +292,12 @@ impl World {
         .await;
     }
 
-    async fn patch_holding(&self, holder: AccountId, body: &Value) {
+    pub(crate) async fn patch_holding(&self, holder: AccountId, body: &Value) {
         self.admin_send(Method::PATCH, &format!("/api/v1/accounts/{holder}"), body)
             .await;
     }
 
-    async fn display(&self, currency: &str) {
+    pub(crate) async fn display(&self, currency: &str) {
         self.admin_send(
             Method::PATCH,
             SETTINGS,
@@ -307,7 +307,7 @@ impl World {
     }
 
     /// Stores `rates` of `currency`, as a fetch does.
-    async fn rates(&self, currency: &str, rates: &[(&str, &str)]) {
+    pub(crate) async fn rates(&self, currency: &str, rates: &[(&str, &str)]) {
         let rates: Vec<RateObservation> = rates
             .iter()
             .map(|(on, rate)| RateObservation {
@@ -328,7 +328,7 @@ impl World {
     }
 
     /// Records that fetching `currency`'s rates gave none, as a fetch does.
-    async fn fetch_failed(
+    pub(crate) async fn fetch_failed(
         &self,
         currency: &str,
         status: FxFetchStatus,
@@ -342,14 +342,14 @@ impl World {
     }
 
     /// What the daily job does when a day has passed.
-    async fn fill(&self, through: &str) {
+    pub(crate) async fn fill(&self, through: &str) {
         let mut tx = self.server.store.begin().await.unwrap();
         tx.fill_net_worth(day(through)).await.unwrap();
         tx.commit().await.unwrap();
     }
 
     /// What the daily job does after the migration.
-    async fn rebuild(&self, through: &str) {
+    pub(crate) async fn rebuild(&self, through: &str) {
         let mut tx = self.server.store.begin().await.unwrap();
         tx.rebuild_net_worth(day(through)).await.unwrap();
         tx.commit().await.unwrap();
@@ -364,7 +364,7 @@ impl World {
             .unwrap_or_else(|_| panic!("reading the table failed"))
     }
 
-    async fn settings_events(&self) -> Vec<AuditEvent> {
+    pub(crate) async fn settings_events(&self) -> Vec<AuditEvent> {
         self.server
             .store
             .list_audit(
@@ -380,7 +380,7 @@ impl World {
     }
 
     /// How many entries the whole log holds, up to one page.
-    async fn audit_count(&self) -> usize {
+    pub(crate) async fn audit_count(&self) -> usize {
         self.server
             .store
             .list_audit(&AuditFilter::default(), &PageRequest::default())
@@ -392,7 +392,7 @@ impl World {
 
     /// Task 1's household (see `golden_week_of_net_worth`): the rates, the four accounts
     /// and their balances, and display USD.
-    async fn golden(&self) -> Golden {
+    pub(crate) async fn golden(&self) -> Golden {
         self.rates(
             "USD",
             &[
@@ -440,9 +440,9 @@ impl World {
 }
 
 /// The accounts of [`World::golden`].
-struct Golden {
-    checking: AccountId,
-    livret: AccountId,
-    card: AccountId,
-    side: AccountId,
+pub(crate) struct Golden {
+    pub(crate) checking: AccountId,
+    pub(crate) livret: AccountId,
+    pub(crate) card: AccountId,
+    pub(crate) side: AccountId,
 }

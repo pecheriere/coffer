@@ -73,7 +73,7 @@ impl Ledger {
     }
 
     /// The household's day.
-    fn today(&self) -> Date {
+    pub(crate) fn today(&self) -> Date {
         self.clock.now().to_zoned(self.timezone.clone()).date()
     }
 

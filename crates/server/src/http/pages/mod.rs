@@ -11,14 +11,18 @@
 
 mod account;
 mod admin;
+mod amounts;
 mod connections;
 mod forecast;
 mod grants;
 mod household;
 mod layout;
 mod login;
+mod net_worth;
 mod plaid;
 mod setup;
+#[cfg(test)]
+mod word_checks;
 
 use axum::body::Body;
 use axum::extract::rejection::{FormRejection, JsonRejection};
@@ -68,6 +72,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(connections::routes())
         .merge(household::routes())
         .merge(forecast::routes())
+        .merge(net_worth::routes())
         .merge(plaid)
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))

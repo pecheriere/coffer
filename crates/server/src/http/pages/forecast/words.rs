@@ -8,9 +8,11 @@ use coffer_domain::forecast::{
     AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, LineSource, SettledLine,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
-use coffer_domain::money::{Currency, Money, format_minor_units};
+use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{CalendarMonth, SettlementKind};
 use jiff::civil::Date;
+
+use crate::http::pages::amounts::{day, magnitude, money};
 
 /// What the forecast's ids are called. An id with no name, which only a change between
 /// two reads can cause, falls back to a plain description.
@@ -68,53 +70,6 @@ impl<'a> Names<'a> {
             |name| format!("the one-off {name}"),
         )
     }
-}
-
-/// `minor` units of `currency` as the page writes them: `-1,234.56` USD, `1,234` JPY.
-///
-/// The API's numbers stay ungrouped, as [`format_minor_units`] writes them: this only
-/// puts the separators into its text.
-pub(super) fn grouped(minor: i64, currency: Currency) -> String {
-    let plain = format_minor_units(minor, currency);
-    let (sign, unsigned) = plain
-        .strip_prefix('-')
-        .map_or(("", plain.as_str()), |rest| ("-", rest));
-    let (whole, decimals) = unsigned
-        .split_once('.')
-        .map_or((unsigned, None), |(whole, decimals)| {
-            (whole, Some(decimals))
-        });
-    let mut text = String::with_capacity(plain.len() + whole.len() / 3);
-    text.push_str(sign);
-    for (index, digit) in whole.char_indices() {
-        if index > 0 && (whole.len() - index).is_multiple_of(3) {
-            text.push(',');
-        }
-        text.push(digit);
-    }
-    if let Some(decimals) = decimals {
-        text.push('.');
-        text.push_str(decimals);
-    }
-    text
-}
-
-/// `amount` with its currency: `-1,234.56 USD`.
-pub(super) fn money(amount: Money) -> String {
-    format!(
-        "{} {}",
-        grouped(amount.minor_units, amount.currency),
-        amount.currency.as_str()
-    )
-}
-
-/// The size of `amount`, whatever its sign, with its currency: `12.34 USD`.
-pub(super) fn magnitude(amount: Money) -> String {
-    money(amount).trim_start_matches('-').to_owned()
-}
-
-pub(super) fn day(date: Date) -> String {
-    date.strftime("%-d %B %Y").to_string()
 }
 
 pub(super) fn month_name(month: CalendarMonth) -> String {
@@ -415,11 +370,9 @@ mod tests {
     use coffer_domain::money::{Currency, Money};
     use coffer_domain::plan::CalendarMonth;
     use jiff::civil::{Date, date};
-    use serde::Serialize;
-    use serde_json::Value;
-    use utoipa::PartialSchema;
 
-    use super::{Names, blocker_sentence, caution_sentence, grouped, newer_spending_sentence};
+    use super::{Names, blocker_sentence, caution_sentence, newer_spending_sentence};
+    use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
 
     fn usd(minor_units: i64) -> Money {
         Money {
@@ -531,53 +484,6 @@ mod tests {
                 name: "Rainy day".to_owned(),
             },
         ]
-    }
-
-    /// Every value of `kind` in `schema`, walking its alternatives.
-    fn kinds_in(schema: &Value, found: &mut BTreeSet<String>) {
-        match schema {
-            Value::Object(fields) => {
-                if let Some(kinds) = fields
-                    .get("properties")
-                    .and_then(|properties| properties["kind"]["enum"].as_array())
-                {
-                    found.extend(kinds.iter().filter_map(Value::as_str).map(str::to_owned));
-                }
-                fields.values().for_each(|value| kinds_in(value, found));
-            }
-            Value::Array(values) => values.iter().for_each(|value| kinds_in(value, found)),
-            _ => {}
-        }
-    }
-
-    /// What the API's schema says the kinds of `T` are.
-    fn schema_kinds<T: PartialSchema>() -> BTreeSet<String> {
-        let schema = serde_json::to_value(T::schema()).unwrap();
-        let mut found = BTreeSet::new();
-        kinds_in(&schema, &mut found);
-        assert!(!found.is_empty(), "the schema must list the kinds");
-        found
-    }
-
-    fn sampled_kinds<T: Serialize>(samples: &[T]) -> BTreeSet<String> {
-        samples
-            .iter()
-            .map(|sample| {
-                serde_json::to_value(sample).unwrap()["kind"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            })
-            .collect()
-    }
-
-    /// A sentence a person could read: not empty, and not the API's wire name.
-    fn assert_worded(sentence: &str, kinds: &BTreeSet<String>) {
-        assert!(sentence.ends_with('.'), "a sentence ends");
-        assert!(!sentence.contains('_'), "no wire name");
-        for kind in kinds {
-            assert!(!sentence.contains(kind.as_str()), "no wire name");
-        }
     }
 
     /// A new caution fails the build at `caution_sentence`'s `match`, and then fails here
@@ -814,22 +720,6 @@ mod tests {
         ] {
             assert!(said(&caution, &names).contains(expected), "{expected}");
         }
-    }
-
-    #[test]
-    fn amounts_are_grouped_in_threes_whatever_the_currency() {
-        let group = |minor, code| grouped(minor, Currency::parse(code).unwrap());
-        assert_eq!(group(0, "USD"), "0.00");
-        assert_eq!(group(5, "USD"), "0.05");
-        assert_eq!(group(99_999, "USD"), "999.99");
-        assert_eq!(group(100_000, "USD"), "1,000.00");
-        assert_eq!(group(-100_000, "USD"), "-1,000.00");
-        assert_eq!(group(100_000_000, "USD"), "1,000,000.00");
-        assert_eq!(group(i64::MIN, "USD"), "-92,233,720,368,547,758.08");
-        assert_eq!(group(999, "JPY"), "999");
-        assert_eq!(group(-1_000, "JPY"), "-1,000");
-        assert_eq!(group(1_234_567, "KWD"), "1,234.567");
-        assert_eq!(group(-1, "KWD"), "-0.001");
     }
 
     /// Reasons inside one kind say different things, so one can't be left as another's.

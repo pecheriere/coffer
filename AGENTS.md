@@ -24,8 +24,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
-  with a content security policy of their own, and whose `forecast.rs` is the
-  read-only forecast page; `browser_reports/`, the
+  with a content security policy of their own, whose `forecast.rs` is the
+  read-only forecast page, and whose `net_worth.rs` is the read-only net worth page
+  and its `chart.rs`, an SVG drawn in integers; `browser_reports/`, the
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
   household forecast `settings`, the `forecast` and its what-if, the
