@@ -757,7 +757,10 @@ assigned, which is a separate question.
 **R8. Goal links on splits.** `SplitInput` gains an optional `goal`, whose
 currency must equal the transaction's, so goal arithmetic stays exact without
 FX. A purchase in another currency cannot be linked until FX exists, which
-overstates that goal's need: the safe direction.
+overstates that goal's need: the safe direction. Only a split in an `expense`
+category may be linked, and only those lower the need: moving money to savings for
+a goal is not spending it, since the money is still cash. Every split names a
+category, so uncategorized money has no split to link.
 
 **R9. Bills and budgets.** A recurring outflow has a `spending` of `bill` or
 `budget`, which replaces §6.8's reduction of every recurring item. Only a budget is
@@ -783,9 +786,27 @@ accounts, on or before that account's balance date, since spending newer than th
 balance is not in it yet and would count twice in the household's favour. Closed
 accounts are left out too: a closed card's debt counts against cash (R16), but its
 spending does not lower the need, which errs safe. Goal-linked spending on a counted
-account has the same balance-date limit; from an excluded account it does not, since
+account has the same balance-date limit, as does one on a closed card switched into
+the forecast, with or without a balance; from an excluded account it does not, since
 it never touched counted cash. Pending charges do not lower the need, and money spent from an excluded
-account did not come out of counted cash.
+account did not come out of counted cash. A known limit: a balance has a date and no
+time, so a transaction later on the balance's own date counts as shown.
+
+Posted outflows on counted accounts after the account's balance date, up to `as_of`,
+raise the caution `spending_newer_than_balance` with their total per currency, which
+makes the status `provisional`. The number does not change, since a provider's balance
+date may lag what its balance reflects and guessing could count the money twice or not
+at all. If the balance really is older, the cash available is overstated by up to that
+total. A bill past its date is still unpaid until spending on or before the balance
+date pays it (R9).
+
+**R10a. Charges that say nothing about what was spent.** A transaction flagged
+`source_removed` or `split_mismatch` counts neither as a category's spending nor as a
+goal's, and one flagged `possible_duplicate` does not count as a goal's. The provider
+took the charge back or changed it, so its splits no longer say what happened, and
+leaving it out errs toward holding more: a bill it paid is unpaid again, with a
+caution. A possible duplicate in a category keeps counting there, with the caution
+`possible_duplicates`.
 
 **R11. No base or display currency yet.** §6.8's "in the requester's display
 currency" waits for FX. A fixed floor carries its own currency.

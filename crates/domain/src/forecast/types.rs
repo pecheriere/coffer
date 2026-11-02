@@ -38,6 +38,8 @@ pub struct ForecastInput {
     pub category_spent: Vec<CategorySpent>,
     /// Spending in `as_of`'s month that is not settled yet.
     pub loose_ends: Vec<LooseEnds>,
+    /// Outflows on counted accounts posted after their balance's date, up to `as_of`.
+    pub newer_spending: Vec<NewerSpending>,
     /// Provider accounts bound to no account.
     pub unbound: Vec<UnboundAccount>,
     /// Connections that are not syncing.
@@ -131,6 +133,15 @@ pub struct LooseEnds {
     /// Positive for money out.
     pub uncategorized_minor: i64,
     pub possible_duplicates: u32,
+}
+
+/// What counted accounts spent in one currency after their balances' dates, which
+/// those balances may not show yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewerSpending {
+    pub currency: Currency,
+    /// Positive for money out.
+    pub total_minor: i64,
 }
 
 /// A provider account bound to no account, whose money the forecast cannot see.
@@ -435,6 +446,11 @@ pub enum Caution {
     /// Possible duplicates this month might be inflating a category's spending, which
     /// could shrink a reduction or hide an unpaid bill or one-off.
     PossibleDuplicates { count: u32 },
+    /// Counted accounts spent this much after their balances' dates, up to `as_of`.
+    /// The number stays as it is, since a provider's balance date may lag what its
+    /// balance reflects, and guessing could count the money twice or not at all. If the
+    /// balance really is older, the cash available is overstated by up to this.
+    SpendingNewerThanBalance { currency: Currency, total: Money },
     /// The first month whose closing cash is below the floor: income arriving
     /// later cannot pay for it.
     CashDipsBelowFloor {

@@ -260,7 +260,9 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   `review`, `assignee` (an active member, or `null`) and `splits` (`[]`
   uncategorizes; otherwise 1 to 50 non-zero splits on categories that are
   not archived, summing exactly to the amount, each with an optional `goal`
-  in the transaction's currency; a split sent without one loses its link). A
+  in the transaction's currency; a split sent without one loses its link). Only
+  a split in an `expense` category takes a `goal`: moving money to savings for a
+  goal isn't spending it, so it doesn't lower what the goal needs. A
   goal the token can't see answers like one that does not exist, unless the
   transaction is already linked to it. A patch that changes nothing records
   nothing.

@@ -14,8 +14,8 @@ use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::PlanItemType;
 use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account, plan_item_visible};
 use coffer_domain::transactions::{
-    Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput, TransactionFlag,
-    TransactionOrigin, validate_splits,
+    CategoryKind, Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput,
+    TransactionFlag, TransactionOrigin, validate_splits,
 };
 use coffer_store::{
     AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange, ReviewChange,
@@ -42,6 +42,7 @@ const ARCHIVED_CATEGORY: &str = "a split names an archived category";
 const UNKNOWN_GOAL: &str = "a split names a goal that does not exist";
 const NOT_A_GOAL: &str = "a split names a planned item that is not a goal";
 const GOAL_CURRENCY: &str = "a split's goal must be in the transaction's currency";
+const GOAL_CATEGORY: &str = "only a split in an expense category can count towards a goal";
 const ACCOUNT_CLOSED: &str = "the account is closed";
 const NOT_MANUAL: &str = "only manual transactions can be deleted";
 const ACCOUNT_LINKED: &str =
@@ -397,6 +398,10 @@ async fn check_categories(tx: &mut StoreTx, splits: &[SplitInput]) -> Result<(),
 /// missing, because its own refusal would say what kind of item it is or that
 /// its currency differs. Nothing the ledger allows leaves a link like that: an
 /// item's type never changes, nor does a linked goal's currency.
+///
+/// A link needs an `expense` category, since moving money to savings for a goal
+/// isn't spending it. That is checked first and says nothing about the goal, so it
+/// answers the same for a hidden one.
 async fn check_goals(
     tx: &mut StoreTx,
     access: &AccountAccess,
@@ -404,6 +409,11 @@ async fn check_goals(
     before: &[SplitInput],
     splits: &[SplitInput],
 ) -> Result<(), LedgerError> {
+    for split in splits.iter().filter(|split| split.goal.is_some()) {
+        if tx.get_category(split.category).await?.kind != CategoryKind::Expense {
+            return Err(LedgerError::Invalid(GOAL_CATEGORY));
+        }
+    }
     for goal in splits.iter().filter_map(|split| split.goal) {
         let item = match tx.get_planned_item(goal).await {
             Ok(item) => item,

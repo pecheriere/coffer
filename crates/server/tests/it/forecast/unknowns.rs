@@ -20,13 +20,13 @@ const LABEL: &str = "Family bank";
 const PROVIDER_ERROR: &str = "the bank says account 4242 is frozen";
 
 /// A world with a provider connection.
-struct Fed {
-    world: World,
+pub(super) struct Fed {
+    pub(super) world: World,
     fake: Arc<FakeProvider>,
     connection: ConnectionId,
 }
 
-async fn fed() -> Fed {
+pub(super) async fn fed() -> Fed {
     let (server, fake) = TestServer::with_fake_provider().await;
     let world = world_on(server).await;
     let connection = world
@@ -42,7 +42,7 @@ async fn fed() -> Fed {
     }
 }
 
-fn reported(currency: &str) -> ProviderAccountData {
+pub(super) fn reported(currency: &str) -> ProviderAccountData {
     ProviderAccountData {
         provider_account_id: "one".into(),
         name: "Everyday savings".into(),
@@ -59,7 +59,7 @@ fn reported(currency: &str) -> ProviderAccountData {
 }
 
 impl Fed {
-    async fn sync(&self, account: ProviderAccountData) {
+    pub(super) async fn sync(&self, account: ProviderAccountData) {
         self.fake.push(Ok(FetchResult {
             accounts: vec![account],
             connection_errors: Vec::new(),
@@ -81,7 +81,7 @@ impl Fed {
     }
 
     /// Reports a provider account in USD and binds it to `account`.
-    async fn bound(&self, account: AccountId) -> ProviderAccountId {
+    pub(super) async fn bound(&self, account: AccountId) -> ProviderAccountId {
         self.sync(reported("USD")).await;
         let id = self.provider_account().await;
         self.world
@@ -124,7 +124,7 @@ impl Fed {
     }
 
     /// The first counted account, its only one but for a test's own.
-    async fn checking(&self) -> AccountId {
+    pub(super) async fn checking(&self) -> AccountId {
         let forecast = self.world.forecast().await;
         let Ok(id) = serde_json::from_value(forecast["accounts"][0]["account"].clone()) else {
             panic!("the forecast lists an id");

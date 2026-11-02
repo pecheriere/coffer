@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use coffer_domain::forecast::{
     AccountInput, BalanceInput, CategorySpent, FeedAlert, FeedProblem, FeedProblemReason,
-    FeedStatus, Forecast, ForecastInput, ItemInput, LineSource, LooseEnds, UnboundAccount,
-    compute_forecast,
+    FeedStatus, Forecast, ForecastInput, ItemInput, LineSource, LooseEnds, NewerSpending,
+    UnboundAccount, compute_forecast,
 };
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
@@ -92,6 +92,7 @@ pub struct WhatIfRequest {
     pub stale_after_days: Option<u16>,
     /// At most 50 items to add, each answering in the breakdown by its position here.
     #[serde(default)]
+    #[schema(max_items = 50)]
     pub items: Vec<HypotheticalItem>,
 }
 
@@ -249,6 +250,7 @@ fn input(
         goal_spent,
         category_spent,
         loose_ends,
+        newer_spending,
         provider_accounts,
         connections,
         ..
@@ -307,6 +309,13 @@ fn input(
                 uncategorized_count: row.uncategorized_count,
                 uncategorized_minor: row.uncategorized_minor,
                 possible_duplicates: row.possible_duplicates,
+            })
+            .collect(),
+        newer_spending: newer_spending
+            .into_iter()
+            .map(|row| NewerSpending {
+                currency: row.currency,
+                total_minor: row.total_minor,
             })
             .collect(),
         unbound,

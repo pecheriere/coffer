@@ -87,6 +87,71 @@ async fn non_goal_item_refused() {
     }
 }
 
+/// Moving money to savings for a goal isn't spending it, and pay isn't either. The
+/// refusal is about the category, so it says the same whatever the goal is.
+#[tokio::test]
+async fn link_on_a_category_that_is_not_expense_refused() {
+    let world = world().await;
+    let transaction = world.manual(world.account("Home").await, -500).await;
+    let goal_id = world.create(&goal(world.expense)).await;
+    let (_, income) = world.category(CategoryKind::Income).await;
+    let (_, transfer) = world.category(CategoryKind::Transfer).await;
+
+    for category in [income, transfer] {
+        let (status, answer) = world
+            .set_splits(&world.admin, &transaction, linked(category, -500, &goal_id))
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(answer.contains("only a split in an expense category can count towards a goal"));
+
+        let missing = world
+            .set_splits(
+                &world.admin,
+                &transaction,
+                linked(category, -500, PlannedItemId::new()),
+            )
+            .await;
+        assert!(
+            missing.1 == answer,
+            "the same for a goal that does not exist"
+        );
+
+        let (status, _) = world
+            .set_splits(
+                &world.admin,
+                &transaction,
+                json!([{"category": category, "minor_units": -500}]),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "unlinked, the category is fine");
+    }
+}
+
+/// Every split names a category, so a goal can't be linked without one, and an
+/// uncategorized transaction has no split to link.
+#[tokio::test]
+async fn uncategorized_money_has_nothing_to_link() {
+    let world = world().await;
+    let transaction = world.manual(world.account("Home").await, -500).await;
+    let goal_id = world.create(&goal(world.expense)).await;
+
+    let (status, _) = world
+        .set_splits(
+            &world.admin,
+            &transaction,
+            json!([{"minor_units": -500, "goal": goal_id}]),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a split needs a category");
+
+    let (status, answer) = world
+        .set_splits(&world.admin, &transaction, json!([]))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(body["splits"], json!([]), "no split, no link");
+}
+
 #[tokio::test]
 async fn other_currency_refused() {
     let world = world().await;

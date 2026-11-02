@@ -57,7 +57,12 @@ pub struct ForecastQuery {
                    Every number traces to its lines: `accounts` says which balances counted, \
                    `items` what each planned item added, `months` the same by calendar month. \
                    This month's spending counts only where a balance already shows it: posted, \
-                   not pending, on or before its account's balance date.\n\n\
+                   not pending, on or before its account's balance date, and not removed or \
+                   revised by its provider. Outflows newer than a balance raise the caution \
+                   `spending_newer_than_balance` and leave the number as it is: if that balance \
+                   really is older, the cash available is overstated by up to that total. Only \
+                   `expense` spending lowers what a goal needs, so moving money to savings for a \
+                   goal doesn't.\n\n\
                    Needs `read`; a token with account grants also needs `all` at `transactions`, \
                    since the answer sums every account. The refusal is the same whatever exists.",
     security(("bearer" = [])),

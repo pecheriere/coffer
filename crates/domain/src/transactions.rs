@@ -159,7 +159,8 @@ pub struct SplitInput {
     /// transaction's sign convention; never zero.
     pub minor_units: i64,
     /// The goal this part counts towards, which must exist and be in the
-    /// transaction's currency; a completed or inactive goal may be named. One
+    /// transaction's currency, on a split in an `expense` category: moving money to
+    /// savings for a goal isn't spending it. A completed or inactive goal may be named. One
     /// the token can't see answers as missing, unless the transaction is
     /// already linked to it. Left out, the part counts towards none.
     #[serde(default, skip_serializing_if = "Option::is_none")]

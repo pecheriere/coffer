@@ -20,6 +20,7 @@ mod cautions;
 mod clamp_and_duplicates;
 mod goals_and_floor;
 mod golden;
+mod newer_spending;
 mod properties;
 mod reduction;
 mod window_and_range;
@@ -62,6 +63,7 @@ fn household() -> ForecastInput {
         items: Vec::new(),
         category_spent: Vec::new(),
         loose_ends: Vec::new(),
+        newer_spending: Vec::new(),
         unbound: Vec::new(),
         feeds: Vec::new(),
     }

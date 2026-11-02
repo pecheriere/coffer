@@ -20,7 +20,7 @@ pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
     ForecastStatus, GoalLine, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
-    MonthCurrency, MonthItem, NotCountedReason, UnboundAccount,
+    MonthCurrency, MonthItem, NewerSpending, NotCountedReason, UnboundAccount,
 };
 
 /// Computes the forecast for `input`, which the caller has validated.
@@ -621,6 +621,19 @@ fn cautions(
         }
     }
     loose_end_cautions(input, reduction, &mut cautions);
+    cautions.extend(
+        input
+            .newer_spending
+            .iter()
+            .filter(|newer| newer.total_minor > 0)
+            .map(|newer| Caution::SpendingNewerThanBalance {
+                currency: newer.currency,
+                total: Money {
+                    minor_units: newer.total_minor,
+                    currency: newer.currency,
+                },
+            }),
+    );
     Ok(cautions)
 }
 

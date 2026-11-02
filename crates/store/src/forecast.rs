@@ -36,6 +36,8 @@ pub struct ForecastData {
     pub goal_spent: Vec<(PlannedItemId, i64)>,
     pub category_spent: Vec<CategorySpentRow>,
     pub loose_ends: Vec<LooseEndsRow>,
+    /// Outflows on counted accounts after their balances' dates, up to `as_of`.
+    pub newer_spending: Vec<NewerSpendingRow>,
     /// Every provider account, ordered by id.
     pub provider_accounts: Vec<ProviderAccountRecord>,
     /// Every connection, removed ones included, ordered by id.
@@ -58,6 +60,14 @@ pub struct LooseEndsRow {
     /// Positive for money out.
     pub uncategorized_minor: i64,
     pub possible_duplicates: u32,
+}
+
+/// What counted accounts spent in one currency after their balances' dates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewerSpendingRow {
+    pub currency: Currency,
+    /// Positive for money out.
+    pub total_minor: i64,
 }
 
 /// How a connection stands: nothing of its credentials or provider state.
@@ -94,12 +104,15 @@ macro_rules! shown_this_month {
     };
 }
 
+/// A charge the provider removed, or revised away from its splits, doesn't say what
+/// was spent in a category, so it pays no bill and reduces no budget.
 const CATEGORY_SPENT: &str = concat!(
     "SELECT s.category_id AS category, t.currency AS currency, \
      MAX(0, -SUM(s.minor_units)) AS spent_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id, ",
     shown_this_month!(),
     " AND s.transaction_id = t.id AND s.goal_id IS NULL AND c.kind = 'expense' \
+     AND t.flag_source_removed = 0 AND t.flag_split_mismatch = 0 \
      GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
 );
 
@@ -122,21 +135,41 @@ const LOOSE_ENDS: &str = concat!(
      ORDER BY t.currency"
 );
 
-/// Spending linked to each goal. An account counts as the forecast counts it: open, or
-/// a closed card still owing, switched in and of a spendable class. On one of those,
-/// spending newer than the balance isn't in that balance yet, and an account with no
-/// balance shows none; spending from any other never touched counted cash.
+/// Spending linked to each goal: `expense` splits only, since money moved to savings
+/// for a goal is still cash. A charge the provider removed or revised away from its
+/// splits, or that may be another charge again, doesn't lower the need.
+///
+/// The balance date limits an account switched in and of a spendable class, open or a
+/// closed card: spending newer than the balance isn't in it yet, an account with no
+/// balance shows none, and a closed card's debt may be what the balance hasn't reached.
+/// Spending from any other account never touched counted cash.
 const GOAL_SPENT: &str = concat!(
     "SELECT s.goal_id AS goal, MAX(0, -SUM(s.minor_units)) AS spent_minor \
-     FROM transaction_splits s JOIN transactions t ON t.id = s.transaction_id \
+     FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
+     JOIN transactions t ON t.id = s.transaction_id \
      JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
     latest_balance!(),
-    " WHERE s.goal_id IS NOT NULL AND t.pending = 0 AND t.posted_on <= ?1 AND ( \
+    " WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
+       AND t.flag_source_removed = 0 AND t.flag_split_mismatch = 0 \
+       AND t.flag_possible_duplicate = 0 AND t.posted_on <= ?1 AND ( \
        NOT (a.include_in_forecast = 1 AND a.liquidity IN ('cash', 'short_term_liability') \
-            AND (a.closed_at IS NULL OR (a.liquidity = 'short_term_liability' \
-                                         AND COALESCE(b.balance_minor, 0) < 0))) \
+            AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
        OR t.posted_on <= COALESCE(b.on_date, '') \
      ) GROUP BY s.goal_id ORDER BY s.goal_id"
+);
+
+/// Posted outflows on accounts the forecast counts, as it counts them, after the date
+/// of the balance it takes for them, up to `as_of`.
+const NEWER_SPENDING: &str = concat!(
+    "SELECT t.currency AS currency, -SUM(t.amount_minor) AS total_minor \
+     FROM transactions t JOIN accounts a ON a.id = t.account_id JOIN ",
+    latest_balance!(),
+    " WHERE t.pending = 0 AND t.amount_minor < 0 AND t.posted_on > b.on_date \
+       AND t.posted_on <= ?1 AND a.include_in_forecast = 1 \
+       AND a.liquidity IN ('cash', 'short_term_liability') \
+       AND (a.closed_at IS NULL \
+            OR (a.liquidity = 'short_term_liability' AND b.balance_minor < 0)) \
+     GROUP BY t.currency ORDER BY t.currency"
 );
 
 fn count(row: &SqliteRow, column: &str) -> Result<u32, StoreError> {
@@ -157,6 +190,13 @@ fn loose_ends_from_row(row: &SqliteRow) -> Result<LooseEndsRow, StoreError> {
         uncategorized_count: count(row, "uncategorized_count")?,
         uncategorized_minor: int(row, "uncategorized_minor")?,
         possible_duplicates: count(row, "possible_duplicates")?,
+    })
+}
+
+fn newer_spending_from_row(row: &SqliteRow) -> Result<NewerSpendingRow, StoreError> {
+    Ok(NewerSpendingRow {
+        currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
+        total_minor: int(row, "total_minor")?,
     })
 }
 
@@ -249,6 +289,14 @@ impl Store {
             .iter()
             .map(loose_ends_from_row)
             .collect::<Result<_, _>>()?;
+        let newer_spending = sqlx::query(NEWER_SPENDING)
+            .bind(&day)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(newer_spending_from_row)
+            .collect::<Result<_, _>>()?;
         let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
             .fetch_all(&mut *tx)
             .await
@@ -271,6 +319,7 @@ impl Store {
             goal_spent,
             category_spent,
             loose_ends,
+            newer_spending,
             provider_accounts,
             connections,
         })
