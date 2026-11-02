@@ -39,6 +39,7 @@ fn invalid(error: PlanError) -> LedgerError {
         PlanError::InvalidFloorMonths => "floor months must be 1 to 60",
         PlanError::InvalidHorizon => "the horizon must be 1 to 60 months",
         PlanError::InvalidStaleDays => "stale after must be 1 to 365 days",
+        // `PlanError` is non-exhaustive, and no other variant arises here.
         _ => "the forecast settings are not valid",
     })
 }
@@ -69,6 +70,8 @@ impl Ledger {
     ) -> Result<ForecastSettings, LedgerError> {
         authorize(actor, Action::ManageHousehold)?;
         let now = self.clock.now();
+        // `begin` takes `BEGIN IMMEDIATE`, so no writer can change the row
+        // between this read and the no-op check below.
         let mut tx = self.store.begin().await?;
         let current = tx.forecast_settings().await?;
         let next = ForecastSettings {

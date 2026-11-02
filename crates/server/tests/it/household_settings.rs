@@ -11,9 +11,11 @@ use axum::http::{Method, Request, StatusCode, header};
 use coffer_domain::audit::{AuditActor, AuditValue};
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::{AgentTokenId, MemberId};
-use coffer_domain::policy::DenyReason;
+use coffer_domain::policy::{AccountLevel, DenyReason, GrantTarget, TokenGrant};
 use coffer_server::auth::AuthError;
 use coffer_server::http::router;
+use coffer_server::ledger::LedgerError;
+use coffer_server::ledger::settings::ForecastSettingsPatch;
 use coffer_server::secrets::SecretToken;
 use coffer_server::testkit::TestServer;
 use coffer_store::{AuditEvent, AuditFilter, PageRequest};
@@ -418,4 +420,92 @@ async fn floor_can_be_replaced_not_unset() {
         "a null floor changes nothing"
     );
     assert_eq!(events(&world.server).await.len(), 2, "no event for null");
+}
+
+#[tokio::test]
+async fn numbers_outside_the_field_type_are_400() {
+    let world = world().await;
+    let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
+
+    for body in [
+        json!({"default_horizon_months": 300}),
+        json!({"floor": {"kind": "months_of_outflows", "months": 300}}),
+        json!({"stale_after_days": 70_000}),
+        json!({"default_horizon_months": -1}),
+    ] {
+        let (status, _) = patch(&world.server, &admin, body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a number outside the field's type is 400"
+        );
+    }
+    assert!(
+        events(&world.server).await.is_empty(),
+        "refused values write nothing"
+    );
+}
+
+async fn granted_token(world: &World, scope: Scope) -> SecretToken {
+    let grants = vec![TokenGrant {
+        target: GrantTarget::All,
+        level: AccountLevel::Balances,
+    }];
+    let (_, secret) = world
+        .server
+        .agent_tokens
+        .create(
+            &world.alice,
+            TokenName::parse("restricted").unwrap(),
+            scope,
+            None,
+            grants,
+        )
+        .await
+        .unwrap();
+    secret
+}
+
+#[tokio::test]
+async fn account_grants_do_not_change_settings_access() {
+    let world = world().await;
+    let read = granted_token(&world, Scope::Read).await;
+    let (status, _) = call(&world.server, Method::GET, &read, None).await;
+    assert_eq!(status, StatusCode::OK, "a granted read token may read");
+
+    let write = granted_token(&world, Scope::Write).await;
+    let (status, _) = patch(&world.server, &write, json!({"include_income": true})).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a granted write token may not change settings"
+    );
+    assert!(events(&world.server).await.is_empty(), "nothing written");
+}
+
+#[tokio::test]
+async fn member_session_reads_but_cannot_change() {
+    let world = world().await;
+
+    let settings = world.server.ledger.forecast_settings(&world.bob).await;
+    assert_eq!(
+        settings.unwrap(),
+        coffer_domain::plan::ForecastSettings::default(),
+        "a member session reads"
+    );
+    let patch = ForecastSettingsPatch {
+        include_income: Some(true),
+        ..ForecastSettingsPatch::default()
+    };
+    let err = world
+        .server
+        .ledger
+        .update_forecast_settings(&world.bob, patch)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, LedgerError::Denied(_)),
+        "a member session may not change settings"
+    );
+    assert!(events(&world.server).await.is_empty(), "nothing written");
 }

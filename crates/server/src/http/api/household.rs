@@ -43,7 +43,8 @@ pub(super) async fn get(
     tag = tags::HOUSEHOLD,
     description = "Changes the settings given; a field left out stays. A floor can be \
                    replaced but never unset: `floor: null` leaves it. A patch that changes \
-                   nothing writes nothing. Needs `admin`. Account grants do not apply.",
+                   nothing writes nothing. A number out of range is 422; one outside the field's type (such \
+                   as 300 months) is 400. Needs `admin`. Account grants do not apply.",
     security(("bearer" = [])),
     request_body = ForecastSettingsPatch,
     responses(
