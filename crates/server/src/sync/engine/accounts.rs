@@ -179,7 +179,6 @@ impl SyncService {
         connection: &ConnectionRecord,
         result: FetchResult,
         mode: FetchMode,
-        today: Date,
         started_at: Timestamp,
     ) -> Result<SyncRunRecord, SyncError> {
         let mut totals = Totals::default();
@@ -203,7 +202,7 @@ impl SyncService {
         for data in result.accounts {
             let release = released.get(&data.provider_account_id).copied();
             let outcome = self
-                .apply_account(connection.id, data, today, (cursor, release))
+                .apply_account(connection.id, data, (cursor, release))
                 .await;
             totals.add(&outcome);
             if totals.connection_removed {
@@ -295,7 +294,6 @@ impl SyncService {
         &self,
         connection: ConnectionId,
         data: ProviderAccountData,
-        today: Date,
         (cursor, released): (bool, Option<(ProviderAccountId, u32)>),
     ) -> AccountOutcome {
         let records = Records::of(&data, cursor);
@@ -345,7 +343,7 @@ impl SyncService {
             seen_at: now,
         };
         match self
-            .try_apply_account(upsert.clone(), data, today, (records, release))
+            .try_apply_account(upsert.clone(), data, (records, release))
             .await
         {
             Ok(outcome) => outcome,
@@ -390,7 +388,6 @@ impl SyncService {
         &self,
         mut upsert: ProviderAccountUpsert,
         data: ProviderAccountData,
-        today: Date,
         (records, release): (Records, bool),
     ) -> Result<AccountOutcome, SyncError> {
         let now = upsert.seen_at;
@@ -442,6 +439,10 @@ impl SyncService {
                 return Ok(outcome);
             }
         };
+        // Everything this transaction writes is dated in the zone it sees. A balance's day
+        // comes from the fetch, but `record_balance` never dates one after this today.
+        let chosen = tx.household_zone().await?;
+        let today = self.time.today_in(&self.time.applying(chosen.as_ref()));
         let Converted {
             transactions,
             unusable,
@@ -451,7 +452,7 @@ impl SyncService {
             currency,
             today,
             &self.time,
-            tx.household_zone().await?.as_ref(),
+            chosen.as_ref(),
         );
         let (balance, note) = readable_balance(data.balance, currency);
         if record.error != note {
@@ -466,7 +467,6 @@ impl SyncService {
                 removed: data.removed,
                 skipped: u32::try_from(unusable.len()).unwrap_or(u32::MAX),
                 balance,
-                today,
                 now,
             };
             return self.apply_one_by_one(job).await;

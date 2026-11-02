@@ -111,7 +111,6 @@ async fn a_store_failure_is_no_removal_in_a_one_by_one_apply() {
                 removed: Vec::new(),
                 skipped: 0,
                 balance: None,
-                today: date(2027, 1, 11),
                 now,
             })
             .await;
@@ -318,6 +317,9 @@ async fn a_released_feed_keeps_a_future_balance_as_today() {
     let connection = server
         .seed_connection(ProviderKind::Plaid, "Plaid bank", member, "{}")
         .await;
+    server
+        .clock
+        .set("2027-01-11T12:00:00Z".parse::<jiff::Timestamp>().unwrap());
     let now = server.clock.now();
     let mut tx = server.store.begin().await.unwrap();
     let feed = tx
@@ -348,7 +350,6 @@ async fn a_released_feed_keeps_a_future_balance_as_today() {
                 balance_minor: 500,
                 currency: Currency::parse("USD").unwrap(),
             }),
-            today: date(2027, 1, 11),
             now,
         })
         .await

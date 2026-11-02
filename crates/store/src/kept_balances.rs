@@ -66,6 +66,27 @@ impl StoreTx {
             .transpose()
     }
 
+    /// The amount kept for `provider_account` on the day `on`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn kept_balance_on(
+        &mut self,
+        provider_account: ProviderAccountId,
+        on: Date,
+    ) -> Result<Option<i64>, StoreError> {
+        sqlx::query_scalar(
+            "SELECT balance_minor FROM kept_balances \
+             WHERE provider_account_id = ? AND on_date = ?",
+        )
+        .bind(provider_account.to_string())
+        .bind(on.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)
+    }
+
     /// Keep `balance`, replacing what was kept for the same provider account
     /// and day.
     ///

@@ -47,16 +47,34 @@ pub struct RecordDating {
 }
 
 impl RecordDating {
-    /// Whether `known`, an earlier report of this record, has the days these instants
-    /// fall on in the zone `known` was dated in: then nothing happened to the record, and
-    /// any other day now would come only from the zone having changed.
+    /// Whether the day `known`, an earlier report of this record, is dated is the day these
+    /// instants fall on in the zone it was dated in. Then nothing happened to that day, and
+    /// another day now would come only from the zone having changed.
     #[must_use]
-    pub fn matches(&self, known: &SourceRecord) -> bool {
-        let zone = known
-            .dated_in
-            .as_ref()
-            .map_or(&self.default_zone, IanaZone::zone);
-        let (dated, transacted) = self.instants.days_in(zone);
-        dated == Some(known.fields.posted_on) && transacted == known.fields.transacted_on
+    pub fn keeps_dated_day(&self, known: &SourceRecord) -> bool {
+        let zone = known.dated_in.as_ref();
+        self.instants.days_in(self.zone_or_default(zone)).0 == Some(known.fields.posted_on)
     }
+
+    /// The same for the day it was transacted, which has an instant and a zone of its own:
+    /// a pending record that posts keeps it.
+    #[must_use]
+    pub fn keeps_transacted_day(&self, known: &SourceRecord) -> bool {
+        let zone = known.transacted_in.as_ref();
+        self.instants.days_in(self.zone_or_default(zone)).1 == known.fields.transacted_on
+    }
+
+    fn zone_or_default<'a>(&'a self, zone: Option<&'a IanaZone>) -> &'a TimeZone {
+        zone.map_or(&self.default_zone, IanaZone::zone)
+    }
+}
+
+/// Whether a pending `source` missing from a window starting on `start` may simply be from
+/// before the window. The provider is asked from midnight in the zone `zone_now`. A record
+/// dated in another zone can be on the window's first days and still from before that
+/// midnight, by at most a day after `start`. Its absence then says nothing.
+#[must_use]
+pub fn may_precede_window(source: &SourceRecord, start: Date, zone_now: Option<&IanaZone>) -> bool {
+    source.dated_in.as_ref() != zone_now
+        && source.fields.posted_on <= start.tomorrow().unwrap_or(start)
 }

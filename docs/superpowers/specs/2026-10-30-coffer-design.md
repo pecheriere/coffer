@@ -707,13 +707,27 @@ applies to the next request and the next job with no restart.
 **A change moves nothing already stored.** A transaction's day, a balance snapshot and
 a kept balance were right when they were recorded, and rewriting them could move money
 between months. Only new days use the new zone. So that a provider's next report can't
-undo this, a source record remembers the chosen zone its day was worked out in
-(`dated_in`; none means `COFFER_TIMEZONE`, as for every record from before this
-setting). A record dated by an instant, reported again, keeps its day unless that
-instant falls on another day in that same zone, which means the provider moved it; only
-then does it take the zone now in force. A balance reported with the amount of the
-latest one, on an earlier day, is what the same report looks like once the zone moved
-back, and writes nothing: it would replace what that day really ended on.
+undo this, a source record remembers the chosen zone each of its two days was worked out
+in (`dated_in`, `transacted_in`; none means `COFFER_TIMEZONE`, as for every record from
+before this setting). A record dated by an instant, reported again, keeps each day unless
+its instant falls on another day in that same zone, which means the provider moved it;
+only then does that day take the zone now in force. A pending record missing from a sync's
+window isn't taken as gone if another zone dated it and it is within a day of the window's
+start, since it may be from before the window.
+
+A provider's report of the same moment can land on an earlier day once the zone moved back.
+If that day already holds a balance, and the report's amount is that of the latest
+provider-written balance, at most 2 days later, it writes nothing, since it would replace
+what the day really ended on (the most a change of zone can move a day is 2). An empty day
+is written. The rule can drop a provider's real correction of a day within those 2 days to
+the latest amount. Past today the opposite applies: a report replaces a provider-written
+balance dated up to 2 days after it and after today, so the old amount doesn't come back as
+the household's latest when that day arrives. A member's own balance is never replaced.
+
+A sync's window comes from the zone at the start of its run. Everything an account's
+transaction then writes uses the zone that transaction sees, and no balance is dated after
+that today. A zone changed during a run can therefore date two accounts differently, each
+one consistently.
 
 **The daily table.** A change that leaves today on or after the table's last day needs
 nothing, as the table is right as far as it goes, and the job adds any new day within a

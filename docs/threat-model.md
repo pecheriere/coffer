@@ -627,6 +627,9 @@
   nothing in the answer contradicts it. The docs say so first and tell an agent to
   check `access.all` in `GET /api/v1/me` and not to report such a sum as the
   household's. Marking it would reveal that other accounts exist.
+- **A provider can leave a day's balance alone by repeating the latest amount** on a day
+  that holds one, within 2 days of the latest, and can replace its own balance dated past
+  today. Neither reaches further back or touches a member's balance (spec §8.7).
 - **A change of time zone can hold the write lock while it rebuilds,** only when it
   puts today before the table's last day (spec §8.7), and only an admin can make one,
   as with the display currency below. It takes `admin` whatever the token's account

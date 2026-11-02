@@ -278,14 +278,12 @@ impl SyncService {
             .iter()
             .map(|account| (account.last_seen_at, account.last_applied_at))
             .collect();
-        // One zone for the whole run: its window, its records and its balance's day.
+        // Only the window asked for. What is written is dated in the zone its own
+        // transaction sees, since one can change during a fetch.
         let zone = self.time.zone().await?;
         let today = self.time.today_in(&zone);
         match self.fetch(&connection, &accounts, &zone, today).await {
-            Ok((result, mode)) => {
-                self.apply(run, &connection, result, mode, today, started_at)
-                    .await
-            }
+            Ok((result, mode)) => self.apply(run, &connection, result, mode, started_at).await,
             Err(failure) => {
                 self.record_failure(run, &connection, failure, started_at)
                     .await
@@ -354,38 +352,73 @@ pub(super) async fn record_balance(
     today: Date,
 ) -> Result<(), SyncError> {
     let on = balance.on.min(today);
+    let minor = balance.balance_minor;
     if let Some(account) = account {
         let latest = tx.latest_balance(account).await?;
-        if latest.is_some_and(|latest| repeats(&balance, on, latest.on, latest.balance_minor)) {
-            return Ok(());
+        let moved = latest.is_some_and(|latest| {
+            latest.source == BalanceSource::Sync
+                && repeats(minor, on, latest.on, latest.balance_minor)
+        }) && tx.balance_on(account, on).await?.is_some();
+        if !moved {
+            write_balance(tx, now, account, on, minor).await?;
         }
-        return write_balance(tx, now, account, on, balance.balance_minor).await;
+        for day in later_days_past_today(on, today) {
+            let row = tx.balance_on(account, day).await?;
+            if row.is_some_and(|row| row.source == BalanceSource::Sync) {
+                write_balance(tx, now, account, day, minor).await?;
+            }
+        }
+        return Ok(());
     }
     if on < oldest_kept_day(today) {
         tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
         return Ok(());
     }
-    let latest = tx.latest_kept_balance(provider_account).await?;
-    if latest.is_some_and(|(day, minor)| repeats(&balance, on, day, minor)) {
-        return Ok(());
-    }
-    tx.keep_balance(KeptBalance {
+    let keep = |on| KeptBalance {
         provider_account,
         on,
-        balance_minor: balance.balance_minor,
+        balance_minor: minor,
         currency: balance.currency,
         recorded_at: now,
-    })
-    .await?;
+    };
+    let latest = tx.latest_kept_balance(provider_account).await?;
+    let moved = latest.is_some_and(|(day, kept)| repeats(minor, on, day, kept))
+        && tx.kept_balance_on(provider_account, on).await?.is_some();
+    if !moved {
+        tx.keep_balance(keep(on)).await?;
+    }
+    for day in later_days_past_today(on, today) {
+        if tx.kept_balance_on(provider_account, day).await?.is_some() {
+            tx.keep_balance(keep(day)).await?;
+        }
+    }
     Ok(())
 }
 
-/// Whether `balance`, on `on`, says only what the latest stored balance says, from an
-/// earlier day. It tells nothing new. It is what a report of the same moment looks like
-/// after the household's zone moved back (spec §8.7), and written it would replace the
-/// balance that day really ended on.
-fn repeats(balance: &ReportedBalance, on: Date, latest_on: Date, latest_minor: i64) -> bool {
-    on < latest_on && balance.balance_minor == latest_minor
+/// The most a change of zone can move an instant's day: the zones furthest apart differ by
+/// 25 hours.
+const MOST_A_ZONE_MOVES_A_DAY: i64 = 2;
+
+/// Whether `minor`, on `on`, is what the latest provider-written balance says, from a day
+/// at most a change of zone away. It is what a report of the same moment looks like after
+/// the zone moved back (spec §8.7). The caller goes on only if `on` already holds a balance,
+/// which writing this would replace with what that day didn't end on; an empty day loses
+/// nothing by being written.
+fn repeats(minor: i64, on: Date, latest_on: Date, latest_minor: i64) -> bool {
+    minor == latest_minor
+        && on < latest_on
+        && on
+            .checked_add(Span::new().days(MOST_A_ZONE_MOVES_A_DAY))
+            .is_ok_and(|furthest| latest_on <= furthest)
+}
+
+/// The days after `on` and after `today` that a change of zone can have left a
+/// provider-written balance on. A newer report replaces those, or that old amount would
+/// come back as the household's latest when the day arrives.
+fn later_days_past_today(on: Date, today: Date) -> impl Iterator<Item = Date> {
+    (1..=MOST_A_ZONE_MOVES_A_DAY)
+        .filter_map(move |ahead| on.checked_add(Span::new().days(ahead)).ok())
+        .filter(move |day| *day > today)
 }
 
 /// Writes the day's `sync` snapshot of `account`, audited when it changes

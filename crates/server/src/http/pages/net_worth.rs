@@ -137,14 +137,9 @@ async fn net_worth_page(
 ) -> Result<Response, PageError> {
     let Query(query) = query.map_err(|_| bad_range())?;
     let range = query.range.unwrap_or_default();
-    let today = state
-        .ledger
-        .today()
-        .await
-        .map_err(|err| PageError(Problem::from(err)))?;
     let report = state
         .ledger
-        .net_worth(&session.actor(), range.query(today))
+        .net_worth_by_day(&session.actor(), |today| range.query(today))
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
     let viewer = viewer(&state, &session).await;

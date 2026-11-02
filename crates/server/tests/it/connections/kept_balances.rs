@@ -11,13 +11,13 @@ use coffer_domain::ids::{AccountId, ConnectionId};
 use coffer_domain::money::DecimalAmount;
 use coffer_domain::policy::{AccountLevel, GrantTarget, TokenGrant};
 use coffer_domain::sync::SyncTrigger;
-use coffer_domain::time::Clock as _;
+use coffer_domain::time::{Clock as _, IanaZone};
 use coffer_server::secrets::SecretToken;
 use coffer_server::sync::SyncError;
 use coffer_server::sync::provider::{FetchResult, ProviderAccountData, ProviderKind};
 use coffer_server::testkit::browser::{Browser, with_admin};
 use coffer_store::NewSyncRun;
-use jiff::civil::Date;
+use jiff::civil::{Date, date};
 use jiff::{SignedDuration, Span};
 use serde_json::json;
 
@@ -166,42 +166,198 @@ async fn two_syncs_in_a_day_keep_the_last() {
     );
 }
 
-/// What a report of the same moment looks like after the household's zone moved back: the
-/// same amount a day earlier. The day before keeps what it ended on.
-#[tokio::test]
-async fn the_latest_amount_on_an_earlier_day_is_not_kept() {
+/// At this instant Auckland is on 2026-11-03 and Los Angeles on 2026-11-02.
+const ZONES_APART: &str = "2026-11-03T01:00:00Z";
+
+/// Chooses `zone` as the household's, leaving the daily table alone.
+async fn choose(world: &World, zone: &str) {
+    let zone = IanaZone::parse(zone).unwrap();
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.set_household_zone(Some(&zone), date(2099, 1, 1))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// A sync reporting `value` for the feed, dated `on`.
+async fn report_on(world: &World, on: Date, value: &str) {
+    world
+        .sync_once(vec![balance_of(FEED, "USD", on, value)])
+        .await;
+}
+
+/// A bound account in Auckland at [`ZONES_APART`], with `amounts` reported in turn.
+async fn bound_in_auckland(amounts: &[(Date, &str)]) -> (World, AccountId) {
     let world = world().await;
-    world.report(1, "10.00", "USD").await;
-    world.report(0, "20.00", "USD").await;
+    world.server.clock.set(ZONES_APART.parse().unwrap());
+    choose(&world, "Pacific/Auckland").await;
+    report_on(&world, date(2026, 10, 1), "1.00").await;
+    let target = world.account("Checking", "USD").await;
+    world.bind_feed(target).await;
+    for (on, value) in amounts {
+        report_on(&world, *on, value).await;
+    }
+    (world, target)
+}
 
-    world.report(1, "20.00", "USD").await;
+fn sync_row(on: Date, minor: i64) -> (String, i64, String) {
+    (on.to_string(), minor, "sync".to_owned())
+}
 
+/// What a report of the same moment looks like after the zone moved back: the same amount a
+/// day earlier, on a day that ended on something else. That day stays.
+#[tokio::test]
+async fn the_same_moment_a_day_earlier_leaves_that_day_alone() {
+    let (nov_2, nov_3) = (date(2026, 11, 2), date(2026, 11, 3));
+    let (world, target) = bound_in_auckland(&[(nov_2, "10.00"), (nov_3, "20.00")]).await;
+    choose(&world, "America/Los_Angeles").await;
+
+    report_on(&world, nov_2, "20.00").await;
+
+    let history = world.history(target).await;
+    assert_eq!(history[..2], [sync_row(nov_3, 2000), sync_row(nov_2, 1000)]);
+}
+
+/// The day the zone moved back to is empty, so the report is what today's balance is.
+#[tokio::test]
+async fn the_same_amount_on_an_empty_day_is_written() {
+    let (nov_1, nov_2, nov_3) = (date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3));
+    let (world, target) = bound_in_auckland(&[(nov_1, "50.00"), (nov_3, "10.00")]).await;
+    choose(&world, "America/Los_Angeles").await;
+
+    report_on(&world, nov_2, "10.00").await;
+
+    let history = world.history(target).await;
     assert_eq!(
-        world.kept(world.connection).await,
+        history[..3],
         [
-            (world.day(1).to_string(), 1000),
-            (world.today().to_string(), 2000),
+            sync_row(nov_3, 1000),
+            sync_row(nov_2, 1000),
+            sync_row(nov_1, 5000)
         ]
     );
 }
 
-/// The same on a bound account, whose snapshots stay as they are.
+/// With no change of zone at all, a day between two others is no repeat.
 #[tokio::test]
-async fn the_latest_amount_on_an_earlier_day_writes_no_snapshot() {
+async fn a_day_filled_in_between_is_written() {
     let world = world().await;
-    world.report(1, "10.00", "USD").await;
     let target = world.account("Checking", "USD").await;
+    report_on(&world, world.day(5), "1.00").await;
     world.bind_feed(target).await;
-    world.report(0, "20.00", "USD").await;
+    report_on(&world, world.day(2), "50.00").await;
+    report_on(&world, world.today(), "100.00").await;
 
-    world.report(1, "20.00", "USD").await;
+    report_on(&world, world.day(1), "100.00").await;
 
     assert_eq!(
-        world.history(target).await,
+        world.history(target).await[1],
+        sync_row(world.day(1), 10_000)
+    );
+}
+
+/// A report further back than a change of zone can move a day is taken at its word.
+#[tokio::test]
+async fn the_same_amount_further_back_than_a_zone_can_move_is_written() {
+    let world = world().await;
+    let target = world.account("Checking", "USD").await;
+    report_on(&world, world.day(5), "1.00").await;
+    world.bind_feed(target).await;
+    report_on(&world, world.day(3), "50.00").await;
+    report_on(&world, world.today(), "100.00").await;
+
+    report_on(&world, world.day(3), "100.00").await;
+
+    assert_eq!(
+        world.history(target).await[1],
+        sync_row(world.day(3), 10_000)
+    );
+}
+
+/// A member's balance on a later day, however near, doesn't silence the bank.
+#[tokio::test]
+async fn a_hand_set_balance_ahead_silences_no_report() {
+    for ahead in [1, 40] {
+        let world = world().await;
+        let target = world.account("Checking", "USD").await;
+        report_on(&world, world.day(0), "90.00").await;
+        world.bind_feed(target).await;
+        world.manual(target, world.day(-ahead), 10_000).await;
+
+        report_on(&world, world.today(), "100.00").await;
+
+        let history = world.history(target).await;
+        assert_eq!(history[1], sync_row(world.today(), 10_000), "{ahead} ahead");
+    }
+}
+
+/// After the zone moved back the bank says something new. Its balance left on the day that
+/// is now tomorrow must not come back as the latest when that day arrives.
+#[tokio::test]
+async fn a_newer_amount_replaces_a_provider_balance_past_today() {
+    let (nov_2, nov_3) = (date(2026, 11, 2), date(2026, 11, 3));
+    let (world, target) = bound_in_auckland(&[(nov_3, "20.00")]).await;
+    choose(&world, "America/Los_Angeles").await;
+
+    report_on(&world, nov_2, "30.00").await;
+
+    let history = world.history(target).await;
+    assert_eq!(history[..2], [sync_row(nov_3, 3000), sync_row(nov_2, 3000)]);
+}
+
+#[tokio::test]
+async fn a_newer_amount_leaves_a_member_s_balance_past_today() {
+    let (nov_2, nov_3) = (date(2026, 11, 2), date(2026, 11, 3));
+    let (world, target) = bound_in_auckland(&[]).await;
+    world.manual(target, nov_3, 2000).await;
+    choose(&world, "America/Los_Angeles").await;
+
+    report_on(&world, nov_2, "30.00").await;
+
+    let history = world.history(target).await;
+    assert_eq!(
+        history[..2],
         [
-            (world.today().to_string(), 2000, "sync".to_owned()),
-            (world.day(1).to_string(), 1000, "sync".to_owned()),
+            (nov_3.to_string(), 2000, "manual".to_owned()),
+            sync_row(nov_2, 3000)
         ]
+    );
+}
+
+/// The rules for a bound account hold for what is kept while unbound.
+#[tokio::test]
+async fn kept_days_follow_the_same_rules() {
+    let (nov_1, nov_2, nov_3) = (date(2026, 11, 1), date(2026, 11, 2), date(2026, 11, 3));
+    let world = world().await;
+    world.server.clock.set(ZONES_APART.parse().unwrap());
+    choose(&world, "Pacific/Auckland").await;
+    report_on(&world, nov_1, "50.00").await;
+    report_on(&world, nov_3, "20.00").await;
+    choose(&world, "America/Los_Angeles").await;
+
+    report_on(&world, nov_2, "20.00").await;
+    assert_eq!(
+        world.kept(world.connection).await,
+        [
+            (nov_1.to_string(), 5000),
+            (nov_2.to_string(), 2000),
+            (nov_3.to_string(), 2000),
+        ],
+        "an empty day is written"
+    );
+
+    report_on(&world, nov_1, "20.00").await;
+    assert_eq!(
+        world.kept(world.connection).await[0],
+        (nov_1.to_string(), 5000),
+        "a day holding a balance stays"
+    );
+
+    report_on(&world, nov_2, "30.00").await;
+    assert_eq!(
+        world.kept(world.connection).await[1..],
+        [(nov_2.to_string(), 3000), (nov_3.to_string(), 3000)],
+        "a newer amount replaces what is past today"
     );
 }
 

@@ -4,8 +4,10 @@
 ALTER TABLE household_settings ADD COLUMN timezone TEXT
     CHECK (length(timezone) BETWEEN 1 AND 64);
 
--- The chosen zone a provider record's day was worked out in; NULL means COFFER_TIMEZONE,
--- which every record before this column was. A record reported again keeps its day
--- unless its instant moved in that zone, so a change of zone can't move money.
+-- The chosen zone each of a provider record's two days was worked out in; NULL means
+-- COFFER_TIMEZONE, which every record before these columns was. A record reported again
+-- keeps a day unless its instant moved in that zone, so a change of zone can't move money.
 ALTER TABLE transaction_sources ADD COLUMN dated_in TEXT
     CHECK (length(dated_in) BETWEEN 1 AND 64);
+ALTER TABLE transaction_sources ADD COLUMN transacted_in TEXT
+    CHECK (length(transacted_in) BETWEEN 1 AND 64);

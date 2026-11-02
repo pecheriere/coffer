@@ -1,7 +1,9 @@
 //! The window a run fetches and the household's `today`.
 
 use super::{World, fetched, provider_account, txn, world, world_on};
+use coffer_domain::money::DecimalAmount;
 use coffer_domain::sync::SyncRunStatus;
+use coffer_domain::time::IanaZone;
 use coffer_server::ledger::settings::ForecastSettingsPatch;
 use coffer_server::ledger::transactions::Patch;
 use coffer_server::testkit::browser::Browser;
@@ -199,6 +201,128 @@ async fn a_new_zone_reaches_the_next_run_and_the_page() {
             .body
             .contains("2026-10-31 05:00"),
         "in Los Angeles"
+    );
+}
+
+/// A window starts at midnight in the zone now, so a pending record dated in another zone can
+/// be on its first days and still from before it. Further in, its absence means it has gone.
+#[tokio::test]
+async fn a_pending_record_dated_in_another_zone_can_precede_the_window() {
+    let start = date(2026, 10, 10);
+    for (posted_on, kept) in [
+        (start, true),
+        (date(2026, 10, 11), true),
+        (date(2026, 10, 12), false),
+    ] {
+        let world = world().await;
+        let held = world.account("Held", "USD").await;
+        world.bound("acct-1", "USD", held).await;
+        let mut pending = txn("p-1", posted_on, "-4.00");
+        pending.pending = true;
+        world.fake.push(Ok(fetched(vec![provider_account(
+            "acct-1",
+            "USD",
+            start,
+            vec![pending],
+        )])));
+        world.sync().await;
+        let zone = IanaZone::parse("Pacific/Auckland").unwrap();
+        let mut tx = world.server.store.begin().await.unwrap();
+        tx.set_household_zone(Some(&zone), date(2099, 1, 1))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        world.fake.push(Ok(fetched(vec![provider_account(
+            "acct-1",
+            "USD",
+            start,
+            Vec::new(),
+        )])));
+        world.sync().await;
+
+        assert_eq!(
+            !world.transactions(held).await.is_empty(),
+            kept,
+            "{posted_on}"
+        );
+    }
+}
+
+/// With no change of zone, a pending record missing from the window has gone.
+#[tokio::test]
+async fn a_pending_record_in_the_zone_now_vanishes_on_the_window_s_first_day() {
+    let start = date(2026, 10, 10);
+    let world = world().await;
+    let held = world.account("Held", "USD").await;
+    world.bound("acct-1", "USD", held).await;
+    let mut pending = txn("p-1", start, "-4.00");
+    pending.pending = true;
+    world.fake.push(Ok(fetched(vec![provider_account(
+        "acct-1",
+        "USD",
+        start,
+        vec![pending],
+    )])));
+    world.sync().await;
+
+    world.fake.push(Ok(fetched(vec![provider_account(
+        "acct-1",
+        "USD",
+        start,
+        Vec::new(),
+    )])));
+    world.sync().await;
+
+    assert!(world.transactions(held).await.is_empty());
+}
+
+/// A change landing during a fetch: what the run writes uses the zone at the time it writes,
+/// so no balance is dated after the new today.
+#[tokio::test]
+async fn a_zone_changed_during_a_fetch_is_the_one_written_with() {
+    let world = world().await;
+    let held = world.account("Held", "USD").await;
+    world.bound("acct-1", "USD", held).await;
+    // Auckland is on the 1st; Los Angeles, chosen before the answer is applied, the 31st.
+    let auckland = IanaZone::parse("Pacific/Auckland").unwrap();
+    let los_angeles = IanaZone::parse("America/Los_Angeles").unwrap();
+    world
+        .server
+        .clock
+        .set("2026-11-01T01:00:00Z".parse::<Timestamp>().unwrap());
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.set_household_zone(Some(&auckland), date(2099, 1, 1))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut account = provider_account("acct-1", "USD", date(2026, 10, 1), Vec::new());
+    account.balance = Some((date(2026, 11, 1), DecimalAmount::parse("7.00").unwrap()));
+    world.fake.push(Ok(fetched(vec![account])));
+    let gate = world.fake.hold_next_fetch();
+
+    tokio::join!(world.sync(), async {
+        gate.entered().await;
+        let mut tx = world.server.store.begin().await.unwrap();
+        tx.set_household_zone(Some(&los_angeles), date(2099, 1, 1))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        gate.release();
+    });
+
+    let latest = world
+        .server
+        .store
+        .latest_balance(held)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.on, date(2026, 10, 31));
+    assert_eq!(
+        world.fake.requests()[0].today,
+        date(2026, 11, 1),
+        "the window's day"
     );
 }
 

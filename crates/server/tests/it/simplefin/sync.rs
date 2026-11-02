@@ -242,6 +242,40 @@ async fn a_record_whose_instant_moved_takes_the_new_zone() {
     );
 }
 
+/// A pending record that posts after a change of zone: its posting is new and takes the new
+/// zone, and the day it was transacted hasn't moved.
+#[tokio::test]
+async fn a_pending_record_that_posts_keeps_the_day_it_was_transacted() {
+    let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
+    let connection = world.seeded().await;
+    let pending = json!([{
+        "id": "TRN-P", "posted": 0, "transacted_at": LATE_EVENING, "pending": true,
+        "amount": "-5.00", "description": "PARKING METER",
+    }]);
+    let posted = json!([{
+        "id": "TRN-P", "posted": NEXT_EVENING, "transacted_at": LATE_EVENING,
+        "amount": "-5.00", "description": "PARKING METER",
+    }]);
+    world.script.bridge_reply(Reply::ok(&account_set(&pending)));
+    world.sync(connection).await;
+    let account = world.bind("ACT-0001", AccountKind::Checking).await;
+    choose_zone(&world, Some("Pacific/Auckland")).await;
+
+    for _ in 0..2 {
+        world.script.bridge_reply(Reply::ok(&account_set(&posted)));
+        world.sync(connection).await;
+
+        let transaction = world.transactions(account).await.remove(0);
+        assert!(!transaction.pending);
+        assert_eq!(transaction.posted_on, date(2026, 11, 1), "in Auckland");
+        assert_eq!(
+            transaction.transacted_on,
+            Some(date(2026, 10, 30)),
+            "in Los Angeles"
+        );
+    }
+}
+
 #[tokio::test]
 async fn errors_fixture_reports_connection_and_account_errors() {
     let world = world().await;

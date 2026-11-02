@@ -153,6 +153,20 @@ impl Ledger {
         actor: &Actor,
         query: NetWorthQuery,
     ) -> Result<NetWorthReport, LedgerError> {
+        self.net_worth_by_day(actor, |_| query).await
+    }
+
+    /// [`Self::net_worth`] for a query that depends on what day it is, such as a range
+    /// counted back from today, so the query and the report use one day.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::net_worth`].
+    pub async fn net_worth_by_day(
+        &self,
+        actor: &Actor,
+        query_for: impl FnOnce(Date) -> NetWorthQuery,
+    ) -> Result<NetWorthReport, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let scope = self
             .access
@@ -163,6 +177,7 @@ impl Ledger {
         // One zone for the whole report, whatever changes while it is gathered.
         let zone = self.timezone().await?;
         let today = self.time.today_in(&zone);
+        let query = query_for(today);
         let to = query.to.unwrap_or(today);
         validate_as_of(to).map_err(plan_items::invalid)?;
         // No day after today is answered, so that is where a default year ends.

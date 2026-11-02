@@ -370,7 +370,9 @@ floor; the forecast will say.
 admin chose, or `null` while the server's `COFFER_TIMEZONE` applies. A `PATCH` with a
 name chooses it, and `timezone: null` clears it: it is the one setting `null` clears. A
 name that isn't an IANA zone is a 422. A change applies to the next request, and
-days already recorded stay as they are: only new days use the new zone.
+days already recorded stay as they are: only new days use the new zone. The exception is a
+provider's balance dated up to 2 days past today after the zone moved back, which its next
+report replaces.
 
 ## Forecast
 

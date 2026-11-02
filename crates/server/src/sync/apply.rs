@@ -32,7 +32,7 @@ use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 
 use super::SyncError;
-use super::dating::RecordDating;
+use super::dating::{RecordDating, may_precede_window};
 use crate::canonical::{apply_imported_fields, drop_candidate, drop_stale_candidates};
 
 /// The reason every sync change is attributed to.
@@ -172,6 +172,8 @@ struct Record {
     dating: Option<RecordDating>,
     /// See [`SourceRecord::dated_in`].
     dated_in: Option<IanaZone>,
+    /// See [`SourceRecord::transacted_in`].
+    transacted_in: Option<IanaZone>,
 }
 
 impl Record {
@@ -197,6 +199,10 @@ impl Record {
                 .dating
                 .as_ref()
                 .and_then(|dating| dating.chosen.clone()),
+            transacted_in: normalized
+                .dating
+                .as_ref()
+                .and_then(|dating| dating.chosen.clone()),
             dating: normalized.dating,
             date_reported: normalized.date_reported,
             amount_raw: normalized.amount_raw,
@@ -213,25 +219,28 @@ impl Record {
             replaces: None,
             dating: None,
             dated_in: source.dated_in,
+            transacted_in: source.transacted_in,
         }
     }
 
     /// A pending record re-reported without a date keeps the day its known
-    /// pending form was stored with, so it does not move every sync. A record
-    /// whose instants still fall on the days it has keeps them, so a change of
-    /// the household's zone doesn't move it.
+    /// pending form was stored with, so it does not move every sync. Each day
+    /// whose instant still falls on it keeps it, so a change of the household's
+    /// zone doesn't move it.
     fn keep_known_date(&mut self, known: &SourceRecord) {
         if !self.date_reported && self.fields.pending && known.fields.pending {
             self.fields.posted_on = known.fields.posted_on;
         }
-        if self
-            .dating
-            .as_ref()
-            .is_some_and(|dating| dating.matches(known))
-        {
+        let Some(dating) = &self.dating else {
+            return;
+        };
+        if dating.keeps_dated_day(known) {
             self.fields.posted_on = known.fields.posted_on;
-            self.fields.transacted_on = known.fields.transacted_on;
             self.dated_in.clone_from(&known.dated_in);
+        }
+        if dating.keeps_transacted_day(known) {
+            self.fields.transacted_on = known.fields.transacted_on;
+            self.transacted_in.clone_from(&known.transacted_in);
         }
     }
 
@@ -241,6 +250,7 @@ impl Record {
             amount_raw: self.amount_raw.clone(),
             seen_at: now,
             dated_in: self.dated_in.clone(),
+            transacted_in: self.transacted_in.clone(),
         }
     }
 }
@@ -341,12 +351,15 @@ pub(super) async fn apply_account_batch_beside(
         }
     }
     if let Coverage::Window { start } = batch.coverage {
+        let zone_now = apply.tx.household_zone().await?;
         for source in apply
             .tx
             .pending_sources_since(provider_account.id, start)
             .await?
         {
-            if !present.contains(source.provider_txn_id.as_str()) {
+            if !present.contains(source.provider_txn_id.as_str())
+                && !may_precede_window(&source, start, zone_now.as_ref())
+            {
                 vanished.insert(source.id, source);
             }
         }
@@ -539,6 +552,7 @@ impl Apply<'_> {
                 amount_raw: record.amount_raw.clone(),
                 seen_at: self.now,
                 dated_in: record.dated_in.clone(),
+                transacted_in: record.transacted_in.clone(),
             })
             .await?;
         Ok(source.id)
