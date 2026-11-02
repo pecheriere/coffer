@@ -114,7 +114,7 @@ pub(super) async fn create(
     tag = tags::CATEGORIES,
     description = "Changes the fields given: name, kind, position, group (moving it) or \
                    archived. An archived category takes no new splits; its existing splits \
-                   stay. Needs `write`; a token with account grants also needs `all` at `write`.",
+                   stay. Its kind can't change while a planned item uses it. Needs `write`; a token with account grants also needs `all` at `write`.",
     security(("bearer" = [])),
     params(CategoryPath),
     request_body = CategoryPatch,

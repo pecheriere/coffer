@@ -20,6 +20,7 @@ const GROUP_NAME_INVALID: &str =
 const NAME_INVALID: &str = "category name must be 1 to 100 characters without control characters";
 const POSITION_INVALID: &str = "position must be at most 10000";
 const UNKNOWN_GROUP: &str = "the category group does not exist";
+const KIND_IN_USE: &str = "a category used by a planned item cannot change kind";
 
 /// A category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -332,8 +333,9 @@ impl Ledger {
     ///
     /// [`LedgerError::NotFound`] for an unknown category;
     /// [`LedgerError::Denied`] without [`Action::WriteHousehold`];
-    /// [`LedgerError::Invalid`] for an invalid name or position or an
-    /// unknown group; storage failures.
+    /// [`LedgerError::Invalid`] for an invalid name or position, an unknown
+    /// group, or a new kind while a planned item uses the category; storage
+    /// failures.
     pub async fn update_category(
         &self,
         actor: &Actor,
@@ -361,6 +363,11 @@ impl Ledger {
             changes.name = Some(name);
         }
         if let Some(kind) = patch.kind.filter(|kind| *kind != current.kind) {
+            // An item's direction needs its category's kind. Only an actor
+            // with `all` at `write`, who sees every item, gets this far.
+            if tx.category_has_planned_items(id).await? {
+                return Err(LedgerError::Invalid(KIND_IN_USE));
+            }
             audited = audited.change("kind", current.kind.as_str(), kind.as_str());
             changes.kind = Some(kind);
         }

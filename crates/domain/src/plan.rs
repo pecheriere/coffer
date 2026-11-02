@@ -298,6 +298,28 @@ mod tests {
 
     const OUT: PlanDirection = PlanDirection::Outflow;
 
+    #[test]
+    fn only_a_recurring_outflow_has_a_spending_kind() {
+        let recurring = PlanSchedule::Recurring {
+            every: 1,
+            unit: IntervalUnit::Months,
+            anchor_on: date(2027, 1, 1),
+            end_on: None,
+        };
+        let one_off = PlanSchedule::OneOff {
+            on: date(2027, 1, 1),
+        };
+        let goal = PlanSchedule::Goal {
+            start_on: date(2027, 1, 1),
+            due_on: date(2027, 2, 1),
+            completed: false,
+        };
+        assert!(spending_applies(PlanDirection::Outflow, &recurring));
+        assert!(!spending_applies(PlanDirection::Inflow, &recurring));
+        assert!(!spending_applies(PlanDirection::Outflow, &one_off));
+        assert!(!spending_applies(PlanDirection::Outflow, &goal));
+    }
+
     /// One case per `PlanError` that a value check raises.
     #[test]
     fn validate_refuses_each_case() {
@@ -521,21 +543,6 @@ mod tests {
             Err(PlanError::UnknownItemType),
             "unknown item type"
         );
-    }
-
-    #[test]
-    fn spending_applies_only_to_a_recurring_outflow() {
-        let on = date(2027, 1, 1);
-        assert!(spending_applies(OUT, &recurring(1)), "recurring outflow");
-        assert!(
-            !spending_applies(PlanDirection::Inflow, &recurring(1)),
-            "not an inflow"
-        );
-        assert!(
-            !spending_applies(OUT, &PlanSchedule::OneOff { on }),
-            "not a one-off"
-        );
-        assert!(!spending_applies(OUT, &goal(on, on)), "not a goal");
     }
 
     #[test]
