@@ -10,12 +10,13 @@ use proptest::test_runner::TestCaseError;
 use proptest::{collection, prop_compose};
 
 use super::{Holding, currency, holding, id, input, rates};
-use crate::accounts::LiquidityClass;
+use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::net_worth::{
-    DailyValue, NetWorthInput, NetWorthInterval, NetWorthReport, NetWorthStatus, PeriodEnd,
-    ReportAccount, daily_values, net_worth_report, period_ends,
+    DailyValue, NetWorthBlocker, NetWorthBucket, NetWorthCaution, NetWorthInput, NetWorthInterval,
+    NetWorthReport, NetWorthStatus, PeriodEnd, ReportAccount, daily_values, net_worth_report,
+    period_ends,
 };
 
 const MAX_AMOUNT: i64 = 1_000_000_000_000;
@@ -205,71 +206,185 @@ fn check_period(
     Ok(())
 }
 
-fn status_matches_lists(report: &NetWorthReport) -> bool {
-    let expected = if !report.blockers.is_empty() {
+fn status_matches_lists(
+    status: NetWorthStatus,
+    blockers: &[NetWorthBlocker],
+    cautions: &[NetWorthCaution],
+) -> bool {
+    let expected = if !blockers.is_empty() {
         NetWorthStatus::Unavailable
-    } else if report.cautions.is_empty() {
+    } else if cautions.is_empty() {
         NetWorthStatus::Firm
     } else {
         NetWorthStatus::Provisional
     };
-    report.status == expected
+    status == expected
+}
+
+prop_compose! {
+    /// An account that isn't the household's: `n` is past every household holding's.
+    fn random_bucket_holding(n: u128)(
+        code in code(),
+        liquidity in class(),
+        closed_on in proptest::option::of(day()),
+        snapshots in collection::vec((day(), -MAX_AMOUNT..MAX_AMOUNT), 0..5),
+        belongs_to in prop_oneof![Just(BelongsTo::SomeoneElse), Just(BelongsTo::GivenAway)],
+        label in prop_oneof![
+            Just(None),
+            Just(Some("Child A")),
+            Just(Some("child a")),
+            Just(Some("Family fund")),
+        ],
+        place in any::<usize>(),
+    ) -> (usize, Holding) {
+        let mut held = holding(n + MAX_HOLDINGS, code, liquidity, &snapshots);
+        held.line.include_in_net_worth = false;
+        held.line.closed_on = closed_on;
+        held.line.belongs_to = belongs_to;
+        held.line.beneficiary = label.map(str::to_owned);
+        (place, held)
+    }
+}
+
+fn bucket_holdings() -> impl Strategy<Value = Vec<(usize, Holding)>> {
+    (0..=MAX_HOLDINGS)
+        .prop_flat_map(|count| (1..=count).map(random_bucket_holding).collect::<Vec<_>>())
+}
+
+/// The range and the table a report is asked of, apart from who is in it.
+#[derive(Debug, Clone, Copy)]
+struct Asked {
+    display: Option<&'static str>,
+    from: Date,
+    length: i32,
+    through_after_from: i32,
+    interval: NetWorthInterval,
+}
+
+fn asked() -> impl Strategy<Value = Asked> {
+    (
+        proptest::option::of(code()),
+        day(),
+        0_i32..60,
+        -3_i32..60,
+        interval(),
+    )
+        .prop_map(
+            |(display, from, length, through_after_from, interval)| Asked {
+                display,
+                from,
+                length,
+                through_after_from,
+                interval,
+            },
+        )
+}
+
+/// The input of `asked` over `held`, with its rows made over the window and the days
+/// of `taken_out` gone from them.
+fn windowed(held: &[Holding], asked: Asked, taken_out: &[(u128, Date)]) -> NetWorthInput {
+    let book = rates(&[
+        (
+            "USD",
+            &[(date(2028, 1, 20), "1.1172"), (date(2028, 2, 29), "1.1188")],
+        ),
+        ("JPY", &[(date(2028, 1, 1), "175.68")]),
+        ("KWD", &[(date(2000, 1, 1), "0.34")]),
+    ]);
+    let mut made = input(held, asked.display, &book);
+    // The fixture's rows stop at its own today, before this window: redo them.
+    let window_end = date(2028, 4, 30);
+    made.rows = held
+        .iter()
+        .flat_map(|one| {
+            daily_values(
+                one.line.id,
+                one.line.currency,
+                &one.snapshots,
+                asked.display.map(currency),
+                &book,
+                date(2028, 1, 1),
+                window_end,
+            )
+        })
+        .collect();
+    made.first_on = held
+        .iter()
+        .filter_map(|one| {
+            let first = made.rows.iter().find(|row| row.account == one.line.id)?;
+            Some((one.line.id, first.on))
+        })
+        .collect();
+    made.rows.retain(|row| {
+        !taken_out
+            .iter()
+            .any(|&(n, on)| row.account == id(n) && row.on == on)
+    });
+    made.today = window_end;
+    made.from = asked.from;
+    made.to = asked.from.checked_add(asked.length.days()).unwrap();
+    made.through = Some(
+        asked
+            .from
+            .checked_add(asked.through_after_from.days())
+            .unwrap(),
+    );
+    made.interval = asked.interval;
+    made
+}
+
+/// `household` with `buckets` each placed somewhere among them.
+fn interleaved(household: Vec<Holding>, buckets: Vec<(usize, Holding)>) -> Vec<Holding> {
+    let mut all = household;
+    for (place, held) in buckets {
+        all.insert(place % (all.len() + 1), held);
+    }
+    all
+}
+
+/// The sum of what `bucket` lists on a point is its total, unless one of them has none.
+fn total_equals_the_sum_of_its_accounts(
+    bucket: &NetWorthBucket,
+    display: Option<Currency>,
+) -> Result<(), TestCaseError> {
+    for point in &bucket.points {
+        let lines: Vec<_> = bucket
+            .accounts
+            .iter()
+            .flat_map(|line| &line.points)
+            .filter(|line| line.on == point.on && line.counted)
+            .collect();
+        let sum: Option<i64> = lines
+            .iter()
+            .map(|line| line.amount.map(|amount| amount.minor_units))
+            .sum();
+        let want = display
+            .filter(|_| point.unconverted.is_empty())
+            .and_then(|currency| {
+                Some(Money {
+                    minor_units: sum?,
+                    currency,
+                })
+            });
+        prop_assert_eq!(point.total, want);
+    }
+    Ok(())
 }
 
 proptest! {
     #[test]
     fn totals_explain_themselves(
         held in holdings(),
-        display in proptest::option::of(code()),
-        from in day(),
-        length in 0_i32..60,
-        through_after_from in -3_i32..60,
-        interval in interval(),
+        range in asked(),
         taken_out in collection::vec((1..=MAX_HOLDINGS, day()), 0..6),
     ) {
-        let book = rates(&[
-            ("USD", &[(date(2028, 1, 20), "1.1172"), (date(2028, 2, 29), "1.1188")]),
-            ("JPY", &[(date(2028, 1, 1), "175.68")]),
-            ("KWD", &[(date(2000, 1, 1), "0.34")]),
-        ]);
-        let mut asked = input(&held, display, &book);
-        // The fixture's rows stop at its own today, before this window: redo them.
-        let window_end = date(2028, 4, 30);
-        asked.rows = held
-            .iter()
-            .flat_map(|one| {
-                daily_values(
-                    one.line.id,
-                    one.line.currency,
-                    &one.snapshots,
-                    display.map(currency),
-                    &book,
-                    date(2028, 1, 1),
-                    window_end,
-                )
-            })
-            .collect();
-        asked.first_on = held
-            .iter()
-            .filter_map(|one| {
-                let first = asked.rows.iter().find(|row| row.account == one.line.id)?;
-                Some((one.line.id, first.on))
-            })
-            .collect();
-        asked.rows.retain(|row| {
-            !taken_out.iter().any(|&(n, on)| row.account == id(n) && row.on == on)
-        });
-        asked.today = window_end;
-        asked.from = from;
-        asked.to = from.checked_add(length.days()).unwrap();
-        let through = from.checked_add(through_after_from.days()).unwrap();
-        asked.through = Some(through);
-        asked.interval = interval;
+        let asked = windowed(&held, range, &taken_out);
         let report = net_worth_report(&asked).unwrap();
 
+        let through = asked.through.unwrap();
         let end = asked.to.min(asked.today).min(through);
-        let periods = if from <= end {
-            period_ends(from, end, interval).unwrap()
+        let periods = if range.from <= end {
+            period_ends(range.from, end, range.interval).unwrap()
         } else {
             Vec::new()
         };
@@ -283,7 +398,54 @@ proptest! {
         for pair in report.points.windows(2) {
             prop_assert!(pair[0].on < pair[1].on);
         }
-        prop_assert!(status_matches_lists(&report));
+        prop_assert!(status_matches_lists(report.status, &report.blockers, &report.cautions));
         prop_assert_eq!(report.accounts.len(), held.len());
+    }
+
+    /// Compared with a report that really lacks them: whatever they hold, where they sit
+    /// in the input, and whichever of their rows are gone.
+    #[test]
+    fn buckets_never_touch_the_household_answer(
+        household in holdings(),
+        buckets in bucket_holdings(),
+        range in asked(),
+        taken_out in collection::vec((1..=2 * MAX_HOLDINGS, day()), 0..6),
+    ) {
+        let without = windowed(&household, range, &taken_out);
+        let all = interleaved(household, buckets);
+        let with = windowed(&all, range, &taken_out);
+
+        let mut report = net_worth_report(&with).unwrap();
+        report.buckets.clear();
+
+        prop_assert_eq!(report, net_worth_report(&without).unwrap());
+    }
+
+    #[test]
+    fn a_bucket_explains_itself(
+        household in holdings(),
+        buckets in bucket_holdings(),
+        range in asked(),
+        taken_out in collection::vec((1..=2 * MAX_HOLDINGS, day()), 0..6),
+    ) {
+        let in_buckets = buckets.len();
+        let all = interleaved(household, buckets);
+        let asked = windowed(&all, range, &taken_out);
+
+        let report = net_worth_report(&asked).unwrap();
+
+        let mut seen = 0;
+        for bucket in &report.buckets {
+            prop_assert!(status_matches_lists(bucket.status, &bucket.blockers, &bucket.cautions));
+            total_equals_the_sum_of_its_accounts(bucket, asked.display)?;
+            prop_assert!(!bucket.accounts.is_empty());
+            for line in &bucket.accounts {
+                let held = asked.accounts.iter().find(|one| one.id == line.account).unwrap();
+                prop_assert_eq!(held.belongs_to, bucket.belongs_to);
+                prop_assert_eq!(&held.beneficiary, &bucket.beneficiary);
+                seen += 1;
+            }
+        }
+        prop_assert_eq!(seen, in_buckets);
     }
 }

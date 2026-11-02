@@ -1,6 +1,7 @@
 //! A read answers from one moment, stops at the last day filled, and holds
 //! nothing of an account outside its scope.
 
+use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, Beneficiary, LiquidityClass};
 use coffer_domain::fx::RateLeg;
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
@@ -10,10 +11,10 @@ use coffer_domain::net_worth::{
 };
 use coffer_domain::plan::ForecastSettings;
 use coffer_domain::policy::AccountScope;
-use coffer_store::{AccountChanges, NetWorthData, Store, StoreError};
+use coffer_store::{AccountChanges, NetWorthData, NewAccount, Store, StoreError};
 use jiff::civil::{Date, date};
 
-use super::{cur, days, fx, holding, holding_with, oct, open, rebuild, show_in, snap};
+use super::{at, cur, days, fx, holding, holding_with, oct, open, rebuild, show_in, snap};
 
 async fn by_day(store: &Store, scope: &AccountScope, from: Date, to: Date) -> NetWorthData {
     store
@@ -52,6 +53,11 @@ fn report_of(data: NetWorthData, from: Date, to: Date) -> NetWorthReport {
             liquidity: record.liquidity,
             include_in_net_worth: record.include_in_net_worth,
             closed_on: None,
+            belongs_to: record.belongs_to,
+            beneficiary: record
+                .beneficiary
+                .as_ref()
+                .map(|label| label.as_str().to_owned()),
         })
         .collect();
     net_worth_report(&NetWorthInput {
@@ -225,6 +231,61 @@ async fn excluded_accounts_have_no_rows_but_are_listed() {
     assert!(listed(&data).contains(&excluded));
     assert_eq!(holders(&data), [counted]);
     assert_eq!(data.rows.len(), 2);
+}
+
+/// A USD account held for Child A, whose flags are off as the table holds.
+async fn held_for_a_child(store: &Store) -> AccountId {
+    let id = AccountId::new();
+    let mut tx = store.begin().await.unwrap();
+    tx.insert_account(NewAccount {
+        id,
+        name: AccountName::parse("College fund").unwrap(),
+        kind: AccountKind::Education,
+        currency: cur("USD"),
+        liquidity: LiquidityClass::Invested,
+        liquidity_overridden: false,
+        include_in_net_worth: false,
+        include_in_forecast: false,
+        created_at: at(),
+        belongs_to: BelongsTo::SomeoneElse,
+        belongs_to_overridden: false,
+        beneficiary: Some(Beneficiary::parse("Child A").unwrap()),
+    })
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// Its flag is false, which would otherwise read as no rows, and a hole in every bucket.
+#[tokio::test]
+async fn a_bucket_has_its_rows() {
+    let (_dir, store) = open().await;
+    let held = held_for_a_child(&store).await;
+    snap(&store, held, oct(1), 100).await;
+    rebuild(&store, oct(2)).await;
+
+    let data = by_day(&store, &AccountScope::All, oct(1), oct(2)).await;
+
+    assert_eq!(holders(&data), [held]);
+    assert_eq!(on_days(&data), days(1, 2));
+}
+
+#[tokio::test]
+async fn scope_filters_buckets_in_the_query() {
+    let (_dir, store) = open().await;
+    let seen = held_for_a_child(&store).await;
+    let hidden = held_for_a_child(&store).await;
+    snap(&store, seen, oct(2), 100).await;
+    snap(&store, hidden, oct(1), 200).await;
+    rebuild(&store, oct(3)).await;
+
+    let data = by_day(&store, &AccountScope::Only(vec![seen]), oct(1), oct(3)).await;
+
+    assert_eq!(listed(&data), [seen]);
+    assert_eq!(holders(&data), [seen]);
+    assert_eq!(on_days(&data), [oct(2), oct(3)]);
+    assert_eq!(data.first_on, [(seen, oct(2))]);
 }
 
 /// Closing applies at read (N9): a closed account is listed and keeps its rows.

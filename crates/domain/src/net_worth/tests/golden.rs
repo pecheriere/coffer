@@ -20,7 +20,7 @@
 
 use jiff::civil::{Date, date};
 
-use super::{TODAY, cash, holding, id, input, money, point_on, rates};
+use super::{Holding, TODAY, cash, holding, id, input, money, point_on, rates};
 use crate::accounts::LiquidityClass;
 use crate::fx::RateBook;
 use crate::net_worth::{
@@ -28,12 +28,12 @@ use crate::net_worth::{
     NetWorthStatus, NotCountedReason, net_worth_report,
 };
 
-const CHECKING: u128 = 1;
+pub(super) const CHECKING: u128 = 1;
 const LIVRET: u128 = 2;
-const CARD: u128 = 3;
-const SIDE: u128 = 4;
+pub(super) const CARD: u128 = 3;
+pub(super) const SIDE: u128 = 4;
 
-fn book() -> RateBook {
+pub(super) fn book() -> RateBook {
     rates(&[(
         "USD",
         &[
@@ -46,31 +46,32 @@ fn book() -> RateBook {
     )])
 }
 
-fn household(display: &str) -> NetWorthInput {
+/// The accounts of the golden household.
+pub(super) fn holdings() -> Vec<Holding> {
     let side_excluded = {
         let mut side = cash(SIDE, "USD", &[(date(2026, 10, 26), 99_900)]);
         side.line.include_in_net_worth = false;
         side
     };
-    input(
-        &[
-            cash(
-                CHECKING,
-                "USD",
-                &[(date(2026, 10, 26), 500_000), (date(2026, 10, 30), 550_000)],
-            ),
-            cash(LIVRET, "EUR", &[(date(2026, 10, 26), 100_000)]),
-            holding(
-                CARD,
-                "USD",
-                LiquidityClass::ShortTermLiability,
-                &[(date(2026, 10, 28), -30_000)],
-            ),
-            side_excluded,
-        ],
-        Some(display),
-        &book(),
-    )
+    vec![
+        cash(
+            CHECKING,
+            "USD",
+            &[(date(2026, 10, 26), 500_000), (date(2026, 10, 30), 550_000)],
+        ),
+        cash(LIVRET, "EUR", &[(date(2026, 10, 26), 100_000)]),
+        holding(
+            CARD,
+            "USD",
+            LiquidityClass::ShortTermLiability,
+            &[(date(2026, 10, 28), -30_000)],
+        ),
+        side_excluded,
+    ]
+}
+
+fn household(display: &str) -> NetWorthInput {
+    input(&holdings(), Some(display), &book())
 }
 
 fn series(report: &NetWorthReport, n: u128) -> &AccountSeries {

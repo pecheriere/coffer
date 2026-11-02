@@ -21,13 +21,13 @@ const FEED: &str = "feed-1";
 const FIRST_RAW: &str = "4242.17";
 const FIRST_MINOR: i64 = 424_217;
 
-struct Feed {
-    world: World,
+pub(super) struct Feed {
+    pub(super) world: World,
     fake: std::sync::Arc<FakeProvider>,
     connection: ConnectionId,
 }
 
-async fn feed() -> Feed {
+pub(super) async fn feed() -> Feed {
     let (server, fake) = TestServer::with_fake_provider().await;
     let world = world_on(server).await;
     let connection = world
@@ -64,7 +64,7 @@ fn data(currency: &str, on: Date, value: &str) -> ProviderAccountData {
 
 impl Feed {
     /// A sync on the clock's day reporting `value` for that day.
-    async fn sync(&self, on: &str, currency: &str, value: &str) {
+    pub(super) async fn sync(&self, on: &str, currency: &str, value: &str) {
         self.world.at(on);
         self.fake.push(Ok(FetchResult {
             accounts: vec![data(currency, day(on), value)],
@@ -88,7 +88,7 @@ impl Feed {
     }
 
     /// Binds the feed to `target` through the API.
-    async fn bind(&self, target: AccountId) {
+    pub(super) async fn bind(&self, target: AccountId) {
         let world = &self.world;
         let (status, text) = world
             .send(Method::GET, "/api/v1/provider-accounts", &world.admin, None)

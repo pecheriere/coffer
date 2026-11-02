@@ -77,6 +77,35 @@ fn an_excluded_series_says_it_has_no_points() {
     assert!(text.contains("switched out"), "the exclusion is not said");
 }
 
+/// A reader of the document alone must not take a bucket for part of net worth.
+#[test]
+fn the_description_says_nothing_adds_a_bucket() {
+    let doc = serde_json::to_value(document()).unwrap();
+    let text = doc["paths"]["/api/v1/reports/net-worth"]["get"]["description"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    assert!(
+        text.contains("nothing adds a bucket to `total`, or one bucket to another"),
+        "the rule is not said"
+    );
+}
+
+#[test]
+fn a_bucket_always_says_its_label() {
+    let required = schema("NetWorthBucket")["required"].clone();
+
+    assert!(
+        required
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "beneficiary"),
+        "beneficiary is required"
+    );
+}
+
 /// The refusal of a `from` after today is in the parameter's own text.
 #[test]
 fn a_from_after_today_is_documented() {

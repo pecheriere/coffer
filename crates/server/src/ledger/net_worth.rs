@@ -8,6 +8,9 @@
 //! lacks. The rates themselves are shared: N2 rules on what a rate already held can tell a
 //! token about its own currency. The FX endpoints say which currencies are in use, so they
 //! need `all` at `balances`. None of this writes.
+//!
+//! A bucket (§8.11 B6, B7) is made in the domain from these same accounts, so a token's
+//! buckets hold what it sees at `balances` and nothing else.
 
 use std::collections::BTreeSet;
 
@@ -196,6 +199,11 @@ impl Ledger {
             closed_on: record
                 .closed_at
                 .map(|at| at.to_zoned(self.timezone.clone()).date()),
+            belongs_to: record.belongs_to,
+            beneficiary: record
+                .beneficiary
+                .as_ref()
+                .map(|label| label.as_str().to_owned()),
         }
     }
 
