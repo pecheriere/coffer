@@ -11,6 +11,7 @@
 mod claim;
 mod connect;
 mod fetch;
+mod limits;
 mod sync;
 
 use axum::Router;

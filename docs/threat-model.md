@@ -225,8 +225,13 @@
     comes on top of that and has no deadline.
   - Memory in one fetch goes above the 64 MiB. Parsing adds overhead, and the
     account list and the page being read add up to 16 MiB each. A SimpleFin
-    answer has no limit on its accounts, and a 16 MiB answer of tiny entries
-    expands much further while it is read (issue #62).
+    answer is held whole, up to 16 MiB, and is read with the same bound as
+    Plaid's pages: at most 1,000 accounts, 10,000 transactions on one account
+    and 100,000 in all. Each list holds one entry past its limit, the rest
+    is skipped but must still be valid JSON, and an answer over a limit fails
+    the run with a fixed text before any entry is converted, so nothing is
+    stored from it. The `errors` list of an answer is not bounded beyond the
+    16 MiB.
 - **Some Plaid records are passed by for good and only counted.** A record with
   an id too long to store is skipped, and longer texts are cut. A record whose
   `account_id` is too long, or that names no account, belongs to no account coffer
