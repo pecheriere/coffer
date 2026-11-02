@@ -22,7 +22,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   transactions and their splits, merging, un-merging and dismissing possible
   duplicates); `egress` (the one outbound
   HTTPS client: per-provider host allow-lists, public-address resolver,
-  `HTTPS_PROXY`, no redirects, time and size caps); `vault` (provider
+  `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
   and the `ProviderRegistry`, the one place providers are registered; the
