@@ -26,7 +26,7 @@ async fn with_a_card(world: &World) -> coffer_domain::ids::AccountId {
 }
 
 /// Takes one day's value of `holder` out of the table, as a lost write would.
-async fn hole_today(world: &World, holder: coffer_domain::ids::AccountId) {
+pub(super) async fn hole_today(world: &World, holder: coffer_domain::ids::AccountId) {
     world
         .server
         .store
@@ -333,6 +333,10 @@ async fn sums_say_who_they_leave_out() {
     let latest = text_of(section(&body, "latest"));
     assert!(latest.contains("These sums leave out Livret, which has no value that day."));
     assert!(!latest.contains("EUR"), "its currency has nothing in it");
+    assert_eq!(
+        row(section(&body, "accounts"), "Livret")[0],
+        "No value that day"
+    );
 }
 
 #[tokio::test]
