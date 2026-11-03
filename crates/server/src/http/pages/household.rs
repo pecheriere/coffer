@@ -13,7 +13,7 @@ use coffer_domain::identity::ThemeName;
 use coffer_domain::money::Currency;
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::time::IanaZone;
-use maud::html;
+use maud::{Markup, html};
 use serde::Deserialize;
 
 use super::account::viewer;
@@ -22,7 +22,7 @@ use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::Problem;
-use crate::ledger::settings::ForecastSettingsPatch;
+use crate::ledger::settings::{ForecastSettingsPatch, HouseholdSettings};
 use crate::ledger::transactions::Patch;
 use crate::themes::THEMES;
 
@@ -92,6 +92,22 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save household theme" }
             }
         }
+        (display_currency_card(&viewer.csrf, &settings))
+        (time_zone_card(&viewer.csrf, &settings, state.ledger.default_zone_name()))
+        (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
+    };
+    let frame = Frame {
+        look,
+        viewer: Some(&viewer),
+        current: Some(Nav::Household),
+        narrow: false,
+    };
+    Ok(page(&frame, "Household", &content).into_response())
+}
+
+/// What net worth is shown in, and the form to change it.
+fn display_currency_card(csrf: &str, settings: &HouseholdSettings) -> Markup {
+    html! {
         section.card {
             h2 { "Display currency" }
             p {
@@ -99,7 +115,7 @@ async fn household(
                 "once, at the rates of each day, and changes no balance."
             }
             form method="post" action=(DISPLAY_CURRENCY) {
-                (csrf_field(&viewer.csrf))
+                (csrf_field(csrf))
                 label.field {
                     "Display currency"
                     select.input name="display_currency" required {
@@ -117,6 +133,12 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save display currency" }
             }
         }
+    }
+}
+
+/// Which zone decides the household's day, and the form to change it.
+fn time_zone_card(csrf: &str, settings: &HouseholdSettings, default_zone: &str) -> Markup {
+    html! {
         section.card {
             h2 { "Time zone" }
             p {
@@ -129,12 +151,12 @@ async fn household(
                 "moving it could move money between months. Only new days use the new zone."
             }
             form method="post" action=(TIME_ZONE) {
-                (csrf_field(&viewer.csrf))
+                (csrf_field(csrf))
                 label.field {
                     "Time zone"
                     select.input name="timezone" {
                         option value="" selected[settings.timezone_setting.is_none()] {
-                            "Server default (" (state.ledger.default_zone_name()) ")"
+                            "Server default (" (default_zone) ")"
                         }
                         @for name in IanaZone::all_names() {
                             option value=(name)
@@ -147,15 +169,7 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save time zone" }
             }
         }
-        (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
-    };
-    let frame = Frame {
-        look,
-        viewer: Some(&viewer),
-        current: Some(Nav::Household),
-        narrow: false,
-    };
-    Ok(page(&frame, "Household", &content).into_response())
+    }
 }
 
 /// Unknown fields are refused: a forged form fails whole.
