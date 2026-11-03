@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use coffer_domain::forecast::{
     Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
 };
-use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId};
+use coffer_domain::ids::{
+    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
+};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::CalendarMonth;
 use jiff::civil::{Date, date};
@@ -84,6 +86,9 @@ fn cautions() -> Vec<Caution> {
         },
         Caution::GoalOverdue { goal, due_on: ON },
         Caution::GoalLinkedBothSides { goal },
+        Caution::TransferLegRemoved {
+            link: TransferLinkId::new(),
+        },
         Caution::ItemHintNotCounted {
             item: goal,
             account,
@@ -371,6 +376,12 @@ fn missing_names_read_well() {
         (
             Caution::GoalLinkedBothSides { goal },
             "A goal has spending linked to it",
+        ),
+        (
+            Caution::TransferLegRemoved {
+                link: TransferLinkId::new(),
+            },
+            "A bank took back one side of a linked transfer",
         ),
         (
             Caution::ItemHintNotCounted {

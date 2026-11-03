@@ -589,7 +589,8 @@ and the fields shown:
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
 | `goal_linked_both_sides` (`goal`) | One goal has spending linked to it on both the household's accounts, counted or not, and an account that isn't the household's, such as a contribution from checking and the tuition it paid from a 529. If so, the same money lowers its need twice and the surplus is too high; the data can't tell, so the number stays. A finished goal raises nothing. | Link the payment or the contribution, never both. Ask which one, and remove the other's link. |
 | `item_hint_not_counted` (`item`, `account`, `effect`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). `effect` says what became of it. `still_needed`: an outflow counts anyway, since overstating the need is safe. `left_out`: an inflow into an account that doesn't count stays out of the number, since the money may never reach counted cash (an account that isn't the household's, or one left out of the forecast on purpose). The surplus can then read lower than the money you expect, and this says why. With `include_income` off, an inflow raises nothing. | For `still_needed`: fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. For `left_out`: the number is already right, so don't remove the hint just to clear the caution, since that adds the money to the number. If the money will reach counted cash, hint the item at a counted account instead. If the money isn't expected, set the item `active: false`. |
-| `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. | Categorize it with the [review workflow](agent-usage.md#review-workflow). |
+| `transfer_leg_removed` (`link`) | A provider took back one leg of a [transfer link](agent-usage.md#transfer-links) between counted accounts, with a leg this month. Its money counts as filed again, spending included. | Read the link and its legs. Remove the link if it no longer holds, or merge the posted form into the leg. |
+| `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. What a [transfer link](agent-usage.md#transfer-links) between counted accounts says moved isn't in it. A leg linked anywhere else is, until it is filed. | Categorize it with the [review workflow](agent-usage.md#review-workflow), or link it if the money only moved between counted accounts. |
 | `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget or hide an unpaid bill. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
 | `cash_dips_below_floor` (`month`, `currency`, `projected_cash`) | With `include_income` on, the first month whose cash at its end is below the floor. A later inflow cannot pay an earlier bill. | Report the month. The surplus nets all the income against all the outflows, and is optimistic. |
@@ -909,7 +910,9 @@ per list.)
 - `actual` is posted splits on any of the household's accounts, counted or not
   (balance dates decide what a forecast may trust, not what happened): spending
   in an `expense` category, income in an `income` one, net of refunds, so a month
-  of refunds is negative. `transfer` categories don't count.
+  of refunds is negative. `transfer` categories don't count, and nor does what a
+  [transfer link](agent-usage.md#transfer-links) between two counted accounts says moved,
+  whatever it is filed as.
 - Money that isn't in `actual` is still reported. `left_out` is a charge (or a
   deposit in an `income` category) whose provider removed it or revised it away
   from its splits, at what its splits say. A refund on such a transaction keeps
@@ -927,8 +930,9 @@ per list.)
 - `uncategorized` counts outflows with no splits. They are never spending, and
   money in invested and illiquid accounts is left out of it, so a trade or a
   sweep is neither spending nor drowns the list. A transfer, such as a move to
-  savings, is not spending either: give it a `transfer` category, or leave it
-  uncategorized, where it shows in `uncategorized`, and it stays out of `actual`.
+  savings, is not spending either: link it, which takes what moved between counted accounts off
+  this list, or give it a `transfer` category, or leave it uncategorized, where it shows in `uncategorized`, and it
+  stays out of `actual`.
   Uncategorized outflows on an account that isn't the household's, a held cash
   account too, are left out of every list.
 - `not_the_households` is categorized money on accounts that aren't the household's,
@@ -938,6 +942,10 @@ per list.)
   fund doesn't count again after the contribution that funded it. Its `net` can be 0
   when money went in and out. Flags don't change it, `transfer` categories aren't in
   it, and a split linked to a goal stays on the goal's line.
+- `moved_between_counted_accounts` is what [transfer links](agent-usage.md#transfer-links)
+  between counted accounts took out of `actual`, per month and currency, the reported months only:
+  `money_out` and `money_in`, both positive, for the legs posted in that month. A leg posted in
+  another month shows as the two differing. A fee isn't here: it stays what its leg is filed as.
 - `rollovers` has a line per category and currency with a budget: what was
   `budgeted` over the reported months up to today's, what they `spent` while a
   budget was running once bills and one-offs dated up to and including today took

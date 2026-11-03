@@ -71,6 +71,7 @@ fn household() -> ForecastInput {
         category_spent: Vec::new(),
         loose_ends: Vec::new(),
         newer_spending: Vec::new(),
+        links_with_leg_removed: Vec::new(),
         unbound: Vec::new(),
         feeds: Vec::new(),
     }

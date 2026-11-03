@@ -108,6 +108,10 @@ pub struct TransactionQuery {
     category: Option<Listed<CategoryId>>,
     /// `true`: only transactions without splits. `false` does not filter.
     uncategorized: Option<bool>,
+    /// `true`: only transactions with a split in a `transfer` category and in no transfer
+    /// link, which is what is left to match. `false` does not filter. A transaction linked to
+    /// one the token can't see stays out, since it has a link.
+    unmatched_transfer: Option<bool>,
     /// Only pending (`true`) or only posted (`false`) transactions.
     pending: Option<bool>,
     /// Only transactions with this flag.
@@ -146,6 +150,7 @@ impl TransactionQuery {
             assignee: self.assignee.map(|Assignee(filter)| filter),
             categories: self.category.map(|Listed(ids)| ids).unwrap_or_default(),
             uncategorized: self.uncategorized.unwrap_or(false),
+            unmatched_transfer: self.unmatched_transfer.unwrap_or(false),
             pending: self.pending,
             flag: self.flag,
             min_minor: self.min_amount,
@@ -202,7 +207,8 @@ pub struct MergeRequest {
     /// An imported transaction of the same account; it is deleted.
     pub duplicate: TransactionId,
     /// Merge even though the duplicate has notes, splits, a review, an
-    /// assignee or an edited payee, discarding them (default `false`).
+    /// assignee, an edited payee or a transfer link, discarding them (default
+    /// `false`).
     #[serde(default)]
     pub discard_duplicate_state: bool,
 }
@@ -382,12 +388,13 @@ pub(super) async fn update(
     operation_id = "deleteTransaction",
     tag = tags::TRANSACTIONS,
     description = "Deletes a manual transaction and its splits. Imported transactions are \
-                   never deleted by hand. Needs `write` on its account.",
+                   never deleted by hand, and one in a transfer link stays until the link is \
+                   removed. Needs `write` on its account.",
     security(("bearer" = [])),
     params(TransactionPath),
     responses(
         (status = 204, description = "The transaction is deleted."),
-        (status = 409, description = "The transaction is imported.",
+        (status = 409, description = "The transaction is imported, or in a transfer link.",
          body = ProblemBody, content_type = "application/problem+json"),
         CommonProblems,
     ),
@@ -445,7 +452,9 @@ pub(super) async fn batch(
                    merged with a posted duplicate takes its posted fields. The duplicate's \
                    own user state is never combined: unless `discard_duplicate_state` is \
                    `true`, a duplicate that has any is refused with `merge_conflict`, and \
-                   discarded values are recorded in the audit log. Its candidacies move \
+                   discarded values are recorded in the audit log. A transfer link is user \
+                   state, and discarding it needs `write` on the other leg's account too. Its \
+                   candidacies move \
                    here, and `possible_duplicate` clears once no candidate is left. Two \
                    transactions that each hold a posted record of the same connection are \
                    distinct purchases and are refused. Needs `write` on the account.",
