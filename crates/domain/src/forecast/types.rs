@@ -11,7 +11,9 @@ use jiff::civil::Date;
 use serde::Serialize;
 
 use crate::accounts::{BelongsTo, LiquidityClass};
-use crate::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId};
+use crate::ids::{
+    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
+};
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, SafetyFloor,
@@ -43,6 +45,9 @@ pub struct ForecastInput {
     pub loose_ends: Vec<LooseEnds>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
+    /// Links between counted accounts with a leg its provider took back and a leg in `as_of`'s
+    /// month.
+    pub links_with_leg_removed: Vec<TransferLinkId>,
     /// Provider accounts bound to no account.
     pub unbound: Vec<UnboundAccount>,
     /// Connections that are not syncing.
@@ -517,6 +522,9 @@ pub enum Caution {
         count: u32,
         total: Money,
     },
+    /// A provider took back one leg of this transfer link between counted accounts, so its
+    /// money counts as it is filed again, spending included, until a person says what happened.
+    TransferLegRemoved { link: TransferLinkId },
     /// Possible duplicates this month might be inflating a category's spending, which
     /// could shrink a reduction or hide an unpaid bill or one-off.
     PossibleDuplicates { count: u32 },
