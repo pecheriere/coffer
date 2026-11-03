@@ -70,9 +70,12 @@ class Refusals(unittest.TestCase):
 
     def test_a_second_test_run_in_a_checkout_is_refused(self) -> None:
         """Two runs would remove each other's servers."""
-        lock = SCRIPT.parent.parent / "staging" / ".state" / "test.lock"
-        lock.mkdir(parents=True)
-        self.addCleanup(lock.parent.rmdir)
+        state = SCRIPT.parent.parent / "staging" / ".state"
+        if not state.exists():
+            state.mkdir()
+            self.addCleanup(state.rmdir)
+        lock = state / "test.lock"
+        lock.mkdir()
         self.addCleanup(lock.rmdir)
         pid = lock / "pid"
         pid.write_text(str(os.getpid()))
