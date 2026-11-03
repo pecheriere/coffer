@@ -10,7 +10,8 @@ const SEEDED = NOT_GBP + 752_941;
 
 async function netWorthOn(api, day) {
   const { body } = await api.get(`/reports/net-worth?from=${day}&to=${day}&interval=day`);
-  return { report: body, total: body.points[0].total.minor_units };
+  const { total } = body.points[0];
+  return { report: body, total: total === null ? null : total.minor_units };
 }
 
 test('a saved rate moves net worth, says so, and removing it moves it back', async ({
@@ -79,7 +80,10 @@ test('a currency nobody publishes converts once it has a rate', async ({ api, se
     currency: 'DKK',
     opening_balance: { on: day, minor_units: 100_000 },
   });
-  expect((await netWorthOn(api, day)).report.points[0].unconverted).toEqual([account.id]);
+  // No rate: the day has no total at all, not a smaller one, and the account is named.
+  const blocked = await netWorthOn(api, day);
+  expect(blocked.total).toBeNull();
+  expect(blocked.report.points[0].unconverted).toEqual([account.id]);
 
   // With no published rate to compare it with, nothing is unusual.
   expect((await api.put(`/fx/manual-rates/DKK/${day}`, { rate: '7.46' })).status).toBe(200);
