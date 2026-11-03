@@ -211,6 +211,7 @@ async fn transactions(world: &World, account: AccountId) -> Vec<TransactionRecor
                 assignee: None,
                 categories: Vec::new(),
                 uncategorized: false,
+                unmatched_transfer: false,
                 pending: None,
                 flag: None,
                 min_minor: None,

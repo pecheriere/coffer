@@ -834,8 +834,9 @@ floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
 allowed. A floor of some months of outflows that comes to 0 keeps the number, with
 a caution.
 
-**R6. Plan versus actual** is defined by category (§6.9) and needs no transfer
-links: actuals are categorized splits, and `transfer` is a category kind.
+**R6. Plan versus actual** is defined by category (§6.9): actuals are categorized
+splits, and `transfer` is a category kind. A transfer link takes a movement between counted
+accounts out of them whatever it is filed as (§8.12 T5).
 Uncategorized money is never spending and is reported separately, without
 invested and illiquid accounts.
 
@@ -1377,9 +1378,8 @@ plan versus actual, pays a planned bill as R9 says, and lowers the surplus, and 
 the bucket rises, which is what happened. A `transfer` category means money moved within the
 household, which this isn't: there it is in no `actual` (R6), though the forecast's cash still
 falls and an unpaid bill keeps counting, the safe direction. R17 already refuses a `transfer`
-category on a planned item. Nothing can check this until transfer links exist (#72), so it is a
-rule for members and agents, in the docs. Those links must read a link out of the household as an
-outflow.
+category on a planned item. Nothing checks this, so it is a rule for members and agents, in the
+docs. A transfer link out of the household reads as an outflow, changing no number (§8.12 T5).
 
 Money coming back, such as a 529 paying a household's tuition bill into checking, is a refund in
 the `expense` category it paid for, or `income`, on the household's side.
@@ -1438,5 +1438,106 @@ without write access to every account is refused before any lookup, so a real id
 a state it is already in, or for a bound account or a removed connection, is a 409, which also
 answers a page or form older than the change.
 
-**B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
+**B13. Not in this plan:** target allocation (#3), holdings (#42), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.
+
+### 8.12 Transfer links
+
+Decisions made for issue #72. Where they differ from an earlier section, they govern; T5 and T6
+narrow R6, R9 and R10 for linked money.
+
+**T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
+money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
+for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
+(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
+either transaction: a leg keeps its category, and its other fields, as they were. API only for now
+(#49 tracks the pages).
+
+**T2. Never linked by itself.** As with duplicates (§8.4) and suggested kinds (B12), coffer guesses
+and a member or agent confirms. `transfer-candidates` suggests the same amount the other way, same
+currency, another account the actor can read, within 5 days, in no link and with at most one split,
+nearest first. `GET /transactions?unmatched_transfer=true` lists what is filed in a `transfer`
+category with no link. Neither writes anything.
+
+**T3. Access.** Creating or removing a link needs `write` on both accounts, and reading one
+`transactions` on both. A token with one side hidden gets the answer a missing transaction or link
+gets, and a transaction it can read shows `transfer_link: null`. A refusal such a token gets because
+of the link (a split, a goal, a delete, a merge) doesn't word it as a link, and one refused for a goal
+it isn't shown doesn't word it as a goal, as R3 has it.
+Audited as `transfer_link.create` and `transfer_link.remove`, with the agent as usual, and undone by
+removing it or making it again. Nothing in the policy changes.
+
+**T4. What a leg holds.** At most one split, so a link is refused on a split transaction and a leg
+can't become one. Part of a split may be spending, and a report can't say which part, so a rule of
+counting the rest would be a guess. Remove the link to split it. A goal is refused on a link that is one
+movement in a report (T5), either way round, since money moved between counted accounts is still cash (R8). Any
+other link keeps its goal, as a contribution out of counted cash may lower one's need (B10). R8's
+refusal of a goal on a `transfer` category stands.
+
+**T5. What it does to a report.** A link is *one movement* when both accounts are in counted cash,
+the definition the forecast's actuals use (R10): open, `include_in_forecast`, and `cash` or
+`short_term_liability`. Only then did the money stay in the cash the forecast adds up. It is one
+definition in the store, behind every number here. Flags and classes are read at the time as every
+count is (B6), so switching one changes what its links mean, history included. Closing an account
+doesn't: a report says what happened, so it counts a closed account for a leg posted before
+`closed_at`, up to the UTC date of `closed_at` plus one day, and January and the last sweep before closing keep
+their meaning. The forecast reads the current state, in which a closed account isn't counted, so
+`one_movement` and `one_movement_in_reports` can differ on such a link. A link also
+stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs
+of one sign.
+
+What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
+link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
+currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
+known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
+word.
+
+| Number | Effect of linking |
+|---|---|
+| `actual`, `rolling_average`, `rollovers` | What moved leaves, in any category. |
+| `uncategorized` | What moved of an uncategorized outflow leaves. Any other link stays on the list until it is filed, since B9 makes it real spending, and a `transfer` category clears it as it does any outflow. |
+| a goal's `spent_against` | What moved of a charge leaves, into the line's `left_out`; of a refund, it just isn't counted. Only an account changing after the link can put one there (T4). |
+| `moved_between_counted_accounts` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6). |
+
+Any other link, to a brokerage, a loan, a closed account, or across or outside the household's money,
+records the movement and changes no other number: B9's contribution stays `actual` and pays its bill,
+a monthly auto-invest stays paid, B10's money inside stays in `not_the_households`, and one in a
+`transfer` category stays out of `actual` as it was, since a link doesn't correct a category.
+`one_movement` says which. Pending legs are in none of this, as in R10.
+
+**T6. What it does to the forecast.** For one movement, read at the time:
+
+| Number | Effect of linking |
+|---|---|
+| A budget's `reduced_by`, a bill's `unpaid` | What moved no longer reduces or pays. The other side is counted cash, so nothing left it, and the need is really still there: without the link the surplus was overstated by that much, and with it the surplus falls by that. |
+| `uncategorized_spending` | What moved isn't in it. |
+| `possible_duplicates` | Unchanged: a leg may still be a duplicate. |
+| Goal need, `goal_linked_both_sides` | What moved doesn't lower the need or count as a side. |
+| Cash, net worth | Unchanged: they read balances. |
+| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown or still pending, it stays: a pending deposit may already be in its balance, and then cash is overstated. That can ask when nothing is wrong, the safe direction. |
+
+A link to any other account changes none of these. Its money left counted cash, so
+counting it as spent is what makes the number right: a bill paid by an auto-invest stays paid, where
+treating it as a movement would owe the bill again on top of the fallen balance.
+
+**T7. A leg over time.** Only a person ends a link. A link is user state (§8.4):
+
+- Pending to posted is one transaction, so nothing changes.
+- A provider's record vanishing doesn't delete a leg, which holds a person's say-so. It stays with its
+  link, flagged `source_removed`, and the link stops counting: real spending comes back rather than
+  disappears. The flagged leg follows R10a, so a withdrawn charge is in `left_out`, and the other leg
+  counts as it is filed. Between counted accounts with a leg in `as_of`'s month, the caution
+  `transfer_leg_removed` names the link and makes the forecast `provisional`. A pending record taken
+  back is in no `spending_newer_than_balance`, link or not. A record attaching again clears the flag
+  and the link counts again.
+- A merge: the target keeps its link. A duplicate holding one is refused with `merge_conflict` unless
+  `discard_duplicate_state` is sent, like its notes, and the end of the link is audited; that also
+  needs `write` on the other leg's account. To keep a link, merge into the leg. A target flagged
+  `source_removed` holds a record again, so a merge clears that flag too.
+- An un-merge leaves the link on the transaction that holds it; the new one starts with none.
+- A manual leg can't be deleted until its link is removed: 409, and the reference refuses it should
+  anything else try.
+- A closed account may hold a leg, and links can still be made and removed on it: the last sweep out
+  of an account is often what closed it. The forecast reads such a link as no movement and a report, for
+a leg posted before the close, as one (T5).
+- A provider revising a leg's amount leaves the link, and `difference` shows what it says now.

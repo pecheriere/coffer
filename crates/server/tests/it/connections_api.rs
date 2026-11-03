@@ -255,6 +255,7 @@ impl World {
                     assignee: None,
                     categories: Vec::new(),
                     uncategorized: false,
+                    unmatched_transfer: false,
                     pending: None,
                     flag: None,
                     min_minor: None,

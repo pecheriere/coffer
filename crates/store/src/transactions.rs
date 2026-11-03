@@ -19,6 +19,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time, time_opt};
 use crate::members::expect_one;
 use crate::sources::{SourceRecord, candidates_by_transaction, sources_by_transaction};
+use crate::transfer_links::{TransferLinkSide, sides_by_transaction};
 use crate::{Page, PageRequest, Store, StoreError, StoreTx};
 
 macro_rules! columns {
@@ -85,6 +86,8 @@ pub struct TransactionRecord {
     /// The transactions it may duplicate, when flagged
     /// [`TransactionFlag::PossibleDuplicate`].
     pub duplicate_candidates: Vec<TransactionId>,
+    /// The transfer link it is one leg of.
+    pub transfer_link: Option<TransferLinkSide>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -99,6 +102,7 @@ impl TransactionRecord {
             reviewed: self.review == ReviewStatus::Reviewed,
             assignee: self.assignee.is_some(),
             payee_edited: self.payee_edited,
+            transfer_link: self.transfer_link.is_some(),
         }
     }
 }
@@ -196,6 +200,9 @@ pub struct TransactionFilter {
     pub categories: Vec<CategoryId>,
     /// Only transactions without splits; `false` does not filter.
     pub uncategorized: bool,
+    /// Only transactions with a split in a `transfer` category and in no transfer link;
+    /// `false` does not filter.
+    pub unmatched_transfer: bool,
     pub pending: Option<bool>,
     /// With this flag set.
     pub flag: Option<TransactionFlag>,
@@ -296,6 +303,15 @@ fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &TransactionFilter) {
         query.push(
             " AND NOT EXISTS (SELECT 1 FROM transaction_splits s \
              WHERE s.transaction_id = transactions.id)",
+        );
+    }
+    if filter.unmatched_transfer {
+        query.push(
+            " AND EXISTS (SELECT 1 FROM transaction_splits s \
+             JOIN categories c ON c.id = s.category_id \
+             WHERE s.transaction_id = transactions.id AND c.kind = 'transfer') \
+             AND NOT EXISTS (SELECT 1 FROM transfer_links l \
+             WHERE l.outflow_id = transactions.id OR l.inflow_id = transactions.id)",
         );
     }
     if let Some(pending) = filter.pending {
@@ -414,6 +430,7 @@ fn transaction_from_row(row: &SqliteRow) -> Result<TransactionRecord, StoreError
         splits: Vec::new(),
         sources: Vec::new(),
         duplicate_candidates: Vec::new(),
+        transfer_link: None,
         created_at: time(row, "created_at")?,
         updated_at: time(row, "updated_at")?,
     })
@@ -439,7 +456,7 @@ async fn fetch_transaction(
     Ok(record)
 }
 
-/// Loads the splits (in order), source records and duplicate candidates of
+/// Loads the splits (in order), source records, duplicate candidates and transfer link of
 /// every record in `records`.
 async fn attach_children(
     conn: &mut SqliteConnection,
@@ -477,10 +494,12 @@ async fn attach_children(
     let ids: Vec<TransactionId> = records.iter().map(|record| record.id).collect();
     let mut sources = sources_by_transaction(conn, &ids).await?;
     let mut candidates = candidates_by_transaction(conn, &ids).await?;
+    let mut links = sides_by_transaction(conn, &ids).await?;
     for record in records {
         record.splits = splits.remove(&record.id).unwrap_or_default();
         record.sources = sources.remove(&record.id).unwrap_or_default();
         record.duplicate_candidates = candidates.remove(&record.id).unwrap_or_default();
+        record.transfer_link = links.remove(&record.id);
     }
     Ok(())
 }
@@ -690,7 +709,8 @@ impl StoreTx {
     ///
     /// # Errors
     ///
-    /// `NotFound` if the transaction does not exist.
+    /// `NotFound` if the transaction does not exist; a backend failure if a transfer link
+    /// still holds it, since only a person ends one.
     pub async fn delete_transaction(&mut self, id: TransactionId) -> Result<(), StoreError> {
         let result = sqlx::query("DELETE FROM transactions WHERE id = ?")
             .bind(id.to_string())
