@@ -6,7 +6,9 @@
 use coffer_domain::net_worth::{NetWorthBucket, NetWorthPoint, NetWorthReport, NetWorthStatus};
 use maud::{Markup, html};
 
-use super::words::{Names, bucket_blocker_sentence, bucket_caution_sentence, bucket_heading};
+use super::words::{
+    Names, bucket_blocker_sentence, bucket_caution_sentence, bucket_heading, manual_rate_sentence,
+};
 use super::{
     NO_TOTAL, NO_VALUE_THAT_DAY, accounts_table, by_currency_table, left_out_notes,
     opens_for_a_gap, periods, periods_table, status,
@@ -53,6 +55,9 @@ fn one_bucket(report: &NetWorthReport, bucket: &NetWorthBucket) -> Markup {
         (latest_total(latest))
         @if bucket.status != NetWorthStatus::Firm {
             (status(bucket.status, has_a_total))
+        }
+        @for used in &bucket.manual_rates {
+            p.fine { (manual_rate_sentence(*used)) }
         }
         @if !bucket.blockers.is_empty() || !bucket.cautions.is_empty() {
             ul.reasons.held-reasons {

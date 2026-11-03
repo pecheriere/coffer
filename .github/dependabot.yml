@@ -88,6 +88,22 @@ updates:
     commit-message:
       prefix: test
 
+  # The end-to-end tests' packages. A bump of Playwright also needs
+  # `node support/install-browser.mjs --update` run in staging/e2e and committed: the e2e job
+  # fails until then, since browser.lock.json names the Playwright it belongs to.
+  - package-ecosystem: npm
+    directory: /staging/e2e
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    commit-message:
+      prefix: test
+
   # The digest-pinned Spectral image the openapi-lint job runs.
   - package-ecosystem: docker
     directory: /.github/spectral

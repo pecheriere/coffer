@@ -8,18 +8,21 @@ pub mod accounts;
 pub mod categories;
 pub mod duplicates;
 pub mod forecast;
+pub mod manual_rates;
 pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;
 pub mod settings;
 pub mod settlements;
 pub mod transactions;
+pub mod transfer_links;
 mod unseen;
 
 use std::sync::Arc;
 
 use axum::http::StatusCode;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
+use coffer_domain::fx::{FxRate, RateObservation, UnusualEntry};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::AccountId;
 use coffer_domain::policy::{
@@ -33,6 +36,7 @@ use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
 use crate::config::FxProviderKind;
+use crate::household_time::HouseholdTime;
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::{Problem, ProblemCode};
 
@@ -41,8 +45,8 @@ pub struct Ledger {
     store: Store,
     clock: Arc<dyn Clock>,
     access: Arc<AccessResolver>,
-    /// The household's zone, which decides what day it is (spec §8.7).
-    timezone: TimeZone,
+    /// The household's zone and day (spec §8.7).
+    time: HouseholdTime,
     /// Whether this server fetches rates at all, which is why one may be missing.
     rate_provider_configured: bool,
 }
@@ -64,17 +68,27 @@ impl Ledger {
         fx_provider: FxProviderKind,
     ) -> Self {
         Self {
+            time: HouseholdTime::new(store.clone(), Arc::clone(&clock), timezone),
             store,
             clock,
             access,
-            timezone,
             rate_provider_configured: fx_provider != FxProviderKind::Off,
         }
     }
 
-    /// The household's day.
-    pub(crate) fn today(&self) -> Date {
-        self.clock.now().to_zoned(self.timezone.clone()).date()
+    /// The household's day, as it is now.
+    pub(crate) async fn today(&self) -> Result<Date, LedgerError> {
+        Ok(self.time.today().await?)
+    }
+
+    /// The name of the zone that applies while the settings choose none.
+    pub(crate) fn default_zone_name(&self) -> &str {
+        self.time.default_name()
+    }
+
+    /// The household's zone, as it is now.
+    pub(crate) async fn timezone(&self) -> Result<TimeZone, LedgerError> {
+        Ok(self.time.zone().await?)
     }
 
     /// Whether `actor` may use `account` at `level`, decided before a
@@ -148,6 +162,13 @@ pub enum LedgerError {
     /// A submitted value is not acceptable; the message says which.
     #[error("{0}")]
     Invalid(&'static str),
+    /// A manual rate is odd against a published one nearby and wasn't confirmed. It says both,
+    /// which are validated rates, since the person has to compare them.
+    #[error("{}", unusual_rate_words(*entered, *unusual))]
+    UnusualRate {
+        entered: FxRate,
+        unusual: UnusualEntry,
+    },
     /// The change conflicts with the current state.
     #[error("{1}")]
     Conflict(ProblemCode, &'static str),
@@ -211,6 +232,21 @@ impl From<AuthError> for LedgerError {
     }
 }
 
+/// What is odd about a manual rate, both numbers said.
+fn unusual_rate_words(entered: FxRate, unusual: UnusualEntry) -> String {
+    let RateObservation { on, rate } = unusual.published();
+    let compared =
+        format!("this rate is {entered} per euro, but the published rate of {on} is {rate}");
+    let verdict = match unusual {
+        UnusualEntry::WrongWayRound(_) => "It looks like it was entered the wrong way round",
+        UnusualEntry::FarFrom(_) => "That is more than 1.5 times away, so it may be a slip",
+    };
+    format!(
+        "{compared}. {verdict}: it should be how much of the currency one euro buys. To keep it \
+         anyway, confirm it."
+    )
+}
+
 impl From<LedgerError> for Problem {
     fn from(err: LedgerError) -> Self {
         let message = err.to_string();
@@ -221,6 +257,12 @@ impl From<LedgerError> for Problem {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 ProblemCode::Invalid,
                 "Invalid value",
+            )
+            .with_detail(message),
+            LedgerError::UnusualRate { .. } => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ProblemCode::UnusualRate,
+                "Unusual rate",
             )
             .with_detail(message),
             LedgerError::Conflict(code, _) => {

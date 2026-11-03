@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use coffer_domain::ids::{ConnectionId, ProviderAccountId, SourceRecordId};
 use coffer_store::{AccountRecord, ConnectionStatus, ProviderAccountRecord, StoreTx};
 use jiff::Timestamp;
-use jiff::civil::Date;
 
 use super::accounts::ACCOUNT_NOT_STORED;
 use super::results::AccountOutcome;
@@ -29,7 +28,6 @@ pub(super) struct OneByOne {
     /// Records already left out as unusable.
     pub(super) skipped: u32,
     pub(super) balance: Option<ReportedBalance>,
-    pub(super) today: Date,
     pub(super) now: Timestamp,
 }
 
@@ -109,13 +107,14 @@ impl SyncService {
         }
         let (_, account) = current_binding(&mut tx, job.provider_account).await?;
         if let Some(balance) = job.balance {
+            let today = self.time.today_seen_by(&mut tx).await?;
             record_balance(
                 &mut tx,
                 job.now,
                 job.provider_account,
                 account.map(|account| account.id),
                 balance,
-                job.today,
+                today,
             )
             .await?;
         }

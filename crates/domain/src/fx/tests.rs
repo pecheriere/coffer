@@ -8,8 +8,8 @@ use proptest::prelude::{Just, Strategy, prop_assert, prop_assert_eq, prop_oneof,
 use proptest::{collection, sample};
 
 use super::{
-    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory, RateLeg,
-    RateLookup, RateObservation, convert,
+    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateBook, RateHistory,
+    RateLeg, RateLookup, RateObservation, UnusualEntry, convert, unusual_against,
 };
 use crate::money::Currency;
 
@@ -63,6 +63,7 @@ fn converted(minor: i64, rate_on: Date, leg: RateLeg) -> Conversion {
         minor,
         rate_on,
         leg,
+        manual: None,
     }
 }
 
@@ -251,7 +252,11 @@ fn no_later_rate_is_used() {
     );
     assert_eq!(
         book.rate(usd, first),
-        RateLookup::Found(first, rate("1.1789"))
+        RateLookup::Found(HeldRate {
+            on: first,
+            rate: rate("1.1789"),
+            manual: false,
+        })
     );
 }
 
@@ -362,13 +367,171 @@ fn opposite(conversion: Conversion) -> Conversion {
             minor,
             rate_on,
             leg,
+            manual,
         } => Conversion::Converted {
             minor: -minor,
             rate_on,
             leg,
+            manual,
         },
         other => other,
     }
+}
+
+/// Only the manual rate of a day counts, the fetched one under it stays behind it, and a
+/// later fetched rate takes over: what an admin's rate does and doesn't win.
+#[test]
+fn a_manual_rate_wins_its_own_day_and_a_later_published_rate_takes_over() {
+    let [before, entered, after] = [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)];
+    let observed = |on, text| RateObservation {
+        on,
+        rate: rate(text),
+    };
+    let history = RateHistory::merged(
+        vec![
+            observed(before, "1.1"),
+            observed(entered, "1.2"),
+            observed(after, "1.3"),
+        ],
+        vec![observed(entered, "9")],
+    );
+    let held = |on: Date| history.on_or_before(on).unwrap();
+
+    assert_eq!(
+        (held(before).rate, held(before).manual),
+        (rate("1.1"), false)
+    );
+    assert_eq!(
+        (held(entered).rate, held(entered).manual),
+        (rate("9"), true)
+    );
+    let carried = held(date(2026, 10, 4));
+    assert_eq!(
+        (carried.on, carried.manual),
+        (entered, true),
+        "carried forward"
+    );
+    assert_eq!((held(after).rate, held(after).manual), (rate("1.3"), false));
+    assert_eq!(history.rates().len(), 3, "one rate a day");
+}
+
+/// A conversion says which side's rate an admin entered, not just that one did.
+#[test]
+fn a_conversion_names_the_side_with_a_manual_rate() {
+    let on = date(2026, 10, 2);
+    let observed = RateObservation {
+        on,
+        rate: rate("2"),
+    };
+    let mut book = RateBook::default();
+    book.insert(currency("USD"), RateHistory::new(vec![observed]));
+    book.insert(
+        currency("XAF"),
+        RateHistory::merged(Vec::new(), vec![observed]),
+    );
+    book.insert(
+        currency("XOF"),
+        RateHistory::merged(Vec::new(), vec![observed]),
+    );
+    let manual_of =
+        |from: &str, to: &str| match convert(100, currency(from), currency(to), on, &book) {
+            Conversion::Converted { manual, .. } => manual,
+            other => panic!("expected a conversion, got {other:?}"),
+        };
+
+    assert_eq!(manual_of("USD", "EUR"), None);
+    assert_eq!(manual_of("XAF", "EUR"), Some(RateLeg::Held));
+    assert_eq!(manual_of("EUR", "XAF"), Some(RateLeg::Display));
+    assert_eq!(manual_of("XAF", "USD"), Some(RateLeg::Held));
+    assert_eq!(manual_of("USD", "XAF"), Some(RateLeg::Display));
+    assert_eq!(manual_of("XAF", "XOF"), Some(RateLeg::Both));
+}
+
+/// Exactly 1.5 times away isn't more than that, on either side.
+#[test]
+fn a_rate_over_one_and_a_half_times_from_the_nearest_published_one_is_unusual() {
+    let on = date(2026, 10, 15);
+    let near = RateObservation {
+        on: date(2026, 10, 14),
+        rate: rate("2"),
+    };
+    let far = RateObservation {
+        on: date(2026, 10, 1),
+        rate: rate("100"),
+    };
+    let unusual = |text| unusual_against(rate(text), on, &[far, near]);
+
+    assert_eq!(unusual("3"), None);
+    assert_eq!(unusual("3.000001"), Some(UnusualEntry::FarFrom(near)));
+    assert_eq!(unusual("1.333334"), None);
+    assert_eq!(unusual("1.333333"), Some(UnusualEntry::FarFrom(near)));
+    assert_eq!(
+        unusual_against(rate("0.5"), on, &[]),
+        None,
+        "nothing to compare"
+    );
+}
+
+/// What a rate comes to against `published` on one day.
+fn against(entered: &str, published: &str) -> Option<UnusualEntry> {
+    let on = date(2026, 10, 15);
+    unusual_against(
+        rate(entered),
+        on,
+        &[RateObservation {
+            on,
+            rate: rate(published),
+        }],
+    )
+}
+
+fn wrong_way_round(entered: &str, published: &str) -> bool {
+    matches!(
+        against(entered, published),
+        Some(UnusualEntry::WrongWayRound(_))
+    )
+}
+
+/// USD at 0.92 for 1.087 is only 1.18 times away, so the factor alone would miss it.
+#[test]
+fn a_rate_near_the_inverse_of_a_published_one_is_the_wrong_way_round() {
+    assert!(wrong_way_round("0.92", "1.087"));
+    assert!(wrong_way_round("1.087", "0.92"));
+    assert!(
+        wrong_way_round("0.5", "2"),
+        "the inverse says more than far"
+    );
+    // Exactly 2% from the inverse on each side, and just past it.
+    assert!(wrong_way_round("0.49", "2"));
+    assert!(wrong_way_round("0.51", "2"));
+    assert_eq!(
+        against("1.3", "2"),
+        Some(UnusualEntry::FarFrom(RateObservation {
+            on: date(2026, 10, 15),
+            rate: rate("2"),
+        })),
+        "far, and not near the inverse"
+    );
+    assert!(!wrong_way_round("0.489999", "2"));
+    assert!(!wrong_way_round("0.510001", "2"));
+}
+
+/// Within 5% of parity a rate and its inverse are an ordinary move apart.
+#[test]
+fn near_parity_nothing_is_the_wrong_way_round() {
+    assert_eq!(against("0.98", "1.02"), None);
+    assert_eq!(against("1.02", "0.98"), None);
+    assert_eq!(against("0.96", "1.049999"), None);
+    assert_eq!(against("1.05", "0.950001"), None);
+    assert!(wrong_way_round("0.952", "1.05"), "5% away counts");
+    assert!(wrong_way_round("1.0526", "0.95"), "on either side of 1");
+}
+
+#[test]
+fn an_ordinary_move_is_not_unusual() {
+    assert_eq!(against("1.1", "1.087"), None);
+    assert_eq!(against("1.2", "1.087"), None);
+    assert_eq!(against("150", "175.68"), None);
 }
 
 /// Leap days, month ends and the days around them.
@@ -418,7 +581,7 @@ proptest! {
             .collect();
         let latest = days.iter().copied().filter(|day| *day <= on).max();
         let found = RateHistory::new(rates).on_or_before(on);
-        prop_assert_eq!(found.map(|(day, _)| day), latest);
-        prop_assert!(found.is_none_or(|(day, _)| day <= on));
+        prop_assert_eq!(found.map(|held| held.on), latest);
+        prop_assert!(found.is_none_or(|held| held.on <= on));
     }
 }

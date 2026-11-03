@@ -114,7 +114,7 @@ async fn liability_balances_are_negative() {
         .server
         .clock
         .now()
-        .to_zoned(world.server.config.timezone.clone())
+        .to_zoned(world.server.config.default_timezone.clone())
         .date();
     let owed = world
         .server

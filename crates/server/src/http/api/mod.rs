@@ -18,6 +18,7 @@ mod provider_accounts;
 mod reports;
 mod router;
 mod transactions;
+mod transfer_links;
 
 use axum::Router;
 use axum::extract::Request;
@@ -62,6 +63,9 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(transfer_links::create))
+        .op(routes!(transfer_links::get, transfer_links::remove))
+        .op(routes!(transfer_links::candidates))
         .op(routes!(plan_items::list, plan_items::create))
         .op(routes!(
             plan_items::get,
@@ -75,6 +79,8 @@ fn routes() -> ApiRouter {
         .op(routes!(reports::net_worth))
         .op(routes!(fx::coverage))
         .op(routes!(fx::rates))
+        .op(routes!(fx::manual_rates))
+        .op(routes!(fx::set_manual_rate, fx::remove_manual_rate))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

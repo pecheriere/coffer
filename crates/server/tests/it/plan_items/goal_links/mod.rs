@@ -64,6 +64,7 @@ fn provider_record(id: &str, amount_minor: i64, pending: bool) -> NormalizedTran
         memo: None,
         pending,
         replaces_provider_id: None,
+        dating: None,
     }
 }
 

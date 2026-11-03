@@ -14,6 +14,8 @@
 //!   merged with a posted duplicate takes the duplicate's (as when the
 //!   sync attaches a posted record to its pending form); a single split
 //!   follows a new amount.
+//! - A transfer link is user state too (spec §8.12 T7): a target keeps its own, and the
+//!   duplicate's is ended if the caller discards it, which needs write access to the other leg.
 //! - The duplicate's candidacies move to the target: its own candidates
 //!   become the target's, and transactions listing it list the target
 //!   instead.
@@ -31,6 +33,7 @@ use coffer_store::{
 };
 
 use super::transactions::{TransactionView, attribution, current_splits, splits_value};
+use super::transfer_links::discard_in_merge;
 use super::unseen::hide_unseen_in_tx;
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::canonical::{
@@ -44,8 +47,9 @@ const MERGE_ACROSS_ACCOUNTS: &str = "only transactions of the same account can b
 const MERGE_NOT_IMPORTED: &str = "only imported transactions can be merged";
 const MERGE_REPORTED_APART: &str =
     "both transactions hold a posted record of the same connection: they are distinct purchases";
-const MERGE_CONFLICT: &str = "the duplicate has notes, splits, a review, an assignee or an edited \
-                              payee: set discard_duplicate_state to discard them";
+const MERGE_CONFLICT: &str = "the duplicate has notes, splits, a review, an assignee, an edited \
+                              payee or something else of its own: set discard_duplicate_state \
+                              to discard them";
 const SOURCE_NOT_OWN: &str = "the source is not one of the transaction's records";
 const LAST_SOURCE: &str = "a transaction keeps at least one source record";
 
@@ -120,6 +124,9 @@ fn merged_away(
     if let Some(candidates) = listed(&duplicate.duplicate_candidates) {
         changes = changes.unset("duplicate_candidates", candidates);
     }
+    if let Some(link) = &duplicate.transfer_link {
+        changes = changes.unset("transfer_link", link.id);
+    }
     Ok(changes)
 }
 
@@ -191,7 +198,8 @@ impl Ledger {
     /// that each hold a posted record of the same connection (distinct
     /// purchases);
     /// [`LedgerError::Conflict`] (`merge_conflict`) when the duplicate has
-    /// user state and `discard_duplicate_state` is false; storage failures.
+    /// user state and `discard_duplicate_state` is false, or a transfer link
+    /// whose other leg the actor can't write; storage failures.
     pub async fn merge(
         &self,
         actor: &Actor,
@@ -229,6 +237,9 @@ impl Ledger {
             ));
         }
         let discarded = merged_away(&duplicate, target.id)?;
+        if let Some(side) = &duplicate.transfer_link {
+            discard_in_merge(&mut tx, now, actor, &access, side, target.id).await?;
+        }
 
         for source in &duplicate.sources {
             tx.attach_source(source.id, target.id).await?;
@@ -246,6 +257,13 @@ impl Ledger {
                 &attribution(actor, now),
             )
             .await?;
+        }
+
+        // It holds a record again, as when a sync attaches one.
+        if target.flags.contains(&TransactionFlag::SourceRemoved) && !duplicate.sources.is_empty() {
+            tx.set_flag(target.id, TransactionFlag::SourceRemoved, false)
+                .await?;
+            changes = changes.change("source_removed", true, false);
         }
 
         let (changes, listers) = delete_into(&mut tx, &target, &duplicate, changes).await?;
@@ -489,6 +507,8 @@ mod tests {
             connection,
             provider_account: ProviderAccountId::new(),
             provider_txn_id: "p".into(),
+            dated_in: None,
+            transacted_in: None,
             transaction: None,
             fields: ImportedFields {
                 posted_on: date(2026, 10, 10),

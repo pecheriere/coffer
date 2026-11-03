@@ -1,7 +1,7 @@
 //! What only the crate can see: the stored `fetched_at`, and the loader that
 //! the net worth table uses.
 
-use coffer_domain::fx::{FxRate, FxSource, RateLookup, RateObservation};
+use coffer_domain::fx::{FxRate, FxSource, HeldRate, RateLookup, RateObservation};
 use coffer_domain::money::Currency;
 use jiff::Timestamp;
 use jiff::civil::{Date, date};
@@ -85,16 +85,15 @@ async fn rate_book_holds_the_rate_before_the_window() {
     .await
     .unwrap();
     let usd = cur("USD");
-    assert_eq!(
-        book.rate(usd, sunday),
-        RateLookup::Found(friday, "1.11".parse().unwrap())
-    );
+    let on_friday = RateLookup::Found(HeldRate {
+        on: friday,
+        rate: "1.11".parse().unwrap(),
+        manual: false,
+    });
+    assert_eq!(book.rate(usd, sunday), on_friday);
     // Thursday was not loaded, and Monday is outside the window.
     assert_eq!(book.rate(usd, thursday), RateLookup::Missing);
-    assert_eq!(
-        book.rate(usd, monday),
-        RateLookup::Found(friday, "1.11".parse().unwrap())
-    );
+    assert_eq!(book.rate(usd, monday), on_friday);
     assert_eq!(book.rate(cur("THB"), sunday), RateLookup::Missing);
 }
 
@@ -113,7 +112,13 @@ async fn rate_book_holds_every_rate_inside_the_window_and_one_before() {
     let book = load_rate_book(&mut conn, &[cur("USD")], days[2], days[3])
         .await
         .unwrap();
-    let found = |day| RateLookup::Found(day, "1.1".parse().unwrap());
+    let found = |on| {
+        RateLookup::Found(HeldRate {
+            on,
+            rate: "1.1".parse().unwrap(),
+            manual: false,
+        })
+    };
     assert_eq!(book.rate(cur("USD"), days[3]), found(days[3]));
     assert_eq!(book.rate(cur("USD"), days[2]), found(days[2]));
     assert_eq!(book.rate(cur("USD"), days[1]), found(days[1]));

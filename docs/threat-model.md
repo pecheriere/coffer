@@ -206,8 +206,9 @@
     counted account reads exactly like an empty household, apart from any bucket it
     sees. Rates are stored once
     for the household and depend on the currencies in use, so the FX endpoints
-    (`/api/v1/fx/coverage`, `/api/v1/fx/rates`) span every account and need `all`
-    at `balances`, refused the same whether or not an account is hidden. So does a
+    (`/api/v1/fx/coverage`, `/api/v1/fx/rates`, `/api/v1/fx/manual-rates`) span every account and need `all`
+    at `balances`, refused the same whether or not an account is hidden. So does
+    entering or removing a rate by hand. So does a
     patch naming `display_currency`, whatever it names: a visible row converts at
     once if the code's rates are held, so a token held to one account could try
     each code and read from its own report which ones the household uses. The
@@ -324,8 +325,8 @@
   the figures from a stored copy. `/net-worth` also shows the buckets a member can see.
   The count stays at two: `/connections` holds no such figures, but its bind forms now
   hold a beneficiary label, so it stays in that table with its rejections withheld, as
-  the accepted risks below describe. `/admin/household` gains one form, for the
-  display currency: admins only (checked before the form is read), the
+  the accepted risks below describe. `/admin/household` gains two forms, for the
+  display currency and the time zone: admins only (checked before the form is read), the
   anti-forgery token and the `Origin` rule like every page form, and the same
   service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries
@@ -641,6 +642,18 @@
   false rate on a day the source has none is removed by the same answer. An older
   one isn't fetched again. The forecast never reads a rate, so it can't be moved by
   one.
+- **An admin can enter a wrong rate by hand** (N16), a slip or on purpose, and it moves
+  net worth at once. A rate is bounded in form as a fetched one is, and it can't be for the display
+  currency, the euro or a day to come. In value, one over 1.5 times from a published rate within
+  30 days, or within 2% of its inverse when that rate is at least 5% away from 1, needs
+  confirming, and a confirmed one says so in the log. Any other wrong rate within that factor
+  passes, including one written the wrong way round when the true rate is within 5% of 1. With no published rate nearby
+  nothing bounds it but the form's wording, so a wrong rate for a currency no source publishes
+  passes.
+  So it is never silent: each write and removal is audited with the old and new rate and
+  who did it, a token's writes need `admin` and `all` at `balances`, and everything built
+  from one says `manual_rate`, and the report lists it in `manual_rates`. A fetch can't overwrite it,
+  so a wrong one lasts until an admin removes it or a later day's rate takes over.
 - **A forged rate after a series has ended stays.** An answer only speaks for the
   days from the start of its window to its own last row, since one cut at the end of
   a line looks like a shorter one. So with no later publication nothing removes a
@@ -661,6 +674,14 @@
   nothing in the answer contradicts it. The docs say so first and tell an agent to
   check `access.all` in `GET /api/v1/me` and not to report such a sum as the
   household's. Marking it would reveal that other accounts exist.
+- **A provider can leave a day's balance alone by repeating the latest amount** on a day
+  that holds one, within 2 days of the latest, and can replace its own balance dated past
+  today. Neither reaches further back or touches a member's balance (spec §8.7).
+- **A change of time zone takes `admin` whatever the token's account grants:** it shows no
+  amount and says nothing of what is hidden, though it decides the day of new records on
+  accounts the token can't see. The name is checked against the copy of the database in
+  the binary before anything looks for a file by it. It holds the write lock only to remove
+  the at most two days a change can leave past today, however large the table.
 - **A back-dated balance adds history for good.** A manual balance may be dated as
   far back as 1970, and the daily values then hold a row for every day since for that
   account. Only a `write` token can set one, and it is audited. It costs disk and

@@ -54,14 +54,14 @@ async fn coverage_and_rates_for_a_full_token() {
             {"currency": "USD", "status": "ready", "first_on": "2026-10-26",
              "last_on": "2026-10-30", "last_attempt_at": at, "last_success_at": at,
              "last_error": null},
-        ]})
+        ], "manual": []})
     );
     assert_eq!(rates_status, StatusCode::OK);
     assert_eq!(
         parsed(&rates),
         json!({"currency": "USD", "items": [
-            {"on": "2026-10-30", "rate": "1.1172"},
-            {"on": "2026-10-26", "rate": "1.1188"},
+            {"on": "2026-10-30", "rate": "1.1172", "manual": false},
+            {"on": "2026-10-26", "rate": "1.1188", "manual": false},
         ]})
     );
 }

@@ -1,5 +1,5 @@
 //! The daily table (spec §8.10 N3): one row per account per day, derived from
-//! `balance_snapshots`, `fx_rates` and the display currency. Only this module
+//! `balance_snapshots`, the rates and the display currency. Only this module
 //! writes it. Every change to a source calls in here within its own transaction,
 //! so no caller can forget, and every path computes rows with `daily_values`, so
 //! they share one rule. `filled_through` and `rebuild_needed` say what the table
@@ -35,8 +35,9 @@ mod reads;
 mod runner;
 
 pub use reads::NetWorthData;
+pub use runner::RunsThrough;
 
-/// Rows per `INSERT`: ten binds each stay far below `SQLite`'s limit.
+/// Rows per `INSERT`: eleven binds each stay far below `SQLite`'s limit.
 const BATCH_ROWS: usize = 500;
 
 /// The most rows a transaction here rewrites for a change or a batch of a rebuild,
@@ -171,7 +172,7 @@ async fn insert_rows(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result
     let mut query = QueryBuilder::<Sqlite>::new(
         "INSERT OR REPLACE INTO account_daily_values (account_id, on_date, balance_minor, \
          balance_on, balance_source, display_currency, display_minor, rate_on, rate_leg, \
-         conversion) ",
+         manual_rate_leg, conversion) ",
     );
     query.push_values(rows, |mut bound, row| {
         bound
@@ -184,6 +185,7 @@ async fn insert_rows(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result
             .push_bind(row.display_minor)
             .push_bind(row.rate_on.map(|on| on.to_string()))
             .push_bind(row.rate_leg.map(RateLeg::as_str))
+            .push_bind(row.manual_rate_leg.map(RateLeg::as_str))
             .push_bind(row.conversion.as_str());
     });
     let done = query
@@ -368,9 +370,9 @@ impl StoreTx {
 
     /// Add the rows of the days after `filled_through`, up to `through` or as many days
     /// as fit in one transaction's rows, and move `filled_through` to the last of them.
-    /// It never moves back, so a changed time zone can't lose a day, and while a rebuild
-    /// is needed it does nothing. Answers the rows written. [`crate::Store::fill_net_worth`]
-    /// repeats it up to `through`.
+    /// It never moves back, so a `COFFER_TIMEZONE` changed at a restart can't lose a day,
+    /// and while a rebuild is needed it does nothing. Answers the rows written.
+    /// [`crate::Store::fill_net_worth`] repeats it up to `through`.
     ///
     /// # Errors
     ///
@@ -585,6 +587,34 @@ impl StoreTx {
         } else {
             self.ask_for_net_worth_rebuild().await
         }
+    }
+
+    /// The household's zone changed, and its day is now `today`. A table ending on or
+    /// before that is right, and the daily job fills any day it lacks. One past it holds
+    /// a day still to come, so those rows go and it ends today, in this transaction. No
+    /// rebuild is needed, as a row depends only on balances and rates of its own day and
+    /// before, so the rows kept are already right. The days removed come back one at a time
+    /// as they arrive, from the same snapshots: no gap and no day twice. A rebuild under
+    /// way goes on with the accounts it has left, up to this day. So nothing can read a day
+    /// to come, from this commit on, and a report that could answer still can.
+    pub(crate) async fn refresh_after_zone_change(
+        &mut self,
+        today: Date,
+    ) -> Result<(), StoreError> {
+        let state = self.net_worth_state().await?;
+        if state.filled_through.is_some_and(|filled| filled > today) {
+            sqlx::query("DELETE FROM account_daily_values WHERE on_date > ?")
+                .bind(today.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+            sqlx::query("UPDATE net_worth_state SET filled_through = ?")
+                .bind(today.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        }
+        Ok(())
     }
 
     /// The display currency changed, so every row has to. In this one transaction

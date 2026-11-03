@@ -27,6 +27,7 @@ mod sources;
 mod sync_runs;
 mod token_grants;
 mod transactions;
+mod transfer_links;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -52,11 +53,12 @@ pub use forecast::{
     CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
     PlanReportData,
 };
+pub use household::HouseholdSettingsRecord;
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use kept_balances::{BroughtIn, KeptBalance};
 pub use members::{Member, NewMember};
-pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch};
+pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch, RunsThrough};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
@@ -68,6 +70,7 @@ pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,
 };
+pub use transfer_links::{NewTransferLink, TransferLinkRecord, TransferLinkSide};
 
 /// How long a writer waits for the write lock before it fails. A sync
 /// applies each provider account in one transaction (spec: an interrupted

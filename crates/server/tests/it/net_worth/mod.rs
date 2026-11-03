@@ -14,6 +14,7 @@ mod buckets;
 mod conversion;
 mod documented;
 mod fx_api;
+mod manual_rates;
 mod settings;
 
 use axum::body::Body;
@@ -55,7 +56,7 @@ pub(crate) async fn world() -> World {
 }
 
 /// As [`world`], over `server`, with a table that can answer.
-async fn world_on(server: TestServer) -> World {
+pub(crate) async fn world_on(server: TestServer) -> World {
     let world = unbuilt(server).await;
     world.rebuild(TODAY).await;
     world
@@ -192,7 +193,7 @@ impl World {
         self.server.clock.set(noon(day));
     }
 
-    async fn token(&self, scope: Scope, grants: Vec<TokenGrant>) -> SecretToken {
+    pub(crate) async fn token(&self, scope: Scope, grants: Vec<TokenGrant>) -> SecretToken {
         self.server
             .agent_tokens
             .create(
@@ -213,7 +214,7 @@ impl World {
             .await
     }
 
-    async fn send(
+    pub(crate) async fn send(
         &self,
         method: Method,
         uri: &str,
@@ -241,7 +242,7 @@ impl World {
     }
 
     /// `body` sent as alice's admin token, which must succeed; the answer.
-    async fn admin_send(&self, method: Method, uri: &str, body: &Value) -> Value {
+    pub(crate) async fn admin_send(&self, method: Method, uri: &str, body: &Value) -> Value {
         let (status, text) = self.send(method, uri, &self.admin, Some(body)).await;
         assert!(status.is_success(), "the setup must succeed: {status}");
         serde_json::from_str(&text).unwrap()
@@ -359,7 +360,7 @@ impl World {
     }
 
     /// Every row of the daily table.
-    async fn rows(&self) -> Vec<DailyValue> {
+    pub(crate) async fn rows(&self) -> Vec<DailyValue> {
         self.server
             .store
             .daily_values_for_tests()

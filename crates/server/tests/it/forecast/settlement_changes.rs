@@ -170,3 +170,41 @@ async fn the_current_month_is_the_households() {
         .collect();
     assert_eq!(months, [&json!("2026-11")]);
 }
+
+/// Choosing a zone moves the household's month at once: from Auckland it is already
+/// January, so 2028-01 is twelve months off and December is no longer the current month.
+#[tokio::test]
+async fn a_chosen_zone_moves_the_month_with_no_restart() {
+    let (world, item) = new_years_eve_in_los_angeles().await;
+    world.settle(&item, "2026-12", "paid").await;
+    world.settle(&item, "2027-01", "paid").await;
+    let thirteen_on = format!("{ITEMS}/{}/settlements/2028-01", item.as_str().unwrap());
+    let body = json!({"kind": "paid"});
+    assert_eq!(
+        world
+            .send(Method::PUT, &thirteen_on, &world.admin, Some(&body))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    world
+        .settings(&json!({"timezone": "Pacific/Auckland"}))
+        .await;
+
+    assert_eq!(
+        world
+            .send(Method::PUT, &thirteen_on, &world.admin, Some(&body))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let answer = world.patched(&item, &json!({"amount": usd(20_000)})).await;
+    let months: Vec<&Value> = answer["settlements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|one| &one["month"])
+        .collect();
+    assert_eq!(months, [&json!("2026-12")], "history in the new zone");
+}

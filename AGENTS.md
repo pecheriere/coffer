@@ -22,11 +22,13 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   planned items and their settlements, the household settings (with the
   display currency), exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
-  a snapshot, a rate or the display currency changes it in its own transaction,
+  a snapshot, a rate, the display currency or a time zone that puts today before its
+  last day changes it in its own transaction,
   or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
   transaction that gathers a forecast's or a report's data.
-- `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
+- `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`
+  (the household's zone and day, read from its settings at each asking); `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
@@ -38,9 +40,11 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
-  transactions and their splits, merging, un-merging and dismissing possible duplicates; `unseen.rs` holds what a token with grants
-  doesn't get of a transaction it can read: duplicate candidates in accounts it
-  can't read and goal links it can't see); `fx` (the `RateProvider` interface,
+  `manual_rates` (exchange rates an admin enters: validated, audited and marked),
+  transactions and their splits, merging, un-merging and dismissing possible duplicates, `transfer_links` (two
+  transactions that are one movement of money); `unseen.rs` holds what a token with grants
+  doesn't get of a transaction it can read: duplicate candidates and transfer links with a side in
+  accounts it can't read and goal links it can't see); `fx` (the `RateProvider` interface,
   the ECB's data API over `egress`, and the two jobs `serve` starts: fetching the
   rates a household needs and filling the daily table forward); `tasks`
   (supervision shared by the sync scheduler and these jobs: a panic is logged and the task restarts);
@@ -49,7 +53,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
-  and the `ProviderRegistry`, the one place providers are registered; the
+  and the `ProviderRegistry`, the one place providers are registered; `dating`, which
+  keeps a record reported again on its day after a change of zone; the
   `SimpleFin` provider and `sync::plaid` (`client.rs`, Plaid's API over
   `egress`; `provider.rs`, the `Provider` implementation; `kinds.rs`, what
   Plaid says an account is); connections, sync requests and their rate limits,
@@ -119,6 +124,17 @@ a throwaway server and seed. What holds it together:
   of the stack's own, on a Docker network with no route out. A scenario is named by the
   request, a SimpleFin setup token or an ECB currency, never set as a mode, so tests
   running side by side don't disturb each other.
+- **End-to-end tests (`scripts/staging.sh test`, `staging/e2e/`) cover the image:** real
+  HTTP, the real configuration and the egress rules, with each server a new copy and every
+  API response checked against `docs/api/openapi.json`. Logic and edge cases stay in
+  `crates/*/tests/it/`. Packages keep to the rules below: exact versions at least 7 days
+  old, a committed lockfile, `npm ci` and no install scripts.
+- **The tests' browser is pinned by hash too:** `staging/e2e/browser.lock.json` holds the
+  sha256 of the headless Chromium archive for each platform, checked before it is unpacked
+  (`support/install-browser.mjs`), never `playwright install`. When Playwright moves, a
+  Dependabot bump fails the e2e job until someone runs
+  `node support/install-browser.mjs --update` in `staging/e2e`, which refuses a browser younger
+  than 7 days, reviews the versions and commits the file.
 - **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
   `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
   localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost
@@ -152,10 +168,14 @@ a throwaway server and seed. What holds it together:
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- A day is the household's day, from `household_time::HouseholdTime`, read when it is
+  asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
+  can change it while the server runs (spec §8.7). A writer whose change depends on the
+  day asks with `today_seen_by`, under the write lock.
 - Every mutation goes through a `StoreTx` together with its audit entry. The one
-  exception is exchange rates and the daily net worth rows (spec §8.10 N10): public
+  exception is fetched exchange rates and the daily net worth rows (spec §8.10 N10): public
   reference data and derived values, written in the transaction of whatever changes
-  them. What changes them is audited.
+  them. What changes them is audited, and a rate an admin enters is (N16).
 - Every handler authorizes through `coffer_domain::policy`: `authorize` for
   household actions, `authorize_account` for anything tied to an account,
   `authorize_every_account` for what spans every account (the rule table in

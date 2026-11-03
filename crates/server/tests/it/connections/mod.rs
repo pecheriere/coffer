@@ -162,6 +162,7 @@ impl World {
                     assignee: None,
                     categories: Vec::new(),
                     uncategorized: false,
+                    unmatched_transfer: false,
                     pending: None,
                     flag: None,
                     min_minor: None,
@@ -278,6 +279,7 @@ fn txn(provider_id: &str, value: &str) -> ProviderTransaction {
         memo: None,
         pending: false,
         replaces_provider_id: None,
+        instants: None,
     }
 }
 

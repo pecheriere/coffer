@@ -11,6 +11,7 @@
 
 mod dismissing;
 mod merging;
+mod transfer_links;
 mod unmerging;
 
 use axum::body::Body;
@@ -170,6 +171,7 @@ fn record(
         memo: None,
         pending,
         replaces_provider_id: None,
+        dating: None,
     }
 }
 
@@ -210,6 +212,7 @@ async fn transactions(world: &World, account: AccountId) -> Vec<TransactionRecor
                 assignee: None,
                 categories: Vec::new(),
                 uncategorized: false,
+                unmatched_transfer: false,
                 pending: None,
                 flag: None,
                 min_minor: None,

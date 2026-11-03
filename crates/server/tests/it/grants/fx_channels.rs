@@ -346,7 +346,7 @@ async fn all_at_balances_reads_coverage_and_rates_and_no_more() {
 
     assert_eq!(
         parsed(&rates.3),
-        json!({"currency": "JPY", "items": [{"on": "2026-10-01", "rate": "175.68"}]})
+        json!({"currency": "JPY", "items": [{"on": "2026-10-01", "rate": "175.68", "manual": false}]})
     );
     let listed = parsed(&coverage.3);
     let codes: Vec<_> = listed["items"]
@@ -486,7 +486,8 @@ async fn an_admin_token_with_grants_gets_the_setting_not_the_sum() {
     assert_eq!(
         parsed(&answers[0].1),
         json!({"floor": null, "include_income": false, "default_horizon_months": 3,
-               "stale_after_days": 7, "display_currency": "CHF"})
+               "stale_after_days": 7, "display_currency": "CHF",
+               "timezone": "UTC", "timezone_setting": null})
     );
 }
 

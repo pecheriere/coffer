@@ -24,6 +24,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::apply::Coverage;
+use super::dating::RecordInstants;
 use super::plaid::client::PlaidClient;
 use super::plaid::provider::Plaid;
 use super::simplefin::SimpleFin;
@@ -199,6 +200,9 @@ pub struct ProviderTransaction {
     pub pending: bool,
     /// The provider id of an earlier record this one replaces.
     pub replaces_provider_id: Option<String>,
+    /// The instants its days come from, for a provider that reports instants and not
+    /// calendar days.
+    pub instants: Option<RecordInstants>,
 }
 
 /// Why a provider call failed. Messages are fixed; the texts some

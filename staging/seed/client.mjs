@@ -1,14 +1,15 @@
 // The two ways into coffer the seed uses, both the real ones: the pages, with a
 // session from a passkey ceremony, for what only a person can do, and the API with
 // an agent token for everything else.
-import { register } from './webauthn.mjs';
+import { assertion, register } from './webauthn.mjs';
 
 const CSRF_FIELD = /name="csrf" value="([^"]+)"/;
 const NEW_LINK = /<code id="new-link">([^<]+)<\/code>/;
 const NEW_TOKEN = /<code id="[^"]*">(coffer[^<]+)<\/code>/;
 
 async function failIfRefused(response, what) {
-  if (!response.ok) {
+  // Not `ok`: a page answers a form with a redirect, which these clients don't follow.
+  if (response.status >= 400) {
     throw new Error(`${what} answered ${response.status}: ${await response.text()}`);
   }
   return response;
@@ -58,6 +59,15 @@ export class PageSession {
     });
   }
 
+  async login(member) {
+    const begun = await this.postJson('/auth/login/begin', { username: member.username });
+    const { ceremony, options } = await begun.json();
+    await this.postJson('/auth/login/finish', {
+      ceremony,
+      credential: assertion(options, member, this.origin),
+    });
+  }
+
   async page(path) {
     const response = await fetch(`${this.base}${path}`, { headers: { Cookie: this.cookie } });
     await failIfRefused(response, `GET ${path}`);
@@ -86,8 +96,9 @@ export class PageSession {
     return link;
   }
 
-  async createToken(name, scope) {
-    const page = await this.submit('/account', '/account/tokens', { name, scope });
+  // `levels` is the grant form's selects: `all` and `account_<id>`.
+  async createToken(name, scope, levels = {}) {
+    const page = await this.submit('/account', '/account/tokens', { name, scope, ...levels });
     const secret = NEW_TOKEN.exec(page)?.[1];
     if (!secret) throw new Error('the account page shows no new token');
     return secret;

@@ -697,7 +697,9 @@ rounded: a record that does not convert exactly is unusable.
 A provider chooses the day of the balance it reports, and a balance's date may
 honestly be when it last changed, so an old date alone doesn't lose the amount. What
 must not happen is a report rewriting or extending history backward. A date within
-31 days of the household's today (§8.7) is believed; a later one is dated today. For
+31 days of the household's today (§8.7) is believed, except that a repeat of the latest
+amount on a day holding a balance writes nothing, for a change of zone (§8.7); a later one
+is dated today. For
 an older date on a bound account:
 
 1. **No snapshot yet, or the latest is before the reported day:** the amount is
@@ -722,16 +724,63 @@ member or a token sets by hand is no report, and none of this limits it.
 
 ### 8.7 Household timezone
 
-Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
-default `UTC`). It stays an environment variable, and household settings do not
-take it over (§8.9, R7). The forecast's "today" is the household's day in this
-zone.
+The household has one time zone, an IANA name. An admin chooses it in the household
+settings (the page and `PATCH /api/v1/household/settings`, audited); until then, and
+after they clear it, `COFFER_TIMEZONE` (default `UTC`) applies. Anything else is
+refused, by the copy of the time zone database built into the binary, so what counts
+as a name doesn't depend on the machine.
+
+Provider timestamps become calendar days in this zone, and every "today" and current
+month is the household's day in it: the forecast, the plan report, net worth, sync
+windows, settlements, the daily jobs, page times and `coffer rebuild-net-worth`. Each
+reads the zone at the time it asks, from the database, and nothing keeps it: a change
+applies to the next request and the next job with no restart.
+
+**A change moves nothing already stored.** A transaction's day, a balance snapshot and
+a kept balance were right when they were recorded, and rewriting them could move money
+between months. Only new days use the new zone. So that a provider's next report can't
+undo this, a source record remembers the chosen zone each of its two days was worked out
+in (`dated_in`, `transacted_in`; none means `COFFER_TIMEZONE`, as for every record from
+before this setting). A record dated by an instant, reported again, keeps each day unless
+its instant falls on another day in that same zone, which means the provider moved it;
+only then does that day take the zone now in force. A pending record missing from a sync's
+window isn't taken as gone if another zone dated it and it is within a day of the window's
+start, since it may be from before the window.
+
+A provider's report of the same moment can land on an earlier day once the zone moved back.
+If that day already holds a balance, and the report's amount is that of the latest
+provider-written balance, at most 2 days later, it writes nothing, since it would replace
+what the day really ended on (the most a change of zone can move a day is 2). An empty day
+is written. The rule can drop a provider's real correction of a day within those 2 days to
+the latest amount. Past today the opposite applies: a report replaces a provider-written
+balance dated up to 2 days after it and after today, so the old amount doesn't come back as
+the household's latest when that day arrives. A member's own balance is never replaced.
+
+A sync's window comes from the zone at the start of its run. Everything an account's
+transaction then writes uses the zone that transaction sees, and no balance is dated after
+that today. A zone changed during a run can therefore date two accounts differently, each
+one consistently.
+
+**The daily table.** A change that leaves today on or after the table's last day needs
+nothing, as the table is right as far as it goes, and the job adds any new day within a
+minute, as at midnight. A change that puts today before the last day would leave rows
+for days still to come, so in its own transaction those rows are removed and the table
+ends today. That is no rebuild: a row depends only on balances and rates of its own day
+and before, so the rows kept are right, and a report goes on answering with no
+`rebuilding` and no null `through`. The days removed return one at a time as they
+arrive, from the same snapshots: no gap, no day twice. A rebuild under way (§8.10 N3)
+goes on with the accounts it has left, up to the new last day. Rebuilds and fills work
+out the day inside each transaction, in the zone that transaction sees, so a runner that
+started before a change can't write a day from the zone before. A `COFFER_TIMEZONE`
+changed at a restart is not a setting and has no such step;
+`coffer rebuild-net-worth` resets a table left ahead, and reports never answer past
+today in any case.
 
 ### 8.8 Deferred
 
 Rules (a §2 goal), transfer links, a starter category set and unbinding a
 provider account move to a later plan (FX: §8.10), as does MCP (§6.12). Household settings
-arrive in plan 3, without the time zone (§8.7, §8.9).
+arrive in plan 3, the time zone later (§8.7).
 
 ### 8.9 Plan and forecast
 
@@ -785,8 +834,9 @@ floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
 allowed. A floor of some months of outflows that comes to 0 keeps the number, with
 a caution.
 
-**R6. Plan versus actual** is defined by category (§6.9) and needs no transfer
-links: actuals are categorized splits, and `transfer` is a category kind.
+**R6. Plan versus actual** is defined by category (§6.9): actuals are categorized
+splits, and `transfer` is a category kind. A transfer link takes a movement between counted
+accounts out of them whatever it is filed as (§8.12 T5).
 Uncategorized money is never spending and is reported separately, without
 invested and illiquid accounts.
 
@@ -822,7 +872,8 @@ integer type answers 400, as on the forecast.
 
 **R7. The time zone stays an environment variable** (§8.7). Everything reads one
 zone, and changing it at runtime would raise what happens to days already
-assigned, which is a separate question.
+assigned, which is a separate question. A later change settled that question and moved
+it into the household settings, with the variable as the default: §8.7 governs.
 
 **R8. Goal links on splits.** `SplitInput` gains an optional `goal`, whose
 currency must equal the transaction's, so goal arithmetic stays exact without
@@ -1061,7 +1112,8 @@ rate date, `rate_leg` and the state of the conversion. `rate_leg` (`held`, `disp
 says which currency's rate the rate date, or a missing rate, is about: a cross rate goes through
 the euro and reports the older of its two dates, and a euro account has only the display
 currency's, so a caution names the currency whose rate is old or missing and never the euro.
-It is derived: `balance_snapshots`, `fx_rates`
+`manual_rate_leg` says which side, if any, used a rate an admin entered (N16). It is derived:
+`balance_snapshots`, `fx_rates`, `fx_manual_rates`
 and the display currency are the source of truth, and the table can be dropped and rebuilt.
 Names, `include_in_net_worth`, the liquidity class and closing are applied at read, so
 changing them needs no rebuild.
@@ -1167,9 +1219,9 @@ a range's later periods, the last point stops short of the range, and the cautio
 `nothing_counted_after_last_point` says from when: it makes the report `provisional`, since a
 reader would take the last point as the value now.
 
-**N10. Rates and rows aren't audited.** They are public reference data and derived values,
-and an entry per row would bury the log. What changes them is: a snapshot's write and the
-display currency are audited as before.
+**N10. Fetched rates and rows aren't audited.** They are public reference data and derived
+values, and an entry per row would bury the log. What changes them is: a snapshot's write and the
+display currency are audited as before, and so is a rate entered by hand (N16).
 
 **N11. Sign and age.** A report sums balances as stored. A positive balance on a liability
 class raises the caution `liability_balance_positive`, and a counted balance older than the
@@ -1185,8 +1237,8 @@ on the last day of its period, or on the last day available, when it says `parti
 forecast page's rules (R14): session only, calls the same service, computes nothing, the
 default content security policy, no script or inline style of its own, and no form. Its chart
 is server-rendered SVG drawn in integers, beside a table of the same numbers, and it takes a
-range through plain links. `/admin/household` gains a form for the display currency, for
-admins, with the anti-forgery token.
+range through plain links. `/admin/household` gains a form for the display currency and one
+for rates entered by hand (N16), for admins, with the anti-forgery token.
 
 **N14. Derived balances are optional and asked for.** `balance_snapshots.source` gains
 `derived`, for balances worked back from a reported balance through posted transactions, on
@@ -1195,9 +1247,46 @@ transaction. Nothing derives them unless a member calls for it on one account, a
 default. They never replace a reported balance, a forecast ignores them, and every report
 naming one says so. Unbuilt until the owner asks for it (plan 4, Task 10).
 
-**N15. Not in this plan:** a forecast across currencies (N1), entering a rate by hand for a currency the ECB doesn't publish,
+**N15. Not in this plan:** a forecast across currencies (N1),
 each member's display currency, separate buckets (#38) and unvested RSUs (#44). Buckets
 filter accounts at read and vesting adds accounts or balances, so neither changes the table.
+
+**N16. An admin can enter a rate by hand** (issue #79), since the ECB publishes about 30
+currencies and a household holding another would otherwise have no total. It is for one currency
+and one day, through `PUT /api/v1/fx/manual-rates/{currency}/{on}` or `/admin/household`, and it
+is carried forward like any rate (N5).
+
+The rule beside a fetch: **a fetch never overwrites a manual rate on the same day; a manual rate
+wins over a fetched rate on the same day, while a fetched rate on a later day takes over as
+usual.** Manual rates live in their own table, `fx_manual_rates`, which no fetch writes, so this
+holds whatever a fetch does (N7), and `RateHistory::merged` is the one place the two join. What is
+asked of a source still depends on fetched rates alone, as does `fx_coverage`. An admin can remove
+one: what it covered falls back on that day's fetched rate, an earlier rate or none.
+
+A wrong rate moves net worth, so nothing about one is silent. It is refused unless it is positive,
+in `FxRate`'s form (N4), with a day from 1970 to the household's today, as its transaction
+sees the zone chosen, in an ISO 4217 code other than the euro or
+the display currency. A rate over 1.5 times from the published rate nearest its day, within 30 days,
+or within 2% of that rate's inverse when it is at least 5% away from 1, is refused as
+`unusual_rate`, showing both numbers, unless `confirm_unusual` is set, since one entered the wrong
+way round misstates net worth without looking wrong: USD at 1.087 written 0.92 is only 1.18 times
+away. Within 5% of 1 a rate and its inverse are an ordinary move apart, so that isn't caught. With no published rate
+nearby there is nothing to compare it with, and the form's wording is the only guard. A later change of display currency to a code holding a manual rate
+goes on using it. Each change is audited with the old and new rate, and the same rate again writes
+nothing. It is marked `manual` wherever it is reported: `manual` on `GET /api/v1/fx/rates`, a list
+of its own on `GET /api/v1/fx/coverage`, and on a report `manual_rate` on a point, a class and an
+account's point, and `manual_rates` on a report and a bucket naming the currency and the stretch.
+That is for information and not a caution: for a currency no source publishes every report would
+otherwise stay `provisional` with nothing to act on, which teaches people to ignore the word. A
+fresh manual rate leaves a report `firm`. `rate_stale` applies after 7 days as to any rate, and
+then it is `provisional`. The list of them answers at most 1,000 from an `offset` with a `truncated` flag,
+and the page links to the rest, so an older one can always be reached and removed.
+
+The daily rows move as for any rate (N3): those it converts, from its day, in the transaction, or
+past 25,000 rows a rebuild. A write needs `admin`, and with grants `all` at `balances` for the
+reason N8 gives: a row converts at once, so a restricted token could otherwise try a code and read
+from its report whether the household uses it. A day before the first rate is still `rate_missing`,
+with `none_that_early`, since a rate never applies to an earlier day.
 
 ### 8.11 Accounts for other people and purposes
 
@@ -1289,9 +1378,8 @@ plan versus actual, pays a planned bill as R9 says, and lowers the surplus, and 
 the bucket rises, which is what happened. A `transfer` category means money moved within the
 household, which this isn't: there it is in no `actual` (R6), though the forecast's cash still
 falls and an unpaid bill keeps counting, the safe direction. R17 already refuses a `transfer`
-category on a planned item. Nothing can check this until transfer links exist (#72), so it is a
-rule for members and agents, in the docs. Those links must read a link out of the household as an
-outflow.
+category on a planned item. Nothing checks this, so it is a rule for members and agents, in the
+docs. A transfer link out of the household reads as an outflow, changing no number (§8.12 T5).
 
 Money coming back, such as a 529 paying a household's tuition bill into checking, is a refund in
 the `expense` category it paid for, or `income`, on the household's side.
@@ -1350,5 +1438,106 @@ without write access to every account is refused before any lookup, so a real id
 a state it is already in, or for a bound account or a removed connection, is a 409, which also
 answers a page or form older than the change.
 
-**B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
+**B13. Not in this plan:** target allocation (#3), holdings (#42), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.
+
+### 8.12 Transfer links
+
+Decisions made for issue #72. Where they differ from an earlier section, they govern; T5 and T6
+narrow R6, R9 and R10 for linked money.
+
+**T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
+money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
+for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
+(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
+either transaction: a leg keeps its category, and its other fields, as they were. API only for now
+(#49 tracks the pages).
+
+**T2. Never linked by itself.** As with duplicates (§8.4) and suggested kinds (B12), coffer guesses
+and a member or agent confirms. `transfer-candidates` suggests the same amount the other way, same
+currency, another account the actor can read, within 5 days, in no link and with at most one split,
+nearest first. `GET /transactions?unmatched_transfer=true` lists what is filed in a `transfer`
+category with no link. Neither writes anything.
+
+**T3. Access.** Creating or removing a link needs `write` on both accounts, and reading one
+`transactions` on both. A token with one side hidden gets the answer a missing transaction or link
+gets, and a transaction it can read shows `transfer_link: null`. A refusal such a token gets because
+of the link (a split, a goal, a delete, a merge) doesn't word it as a link, and one refused for a goal
+it isn't shown doesn't word it as a goal, as R3 has it.
+Audited as `transfer_link.create` and `transfer_link.remove`, with the agent as usual, and undone by
+removing it or making it again. Nothing in the policy changes.
+
+**T4. What a leg holds.** At most one split, so a link is refused on a split transaction and a leg
+can't become one. Part of a split may be spending, and a report can't say which part, so a rule of
+counting the rest would be a guess. Remove the link to split it. A goal is refused on a link that is one
+movement in a report (T5), either way round, since money moved between counted accounts is still cash (R8). Any
+other link keeps its goal, as a contribution out of counted cash may lower one's need (B10). R8's
+refusal of a goal on a `transfer` category stands.
+
+**T5. What it does to a report.** A link is *one movement* when both accounts are in counted cash,
+the definition the forecast's actuals use (R10): open, `include_in_forecast`, and `cash` or
+`short_term_liability`. Only then did the money stay in the cash the forecast adds up. It is one
+definition in the store, behind every number here. Flags and classes are read at the time as every
+count is (B6), so switching one changes what its links mean, history included. Closing an account
+doesn't: a report says what happened, so it counts a closed account for a leg posted before
+`closed_at`, up to the UTC date of `closed_at` plus one day, and January and the last sweep before closing keep
+their meaning. The forecast reads the current state, in which a closed account isn't counted, so
+`one_movement` and `one_movement_in_reports` can differ on such a link. A link also
+stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs
+of one sign.
+
+What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
+link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
+currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
+known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
+word.
+
+| Number | Effect of linking |
+|---|---|
+| `actual`, `rolling_average`, `rollovers` | What moved leaves, in any category. |
+| `uncategorized` | What moved of an uncategorized outflow leaves. Any other link stays on the list until it is filed, since B9 makes it real spending, and a `transfer` category clears it as it does any outflow. |
+| a goal's `spent_against` | What moved of a charge leaves, into the line's `left_out`; of a refund, it just isn't counted. Only an account changing after the link can put one there (T4). |
+| `moved_between_counted_accounts` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6). |
+
+Any other link, to a brokerage, a loan, a closed account, or across or outside the household's money,
+records the movement and changes no other number: B9's contribution stays `actual` and pays its bill,
+a monthly auto-invest stays paid, B10's money inside stays in `not_the_households`, and one in a
+`transfer` category stays out of `actual` as it was, since a link doesn't correct a category.
+`one_movement` says which. Pending legs are in none of this, as in R10.
+
+**T6. What it does to the forecast.** For one movement, read at the time:
+
+| Number | Effect of linking |
+|---|---|
+| A budget's `reduced_by`, a bill's `unpaid` | What moved no longer reduces or pays. The other side is counted cash, so nothing left it, and the need is really still there: without the link the surplus was overstated by that much, and with it the surplus falls by that. |
+| `uncategorized_spending` | What moved isn't in it. |
+| `possible_duplicates` | Unchanged: a leg may still be a duplicate. |
+| Goal need, `goal_linked_both_sides` | What moved doesn't lower the need or count as a side. |
+| Cash, net worth | Unchanged: they read balances. |
+| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown or still pending, it stays: a pending deposit may already be in its balance, and then cash is overstated. That can ask when nothing is wrong, the safe direction. |
+
+A link to any other account changes none of these. Its money left counted cash, so
+counting it as spent is what makes the number right: a bill paid by an auto-invest stays paid, where
+treating it as a movement would owe the bill again on top of the fallen balance.
+
+**T7. A leg over time.** Only a person ends a link. A link is user state (§8.4):
+
+- Pending to posted is one transaction, so nothing changes.
+- A provider's record vanishing doesn't delete a leg, which holds a person's say-so. It stays with its
+  link, flagged `source_removed`, and the link stops counting: real spending comes back rather than
+  disappears. The flagged leg follows R10a, so a withdrawn charge is in `left_out`, and the other leg
+  counts as it is filed. Between counted accounts with a leg in `as_of`'s month, the caution
+  `transfer_leg_removed` names the link and makes the forecast `provisional`. A pending record taken
+  back is in no `spending_newer_than_balance`, link or not. A record attaching again clears the flag
+  and the link counts again.
+- A merge: the target keeps its link. A duplicate holding one is refused with `merge_conflict` unless
+  `discard_duplicate_state` is sent, like its notes, and the end of the link is audited; that also
+  needs `write` on the other leg's account. To keep a link, merge into the leg. A target flagged
+  `source_removed` holds a record again, so a merge clears that flag too.
+- An un-merge leaves the link on the transaction that holds it; the new one starts with none.
+- A manual leg can't be deleted until its link is removed: 409, and the reference refuses it should
+  anything else try.
+- A closed account may hold a leg, and links can still be made and removed on it: the last sweep out
+  of an account is often what closed it. The forecast reads such a link as no movement and a report, for
+a leg posted before the close, as one (T5).
+- A provider revising a leg's amount leaves the link, and `difference` shows what it says now.

@@ -33,9 +33,14 @@ use crate::http::AppState;
 use crate::http::problem::{Problem, ProblemCode};
 use crate::ledger::net_worth::NetWorthQuery;
 use chart::{ChartPoint, ChartSize, line_chart, scale_misses_zero};
-use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount_sentence};
+use words::{
+    Names, blocker_sentence, caution_sentence, liquidity_name, manual_rate_sentence,
+    no_amount_sentence,
+};
 
 const NO_TOTAL: &str = "No total";
+/// Beside a figure resting on an exchange rate an admin entered.
+const BY_HAND: &str = "(a rate entered by hand)";
 const NO_VALUE_THAT_DAY: &str = "No value that day";
 const NOTHING_COUNTED: &str = "Nothing counted";
 const NOT_COUNTED: &str = "Not counted";
@@ -139,7 +144,7 @@ async fn net_worth_page(
     let range = query.range.unwrap_or_default();
     let report = state
         .ledger
-        .net_worth(&session.actor(), range.query(state.ledger.today()))
+        .net_worth_by_day(&session.actor(), |today| range.query(today))
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
     let viewer = viewer(&state, &session).await;
@@ -205,6 +210,9 @@ fn answer(report: &NetWorthReport, names: &Names<'_>, may_choose: bool) -> Marku
                         li { (caution_sentence(caution, names)) }
                     }
                 }
+            }
+            @for used in &report.manual_rates {
+                p.fine { (manual_rate_sentence(*used)) }
             }
         }
     }
@@ -561,8 +569,11 @@ fn period_cell(
             Period::Nothing { .. } => {
                 (nothing_counted)
             }
-            Period::Point(NetWorthPoint { total: Some(total), .. }) => {
+            Period::Point(NetWorthPoint { total: Some(total), manual_rate, .. }) => {
                 (grouped(total.minor_units, total.currency))
+                @if *manual_rate {
+                    " " span.fine { (BY_HAND) }
+                }
             }
             Period::Point(_) if as_above => {
                 span.no-total { (NO_TOTAL) ", as above." }
@@ -601,6 +612,9 @@ fn latest(report: &NetWorthReport, names: &Names<'_>) -> Markup {
                                     @match line.amount {
                                         Some(amount) => { (grouped(amount.minor_units, amount.currency)) }
                                         None => { (NO_TOTAL) }
+                                    }
+                                    @if line.manual_rate {
+                                        " " span.fine { (BY_HAND) }
                                     }
                                 }
                             }
@@ -777,9 +791,14 @@ fn account_cells(
         },
         AccountCell {
             value: amount,
-            note: point
-                .rate_on
-                .map(|on| format!("at the rate of {}", short_day(on))),
+            note: point.rate_on.map(|on| {
+                let by_hand = if point.manual_rate {
+                    ", entered by hand"
+                } else {
+                    ""
+                };
+                format!("at the rate of {}{by_hand}", short_day(on))
+            }),
         },
         first_day,
     ]

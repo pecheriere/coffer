@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use coffer_domain::fx::{FxCoverage, FxFetchStatus, RateObservation};
+use coffer_domain::fx::{FxCoverage, FxFetchStatus, HeldRate, ManualCoverage};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::Currency;
 use coffer_domain::net_worth::{
@@ -26,6 +26,7 @@ use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{AccountRecord, NetWorthData};
 use jiff::ToSpan as _;
 use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -77,16 +78,21 @@ pub struct FxRatesQuery {
 /// What is known of fetching each currency's rates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct FxCoverageList {
-    /// One per currency tried, by currency. A currency never tried has no entry.
+    /// One per currency tried, by currency. A currency never tried has no entry. This is
+    /// about fetching: `first_on` and `last_on` here are of fetched rates alone.
     pub items: Vec<FxCoverage>,
+    /// One per currency holding rates an admin entered, by currency. Such a currency may have
+    /// no entry in `items`, and a fetch that fails or finds nothing doesn't change these.
+    pub manual: Vec<ManualCoverage>,
 }
 
 /// One currency's rates, in units of it per one euro.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct FxRateList {
     pub currency: Currency,
-    /// Newest first. A day with no entry had no published rate.
-    pub items: Vec<RateObservation>,
+    /// Newest first. A day with no entry had no rate. A day with both a published rate and
+    /// one an admin entered has that one, with `manual` true.
+    pub items: Vec<HeldRate>,
 }
 
 /// The message for a refused report, which is fixed.
@@ -102,10 +108,15 @@ fn refused(error: NetWorthError) -> LedgerError {
     })
 }
 
-/// Why a rate missing for this currency is missing. With a rate held, any later day would
-/// find it, so a day lacking one is before the first (`None`), whatever the last fetch did.
-fn missing_reason(known: Option<&FxCoverage>, provider_on: bool) -> Option<RateMissingReason> {
-    if known.is_some_and(|known| known.first_on.is_some()) {
+/// Why a rate missing for this currency is missing. With a rate held, fetched or entered, any
+/// later day would find it, so a day lacking one is before the first (`None`), whatever the
+/// last fetch did.
+fn missing_reason(
+    known: Option<&FxCoverage>,
+    manual_held: bool,
+    provider_on: bool,
+) -> Option<RateMissingReason> {
+    if manual_held || known.is_some_and(|known| known.first_on.is_some()) {
         return None;
     }
     if !provider_on {
@@ -118,6 +129,23 @@ fn missing_reason(known: Option<&FxCoverage>, provider_on: bool) -> Option<RateM
         FxFetchStatus::Ready => None,
         FxFetchStatus::NotPublished => Some(RateMissingReason::NotPublished),
         FxFetchStatus::Failing => Some(RateMissingReason::FetchFailing),
+    }
+}
+
+/// One visible account as a report takes it, its closing in the household's day.
+fn report_account(record: &AccountRecord, zone: &TimeZone) -> ReportAccount {
+    ReportAccount {
+        id: record.id,
+        name: record.name.as_str().to_owned(),
+        currency: record.currency,
+        liquidity: record.liquidity,
+        include_in_net_worth: record.include_in_net_worth,
+        closed_on: record.closed_at.map(|at| at.to_zoned(zone.clone()).date()),
+        belongs_to: record.belongs_to,
+        beneficiary: record
+            .beneficiary
+            .as_ref()
+            .map(|label| label.as_str().to_owned()),
     }
 }
 
@@ -135,6 +163,20 @@ impl Ledger {
         actor: &Actor,
         query: NetWorthQuery,
     ) -> Result<NetWorthReport, LedgerError> {
+        self.net_worth_by_day(actor, |_| query).await
+    }
+
+    /// [`Self::net_worth`] for a query that depends on what day it is, such as a range
+    /// counted back from today, so the query and the report use one day.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::net_worth`].
+    pub async fn net_worth_by_day(
+        &self,
+        actor: &Actor,
+        query_for: impl FnOnce(Date) -> NetWorthQuery,
+    ) -> Result<NetWorthReport, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let scope = self
             .access
@@ -142,7 +184,10 @@ impl Ledger {
             .await?
             .scope(AccountLevel::Balances);
 
-        let today = self.today();
+        // One zone for the whole report, whatever changes while it is gathered.
+        let zone = self.timezone().await?;
+        let today = self.time.today_in(&zone);
+        let query = query_for(today);
         let to = query.to.unwrap_or(today);
         validate_as_of(to).map_err(plan_items::invalid)?;
         // No day after today is answered, so that is where a default year ends.
@@ -182,29 +227,10 @@ impl Ledger {
             accounts: data
                 .accounts
                 .iter()
-                .map(|record| self.report_account(record))
+                .map(|record| report_account(record, &zone))
                 .collect(),
         };
         net_worth_report(&input).map_err(refused)
-    }
-
-    /// One visible account as a report takes it, its closing in the household's day.
-    fn report_account(&self, record: &AccountRecord) -> ReportAccount {
-        ReportAccount {
-            id: record.id,
-            name: record.name.as_str().to_owned(),
-            currency: record.currency,
-            liquidity: record.liquidity,
-            include_in_net_worth: record.include_in_net_worth,
-            closed_on: record
-                .closed_at
-                .map(|at| at.to_zoned(self.timezone.clone()).date()),
-            belongs_to: record.belongs_to,
-            beneficiary: record
-                .beneficiary
-                .as_ref()
-                .map(|label| label.as_str().to_owned()),
-        }
     }
 
     /// Why rates may be missing, per currency of a visible account or the display
@@ -222,6 +248,7 @@ impl Ledger {
                 currency,
                 reason: missing_reason(
                     data.coverage.iter().find(|one| one.currency == currency),
+                    data.manual_rates_held.contains(&currency),
                     self.rate_provider_configured,
                 ),
             })
@@ -236,9 +263,8 @@ impl Ledger {
     /// every account; a failure to resolve access; storage failures.
     pub async fn fx_coverage(&self, actor: &Actor) -> Result<FxCoverageList, LedgerError> {
         self.authorize_fx(actor).await?;
-        Ok(FxCoverageList {
-            items: self.store.fx_coverage().await?,
-        })
+        let (items, manual) = self.store.fx_coverage_with_manual().await?;
+        Ok(FxCoverageList { items, manual })
     }
 
     /// The rates `query` asks for.
@@ -274,7 +300,7 @@ impl Ledger {
 
     /// Which rates are stored depends on the currencies in use, so these span every
     /// account (N2); the refusal is the same whatever exists.
-    async fn authorize_fx(&self, actor: &Actor) -> Result<(), LedgerError> {
+    pub(super) async fn authorize_fx(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Balances)
             .await

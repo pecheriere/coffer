@@ -36,7 +36,11 @@ use crate::ledger::plan_report::PlanReportQuery;
                    goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, \
                    and a removed, revised or possibly duplicate charge there is in that line's \
                    `left_out`. Outflows with no splits are never spending: `uncategorized` lists \
-                   them, without invested and illiquid accounts.\n\n\
+                   them, without invested and illiquid accounts. What a transfer link between two \
+                   counted accounts says moved is out of all of these, whatever it is filed as: \
+                   `moved_between_counted_accounts` says what left and what arrived, per month \
+                   and currency, and a difference between the legs stays as filed. Any other link \
+                   changes nothing here. An account closed since its leg posted still counts.\n\n\
                    An occurrence a person settled (`settlePlanItem`) stays in `planned`, since it \
                    is what was planned: a row's `settled` says how much of `planned` it is, and \
                    the list `settled` says which item, for which month, and whether `paid` or \
@@ -95,7 +99,10 @@ pub(super) async fn plan_vs_actual(
                    stops counting that day unless it still owes). Its `points` say the `balance` in \
                    its own currency, `balance_on`, the date of the snapshot that balance comes \
                    from, `balance_source`, the `amount` in the display currency and `rate_on`, the \
-                   older of the dates of the rates used: a weekend reports Friday's.\n\n\
+                   older of the dates of the rates used: a weekend reports Friday's. `manual_rate` on \
+                   a point, a `by_liquidity` line or an account's point says an amount there used \
+                   a rate an admin entered, and `manual_rates` names the currency and the points: for \
+                   information, since it doesn't stop a report being `firm`.\n\n\
                    `status` says how far to trust it. `firm` is numbers with nothing to warn about. \
                    `provisional` is numbers with `cautions`. `unavailable` is `blockers`: \
                    `display_currency_not_set` (an admin has to choose one, and points still hold \

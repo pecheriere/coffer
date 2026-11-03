@@ -27,6 +27,7 @@ fn charge(id: &str, on: &str, amount: &str) -> ProviderTransaction {
         memo: None,
         pending: false,
         replaces_provider_id: None,
+        instants: None,
     }
 }
 

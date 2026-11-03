@@ -68,6 +68,7 @@ impl World {
                     memo: None,
                     pending: false,
                     replaces_provider_id: None,
+                    dating: None,
                 }],
                 removed: Vec::new(),
                 coverage: Coverage::Delta,

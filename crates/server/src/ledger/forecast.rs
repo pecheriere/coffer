@@ -203,7 +203,7 @@ impl Ledger {
         options: ForecastOptions,
         hypothetical: Vec<ItemInput>,
     ) -> Result<Forecast, LedgerError> {
-        let today = self.today();
+        let today = self.today().await?;
         let as_of = options.as_of.unwrap_or(today);
         validate_as_of(as_of).map_err(plan_items::invalid)?;
         let data = self
@@ -265,6 +265,7 @@ fn input(
         category_spent,
         loose_ends,
         newer_spending,
+        links_with_leg_removed,
         provider_accounts,
         connections,
         ..
@@ -342,6 +343,7 @@ fn input(
                 pending_minor: row.pending_minor,
             })
             .collect(),
+        links_with_leg_removed,
         unbound,
         feeds,
     }

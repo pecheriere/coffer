@@ -41,9 +41,9 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates`. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
 | `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
-| `admin` | Everything in `write`, plus household administration, such as changing the forecast settings. Only admins can create `admin` tokens. |
+| `admin` | Everything in `write`, plus household administration, such as changing the forecast settings or entering an exchange rate by hand. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
 disabled the token loses power at the next request. Tokens can never create,
@@ -80,8 +80,8 @@ token's access.
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
   named in an error (a batch names the failing operation by index only) or
-  in another transaction's `duplicate_candidates`. A planned item hinted at one
-  answers likewise, and a split linked to such a goal reads `goal: null`.
+  in another transaction's `duplicate_candidates` or `transfer_link`. A planned item
+  hinted at one answers likewise, and a split linked to such a goal reads `goal: null`.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
   same for every token. A patch naming `display_currency` also needs `all` at
@@ -92,7 +92,7 @@ token's access.
   whole household's. Each of its `buckets` is made the same way, from what the token
   sees at `balances`: a token holding one of a child's two accounts gets a bucket of
   one, unmarked, and a bucket none of whose accounts it sees isn't there.
-  `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
+  `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates` need `all`
   at `balances`: which rates are stored depends on the currencies in use.
 - The forecast, a what-if and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
@@ -322,6 +322,8 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   - `uncategorized=true`: only transactions without splits
     (`uncategorized=false` does not filter).
   - `pending`: `true` or `false`.
+  - `unmatched_transfer=true`: only transactions filed in a `transfer` category with no
+    [transfer link](#transfer-links), which is what is left to match.
   - `flag`: `possible_duplicate`, `source_removed` or `split_mismatch`.
   - `min_amount` and `max_amount` (both inclusive): the signed amount in
     minor units, so `max_amount=-1` is every outflow.
@@ -371,17 +373,68 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   `{"duplicate": "<transaction id>"}` into this transaction: the
   duplicate's source records move here and it is deleted. Use the
   transaction holding the notes, splits and review as the target; a
-  duplicate with user state of its own is a 409 `merge_conflict` unless
-  `discard_duplicate_state` is `true`.
+  duplicate with user state of its own, a transfer link included, is a 409
+  `merge_conflict` unless `discard_duplicate_state` is `true`.
 - `POST /api/v1/transactions/{transaction_id}/dismiss-duplicate`
   (`write`) clears `possible_duplicate` when the candidates are distinct
   purchases.
 - `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
   source record back into a transaction of its own.
 
+### Transfer links
+
+A transfer between two accounts arrives as two unrelated transactions. A link says they are
+one movement of money. Coffer never links anything by itself: it suggests, and you or a member
+confirm.
+
+- `GET /api/v1/transactions?unmatched_transfer=true` lists what is filed as a `transfer` with
+  no link. Outflows you recognize as transfers may also be uncategorized.
+- `GET /api/v1/transactions/{transaction_id}/transfer-candidates` suggests the other leg: the
+  same amount the other way, in the same currency, on another account you can read, within 5
+  days, nearest first. A guess to check, and it changes nothing.
+- `POST /api/v1/transfer-links` (`write` on both accounts) links `{"outflow": "<id>", "inflow":
+  "<id>"}`. Answers 201 with `difference`, what arrived less what left (`null` across
+  currencies), and `one_movement`. Amounts may differ, as for a fee, and currencies too.
+  Accepts an `Idempotency-Key`. A transaction already in a link is a 409 `conflict`.
+- `GET /api/v1/transfer-links/{transfer_link_id}` reads one, with what each leg says now. Each
+  transaction names its own in `transfer_link`.
+- `DELETE /api/v1/transfer-links/{transfer_link_id}` (`write` on both accounts) ends one. Both
+  transactions stay, and count again as what they are filed as.
+
+**What it changes.** When both accounts are in counted cash (open, switched into the forecast,
+`cash` or `short_term_liability`), `one_movement` is `true`: what moved is neither spending nor
+income, whatever it is filed as. It is out of `actual`, reduces no budget, pays no bill and counts
+towards no goal, and `moved_between_counted_accounts` in plan versus actual says how much. Each leg
+keeps its category, which counts again if the link goes. Only the smaller leg's amount moved: a fee
+stays what its leg is filed as, and a link of -1,250.00 to +12.50 still spends 1,237.50. Across
+currencies a link doesn't read an exchange rate, so all of each leg moved: check those before you link. Net worth and the forecast's cash
+read balances, so a link changes neither. `spending_newer_than_balance` drops what moved only when
+both legs are posted and newer than their balances.
+
+**Any other link** (`one_movement: false`), to a brokerage, a loan, a closed account or an account
+that isn't the household's, records the movement and changes no number: that money left counted
+cash, so an auto-invest stays spending and keeps paying its bill. An uncategorized leg stays on
+`uncategorized` until you file it. Flags and classes are read at the time, so changing `belongs_to`,
+a class or `include_in_forecast` changes what its links mean, history included. Closing an account
+doesn't change the past: reports still count it for a leg posted before it closed
+(`one_movement_in_reports`), while the forecast reads it as it is now.
+
+**What a leg may hold.** One split at most, since part of a split transaction may be spending,
+so one with more is refused, and a leg can't take more until its link is removed. A goal only
+on a link with `one_movement_in_reports: false`: money moved between counted accounts is still cash. A leg can
+be on a closed account.
+
+**When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it. A
+provider's record vanishing leaves the leg with its link, flagged `source_removed`, and the link
+stops counting: the money counts as filed again, and the caution `transfer_leg_removed` asks you to
+look. A record attaching again restores it; otherwise remove the link, or merge the posted form into
+the leg (use the leg as the target). A merge discarding a leg's link needs
+`discard_duplicate_state` and `write` on the other account. An un-merge leaves the link on the
+transaction it was on. A manual leg can't be deleted until its link is removed.
+
 ### Money to and from accounts that aren't the household's
 
-Nothing can check these rules until coffer has transfer links, so they are yours to
+Coffer doesn't check these rules, and a transfer link doesn't either, so they are yours to
 follow. A contribution means money from one of the household's accounts to one whose
 `belongs_to` isn't `household`.
 
@@ -396,6 +449,9 @@ follow. A contribution means money from one of the household's accounts to one w
   one receiving it. Hinted at the receiving account, it still counts, with the caution
   `item_hint_not_counted`, whose `effect` is `still_needed`. A `transfer` category on a
   planned item is refused (422).
+- **A link records it and changes nothing.** You may link the charge to the deposit in the
+  fund. That answers `one_movement: false`, it stays spending, and the number is the same
+  either way, in a `transfer` category too: a link doesn't correct the category.
 - **Money coming back**, such as a 529 paying a tuition bill into checking, is a refund
   in the `expense` category it paid for, or `income`, on the household's side.
 - **Transactions inside such an account** sync and match as usual and can be
@@ -476,8 +532,14 @@ to do about each. In short:
   is missing, never a partial sum), `blockers` and `cautions`. **Never report a
   `provisional` number without its cautions.**
 - `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` show the exchange rates
-  held (units of a currency per euro, from the ECB). They need `all` at
-  `balances`.
+  held (units of a currency per euro, from the ECB or, marked `manual`, entered by an
+  admin). They need `all` at `balances`.
+- `PUT /api/v1/fx/manual-rates/{currency}/{on}` enters a rate by hand for a currency
+  the ECB doesn't publish: `admin`, and `all` at `balances` for a token with grants.
+  A fetch never overwrites it, on its own day it wins, and a later published rate takes
+  over. Totals built from one are marked `manual_rate` and listed in the report's `manual_rates`,
+  which is for information: `status` stays `firm` until `rate_stale` applies. A rate over 1.5
+  times from a published one nearby, or close to its inverse, is 422 `unusual_rate` unless `confirm_unusual: true`.
 - The display currency is `display_currency` in `PATCH
   /api/v1/household/settings`: `admin`, and `all` at `balances` for a token with
   grants. It starts unset, and until it is there is no total.
@@ -515,7 +577,9 @@ account stays bound. coffer syncs every connection on a schedule
 
 A balance's date may honestly be old: it can be the day the balance last changed.
 A date within 31 days of the household's today is believed, and one later than today
-is dated today. For an older one on a bound account: with no balance yet, or a latest
+is dated today. One exception, for a change of time zone: the latest amount, reported on an
+earlier day that already holds a balance and at most 2 days before the latest, changes
+nothing. For an older one on a bound account: with no balance yet, or a latest
 balance before the reported day, the amount is taken and dated 31 days back, so the
 balance can be older than its date says, and the audit entry gives `reported_on`. The
 amount the account already holds changes nothing. Anything else is refused, the
