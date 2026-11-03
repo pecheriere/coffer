@@ -28,7 +28,7 @@ export class Server {
   }
 
   static async start(port, day) {
-    await execFile(STAGING, ['start', String(port), day]);
+    await execFile(STAGING, ['start', String(port), day], { timeout: 60_000 });
     return new Server(port, day);
   }
 
@@ -42,11 +42,12 @@ export class Server {
   async logs() {
     const { stdout, stderr } = await execFile('docker', ['logs', `coffer-staging-${this.port}`], {
       maxBuffer: 16 * 1024 * 1024,
+      timeout: 30_000,
     });
     return stdout + stderr;
   }
 
   stop() {
-    return execFile(STAGING, ['stop', String(this.port)]);
+    return execFile(STAGING, ['stop', String(this.port)], { timeout: 60_000 });
   }
 }

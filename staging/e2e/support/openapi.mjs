@@ -11,6 +11,20 @@ export const openapi = JSON.parse(
   readFileSync(new URL('../../../docs/api/openapi.json', import.meta.url), 'utf8'),
 );
 
+// The document says what a response holds, and nothing else may be in it. Each object schema
+// with `properties` is closed where it stands: its branches, being in `oneOf`, each list
+// their own. `allOf` would need more, and the document has none, which is checked here.
+function closed(schema) {
+  if (Array.isArray(schema)) return schema.map(closed);
+  if (schema === null || typeof schema !== 'object') return schema;
+  if (schema.allOf) throw new Error('a schema with allOf needs unevaluatedProperties here');
+  const copy = Object.fromEntries(Object.entries(schema).map(([key, value]) => [key, closed(value)]));
+  if (copy.properties && typeof schema.properties.type !== 'string' && copy.additionalProperties === undefined) {
+    copy.additionalProperties = false;
+  }
+  return copy;
+}
+
 const ajv = new Ajv2020({
   strict: false,
   allErrors: true,
@@ -18,12 +32,19 @@ const ajv = new Ajv2020({
   formats: { int32: true, int64: true, password: true },
 });
 addFormats(ajv);
-ajv.addSchema({ ...openapi, $id: DOCUMENT_ID });
+ajv.addSchema({ ...closed(openapi), $id: DOCUMENT_ID });
 
-const routes = Object.keys(openapi.paths).map((template) => ({
-  template,
-  pattern: new RegExp(`^${template.replace(/\{[^}]+\}/g, '[^/]+')}$`),
-}));
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A literal path before any template that could also match it, as a router would.
+const routes = Object.keys(openapi.paths)
+  .sort((a, b) => Number(a.includes('{')) - Number(b.includes('{')))
+  .map((template) => ({
+    template,
+    pattern: new RegExp(
+      `^${template.split(/\{[^}]+\}/).map(escaped).join('[^/]+')}$`,
+    ),
+  }));
 
 const pointer = (...parts) =>
   parts.map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/');
@@ -47,7 +68,9 @@ export function problemsWith(method, path, status, type, body) {
   if (!operation) return [`${method} ${route.template} is not documented`];
   const response = operation.responses[String(status)];
   if (!response) return [`${method} ${route.template} does not document ${status}`];
-  if (!response.content) return [];
+  if (!response.content) {
+    return body === undefined ? [] : [`${method} ${route.template} ${status} documents no body`];
+  }
   if (!response.content[type]) {
     return [`${method} ${route.template} ${status} does not document ${type}`];
   }

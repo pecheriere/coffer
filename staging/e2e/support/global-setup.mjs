@@ -7,5 +7,7 @@ export default function globalSetup() {
   const { today, monthStart, monthEnd } = days();
   execFileSync(STAGING, ['template', ...new Set([today, monthStart, monthEnd])], {
     stdio: 'inherit',
+    // Seeding takes about a minute; twice that and more means something is stuck.
+    timeout: 300_000,
   });
 }

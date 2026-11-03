@@ -39,6 +39,34 @@ test('a token with a grant on one account sees only that account', async ({ serv
   expect((await api.get('/accounts')).body.items.length).toBeGreaterThan(1);
 });
 
+test('a balances grant shows balances and not transactions', async ({ server }) => {
+  const pages = await server.signIn('alex');
+  const account = server.seeded.accounts.current;
+  const secret = await pages.createToken('balances only', 'read', {
+    all: 'none',
+    [`account_${account}`]: 'balances',
+  });
+  const limited = new CheckedApi(server.base, secret);
+
+  expect((await limited.get(`/accounts/${account}/balances?limit=1`)).status).toBe(200);
+  const { status } = await limited.get(`/transactions?account=${account}`);
+  expect(status).toBe(403);
+});
+
+test('a transactions grant shows that account\'s transactions', async ({ server }) => {
+  const pages = await server.signIn('alex');
+  const account = server.seeded.accounts.current;
+  const secret = await pages.createToken('transactions', 'read', {
+    all: 'none',
+    [`account_${account}`]: 'transactions',
+  });
+  const limited = new CheckedApi(server.base, secret);
+
+  const { status, body } = await limited.get(`/transactions?account=${account}&limit=5`);
+  expect(status).toBe(200);
+  expect(body.items.length).toBe(5);
+});
+
 test('a revoked token stops working at once', async ({ server }) => {
   const pages = await server.signIn('alex');
   const api = new CheckedApi(server.base, await pages.createToken('short lived', 'read'));
@@ -56,4 +84,6 @@ test("a member's token stops at the member's rights", async ({ server }) => {
 
   expect((await api.get('/me')).body.member.username).toBe('sam');
   expect((await api.patch('/household/settings', { default_horizon_months: 6 })).status).toBe(403);
+  // It does write what Sam may: a token that could write nothing would stop here.
+  expect((await api.post('/accounts', NEW_ACCOUNT)).status).toBe(201);
 });

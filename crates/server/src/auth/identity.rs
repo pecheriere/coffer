@@ -23,6 +23,7 @@ use webauthn_rs::prelude::{
 };
 
 use super::passkeys::{Ceremony, CeremonyId, EnrollTarget, Passkeys};
+use super::staging_fixture::{is_staging_fixture, on_localhost};
 use super::{AuthError, audit};
 use crate::config::Config;
 use crate::secrets::{SecretToken, ServerKey, TokenKind, mint};
@@ -405,7 +406,7 @@ impl Identity {
     /// [`AuthError::InviteInvalid`] when it expired, its target became
     /// unusable or its issuer is no longer an active admin;
     /// [`AuthError::UsernameTaken`];
-    /// [`AuthError::PasskeyAlreadyRegistered`]; storage failures.
+    /// [`AuthError::PasskeyAlreadyRegistered`]; [`AuthError::PasskeyPublic`]; storage failures.
     pub async fn finish_enrollment(
         &self,
         ceremony: CeremonyId,
@@ -494,7 +495,16 @@ impl Identity {
                 StoreError::Conflict(_) => AuthError::InviteUsed,
                 other => other.into(),
             })?;
-        add_passkey(&mut tx, now, member, &label, &passkey, Some(invite)).await?;
+        add_passkey(
+            &mut tx,
+            &self.config,
+            now,
+            member,
+            &label,
+            &passkey,
+            Some(invite),
+        )
+        .await?;
         tx.commit().await?;
         Ok(member)
     }
@@ -537,6 +547,7 @@ impl Identity {
     /// [`AuthError::Denied`]; [`AuthError::CeremonyExpired`] (also for a
     /// ceremony begun by someone else); [`AuthError::PasskeyRejected`];
     /// [`AuthError::MemberDisabled`]; [`AuthError::PasskeyAlreadyRegistered`];
+    /// [`AuthError::PasskeyPublic`];
     /// storage failures.
     pub async fn finish_add_passkey(
         &self,
@@ -558,7 +569,7 @@ impl Identity {
         if tx.get_member(member).await?.disabled_at.is_some() {
             return Err(AuthError::MemberDisabled);
         }
-        let id = add_passkey(&mut tx, now, member, &label, &passkey, None).await?;
+        let id = add_passkey(&mut tx, &self.config, now, member, &label, &passkey, None).await?;
         tx.commit().await?;
         Ok(id)
     }
@@ -912,15 +923,20 @@ fn invite_changes(kind: &InviteKind) -> AuditChanges {
 }
 
 /// Stores `passkey` for `member` and audits `passkey.add` with the member as
-/// the actor. Only the label and the invite (if any) are recorded.
+/// the actor. Only the label and the invite (if any) are recorded. Away from localhost it
+/// refuses the staging seed's keys, which anyone can use.
 async fn add_passkey(
     tx: &mut StoreTx,
+    config: &Config,
     now: Timestamp,
     member: MemberId,
     label: &TokenName,
     passkey: &Passkey,
     invite: Option<InviteId>,
 ) -> Result<PasskeyId, AuthError> {
+    if is_staging_fixture(passkey) && !on_localhost(config) {
+        return Err(AuthError::PasskeyPublic);
+    }
     let record = tx
         .insert_passkey(NewPasskey {
             member,

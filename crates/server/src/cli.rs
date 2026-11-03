@@ -37,7 +37,6 @@ mod panic_report;
 mod staging_seed;
 
 pub use panic_report::install_panic_hook;
-pub use staging_seed::STAGING_ADMIN_CREDENTIAL_ID;
 
 const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
@@ -502,11 +501,11 @@ pub async fn serve_with(
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), CliError> {
-    staging_seed::refuse_outside_localhost(&state.store, &state.config).await?;
+    let listen = listener.local_addr()?;
+    staging_seed::refuse_outside_localhost(&state.store, &state.config, listen).await?;
     if let Some(link) = state.identity.bootstrap_link().await? {
         tracing::info!(%link, "no admin exists yet; open this single-use link to create the first admin");
     }
-    let listen = listener.local_addr()?;
     tracing::info!(%listen, public_url = %state.config.public_url, "coffer is serving");
     let (stop, stopped) = watch::channel(false);
     let stop_with_the_server = |mut stopped: watch::Receiver<bool>| async move {
