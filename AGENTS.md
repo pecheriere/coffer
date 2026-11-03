@@ -166,6 +166,11 @@ worktree when its branch has merged.
   (`cli/panic_report.rs`) leaves it out and `http/panic_answer.rs` answers a
   fixed 500. A `tokio` `JoinError`'s text holds that message, so log
   `err.is_panic()` instead of the error.
+- The release binary keeps its symbols and line tables so a panic report names
+  file and line. CI's `docker-build` job reads both images' binaries with
+  `scripts/check-backtrace-lines.sh`, which fails when a known function no
+  longer resolves to its file and line (`strip` in `[profile.release]`, a
+  linker flag the symbolizer cannot read).
 - A page may set its own `Content-Security-Policy` only for Plaid Link
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the
