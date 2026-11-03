@@ -15,15 +15,17 @@ use coffer_domain::money::Currency;
 use coffer_domain::net_worth::DailyValue;
 use coffer_store::{
     BalanceSnapshot, KeptBalance, NetWorthState, NewAccount, NewConnection, NewMember,
-    ProviderAccountUpsert, Store,
+    ProviderAccountUpsert, RebuildBatch, Store,
 };
 use jiff::Timestamp;
 use jiff::civil::{Date, date};
 use tempfile::TempDir;
 
+mod batches;
 mod incremental;
 mod reads;
 mod rebuild;
+mod runners;
 
 /// What `mark` leaves in a row: any other balance was written after it.
 const MARK: i64 = -999;
@@ -119,17 +121,31 @@ async fn show_in(store: &Store, code: &str) {
 }
 
 async fn rebuild(store: &Store, through: Date) -> u64 {
+    store.rebuild_net_worth(through).await.unwrap()
+}
+
+/// One batch of the rebuild that is needed, in its own transaction.
+async fn batch(store: &Store, through: Date, max_rows: usize) -> RebuildBatch {
     let mut tx = store.begin().await.unwrap();
-    let written = tx.rebuild_net_worth(through).await.unwrap();
+    let batch = tx.rebuild_net_worth_batch(through, max_rows).await.unwrap();
     tx.commit().await.unwrap();
-    written
+    batch
+}
+
+/// Asks for a rebuild of a table that was current, as a change too big for one
+/// transaction does.
+async fn flag(store: &Store) {
+    store
+        .execute_unchecked_for_tests(
+            "UPDATE net_worth_state SET rebuild_needed = 1, rebuilt_up_to = NULL WHERE id = ?",
+            "1",
+        )
+        .await
+        .unwrap();
 }
 
 async fn fill(store: &Store, through: Date) -> u64 {
-    let mut tx = store.begin().await.unwrap();
-    let written = tx.fill_net_worth(through).await.unwrap();
-    tx.commit().await.unwrap();
-    written
+    store.fill_net_worth(through).await.unwrap()
 }
 
 async fn dump(store: &Store) -> Vec<DailyValue> {

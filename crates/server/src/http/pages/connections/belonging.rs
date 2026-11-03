@@ -167,6 +167,9 @@ pub(super) fn account_item(
                 @if let Some(error) = &account.error {
                     span.item-meta { "Error: " (error) }
                 }
+                @if let Some(note) = &account.old_balance_note {
+                    span.item-meta { (note) }
+                }
             }
             @if account.account.is_some() {
                 span.chip {

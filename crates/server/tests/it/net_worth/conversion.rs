@@ -108,9 +108,7 @@ async fn reason_in_production(vars: &[(&str, &str)]) -> Value {
         )
         .await
         .unwrap();
-    let mut tx = state.store.begin().await.unwrap();
-    tx.rebuild_net_worth(today).await.unwrap();
-    tx.commit().await.unwrap();
+    state.store.rebuild_net_worth(today).await.unwrap();
     let holder = state
         .ledger
         .create_account(

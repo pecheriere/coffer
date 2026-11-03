@@ -151,13 +151,15 @@ async fn connect(path: &Path) -> SqlitePool {
         .unwrap()
 }
 
-/// The migrations up to `0022`, which this file is about: a later one changes the tables it
-/// compares, and has tests of its own.
-fn through_belonging() -> Migrator {
-    let mut upto = sqlx::migrate!("./migrations");
+fn every_migration() -> Migrator {
+    sqlx::migrate!("./migrations")
+}
+
+fn migrations_up_to(last: i64) -> Migrator {
+    let mut upto = every_migration();
     upto.migrations = Cow::Owned(
         upto.iter()
-            .filter(|migration| migration.version <= 22)
+            .filter(|migration| migration.version <= last)
             .cloned()
             .collect(),
     );
@@ -165,14 +167,7 @@ fn through_belonging() -> Migrator {
 }
 
 fn before_belonging() -> Migrator {
-    let mut upto = through_belonging();
-    upto.migrations = Cow::Owned(
-        upto.iter()
-            .filter(|migration| migration.version < 22)
-            .cloned()
-            .collect(),
-    );
-    upto
+    migrations_up_to(21)
 }
 
 /// A database at `0021`, populated, connected with foreign keys on.
@@ -187,7 +182,7 @@ async fn seeded() -> (TempDir, SqlitePool) {
 async fn migrated_empty() -> (TempDir, SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
     let pool = connect(&dir.path().join("coffer.db")).await;
-    through_belonging().run(&pool).await.unwrap();
+    every_migration().run(&pool).await.unwrap();
     (dir, pool)
 }
 
@@ -305,7 +300,7 @@ async fn migration_keeps_every_row() {
         assert_eq!(before[table].1.len(), rows, "the seed fills {table}");
     }
 
-    through_belonging().run(&pool).await.unwrap();
+    every_migration().run(&pool).await.unwrap();
 
     let after = dump_all(&pool).await;
     assert_eq!(
@@ -384,7 +379,7 @@ async fn migration_keeps_the_shape_of_the_schema() {
     let foreign = strings(&pool, keys).await;
     let found = strings(&pool, indexes).await;
 
-    through_belonging().run(&pool).await.unwrap();
+    migrations_up_to(22).run(&pool).await.unwrap();
 
     assert_eq!(strings(&pool, schema).await, others);
     assert_eq!(strings(&pool, &columns("provider_accounts")).await, fed);
@@ -416,7 +411,7 @@ async fn migration_keeps_the_shape_of_the_schema() {
 #[tokio::test]
 async fn migration_keeps_every_old_check() {
     let (_dir, pool) = seeded().await;
-    through_belonging().run(&pool).await.unwrap();
+    every_migration().run(&pool).await.unwrap();
     for values in [
         "'', 'checking', 'USD', 'cash', 0, 1, 1, 'household', NULL",
         "printf('%101s', 'x'), 'checking', 'USD', 'cash', 0, 1, 1, 'household', NULL",
@@ -449,7 +444,7 @@ async fn migration_keeps_every_old_check() {
 
 /// `0022` with `from` in its text replaced by `to`, the rest of the migrations as they are.
 fn tampered(from: &str, to: &str) -> Migrator {
-    let mut upto = through_belonging();
+    let mut upto = every_migration();
     upto.migrations = Cow::Owned(
         upto.iter()
             .map(|migration| {
@@ -757,8 +752,8 @@ async fn changing_belonging_writes_no_daily_row() {
     })
     .await
     .unwrap();
-    tx.rebuild_net_worth(date(2026, 10, 3)).await.unwrap();
     tx.commit().await.unwrap();
+    store.rebuild_net_worth(date(2026, 10, 3)).await.unwrap();
     let pool = connect(&path).await;
     let columns = columns_of(&pool, "account_daily_values").await;
     let before = dump(&pool, "account_daily_values", &columns).await;
@@ -788,7 +783,7 @@ async fn changing_belonging_writes_no_daily_row() {
 #[tokio::test]
 async fn the_store_reads_a_migrated_row() {
     let (dir, pool) = seeded().await;
-    through_belonging().run(&pool).await.unwrap();
+    every_migration().run(&pool).await.unwrap();
     pool.close().await;
     let store = Store::open(&dir.path().join("coffer.db")).await.unwrap();
     let mut tx = store.begin().await.unwrap();
