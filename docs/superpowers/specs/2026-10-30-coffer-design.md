@@ -974,7 +974,12 @@ Known limits. A bill's past occurrences are read at the item's amount and catego
 changing either can leave last month's unpaid, the safe direction. A coincidence at the exact amount
 beside a budget is taken as the bill, which in `as_of`'s month changes no total while the budget has
 room, and which `payments` shows. Plan versus actual's rollovers still give bills their share of a
-month by amount (above): they say what a month came to, and pay no one occurrence.
+month by amount (above): they say what a month came to, and pay no one occurrence. A refund goes against the
+newest charge it fits, so it can undo the wrong bill or land on a newer unrelated charge: 1,500 meant
+for a rent lands on a newer furniture charge of 1,600, with no caution, and the rent stays paid, so
+the surplus reads high. And for a bill of last month settled as `paid` with nothing that fits, unmatched
+rows from the 7 days before the look-back count as covering it, so that less of it comes off this
+month's pool and what a budget still needs can read too low.
 
 **R9a. Settling a month.** A bill can be paid with no transaction to categorize, such as a
 transfer or from an account coffer doesn't track, and the safe default of R9 would then
