@@ -76,16 +76,16 @@ async fn category_spent_nets_refunds_and_floors_at_zero() {
     assert_eq!(world.category_spent().await, [0], "floored at zero");
 }
 
-/// What can pay a bill: each transaction, by date, back to the first of last month, and no
-/// further; a refund shows as one; a removed charge and a newer one are out, as they are of the
+/// What can pay a bill: each transaction, by date, back to 7 days before the first of last month,
+/// and no further; a refund shows as one; a removed charge and a newer one are out, as they are of the
 /// category's spending; and a possible duplicate says so.
 #[tokio::test]
 async fn spent_transactions_reach_back_a_month_one_by_one() {
     let world = world().await;
     let balance_on = date(2026, 11, 10);
     world.balance(world.account, balance_on, 0).await;
-    world.spend(world.account, date(2026, 9, 30), -1).await;
-    world.spend(world.account, date(2026, 10, 1), -10).await;
+    world.spend(world.account, date(2026, 9, 23), -1).await;
+    world.spend(world.account, date(2026, 9, 24), -10).await;
     world.spend(world.account, date(2026, 11, 2), 200).await;
     world.spend(world.account, date(2026, 11, 3), -3_000).await;
     world.flag(Flag::SourceRemoved, -3_000).await;
@@ -105,7 +105,7 @@ async fn spent_transactions_reach_back_a_month_one_by_one() {
     assert_eq!(
         rows,
         [
-            (date(2026, 10, 1), 10, false),
+            (date(2026, 9, 24), 10, false),
             (date(2026, 11, 2), -200, false),
             (date(2026, 11, 4), 40_000, true),
         ]
