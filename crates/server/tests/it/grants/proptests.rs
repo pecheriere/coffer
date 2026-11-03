@@ -15,6 +15,7 @@ use coffer_domain::policy::{
     grant_ceiling,
 };
 use coffer_domain::time::Clock as _;
+use coffer_server::ledger::rules::RuleInput;
 use coffer_server::secrets::SecretToken;
 use jiff::tz::TimeZone;
 use proptest::strategy::Strategy as _;
@@ -452,8 +453,54 @@ async fn check_no_endpoint_leaks(household: &Household) -> Result<(), TestCaseEr
     let foreign = seed_net_worth(&world, household, &marker, &mut hidden).await;
     accounts.extend(foreign);
 
-    let uris = read_uris(connection, &accounts, &transactions, &goals);
+    let mut uris = read_uris(connection, &accounts, &transactions, &goals);
+    uris.extend(seed_rules(&world, household, &accounts, &marker, &mut hidden).await);
     check_no_body_reveals(&world, &token, &uris, &hidden).await
+}
+
+/// A rule for each account, and one for every account matching every description, whose
+/// dry run reads them all. Answers the addresses to read them at.
+async fn seed_rules(
+    world: &World,
+    household: &Household,
+    accounts: &[AccountId],
+    marker: &str,
+    hidden: &mut Vec<String>,
+) -> Vec<String> {
+    let category = world.expense_category().await;
+    let mut rules: Vec<(String, Option<AccountId>)> = accounts
+        .iter()
+        .zip(&household.accounts)
+        .enumerate()
+        .map(|(n, (account, level))| {
+            let pattern = format!("rule{n}{marker}");
+            if (*level)
+                .max(household.all)
+                .is_none_or(|level| level < AccountLevel::Transactions)
+            {
+                hidden.push(pattern.clone());
+            }
+            (pattern, Some(*account))
+        })
+        .collect();
+    rules.push((marker.to_owned(), None));
+    let mut uris = vec!["/api/v1/rules".to_owned()];
+    for (pattern, account) in rules {
+        let input: RuleInput = serde_json::from_value(serde_json::json!({
+            "match_kind": "contains", "pattern": pattern, "category": category, "account": account,
+        }))
+        .unwrap();
+        let rule = world
+            .server
+            .ledger
+            .create_rule(&world.alice, input, None)
+            .await
+            .unwrap()
+            .id;
+        uris.push(format!("/api/v1/rules/{rule}"));
+        uris.push(format!("/api/v1/rules/{rule}/dry-run"));
+    }
+    uris
 }
 
 /// Every one of `uris` answers without a server error and holds nothing of `hidden`.

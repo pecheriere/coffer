@@ -26,6 +26,7 @@ pub(super) mod tags {
     pub const HOUSEHOLD: &str = "household";
     pub const ACCOUNTS: &str = "accounts";
     pub const CATEGORIES: &str = "categories";
+    pub const RULES: &str = "rules";
     pub const TRANSACTIONS: &str = "transactions";
     pub const PLAN: &str = "plan";
     pub const FORECAST: &str = "forecast";
@@ -45,7 +46,7 @@ pub fn document() -> OpenApi {
 }
 
 /// What each of [`tags`] covers.
-fn operation_tags() -> [Tag; 13] {
+fn operation_tags() -> [Tag; 14] {
     let tag = |name: &str, description: &str| {
         TagBuilder::new()
             .name(name)
@@ -69,6 +70,12 @@ fn operation_tags() -> [Tag; 13] {
             tags::CATEGORIES,
             "The household's category groups and categories, which transaction splits \
              use.",
+        ),
+        tag(
+            tags::RULES,
+            "Rules that file or assign transactions nobody has filled yet: on arrival from a \
+             sync, or when run by hand. What a rule did is on the transaction and in the audit \
+             log, and undone like any other edit.",
         ),
         tag(
             tags::TRANSACTIONS,

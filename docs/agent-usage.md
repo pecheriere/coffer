@@ -42,7 +42,7 @@ session, never with another token.
 | Scope | Allows |
 |---|---|
 | `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
-| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
+| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, rules, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration, such as changing the forecast settings or entering an exchange rate by hand. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -125,6 +125,10 @@ token's access.
   still shows the problem. Using
   an existing category on a split needs only `write` on the transaction's
   account.
+- A rule for one account needs `transactions` on it to read and `write` on it to change
+  or run. A rule for every account can be read with `transactions` on any account, and
+  changed or run only with `all` at `write`. One you can't read answers 404. A dry run
+  covers only transactions you can read, in its list and in its counts.
 
 ## First call
 
@@ -278,8 +282,9 @@ A transaction has a signed `amount` (`{"minor_units": -1234, "currency":
 `payee`, `notes`, `review` (`unreviewed` or `reviewed`), `assignee` (a
 member id or `null`) and `splits` (`[{id, category, amount, goal}]`, empty when
 uncategorized; `goal` is the id of the goal the split counts towards, or
-`null`, as it also is for a goal the token can't see). `reviewed_by` and `categorized_by` say who reviewed and who
-last changed the splits (`{member, agent, system, at}`); `origin` is
+`null`, as it also is for a goal the token can't see). `reviewed_by`, `categorized_by` and `assigned_by` say who reviewed, who
+last changed the splits and who last set or cleared the assignee (`{member, agent, system, rule, at}`,
+with `rule` the [rule](#rules) that chose the value, if one did); `origin` is
 `manual` or `imported`.
 
 An imported transaction lists the provider records it came from in
@@ -431,6 +436,67 @@ look. A record attaching again restores it; otherwise remove the link, or merge 
 the leg (use the leg as the target). A merge discarding a leg's link needs
 `discard_duplicate_state` and `write` on the other account. An un-merge leaves the link on the
 transaction it was on. A manual leg can't be deleted until its link is removed.
+
+### Rules
+
+A rule files or assigns a transaction nobody has filled yet. It looks for plain text in
+the description, ignoring case (nothing in it is a wildcard), optionally only on one
+account and one range of signed amounts, and sets a category, an assignee or both.
+
+- `GET /api/v1/rules` lists the rules in the order they run. `GET`, `PATCH` and `DELETE`
+  `/api/v1/rules/{rule_id}` read, change and delete one.
+- `POST /api/v1/rules` (accepts an `Idempotency-Key`) takes `match_kind` (`contains` or
+  `starts_with`), `pattern` (kept as written, so `"TAX "` doesn't match `TAXI`), and optionally `account`, `amount`
+  (`{currency, min_minor, max_minor}`, either end `null`; negative is money out, so
+  `{"currency": "USD", "max_minor": -1}` is any spending in dollars), `category`,
+  `assignee`, `position` (lower first; by default after the last) and `enabled`.
+- `GET /api/v1/rules/{rule_id}/dry-run?limit=50` shows what running it would change now,
+  and writes nothing: `changes` (up to `limit`), `would_change`, `would_categorize`,
+  `would_assign`, and `left_alone`, which counts what it matches but won't fill, and why.
+- `POST /api/v1/rules/{rule_id}/apply` does it and answers the same counts. It is safe to
+  repeat, and if the call is cut short what it did stays, so calling again carries on. A
+  dry run reads at most the oldest 20,000 open transactions, and `complete: false` says so.
+- `GET /api/v1/transactions?rule={rule_id}` lists what a rule filled and nobody has changed
+  since. `POST /api/v1/rules/{rule_id}/undo` takes that back and reopens each field, so a
+  corrected rule can fill it. It leaves reviewed transactions for a person and doesn't change
+  the rule, so turn the rule off or correct it first. It needs the same rights as running.
+
+Rules run on their own only when a transaction first arrives from a sync. Nothing already
+held changes until someone runs one. **Try one first:** create it with `enabled: false`,
+read the dry run, then `PATCH` it on or run it. Tell the owner what it will do, especially
+with a `transfer` category, which takes money out of `uncategorized_spending`: a broad
+pattern there hides real spending.
+
+What a rule never does:
+
+- **Overwrite.** It fills only what nobody has set. Someone clearing a category or an
+  assignee has set it, and it stays clear. For each field the first rule that matches
+  wins, and a rule run by hand leaves a field to an earlier one that would win
+  (`earlier_rule`), so run that one.
+- **Review.** A rule never marks anything reviewed, and leaves a reviewed transaction alone
+  (`reviewed`), so reviewing is still yours to do with the owner.
+- **Divide or link.** A transaction with several splits is left alone whole (`split`). A
+  transfer leg can be assigned, but takes a category only if it is `transfer` and the link is one
+  movement (`transfer_leg`): money linked to a brokerage is still spending, so saying what it
+  was is for a person. A rule's split has no goal, and a transaction with a goal link already
+  has a split.
+- **File money going out as income** (`income_on_outflow`), so "PAYROLL" won't catch a
+  "PAYROLL FEE". Money coming in under an `expense` category is filed, as a refund.
+
+To see what a rule did, read `categorized_by.rule` and `assigned_by.rule` on the
+transaction, or the audit log (`transaction.rule_applied`, and `rule.apply` with a count
+for each batch of a run). To undo one, `PATCH` the transaction like any other edit, which
+also clears `rule` and stays, so no rule fills that field again; to undo many, or to let a
+corrected rule fill them, use `.../undo`. Changing or deleting a rule leaves what it did in place.
+
+A rule whose category gets archived (`category_archived`) or whose member gets disabled
+(`assignee_disabled`) stops doing that part, and a later rule may fill it. A posted record
+keeps what a rule chose for its pending form, even under a new description, and runs no
+rule: one that didn't match while pending shows up in a dry run. What only a rule chose
+doesn't count as someone's work, so a pending record its bank takes back goes with it, and
+a duplicate only a rule filled merges without `discard_duplicate_state`. A field someone cleared
+does count: that transaction is kept, and a merge asks first. Clearing a field nobody has set
+writes nothing, so it doesn't stop a rule.
 
 ### Money to and from accounts that aren't the household's
 

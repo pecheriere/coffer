@@ -17,6 +17,7 @@ mod plan_items;
 mod provider_accounts;
 mod reports;
 mod router;
+mod rules;
 mod transactions;
 mod transfer_links;
 
@@ -53,6 +54,11 @@ fn routes() -> ApiRouter {
         .op(routes!(categories::update))
         .op(routes!(categories::create_group))
         .op(routes!(categories::update_group))
+        .op(routes!(rules::list, rules::create))
+        .op(routes!(rules::get, rules::update, rules::delete))
+        .op(routes!(rules::dry_run))
+        .op(routes!(rules::apply))
+        .op(routes!(rules::undo))
         .op(routes!(transactions::list, transactions::create))
         .op(routes!(transactions::batch))
         .op(routes!(transactions::merge))
