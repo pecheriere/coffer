@@ -55,8 +55,10 @@ pub struct TransferLinkPath {
                    and pays no bill. Only the smaller leg's amount moved: a difference in one \
                    currency stays what its leg is filed as. Any other link, to a brokerage, a \
                    loan, a closed account or one that isn't the household's, stays spending and \
-                   changes no number. Any link takes what it says moved out of `uncategorized`. \
-                   `one_movement` says which, and follows the accounts. A leg its provider takes \
+                   changes no number, and an uncategorized leg stays on `uncategorized` until it is \
+                   filed. `one_movement` says which for the forecast and follows the accounts; \
+                   `one_movement_in_reports` says it for reports, where an account closed since \
+                   its leg posted still counts. A leg its provider takes \
                    back suspends this: the money counts as filed again, with the caution \
                    `transfer_leg_removed`.\n\n\
                    A transaction is in one link at most. One with more than one split is refused, \

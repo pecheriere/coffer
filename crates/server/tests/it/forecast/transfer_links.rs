@@ -213,33 +213,47 @@ async fn a_link_out_of_the_household_changes_no_number() {
     assert_eq!(world.forecast_at(ONE_MONTH).await, before);
 }
 
-/// A person has said where an uncategorized outflow went, whatever the other account is, so the
-/// caution asks only about the rest: 500.00 sent, 300.00 arrived.
+/// A contribution to a 529 or a brokerage is real spending (B9), so uncategorized it keeps the
+/// caution until it is filed, whatever is linked, and a `transfer` category clears it.
 #[tokio::test]
-async fn any_link_answers_uncategorized_spending_for_what_it_says() {
-    let world = world().await;
-    world.floor(0).await;
-    let checking = world.funded("Checking", 200_000).await;
-    let brokerage = world
-        .account_with("Brokerage", "brokerage", "USD", json!({}))
-        .await;
-    let food = world.expense("Food").await;
-    world
-        .item(&with(
-            outflow("Groceries", 40_000, food, &monthly("2026-11-20")),
-            "spending",
-            json!("budget"),
-        ))
-        .await;
-    let out = world.deposit(checking, "2026-11-05", -50_000).await;
-    let into = world.deposit(brokerage, "2026-11-06", 30_000).await;
+async fn a_link_out_of_counted_cash_keeps_uncategorized_spending_until_filed() {
+    for kind in ["education", "brokerage"] {
+        let world = world().await;
+        world.floor(0).await;
+        let checking = world.funded("Checking", 200_000).await;
+        let other = world
+            .account_with("Elsewhere", kind, "USD", json!({}))
+            .await;
+        let food = world.expense("Food").await;
+        world
+            .item(&with(
+                outflow("Groceries", 40_000, food, &monthly("2026-11-20")),
+                "spending",
+                json!("budget"),
+            ))
+            .await;
+        let out = world.deposit(checking, "2026-11-05", -50_000).await;
+        let into = world.deposit(other, "2026-11-06", 50_000).await;
 
-    world.link_legs(&out, &into).await;
+        world.link_legs(&out, &into).await;
 
-    let forecast = world.forecast_at(ONE_MONTH).await;
-    let caution = caution(&forecast, "uncategorized_spending");
-    assert_eq!(caution["total"], usd(20_000));
-    assert_eq!(caution["count"], 1);
+        let forecast = world.forecast_at(ONE_MONTH).await;
+        assert_eq!(
+            caution(&forecast, "uncategorized_spending")["total"],
+            usd(50_000)
+        );
+        assert_eq!(forecast["status"], "provisional");
+
+        let moved = world.category("Moved", "transfer").await;
+        world
+            .admin_send(
+                Method::PATCH,
+                &format!("/api/v1/transactions/{out}"),
+                &json!({"splits": [{"category": moved, "minor_units": -50_000}]}),
+            )
+            .await;
+        assert_eq!(world.forecast_at(ONE_MONTH).await["cautions"], json!([]));
+    }
 }
 
 /// A difference in one currency stays spending: 1,250.00 linked to 12.50 lowers the budget by
@@ -413,6 +427,32 @@ async fn the_difference_of_a_movement_stays_newer_spending() {
         caution(&forecast, "spending_newer_than_balance")["total"],
         usd(1_000)
     );
+}
+
+/// A pending deposit may already be in savings' balance, and then cash is 300.00 too high with the
+/// charge after checking's balance, so the alarm stands even if nothing turns out wrong.
+#[tokio::test]
+async fn a_pending_deposit_keeps_the_caution() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let moved = world.category("Moved", "transfer").await;
+    let out = world.charge(checking, AS_OF, 30_000, moved).await;
+    let into = world.deposit(savings, AS_OF, 30_000).await;
+    world.link_legs(&out, &into).await;
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests("UPDATE transactions SET pending = 1 WHERE id = ?", &into)
+        .await
+        .unwrap();
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(
+        caution(&forecast, "spending_newer_than_balance")["total"],
+        usd(30_000)
+    );
+    assert_eq!(forecast["status"], "provisional");
 }
 
 /// The deposit shows and the charge doesn't: one balance is ahead of the other, and cash really

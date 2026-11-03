@@ -1361,7 +1361,7 @@ narrow R6, R9 and R10 for linked money.
 **T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
 money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
 for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
-(`null` across currencies, which have none without a rate), and hides nothing. It writes nothing on
+(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
 either transaction: a leg keeps its category, and its other fields, as they were. API only for now
 (#49 tracks the pages).
 
@@ -1382,27 +1382,32 @@ removing it or making it again. Nothing in the policy changes.
 **T4. What a leg holds.** At most one split, so a link is refused on a split transaction and a leg
 can't become one. Part of a split may be spending, and a report can't say which part, so a rule of
 counting the rest would be a guess. Remove the link to split it. A goal is refused on a link that is one
-movement (T5), either way round, since money moved between counted accounts is still cash (R8). Any
+movement in a report (T5), either way round, since money moved between counted accounts is still cash (R8). Any
 other link keeps its goal, as a contribution out of counted cash may lower one's need (B10). R8's
 refusal of a goal on a `transfer` category stands.
 
 **T5. What it does to a report.** A link is *one movement* when both accounts are in counted cash,
 the definition the forecast's actuals use (R10): open, `include_in_forecast`, and `cash` or
 `short_term_liability`. Only then did the money stay in the cash the forecast adds up. It is one
-definition in the store, behind every number here, read at the time as every count is (B6), so
-closing an account or switching a flag changes what its links mean, history included. A link also
+definition in the store, behind every number here. Flags and classes are read at the time as every
+count is (B6), so switching one changes what its links mean, history included. Closing an account
+doesn't: a report says what happened, so it counts a closed account for a leg posted before
+`closed_at`, with a day's slack for the time zone, and January and the last sweep before closing keep
+their meaning. The forecast reads the current state, in which a closed account isn't counted, so
+`one_movement` and `one_movement_in_reports` can differ on such a link. A link also
 stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs
 of one sign.
 
 What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
 link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
-currencies there is no difference without a rate, so all of each leg moved. A known limit: nothing
-bounds a link across currencies, and it takes all of each leg out on a person's word.
+currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
+known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
+word.
 
 | Number | Effect of linking |
 |---|---|
 | `actual`, `rolling_average`, `rollovers` | What moved leaves, in any category. |
-| `uncategorized` | What a link says of an uncategorized outflow leaves, for any link while it stands: a person has said what it is. |
+| `uncategorized` | What moved of an uncategorized outflow leaves. Any other link stays on the list until it is filed, since B9 makes it real spending, and a `transfer` category clears it as it does any outflow. |
 | a goal's `spent_against` | What moved of a charge leaves, into the line's `left_out`; of a refund, it just isn't counted. Only an account changing after the link can put one there (T4). |
 | `moved_between_counted_accounts` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6). |
 
@@ -1417,13 +1422,13 @@ a monthly auto-invest stays paid, B10's money inside stays in `not_the_household
 | Number | Effect of linking |
 |---|---|
 | A budget's `reduced_by`, a bill's `unpaid` | What moved no longer reduces or pays. The other side is counted cash, so nothing left it, and the need is really still there: without the link the surplus was overstated by that much, and with it the surplus falls by that. |
-| `uncategorized_spending` | What a link says isn't in it, for any link while it stands. |
+| `uncategorized_spending` | What moved isn't in it. |
 | `possible_duplicates` | Unchanged: a leg may still be a duplicate. |
 | Goal need, `goal_linked_both_sides` | What moved doesn't lower the need or count as a side. |
 | Cash, net worth | Unchanged: they read balances. |
-| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown and the outflow not, it stays: that is the balance missing money. |
+| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown or still pending, it stays: a pending deposit may already be in its balance, and then cash is overstated. That can ask when nothing is wrong, the safe direction. |
 
-A link to any other account changes none of these but the second. Its money left counted cash, so
+A link to any other account changes none of these. Its money left counted cash, so
 counting it as spent is what makes the number right: a bill paid by an auto-invest stays paid, where
 treating it as a movement would owe the bill again on top of the fallen balance.
 
@@ -1445,6 +1450,6 @@ treating it as a movement would owe the bill again on top of the fallen balance.
 - A manual leg can't be deleted until its link is removed: 409, and the reference refuses it should
   anything else try.
 - A closed account may hold a leg, and links can still be made and removed on it: the last sweep out
-  of an account is often what closed it. A link to one is no movement (T5), so what it records of the
-open side stays spending, which holds for a sweep out of a closing account too, until a person files it.
+  of an account is often what closed it. The forecast reads such a link as no movement and a report, for
+a leg posted before the close, as one (T5).
 - A provider revising a leg's amount leaves the link, and `difference` shows what it says now.

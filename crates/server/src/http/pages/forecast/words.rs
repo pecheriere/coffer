@@ -213,12 +213,12 @@ fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     )
 }
 
-/// A goal with spending linked on both the household's accounts and money that isn't its own.
-/// `goal` starts the sentence.
 const TRANSFER_LEG_REMOVED: &str = "A bank took back one side of a linked transfer, so its money \
                                     counts as filed again. Check the link, and remove it if it \
                                     no longer holds.";
 
+/// A goal with spending linked on both the household's accounts and money that isn't its own.
+/// `goal` starts the sentence.
 fn both_sides_sentence(goal: &str) -> String {
     format!(
         "{goal} has spending linked to it on both the household's own accounts and an account \

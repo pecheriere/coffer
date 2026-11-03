@@ -91,14 +91,17 @@ pub struct TransferLinkView {
     pub outflow: TransferLegView,
     pub inflow: TransferLegView,
     /// What arrived less what left, negative when less arrived, such as for a fee; `null` for
-    /// legs in two currencies, which have no difference without a rate.
+    /// legs in two currencies, since a link doesn't read an exchange rate.
     #[schema(required)]
     pub difference: Option<Money>,
     /// Both accounts are in counted cash (open, switched into the forecast, of a spendable
     /// class) and neither leg was taken back by its provider, so what moved is one movement in
-    /// reports and the forecast, whatever it is filed as. `false` is any other link, which
-    /// records the movement and changes no number but `uncategorized`. It follows the accounts.
+    /// the forecast, whatever it is filed as. `false` is any other link, which records the
+    /// movement and changes no number. It follows the accounts.
     pub one_movement: bool,
+    /// The same as reports read it, for what happened: an account closed since its leg posted
+    /// still counts here, so closing one doesn't rewrite its past months.
+    pub one_movement_in_reports: bool,
     pub created_by: AttributionView,
 }
 
@@ -121,6 +124,7 @@ impl TransferLinkView {
                     currency: outflow.currency,
                 }),
             one_movement: link.one_movement,
+            one_movement_in_reports: link.one_movement_in_reports,
             created_by: AttributionView::new(&link.created),
         }
     }
@@ -143,7 +147,7 @@ async fn refuse_goal_on_movement(
     let has_goal = |splits: &[SplitInput]| splits.iter().any(|split| split.goal.is_some());
     let (out_splits, in_splits) = (current_splits(outflow), current_splits(inflow));
     if !(has_goal(&out_splits) || has_goal(&in_splits))
-        || !tx.both_in_counted_cash(outflow.id, inflow.id).await?
+        || !tx.would_be_one_movement(outflow.id, inflow.id).await?
     {
         return Ok(());
     }
@@ -184,7 +188,7 @@ pub(super) async fn check_splits_on_leg(
 ) -> Result<(), LedgerError> {
     let refused = if splits.len() > 1 {
         SPLIT_LINKED
-    } else if side.one_movement && splits.iter().any(|split| split.goal.is_some()) {
+    } else if side.one_movement_in_reports && splits.iter().any(|split| split.goal.is_some()) {
         GOAL_LINKED
     } else {
         return Ok(());

@@ -407,20 +407,21 @@ income, whatever it is filed as. It is out of `actual`, reduces no budget, pays 
 towards no goal, and `moved_between_counted_accounts` in plan versus actual says how much. Each leg
 keeps its category, which counts again if the link goes. Only the smaller leg's amount moved: a fee
 stays what its leg is filed as, and a link of -1,250.00 to +12.50 still spends 1,237.50. Across
-currencies all of each leg moved, so check those before you link. Net worth and the forecast's cash
+currencies a link doesn't read an exchange rate, so all of each leg moved: check those before you link. Net worth and the forecast's cash
 read balances, so a link changes neither. `spending_newer_than_balance` drops what moved only when
-neither balance shows it.
+both legs are posted and newer than their balances.
 
 **Any other link** (`one_movement: false`), to a brokerage, a loan, a closed account or an account
 that isn't the household's, records the movement and changes no number: that money left counted
-cash, so an auto-invest stays spending and keeps paying its bill. The one exception is that any
-link takes what it says out of `uncategorized` and `uncategorized_spending`, as you have said what
-it is. It reads the accounts at the time, so closing an account, or changing `belongs_to`, a class
-or `include_in_forecast`, changes what its links mean, history included.
+cash, so an auto-invest stays spending and keeps paying its bill. An uncategorized leg stays on
+`uncategorized` until you file it. Flags and classes are read at the time, so changing `belongs_to`,
+a class or `include_in_forecast` changes what its links mean, history included. Closing an account
+doesn't change the past: reports still count it for a leg posted before it closed
+(`one_movement_in_reports`), while the forecast reads it as it is now.
 
 **What a leg may hold.** One split at most, since part of a split transaction may be spending,
 so one with more is refused, and a leg can't take more until its link is removed. A goal only
-on a link with `one_movement: false`: money moved between counted accounts is still cash. A leg can
+on a link with `one_movement_in_reports: false`: money moved between counted accounts is still cash. A leg can
 be on a closed account.
 
 **When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it. A

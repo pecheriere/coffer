@@ -40,7 +40,7 @@ use crate::ledger::plan_report::PlanReportQuery;
                    counted accounts says moved is out of all of these, whatever it is filed as: \
                    `moved_between_counted_accounts` says what left and what arrived, per month \
                    and currency, and a difference between the legs stays as filed. Any other link \
-                   changes nothing here but `uncategorized`, which any link's movement leaves.\n\n\
+                   changes nothing here. An account closed since its leg posted still counts.\n\n\
                    An occurrence a person settled (`settlePlanItem`) stays in `planned`, since it \
                    is what was planned: a row's `settled` says how much of `planned` it is, and \
                    the list `settled` says which item, for which month, and whether `paid` or \

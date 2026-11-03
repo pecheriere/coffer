@@ -5,7 +5,7 @@ use axum::http::Method;
 use coffer_domain::ids::AccountId;
 use serde_json::{Value, json};
 
-use super::{World, budget, goal, is_empty, row, usd, world};
+use super::{TRANSACTIONS, World, budget, goal, is_empty, noon, row, usd, world};
 
 const OCTOBER: &str = "2026-10";
 
@@ -344,48 +344,106 @@ async fn a_link_to_an_invested_or_long_term_account_changes_no_number() {
     assert_eq!(row(&before, OCTOBER, invest)["actual"], usd(500_000));
 }
 
-/// Closing an account ends what its links say, read at the time as every count is.
+impl World {
+    /// Closes an account on `day`, whatever day the report is read.
+    async fn closed_on(&self, account: AccountId, day: &str) {
+        self.server.clock.set(noon(day));
+        self.admin_send(
+            Method::PATCH,
+            &format!("/api/v1/accounts/{account}"),
+            &json!({"closed": true}),
+        )
+        .await;
+        self.server.clock.set(noon(super::TODAY));
+    }
+}
+
+/// A move to savings in October is still one when savings closes in November: closing an account
+/// says nothing about its past months, or the last sweep before it closed.
 #[tokio::test]
-async fn a_link_to_a_closed_account_changes_no_number() {
+async fn closing_an_account_says_nothing_about_its_past() {
     let world = world().await;
     let checking = world.checking().await;
     let savings = world.savings().await;
     let food = world.expense("Food").await;
     let outflow = world.posted(checking, "2026-10-05", -50_000, food).await;
     let inflow = world.manual(savings, "2026-10-05", 50_000).await;
-    world.linked(&outflow, &inflow).await;
-    assert!(is_empty(&world.october().await, "rows"), "one movement");
+    let made = world.linked(&outflow, &inflow).await;
+    let before = world.october().await;
+    assert!(is_empty(&before, "rows"), "one movement");
 
-    world
-        .admin_send(
-            Method::PATCH,
-            &format!("/api/v1/accounts/{savings}"),
-            &json!({"closed": true}),
+    world.closed_on(savings, "2026-11-10").await;
+
+    assert_eq!(world.october().await, before);
+    let (_, link) = world
+        .send(
+            Method::GET,
+            &format!("/api/v1/transfer-links/{}", made["id"].as_str().unwrap()),
+            &world.admin,
+            None,
         )
         .await;
-
+    let link: Value = serde_json::from_str(&link).unwrap();
     assert_eq!(
-        row(&world.october().await, OCTOBER, food)["actual"],
-        usd(50_000)
+        link["one_movement"], false,
+        "the forecast reads it as it is"
     );
+    assert_eq!(link["one_movement_in_reports"], true);
 }
 
-/// Any link says where an uncategorized outflow went, so it leaves that list, and only what the
-/// link says: 7.00 was sent and 3.00 arrived, and 4.00 stays asked about.
+/// A leg posted the day after the close may be the same day in the household's zone, so it still
+/// counts; one posted later went to an account that was shut, and stays spending.
 #[tokio::test]
-async fn any_link_takes_what_it_says_out_of_uncategorized() {
-    let world = world().await;
-    let checking = world.checking().await;
-    let fund = world.holding("College fund", "education").await;
-    let outflow = world.manual(checking, "2026-10-06", -700).await;
-    let inflow = world.manual(fund, "2026-10-06", 300).await;
-    assert_eq!(world.october().await["uncategorized"][0]["total"], usd(700));
+async fn a_leg_posted_after_the_close_makes_no_movement() {
+    for (posted_on, actual) in [("2026-10-05", 0), ("2026-10-06", 50_000)] {
+        let world = world().await;
+        let checking = world.checking().await;
+        let savings = world.savings().await;
+        let food = world.expense("Food").await;
+        let outflow = world.posted(checking, "2026-10-04", -50_000, food).await;
+        let inflow = world.manual(savings, posted_on, 50_000).await;
+        world.linked(&outflow, &inflow).await;
 
-    world.linked(&outflow, &inflow).await;
+        world.closed_on(savings, "2026-10-04").await;
 
-    let report = world.october().await;
-    assert_eq!(report["uncategorized"][0]["total"], usd(400));
-    assert!(is_empty(&report, "moved_between_counted_accounts"));
+        let report = world.october().await;
+        let spent = report["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["category"] == json!(food))
+            .map_or(json!(0), |row| row["actual"]["minor_units"].clone());
+        assert_eq!(spent, actual);
+    }
+}
+
+/// A contribution linked to a 529 or a brokerage is real spending (B9), so uncategorized it stays
+/// on the list, all of it, until it is filed. A `transfer` category clears it, as any outflow.
+#[tokio::test]
+async fn a_link_out_of_counted_cash_stays_uncategorized_until_filed() {
+    for kind in ["education", "brokerage"] {
+        let world = world().await;
+        let checking = world.checking().await;
+        let other = world.holding("Elsewhere", kind).await;
+        let outflow = world.manual(checking, "2026-10-06", -500_000).await;
+        let inflow = world.manual(other, "2026-10-06", 500_000).await;
+
+        world.linked(&outflow, &inflow).await;
+
+        let report = world.october().await;
+        assert_eq!(report["uncategorized"][0]["total"], usd(500_000));
+        assert!(is_empty(&report, "moved_between_counted_accounts"));
+
+        let moved = world.category("Moved", "transfer").await;
+        world
+            .admin_send(
+                Method::PATCH,
+                &format!("{TRANSACTIONS}/{outflow}"),
+                &json!({"splits": [{"category": moved, "minor_units": -500_000}]}),
+            )
+            .await;
+        assert!(is_empty(&world.october().await, "uncategorized"));
+    }
 }
 
 /// Money between two accounts that aren't the household's stays in `not_the_households`.

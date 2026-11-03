@@ -22,8 +22,8 @@ use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
 use crate::settlements;
 use crate::transfer_links::{
-    after_moved, amount_unsaid, both_counted, counted_cash, link_amount, link_legs, link_stands,
-    moved_minor, said_minor,
+    after_moved, both_counted, both_counted_when_posted, counted_cash, counted_when_posted,
+    link_amount, link_legs, link_stands, moved_minor,
 };
 use crate::{
     AccountRecord, BalanceSnapshot, ConnectionStatus, PlannedItemRecord, ProviderAccountRecord,
@@ -204,7 +204,7 @@ macro_rules! counts_against_goal {
 const CATEGORY_SPENT: &str = concat!(
     "SELECT s.category_id AS category, t.currency AS currency, \
      MAX(0, -SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted),
     ")) AS spent_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id, ",
     shown_this_month!(),
@@ -214,13 +214,15 @@ const CATEGORY_SPENT: &str = concat!(
     " GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
 );
 
-/// An outflow with no splits at all, in `t`, and something of it no link says where it went.
+/// An outflow with no splits at all, in `t`, and something of it that didn't only move, by
+/// `$counted`. Any other link leaves it here until it is filed: money to a 529 or a brokerage is
+/// real spending (spec §8.11 B9), so it stays on a list.
 macro_rules! uncategorized {
-    () => {
+    ($counted:ident) => {
         concat!(
             "FILTER (WHERE t.amount_minor < 0 AND NOT EXISTS \
              (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id) AND ",
-            amount_unsaid!(),
+            after_moved!("t.amount_minor", $counted),
             " < 0)"
         )
     };
@@ -228,11 +230,11 @@ macro_rules! uncategorized {
 
 const LOOSE_ENDS: &str = concat!(
     "SELECT t.currency AS currency, COUNT(*) ",
-    uncategorized!(),
+    uncategorized!(both_counted),
     " AS uncategorized_count, COALESCE(-SUM(",
-    amount_unsaid!(),
+    after_moved!("t.amount_minor", both_counted),
     ") ",
-    uncategorized!(),
+    uncategorized!(both_counted),
     ", 0) AS uncategorized_minor, SUM(t.flag_possible_duplicate) AS possible_duplicates FROM ",
     shown_this_month!(),
     " GROUP BY t.currency HAVING uncategorized_count > 0 OR possible_duplicates > 0 \
@@ -262,7 +264,7 @@ macro_rules! goal_spending {
             " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
                OR t.posted_on <= COALESCE(b.on_date, '') \
              ) AND ",
-            after_moved!("s.minor_units"),
+            after_moved!("s.minor_units", both_counted),
             " <> 0"
         )
     };
@@ -271,7 +273,7 @@ macro_rules! goal_spending {
 /// Spending linked to each goal, positive for money spent: see [`goal_spending`].
 const GOAL_SPENT: &str = concat!(
     "SELECT s.goal_id AS goal, MAX(0, -SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted),
     ")) AS spent_minor ",
     goal_spending!(),
     " GROUP BY s.goal_id ORDER BY s.goal_id"
@@ -297,7 +299,7 @@ const GOALS_LINKED_BOTH_SIDES: &str = concat!(
      JOIN accounts a ON a.id = t.account_id \
      WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
      AND ",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted),
     " < 0 AND ",
     counts_against_goal!(),
     " AND t.posted_on <= ?1 GROUP BY s.goal_id HAVING MAX(",
@@ -308,7 +310,8 @@ const GOALS_LINKED_BOTH_SIDES: &str = concat!(
 );
 
 /// What of the outflow `t` a link says moved to a counted account in the same currency whose own
-/// balance doesn't show it either, up to the bound `as_of`.
+/// balance doesn't show it either, up to the bound `as_of`. A pending inflow may or may not be in
+/// that balance, so it doesn't qualify: asking when nothing is wrong is the safe direction.
 macro_rules! moved_unseen {
     () => {
         concat!(
@@ -318,9 +321,9 @@ macro_rules! moved_unseen {
             link_stands!(),
             " AND ",
             both_counted!(),
-            " AND li.posted_on <= ?1 AND (li.pending = 1 OR li.posted_on > COALESCE(\
+            " AND li.pending = 0 AND li.posted_on <= ?1 AND li.posted_on > COALESCE(\
              (SELECT MAX(on_date) FROM balance_snapshots \
-              WHERE account_id = li.account_id AND on_date <= ?1), ''))), 0)"
+              WHERE account_id = li.account_id AND on_date <= ?1), '')), 0)"
         )
     };
 }
@@ -332,8 +335,8 @@ macro_rules! moved_unseen {
 /// it settles no debt its balance doesn't show. Closed cash isn't in the cash.
 ///
 /// A pending record its provider took back is no money at all. What a link says moved leaves
-/// too when the other leg is just as new on its own counted account, since then neither balance
-/// shows it and counted cash is right as it stands. With the other leg shown, this one is what
+/// too when the other leg is posted and newer than its own counted account's balance, since then
+/// no balance shows the deposit and counted cash isn't overstated. With the other leg shown, this one is what
 /// the balances are missing, and it stays.
 const NEWER_SPENDING: &str = concat!(
     "SELECT t.currency AS currency, \
@@ -362,17 +365,17 @@ const REPORT_ACTUALS: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, s.category_id AS category, c.kind AS kind, \
      t.currency AS currency, \
      COALESCE(SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted_when_posted),
     ") FILTER (WHERE NOT ",
     left_out_of_category!(),
     "), 0) AS net_minor, \
      COALESCE(ABS(SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted_when_posted),
     ") FILTER (WHERE ",
     left_out_of_category!(),
     ")), 0) AS left_out_minor, \
      COALESCE(ABS(SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted_when_posted),
     ") FILTER (WHERE t.flag_possible_duplicate = 1 AND ",
     adds_to_category!(),
     " AND ",
@@ -408,14 +411,14 @@ const REPORT_NOT_HOUSEHOLD: &str = concat!(
 const REPORT_MOVED: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, \
      COALESCE(SUM(",
-    moved_minor!(),
+    moved_minor!(both_counted_when_posted),
     ") FILTER (WHERE t.amount_minor < 0), 0) AS out_minor, \
      COALESCE(SUM(",
-    moved_minor!(),
+    moved_minor!(both_counted_when_posted),
     ") FILTER (WHERE t.amount_minor > 0), 0) AS in_minor \
      FROM transactions t \
      WHERE t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 AND ",
-    moved_minor!(),
+    moved_minor!(both_counted_when_posted),
     " > 0 GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
@@ -436,14 +439,14 @@ const LINKS_WITH_LEG_REMOVED: &str = concat!(
 const REPORT_GOAL_SPENT: &str = concat!(
     "SELECT s.goal_id AS goal, substr(t.posted_on, 1, 7) AS month, \
      COALESCE(-SUM(",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted_when_posted),
     ") FILTER (WHERE ",
     counts_against_goal!(),
     "), 0) AS spent_minor, \
      COALESCE(-SUM(s.minor_units) FILTER (WHERE NOT ",
     counts_against_goal!(),
     "), 0) + COALESCE(-SUM(s.minor_units - ",
-    after_moved!("s.minor_units"),
+    after_moved!("s.minor_units", both_counted_when_posted),
     ") FILTER (WHERE s.minor_units < 0 AND ",
     counts_against_goal!(),
     "), 0) AS left_out_minor \
@@ -459,11 +462,11 @@ const REPORT_GOAL_SPENT: &str = concat!(
 /// and nor is what happens on money that isn't the household's (spec §8.11 B10).
 const REPORT_UNCATEGORIZED: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, COUNT(*) ",
-    uncategorized!(),
+    uncategorized!(both_counted_when_posted),
     " AS uncategorized_count, COALESCE(-SUM(",
-    amount_unsaid!(),
+    after_moved!("t.amount_minor", both_counted_when_posted),
     ") ",
-    uncategorized!(),
+    uncategorized!(both_counted_when_posted),
     ", 0) AS uncategorized_minor \
      FROM transactions t JOIN accounts a ON a.id = t.account_id \
      WHERE t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 AND ",

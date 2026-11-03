@@ -59,23 +59,58 @@ macro_rules! both_counted {
 }
 pub(crate) use both_counted;
 
-/// Whether the link `l` is one movement now, read at the time like every count.
-macro_rules! one_movement {
+/// As [`both_counted`], for a report, which says what happened: an account closed later was
+/// counted when its leg posted, so closing it says nothing about January, nor about the last sweep
+/// before it closed. A day's slack, since `closed_at` is an instant and `posted_on` a day in the
+/// household's zone. The flags and the class are still read at the time (§8.11 B6).
+macro_rules! both_counted_when_posted {
     () => {
+        concat!(
+            counted_when_posted!("ao", "lo"),
+            " AND ",
+            counted_when_posted!("ai", "li")
+        )
+    };
+}
+pub(crate) use both_counted_when_posted;
+
+/// The account under the alias `$a` as [`both_counted_when_posted`] reads it for its leg `$leg`.
+macro_rules! counted_when_posted {
+    ($a:literal, $leg:literal) => {
+        concat!(
+            $a,
+            ".include_in_forecast = 1 AND ",
+            $a,
+            ".liquidity IN ('cash', 'short_term_liability') AND (",
+            $a,
+            ".closed_at IS NULL OR ",
+            $leg,
+            ".posted_on <= date(",
+            $a,
+            ".closed_at / 1000, 'unixepoch', '+1 day'))"
+        )
+    };
+}
+pub(crate) use counted_when_posted;
+
+/// Whether the link `l` is one movement, by `$counted`.
+macro_rules! one_movement {
+    ($counted:ident) => {
         concat!(
             "EXISTS (SELECT 1 FROM ",
             link_legs!(),
             " WHERE lk.id = l.id AND ",
             link_stands!(),
             " AND ",
-            both_counted!(),
+            $counted!(),
             ")"
         )
     };
 }
 
 /// What of the leg `t` a link says moved: all of the smaller leg, so a difference stays what it
-/// is filed as, and all of each leg across currencies, which have no difference without a rate.
+/// is filed as. Across currencies this doesn't read an exchange rate, so all of each leg moved,
+/// which is a known limit (spec §8.12 T5).
 macro_rules! link_amount {
     () => {
         "CASE WHEN lo.currency = li.currency \
@@ -84,10 +119,11 @@ macro_rules! link_amount {
 }
 pub(crate) use link_amount;
 
-/// The magnitude of the leg `t` that is one movement between counted cash, and 0 for any other
-/// transaction: the one definition behind every number in spec §8.12 T5 and T6.
+/// The magnitude of the leg `t` that is one movement between counted cash, by `$counted`, and 0
+/// for any other transaction: the one definition behind every number in spec §8.12 T5 and T6. The
+/// forecast passes [`both_counted`] and a report [`both_counted_when_posted`].
 macro_rules! moved_minor {
-    () => {
+    ($counted:ident) => {
         concat!(
             "COALESCE((SELECT ",
             link_amount!(),
@@ -96,7 +132,7 @@ macro_rules! moved_minor {
             " WHERE (lk.outflow_id = t.id OR lk.inflow_id = t.id) AND ",
             link_stands!(),
             " AND ",
-            both_counted!(),
+            $counted!(),
             "), 0)"
         )
     };
@@ -105,14 +141,14 @@ pub(crate) use moved_minor;
 
 /// `$value`, a signed amount on `t`, less what of it moved.
 macro_rules! after_moved {
-    ($value:literal) => {
+    ($value:literal, $counted:ident) => {
         concat!(
             "(",
             $value,
             " - MAX(-",
-            moved_minor!(),
+            moved_minor!($counted),
             ", MIN(",
-            moved_minor!(),
+            moved_minor!($counted),
             ", ",
             $value,
             ")))"
@@ -120,37 +156,6 @@ macro_rules! after_moved {
     };
 }
 pub(crate) use after_moved;
-
-/// The magnitude of the leg `t` a person has said where it went, whatever the other account:
-/// `uncategorized` asks only that (spec §8.12 T5).
-macro_rules! said_minor {
-    () => {
-        concat!(
-            "COALESCE((SELECT ",
-            link_amount!(),
-            " FROM ",
-            link_legs!(),
-            " WHERE (lk.outflow_id = t.id OR lk.inflow_id = t.id) AND ",
-            link_stands!(),
-            "), 0)"
-        )
-    };
-}
-pub(crate) use said_minor;
-
-/// The amount of `t`, an outflow, that nobody has said anything of.
-macro_rules! amount_unsaid {
-    () => {
-        concat!(
-            "(t.amount_minor - MAX(-",
-            said_minor!(),
-            ", MIN(",
-            said_minor!(),
-            ", t.amount_minor)))"
-        )
-    };
-}
-pub(crate) use amount_unsaid;
 
 /// A stored link.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,9 +165,11 @@ pub struct TransferLinkRecord {
     pub outflow: TransactionId,
     /// The leg with money coming in.
     pub inflow: TransactionId,
-    /// Both accounts are in counted cash and the link still stands, so reports and the forecast
-    /// take what moved as one movement.
+    /// Both accounts are in counted cash and the link still stands, so the forecast takes what
+    /// moved as one movement.
     pub one_movement: bool,
+    /// The same as a report reads it: an account closed since its leg posted still counts.
+    pub one_movement_in_reports: bool,
     /// Who made it and when.
     pub created: Attribution,
 }
@@ -175,6 +182,8 @@ pub struct TransferLinkSide {
     pub other: TransactionId,
     /// As [`TransferLinkRecord::one_movement`].
     pub one_movement: bool,
+    /// As [`TransferLinkRecord::one_movement_in_reports`].
+    pub one_movement_in_reports: bool,
 }
 
 /// A link to create. The caller has checked the legs.
@@ -193,6 +202,7 @@ fn link_from_row(row: &SqliteRow) -> Result<TransferLinkRecord, StoreError> {
         outflow: parsed(row, "outflow_id")?,
         inflow: parsed(row, "inflow_id")?,
         one_movement: int(row, "one_movement")? == 1,
+        one_movement_in_reports: int(row, "one_movement_in_reports")? == 1,
         created: Attribution {
             member: Some(parsed(row, "created_by_member")?),
             agent: parsed_opt(row, "created_by_agent")?,
@@ -208,8 +218,10 @@ async fn fetch_link(
 ) -> Result<TransferLinkRecord, StoreError> {
     let row = sqlx::query(concat!(
         "SELECT l.*, ",
-        one_movement!(),
-        " AS one_movement FROM transfer_links l WHERE l.id = ?"
+        one_movement!(both_counted),
+        " AS one_movement, ",
+        one_movement!(both_counted_when_posted),
+        " AS one_movement_in_reports FROM transfer_links l WHERE l.id = ?"
     ))
     .bind(id.to_string())
     .fetch_one(&mut *conn)
@@ -235,8 +247,10 @@ pub(crate) async fn sides_by_transaction(
             .push(other)
             .push(concat!(
                 " AS other, ",
-                one_movement!(),
-                " AS one_movement FROM transfer_links l WHERE l."
+                one_movement!(both_counted),
+                " AS one_movement, ",
+                one_movement!(both_counted_when_posted),
+                " AS one_movement_in_reports FROM transfer_links l WHERE l."
             ))
             .push(own)
             .push(" IN (");
@@ -257,6 +271,7 @@ pub(crate) async fn sides_by_transaction(
                     id: parsed(row, "id")?,
                     other: parsed(row, "other")?,
                     one_movement: int(row, "one_movement")? == 1,
+                    one_movement_in_reports: int(row, "one_movement_in_reports")? == 1,
                 },
             );
         }
@@ -293,13 +308,13 @@ impl StoreTx {
         fetch_link(&mut self.tx, id).await
     }
 
-    /// Whether the accounts of these two transactions are both in counted cash, which a link
-    /// between them would make one movement.
+    /// Whether a link between these two transactions would be one movement in a report, which
+    /// holds wherever it would in the forecast.
     ///
     /// # Errors
     ///
     /// Backend failures.
-    pub async fn both_in_counted_cash(
+    pub async fn would_be_one_movement(
         &mut self,
         outflow: TransactionId,
         inflow: TransactionId,
@@ -308,7 +323,7 @@ impl StoreTx {
             "SELECT 1 FROM transactions lo JOIN accounts ao ON ao.id = lo.account_id, \
              transactions li JOIN accounts ai ON ai.id = li.account_id \
              WHERE lo.id = ? AND li.id = ? AND ",
-            both_counted!()
+            both_counted_when_posted!()
         ))
         .bind(outflow.to_string())
         .bind(inflow.to_string())
