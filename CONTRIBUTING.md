@@ -80,8 +80,10 @@ scripts/staging.sh test api/sync.spec.mjs     # arguments go to Playwright
 scripts/staging.sh test --project=ui          # the pages only
 ```
 
-They need Node 24 or later on the machine, with npm 11.10 or later, the first to read
-`min-release-age` in `staging/e2e/.npmrc`, and run from `staging/e2e/` in
+CI's `e2e` job runs them on every pull request, on the image `docker-build` made, and keeps
+what a failing test saw as an artifact. They need Node 24 or later on the machine, with npm
+11.10 or later, the first to read `min-release-age` in `staging/e2e/.npmrc`, and run from
+`staging/e2e/` in
 [Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
 install scripts, and the browser comes from `browser.lock.json`, its archive's hash checked
 (about 150 MB in `staging/e2e/.browser`). Needs `unzip`. Each test gets its own server on a new copy of the template, and every
