@@ -337,13 +337,24 @@
 
 ## Accepted residual risks
 
-- **A staging seed restored on a real server.** The staging stack's admin signs in with
-  a private key committed to this repository. `serve` refuses a database where an admin
-  holds that credential unless `COFFER_PUBLIC_URL` is on localhost, which stops an
-  accident, not an operator who wants to: a host operator already controls the data. A
-  member can register that credential for themselves, as they can any other, and only
-  gains a key other people know; only an admin's counts, so it can't be used to stop the
-  server.
+- **A staging seed restored on a real server.** The staging stack's members sign in with
+  private keys committed to this repository. `serve` refuses a database where an admin
+  holds the seeded credential unless `COFFER_PUBLIC_URL` is on localhost. That is a guard
+  against an accident, not a security boundary. A host operator already controls the data,
+  and **localhost mode doesn't protect the seed**: a script holding the key needs no browser,
+  signs for `localhost` and sends a matching `Origin`, and coffer checks no `Host` header, so
+  anyone who can reach such an instance, on a LAN or through a proxy, can sign in as its admin.
+  The seed is safe only where nothing else can reach it, as in the staging stack, whose
+  containers have no other network and whose one way in is bound to `127.0.0.1`. `serve` logs
+  a warning when it serves the seed on an address that isn't loopback; the stack's containers
+  log it too, as they must listen on their internal network.
+- **A seed key registered on a real server.** Away from localhost, coffer refuses to register
+  a seeded key, by credential id or by public key, for any member, so nobody can add a key
+  everyone knows, or use one to stop the server: a member promoted to admin would otherwise
+  trip the refusal above at the next restart. If a database does trip it, restore a backup
+  from before, or remove the passkey on an instance reachable from that machine alone. Don't
+  put a proxied instance on a localhost URL to get there, since it then answers to the
+  committed key.
 - **A released account applies one record per write transaction.** After a
   member releases a held cursor, the sync takes the write lock once per record
   of that account's delta, up to the 100,000 records a fetch may hold. Others

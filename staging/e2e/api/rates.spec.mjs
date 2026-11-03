@@ -1,5 +1,6 @@
 // Rate fetches for real against the mock ECB, on the job's own time: within a minute of a
 // currency being needed.
+import { addMonths } from '../../seed/household.mjs';
 import { eventually, expect, test } from '../support/fixtures.mjs';
 
 test('a failing source is recorded per currency and blocks only what needs it', async ({
@@ -37,7 +38,7 @@ test('the rates the seed fetched are the source\'s, with none at a weekend', asy
   api,
   server,
 }) => {
-  const from = `${String(Number(server.day.slice(0, 4)) - 1)}${server.day.slice(4)}`;
+  const from = addMonths(server.day, -12);
 
   const { body } = await api.get(`/fx/rates?currency=GBP&from=${from}&to=${server.day}`);
 

@@ -3,13 +3,11 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { CheckedApi } from '../support/api.mjs';
-import { expect, test } from '../support/fixtures.mjs';
+import { BESIDE_PORT, expect, test } from '../support/fixtures.mjs';
 import { openapi } from '../support/openapi.mjs';
 import { Server, STAGING } from '../support/server.mjs';
 
 const execFile = promisify(execFileCallback);
-
-const BESIDE_PORT = 18099;
 
 test('a server does not see what another wrote', async ({ api, server }) => {
   const account = server.seeded.accounts.current;
@@ -35,7 +33,7 @@ test('the image serves the API document in this checkout', async ({ api }) => {
 });
 
 test('the seed cannot start away from localhost', async ({ server }) => {
-  const refused = await execFile(STAGING, ['elsewhere', server.day]).then(
+  const refused = await execFile(STAGING, ['elsewhere', server.day], { timeout: 60_000 }).then(
     () => undefined,
     (failure) => failure,
   );

@@ -5,16 +5,25 @@ import { test as base, expect } from '@playwright/test';
 import { CheckedApi } from './api.mjs';
 import { Server } from './server.mjs';
 
+// One each for the workers. 18080 is the served copy, and BESIDE_PORT a test's second server.
 const FIRST_PORT = 18081;
+const LAST_PORT = 18098;
+export const BESIDE_PORT = 18099;
 
 export const test = base.extend({
   seedDay: [process.env.STAGING_TODAY, { option: true }],
 
   server: async ({ seedDay }, use, testInfo) => {
-    const server = await Server.start(FIRST_PORT + testInfo.parallelIndex, seedDay);
-    await use(server);
-    const logs = await server.logs();
-    await server.stop();
+    const port = FIRST_PORT + testInfo.parallelIndex;
+    if (port > LAST_PORT) throw new Error(`no port left for worker ${testInfo.parallelIndex}`);
+    const server = await Server.start(port, seedDay);
+    let logs;
+    try {
+      await use(server);
+      logs = await server.logs();
+    } finally {
+      await server.stop();
+    }
     // Whatever a test was about, the server must not have panicked or logged a
     // credential on the way.
     expect(logs.includes('coffer panicked'), 'the server panicked').toBe(false);

@@ -12,6 +12,7 @@
 #   scripts/staging.sh start <port> [day]  a throwaway server on a copy of the template
 #   scripts/staging.sh start-empty <port>  a throwaway server holding nothing, with no admin
 #   scripts/staging.sh stop <port>         throw it away
+#   scripts/staging.sh sweep               remove the throwaway servers, keeping the one on 18080
 #   scripts/staging.sh elsewhere [day]     what the image does with the seed away from localhost
 #
 # COFFER_STAGING_IMAGE names an image to use instead of building one.
@@ -19,6 +20,7 @@ set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 state="$root/staging/.state"
+test_lock="$state/test.lock"
 image=${COFFER_STAGING_IMAGE:-coffer:staging}
 manual_port=18080
 relay=172.30.90.10
@@ -34,6 +36,35 @@ fail() {
   exit 1
 }
 
+# Names a directory under the state, which gets removed: nothing else may get that far.
+check_day() {
+  [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "a day is written YYYY-MM-DD"
+}
+
+# Names a container, and must be a port the stack publishes.
+check_port() {
+  [[ $1 =~ ^[0-9]+$ ]] && [ "$1" -ge 18080 ] && [ "$1" -le 18099 ] ||
+    fail "a port is from 18080 to 18099"
+}
+
+# Two test runs in one checkout would remove each other's servers. A run that died can't
+# let go, so its lock is taken over.
+lock_test_run() {
+  local holder
+  mkdir -p "$state"
+  if ! mkdir "$test_lock" 2>/dev/null; then
+    holder=$(cat "$test_lock/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      fail "the tests are already running in this checkout (process $holder)"
+    fi
+    rm -f "$test_lock/pid"
+    rmdir "$test_lock"
+    mkdir "$test_lock"
+  fi
+  echo $$ >"$test_lock/pid"
+  trap 'rm -f "$test_lock/pid"; rmdir "$test_lock" 2>/dev/null || true' EXIT
+}
+
 # A stack is one per machine: its network, ports and container names are fixed. Another
 # checkout's would be replaced under whoever is using it.
 refuse_another_checkout() {
@@ -41,7 +72,7 @@ refuse_another_checkout() {
   running=$(docker ps --filter label=com.docker.compose.project=coffer-staging \
     --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1)
   if [ -n "$running" ] && [ "$running" != "$root/staging" ]; then
-    fail "a stack is running from $running; run its 'down' first"
+    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker compose -p coffer-staging down'"
   fi
 }
 
@@ -102,8 +133,8 @@ fingerprint() {
 # relay and the staging CA in place of the CA bundle, which leaves it nothing else to
 # trust.
 create_server() {
-  local name=$1 port=$2
-  docker create --name "$name" --label coffer.staging=server \
+  local name=$1 port=$2 kind=${3:-server}
+  docker create --name "$name" --label "coffer.staging=$kind" \
     --network "$network" \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
     --mount "type=bind,source=$state/certs/trust/ca.crt,target=/etc/ssl/certs/ca-certificates.crt,readonly" \
@@ -153,6 +184,7 @@ build_template() {
 }
 
 ensure_template() {
+  check_day "$1"
   local day=$1 stamp dir="$state/templates/$1"
   stamp=$(fingerprint "$day")
   if [ ! -f "$dir/data.tar" ] || [ "$(cat "$dir/fingerprint" 2>/dev/null)" != "$stamp" ]; then
@@ -182,6 +214,7 @@ copy_template_to() {
 # Runs the image on a copy of the template with a public URL that isn't localhost, and
 # answers with its exit code.
 serve_elsewhere() {
+  check_day "$1"
   local day=$1 name=coffer-staging-elsewhere code
   docker rm -f -v "$name" >/dev/null 2>&1 || true
   docker create --name "$name" --label coffer.staging=server --network "$network" \
@@ -195,17 +228,29 @@ serve_elsewhere() {
   return "$code"
 }
 
+remove_servers() {
+  docker ps --all --quiet --filter "label=$1" | xargs -r docker rm -f -v >/dev/null
+}
+
 start_server() {
-  local port=$1 day=${2:-$(today)} name
+  local port=$1 day=${2-$(today)} name
+  check_port "$port"
+  check_day "$day"
   name=$(container "$port")
   docker rm -f -v "$name" >/dev/null 2>&1 || true
-  create_server "$name" "$port"
+  # The served copy stays when a test run sweeps up its own.
+  if [ "$port" = "$manual_port" ]; then
+    create_server "$name" "$port" manual
+  else
+    create_server "$name" "$port"
+  fi
   copy_template_to "$name" "$day"
   docker start "$name" >/dev/null
   wait_healthy "$name"
 }
 
 start_empty_server() {
+  check_port "$1"
   local port=$1 name
   name=$(container "$port")
   docker rm -f -v "$name" >/dev/null 2>&1 || true
@@ -215,6 +260,7 @@ start_empty_server() {
 }
 
 stop_server() {
+  check_port "$1"
   docker rm -f -v "$(container "$1")" >/dev/null 2>&1 || true
 }
 
@@ -229,13 +275,15 @@ case "${1:-}" in
     echo "staging: http://localhost:$manual_port (scripts/staging.sh link, for a passkey of your own)"
     ;;
   reset)
+    refuse_another_checkout
     day=$(today)
     ensure_template "$day"
     start_server "$manual_port" "$day"
     echo "staging: http://localhost:$manual_port is back to the template"
     ;;
   down)
-    docker ps --all --quiet --filter label=coffer.staging=server | xargs -r docker rm -f -v >/dev/null
+    refuse_another_checkout
+    remove_servers coffer.staging
     compose down --volumes --remove-orphans
     rm -rf "$state"
     ;;
@@ -248,6 +296,7 @@ case "${1:-}" in
   template)
     shift
     if [ "$#" -eq 0 ]; then set -- "$(today)"; fi
+    for day in "$@"; do check_day "$day"; done
     refuse_another_checkout
     ensure_mocks
     ensure_templates "$@"
@@ -255,6 +304,7 @@ case "${1:-}" in
   test)
     shift
     refuse_another_checkout
+    lock_test_run
     build_image
     ensure_mocks
     npm ci --prefix "$root/staging/e2e"
@@ -264,20 +314,28 @@ case "${1:-}" in
     npx playwright install --only-shell chromium
     npx playwright test "$@"
     ;;
+  sweep)
+    refuse_another_checkout
+    remove_servers coffer.staging=server
+    ;;
   elsewhere)
-    serve_elsewhere "${2:-$(today)}"
+    refuse_another_checkout
+    serve_elsewhere "${2-$(today)}"
     ;;
   start)
-    start_server "${2:?a port from 18081 to 18099}" "${3:-}"
+    refuse_another_checkout
+    start_server "${2:?a port from 18081 to 18099}" ${3+"$3"}
     ;;
   start-empty)
+    refuse_another_checkout
     start_empty_server "${2:?a port from 18081 to 18099}"
     ;;
   stop)
+    refuse_another_checkout
     stop_server "${2:?a port}"
     ;;
   *)
-    sed -n '2,14p' "$0" | cut -c 3- >&2
+    sed -n '2,18p' "$0" | cut -c 3- >&2
     exit 2
     ;;
 esac

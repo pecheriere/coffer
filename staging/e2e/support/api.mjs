@@ -2,6 +2,12 @@
 // checked against the OpenAPI document.
 import { problemsWith } from './openapi.mjs';
 
+// JSON if it says it is; any other body is kept as text, for the document to refuse.
+function parseBody(text, type) {
+  if (text === '') return undefined;
+  return type.endsWith('json') ? JSON.parse(text) : text;
+}
+
 export class CheckedApi {
   constructor(base, token) {
     this.base = base;
@@ -19,7 +25,7 @@ export class CheckedApi {
     });
     const type = (response.headers.get('content-type') ?? '').split(';')[0];
     const text = await response.text();
-    const parsed = text === '' ? undefined : JSON.parse(text);
+    const parsed = parseBody(text, type);
     const route = path.split('?')[0];
     const problems = problemsWith(method, `/api/v1${route}`, response.status, type, parsed);
     if (problems.length > 0) {

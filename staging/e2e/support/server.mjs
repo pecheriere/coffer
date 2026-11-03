@@ -30,7 +30,8 @@ export class Server {
 
   // With no day, the server holds nothing: no template, and no admin yet.
   static async start(port, day) {
-    await execFile(STAGING, day ? ['start', String(port), day] : ['start-empty', String(port)]);
+    const command = day ? ['start', String(port), day] : ['start-empty', String(port)];
+    await execFile(STAGING, command, { timeout: 60_000 });
     return new Server(port, day);
   }
 
@@ -41,7 +42,7 @@ export class Server {
       `coffer-staging-${this.port}`,
       '/coffer',
       'bootstrap-link',
-    ]);
+    ], { timeout: 30_000 });
     return stdout.trim();
   }
 
@@ -55,11 +56,12 @@ export class Server {
   async logs() {
     const { stdout, stderr } = await execFile('docker', ['logs', `coffer-staging-${this.port}`], {
       maxBuffer: 16 * 1024 * 1024,
+      timeout: 30_000,
     });
     return stdout + stderr;
   }
 
   stop() {
-    return execFile(STAGING, ['stop', String(this.port)]);
+    return execFile(STAGING, ['stop', String(this.port)], { timeout: 60_000 });
   }
 }
