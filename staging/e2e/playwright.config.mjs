@@ -1,5 +1,6 @@
 import { defineConfig } from '@playwright/test';
 
+import { browserExecutable } from './support/browser-lock.mjs';
 import { days } from './support/days.mjs';
 
 // Set once here for the workers too, so a run crossing midnight stays on one day.
@@ -19,6 +20,10 @@ export default defineConfig({
   use: { screenshot: 'only-on-failure' },
   projects: [
     { name: 'api', testDir: './api' },
-    { name: 'ui', testDir: './ui' },
+    {
+      name: 'ui',
+      testDir: './ui',
+      use: { launchOptions: { executablePath: browserExecutable() } },
+    },
   ],
 });

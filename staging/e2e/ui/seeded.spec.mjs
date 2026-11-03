@@ -22,7 +22,9 @@ test('an admin binds the unbound account, and net worth counts it', async ({
 }) => {
   await signInSeeded(page, server, authenticator, 'alex');
   await page.goto(`${server.base}/forecast`);
-  await expect(page.getByText('Bramblewood Travel Saver')).toBeVisible();
+  await expect(
+    page.getByRole('listitem').filter({ hasText: 'Bramblewood Travel Saver' }),
+  ).toBeVisible();
 
   await page.goto(`${server.base}/connections`);
   // An account waiting for this opens by itself.
@@ -35,5 +37,7 @@ test('an admin binds the unbound account, and net worth counts it', async ({
 
   // The seed's answer and $2,500.00 at 1.10.
   await page.goto(`${server.base}/net-worth`);
-  await expect(page.getByText('183,763.03').first()).toBeVisible();
+  await expect(page.locator('h2.answer-label:has-text("Net worth on") + *')).toHaveText(
+    '183,763.03 EUR',
+  );
 });

@@ -309,9 +309,8 @@ case "${1:-}" in
     ensure_mocks
     npm ci --prefix "$root/staging/e2e"
     cd "$root/staging/e2e"
-    # The one browser the virtual authenticator works in, at the version the lockfile's
-    # Playwright names.
-    npx playwright install --only-shell chromium
+    # The one browser the virtual authenticator works in, its archive's hash checked.
+    node support/install-browser.mjs
     npx playwright test "$@"
     ;;
   sweep)

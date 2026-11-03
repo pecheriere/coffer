@@ -7,16 +7,15 @@ test.use({ seedDay: null });
 test('the first admin sets up through the link, makes a token and signs in again', async ({
   page,
   server,
-  authenticator,
+  // Asked for so that the page has one: the ceremonies below talk to it.
+  authenticator: _authenticator,
 }) => {
-  expect(authenticator.authenticatorId).toBeTruthy();
-
   await page.goto(await server.setupLink());
   await expect(page.getByRole('heading', { name: 'Create your passkey' })).toBeVisible();
   await page.getByLabel('Username').fill('first');
   await page.getByLabel('Display name').fill('First Admin');
   await page.getByRole('button', { name: 'Create passkey' }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith('/setup/'));
+  await page.waitForURL('**/account');
 
   await page.goto(`${server.base}/account`);
   await page.getByLabel('Name', { exact: true }).fill('from the page');
@@ -28,11 +27,13 @@ test('the first admin sets up through the link, makes a token and signs in again
   expect(status).toBe(200);
   expect(body.member.username).toBe('first');
   expect(body.agent.name).toBe('from the page');
+  const write = await api.post('/accounts', { name: 'No', kind: 'savings', currency: 'EUR' });
+  expect(write.status).toBe(403);
 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.waitForURL('**/login');
 
   await signIn(page, server, 'first');
-  await page.goto(`${server.base}/account`);
+  await expect(page).toHaveURL(`${server.base}/account`);
   await expect(page.getByRole('heading', { name: 'Create a token' })).toBeVisible();
 });
