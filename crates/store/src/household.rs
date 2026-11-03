@@ -3,6 +3,8 @@
 use coffer_domain::identity::ThemeName;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{ForecastSettings, SafetyFloor};
+use coffer_domain::time::IanaZone;
+use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteExecutor};
 
@@ -120,7 +122,41 @@ pub(crate) async fn fetch_display_currency<'e>(
         .transpose()
 }
 
+pub(crate) async fn fetch_household_zone<'e>(
+    executor: impl SqliteExecutor<'e>,
+) -> Result<Option<IanaZone>, StoreError> {
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT timezone FROM household_settings WHERE id = 1")
+            .fetch_optional(executor)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+    stored
+        .flatten()
+        .map(|name| IanaZone::parse(&name).map_err(StoreError::backend))
+        .transpose()
+}
+
+/// Every household setting, seen at one moment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HouseholdSettingsRecord {
+    pub forecast: ForecastSettings,
+    /// `None` while none was chosen.
+    pub display_currency: Option<Currency>,
+    /// `None` while none was chosen, and the server's default applies.
+    pub timezone: Option<IanaZone>,
+}
+
 impl Store {
+    /// The zone an admin chose for the household, or `None` while the server's
+    /// default applies.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored name that is not a zone.
+    pub async fn household_zone(&self) -> Result<Option<IanaZone>, StoreError> {
+        fetch_household_zone(&self.pool).await
+    }
+
     /// The currency the household's net worth is shown in, or `None` while
     /// none was chosen.
     ///
@@ -140,21 +176,24 @@ impl Store {
         fetch_forecast_settings(&self.pool).await
     }
 
-    /// The forecast settings and the display currency, seen at one moment: read apart,
-    /// a patch changing both could show between them as a state that never existed.
+    /// Every household setting, seen at one moment: read apart, a patch changing
+    /// several could show between them as a state that never existed.
     ///
     /// # Errors
     ///
-    /// Backend failures, including a stored row that is not valid settings or a stored
-    /// code that is not a currency.
-    pub async fn household_settings(
-        &self,
-    ) -> Result<(ForecastSettings, Option<Currency>), StoreError> {
+    /// Backend failures, including a stored row that is not valid settings, a stored
+    /// code that is not a currency or a stored name that is not a zone.
+    pub async fn household_settings(&self) -> Result<HouseholdSettingsRecord, StoreError> {
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
-        let settings = fetch_forecast_settings(&mut *tx).await?;
-        let display = fetch_display_currency(&mut *tx).await?;
+        let forecast = fetch_forecast_settings(&mut *tx).await?;
+        let display_currency = fetch_display_currency(&mut *tx).await?;
+        let timezone = fetch_household_zone(&mut *tx).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
-        Ok((settings, display))
+        Ok(HouseholdSettingsRecord {
+            forecast,
+            display_currency,
+            timezone,
+        })
     }
 
     /// The household theme, or `None` if none was chosen. A stored value
@@ -250,6 +289,61 @@ impl StoreTx {
         fetch_display_currency(&mut *self.tx).await
     }
 
+    /// With no settings row yet, makes it with the forecast defaults; an existing
+    /// row keeps every value.
+    async fn ensure_settings_row(&mut self) -> Result<(), StoreError> {
+        let defaults = ForecastSettings::default();
+        let (kind, minor, floor_currency, months) = floor_columns(&defaults);
+        sqlx::query(
+            "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
+             floor_months, include_income, default_horizon_months, stale_after_days) \
+             VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(kind)
+        .bind(minor)
+        .bind(floor_currency)
+        .bind(months)
+        .bind(i64::from(defaults.include_income))
+        .bind(i64::from(defaults.default_horizon_months))
+        .bind(i64::from(defaults.stale_after_days))
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// The zone chosen for the household as seen by this transaction; see
+    /// [`Store::household_zone`].
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored name that is not a zone.
+    pub async fn household_zone(&mut self) -> Result<Option<IanaZone>, StoreError> {
+        fetch_household_zone(&mut *self.tx).await
+    }
+
+    /// Choose the household's zone, or with `None` return to the server's default.
+    /// `today` is the household's day in the zone that now applies. Nothing already
+    /// stored moves: a day stays the day it was given. Only a daily table that now
+    /// runs past `today` changes, since it would hold a day still to come.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored row that no longer parses.
+    pub async fn set_household_zone(
+        &mut self,
+        zone: Option<&IanaZone>,
+        today: Date,
+    ) -> Result<(), StoreError> {
+        self.ensure_settings_row().await?;
+        sqlx::query("UPDATE household_settings SET timezone = ? WHERE id = 1")
+            .bind(zone.map(IanaZone::name))
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        self.refresh_after_zone_change(today).await
+    }
+
     /// Set the display currency and answer the one it replaced, which is the
     /// new one again when nothing changed. With no settings row yet, the row
     /// is made with the forecast defaults; an existing row keeps every other
@@ -263,25 +357,12 @@ impl StoreTx {
         currency: Currency,
     ) -> Result<Option<Currency>, StoreError> {
         let previous = fetch_display_currency(&mut *self.tx).await?;
-        let defaults = ForecastSettings::default();
-        let (kind, minor, floor_currency, months) = floor_columns(&defaults);
-        sqlx::query(
-            "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
-             floor_months, include_income, default_horizon_months, stale_after_days, \
-             display_currency) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (id) DO UPDATE SET display_currency = excluded.display_currency",
-        )
-        .bind(kind)
-        .bind(minor)
-        .bind(floor_currency)
-        .bind(months)
-        .bind(i64::from(defaults.include_income))
-        .bind(i64::from(defaults.default_horizon_months))
-        .bind(i64::from(defaults.stale_after_days))
-        .bind(currency.as_str())
-        .execute(&mut *self.tx)
-        .await
-        .map_err(StoreError::from_sqlx)?;
+        self.ensure_settings_row().await?;
+        sqlx::query("UPDATE household_settings SET display_currency = ? WHERE id = 1")
+            .bind(currency.as_str())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
         if previous != Some(currency) {
             self.refresh_after_display_change().await?;
         }

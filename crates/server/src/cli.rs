@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use coffer_domain::identity::Username;
-use coffer_domain::time::{Clock as _, SystemClock};
+use coffer_domain::time::SystemClock;
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -23,6 +23,7 @@ use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
 use crate::config::{Config, ConfigError};
 use crate::egress::{Egress, EgressError};
 use crate::fx::{self, FxService, rate_provider};
+use crate::household_time::HouseholdTime;
 use crate::http::idempotency::RequestHasher;
 use crate::http::{self, AppState};
 use crate::ledger::Ledger;
@@ -259,22 +260,30 @@ async fn execute(
         }
         ConfiguredCommand::RebuildNetWorth => {
             let store = open_existing_store(&config).await?;
-            let today = SystemClock.now().to_zoned(config.timezone).date();
+            let time = HouseholdTime::new(
+                store.clone(),
+                Arc::new(SystemClock),
+                config.default_timezone,
+            );
+            let through = time.runs_through();
             // In short transactions under the write lock like any writer's, so
             // other writes get their turn and none of them is lost. The count is what
             // this run wrote, not what the table holds: a display currency change or a
             // large rate can start it over, and a balance can add rows it didn't write.
-            let rows = if let Some(rows) = store.try_rebuild_net_worth(today).await? {
+            let rows = if let Some(rows) = store.try_rebuild_net_worth(through.clone()).await? {
                 rows
             } else {
                 writeln!(out, "waiting for another net worth rebuild to finish")?;
                 out.flush()?;
-                store.rebuild_net_worth(today).await?
+                store.rebuild_net_worth(through).await?
             };
-            writeln!(
-                out,
-                "net worth rebuilt through {today}: {rows} rows written"
-            )?;
+            // Asked of the table, as the day is decided in the rebuild's own transactions.
+            let Some(last) = store.net_worth_state().await?.filled_through else {
+                return Err(CliError::Failed(
+                    "the net worth table holds no day after its rebuild".to_owned(),
+                ));
+            };
+            writeln!(out, "net worth rebuilt through {last}: {rows} rows written")?;
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -375,7 +384,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
         store.clone(),
         clock.clone(),
         Arc::clone(&access),
-        config.timezone.clone(),
+        config.default_timezone.clone(),
         config.fx_provider,
     ));
     let egress = Egress::from_config(&config)?;
@@ -391,7 +400,7 @@ pub async fn open_state(config: Config) -> Result<AppState, CliError> {
     let fx = Arc::new(FxService::new(
         store.clone(),
         clock.clone(),
-        config.timezone.clone(),
+        config.default_timezone.clone(),
         rate_provider(&config, &egress)?,
     ));
     Ok(AppState {

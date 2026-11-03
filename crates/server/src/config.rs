@@ -68,10 +68,10 @@ pub struct Config {
     /// own, from `COFFER_EGRESS_RELAY`. Only this configuration sets it, and
     /// it excludes [`Config::https_proxy`].
     pub egress_relay: Option<IpAddr>,
-    /// The household's time zone, from `COFFER_TIMEZONE` (an IANA name,
-    /// default `UTC`): provider timestamps become calendar days in it, and
-    /// it decides which day is today.
-    pub timezone: TimeZone,
+    /// The household's time zone while its settings choose none, from
+    /// `COFFER_TIMEZONE` (an IANA name, default `UTC`). Read it only through
+    /// [`crate::household_time::HouseholdTime`], which knows which applies.
+    pub default_timezone: TimeZone,
     /// How often each connection syncs on schedule, from
     /// `COFFER_SYNC_INTERVAL_HOURS` (1 to 24, default 6). A provider's own
     /// minimum interval can lengthen it.
@@ -154,7 +154,7 @@ impl fmt::Debug for Config {
             .field("session_absolute", &self.session_absolute)
             .field("https_proxy", &https_proxy)
             .field("egress_relay", &self.egress_relay)
-            .field("timezone", &self.timezone.iana_name())
+            .field("default_timezone", &self.default_timezone.iana_name())
             .field("sync_interval", &self.sync_interval)
             .field("simplefin_hosts", &self.simplefin_hosts)
             .field("plaid", &self.plaid)
@@ -258,7 +258,7 @@ impl Config {
             session_absolute: SignedDuration::from_hours(absolute_days * 24),
             https_proxy,
             egress_relay,
-            timezone: parse_timezone(&vars)?,
+            default_timezone: parse_timezone(&vars)?,
             sync_interval: SignedDuration::from_hours(sync_hours),
             simplefin_hosts: parse_simplefin_hosts(&vars)?,
             plaid: parse_plaid(&vars)?,

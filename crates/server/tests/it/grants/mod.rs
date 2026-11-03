@@ -348,6 +348,8 @@ impl World {
             .insert_source(NewSource {
                 connection,
                 provider_account,
+                dated_in: None,
+                transacted_in: None,
                 provider_txn_id: format!("txn-{}", record.id),
                 transaction: Some(record.id),
                 fields: ImportedFields {

@@ -22,6 +22,7 @@ impl SyncService {
         &self,
         connection: &ConnectionRecord,
         accounts: &[(Timestamp, Option<Timestamp>)],
+        zone: &TimeZone,
         today: Date,
     ) -> Result<(FetchResult, FetchMode), Failure> {
         let sealed = match (&connection.credentials, connection.status) {
@@ -47,7 +48,7 @@ impl SyncService {
                     accounts,
                     connection.last_success_at,
                     today,
-                    &self.config.timezone,
+                    zone,
                     max_days,
                     overlap_days,
                 )),
@@ -65,7 +66,7 @@ impl SyncService {
                 window_start,
                 cursor,
                 today,
-                timezone: &self.config.timezone,
+                timezone: zone,
             });
             // No store transaction is open here. Dropping the call on expiry
             // drops all it gathered, and the cursor moves only when applying.

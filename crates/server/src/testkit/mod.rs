@@ -298,7 +298,7 @@ impl TestServer {
             store.clone(),
             clock.clone(),
             Arc::clone(&access),
-            config.timezone.clone(),
+            config.default_timezone.clone(),
             config.fx_provider,
         ));
         let registry = registry(&config);
@@ -343,7 +343,7 @@ impl TestServer {
             fx: Arc::new(FxService::new(
                 self.store.clone(),
                 self.clock.clone(),
-                self.config.timezone.clone(),
+                self.config.default_timezone.clone(),
                 None,
             )),
             idempotency: Arc::new(RequestHasher::new(&self.key)),

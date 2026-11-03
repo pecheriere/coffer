@@ -82,7 +82,7 @@ impl Feeds {
             .server
             .clock
             .now()
-            .to_zoned(self.world.server.config.timezone.clone())
+            .to_zoned(self.world.server.config.default_timezone.clone())
             .date()
             .checked_sub(Span::new().days(ago))
             .unwrap()
