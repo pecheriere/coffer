@@ -4,18 +4,28 @@ use jiff::Timestamp;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 
 /// A source of the current time.
+///
+/// Instants are whole milliseconds, the precision the store keeps: a value the clock hands
+/// out is the value any later read of it shows. A source needing finer values must be a
+/// separate one, not a `Clock`.
 pub trait Clock: Send + Sync {
-    /// The current instant.
+    /// The current instant, in whole milliseconds.
     fn now(&self) -> Timestamp;
 }
 
-/// The real wall clock. The only place `Timestamp::now()` is permitted.
+/// `instant` cut to whole milliseconds, the way the store keeps it.
+#[must_use]
+pub fn whole_milliseconds(instant: Timestamp) -> Timestamp {
+    Timestamp::from_millisecond(instant.as_millisecond()).unwrap_or(instant)
+}
+
+/// The real wall clock, to the millisecond. The only place `Timestamp::now()` is permitted.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> Timestamp {
-        Timestamp::now()
+        whole_milliseconds(Timestamp::now())
     }
 }
 
@@ -84,9 +94,10 @@ mod manual {
 
     use jiff::{SignedDuration, Timestamp};
 
-    use super::Clock;
+    use super::{Clock, whole_milliseconds};
 
-    /// A clock that only moves when told to, for deterministic tests.
+    /// A clock that only moves when told to, for deterministic tests. Like the real clock
+    /// it holds whole milliseconds: anything finer is cut off when it is set.
     #[derive(Debug)]
     pub struct ManualClock(Mutex<Timestamp>);
 
@@ -94,19 +105,19 @@ mod manual {
         /// Creates a clock frozen at `start`.
         #[must_use]
         pub fn new(start: Timestamp) -> Self {
-            Self(Mutex::new(start))
+            Self(Mutex::new(whole_milliseconds(start)))
         }
 
         /// Moves the clock forward (or backward, for a negative duration),
         /// saturating at the bounds of the representable timestamp range.
         pub fn advance(&self, by: SignedDuration) {
             let mut now = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-            *now = now.saturating_add(by).unwrap_or(*now);
+            *now = whole_milliseconds(now.saturating_add(by).unwrap_or(*now));
         }
 
         /// Sets the clock to an absolute instant.
         pub fn set(&self, to: Timestamp) {
-            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = to;
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = whole_milliseconds(to);
         }
     }
 
@@ -114,5 +125,29 @@ mod manual {
         fn now(&self) -> Timestamp {
             *self.0.lock().unwrap_or_else(PoisonError::into_inner)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::Timestamp;
+
+    use super::{Clock as _, SystemClock, whole_milliseconds};
+
+    #[test]
+    fn the_real_clock_hands_out_whole_milliseconds() {
+        for _ in 0..1000 {
+            let now = SystemClock.now();
+            assert_eq!(now.subsec_nanosecond() % 1_000_000, 0);
+        }
+    }
+
+    #[test]
+    fn finer_values_are_cut_to_the_millisecond_the_store_keeps() {
+        let fine: Timestamp = "2027-01-15T12:00:00.123456789Z".parse().unwrap();
+        assert_eq!(
+            whole_milliseconds(fine),
+            "2027-01-15T12:00:00.123Z".parse::<Timestamp>().unwrap()
+        );
     }
 }

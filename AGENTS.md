@@ -168,7 +168,7 @@ a throwaway server and seed. What holds it together:
 ## Conventions
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
-- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`. A `Clock` hands out whole milliseconds, what the store keeps, so a save never answers with a time a later read shows differently; don't read back to round.
 - A day is the household's day, from `household_time::HouseholdTime`, read when it is
   asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
   can change it while the server runs (spec §8.7). A writer whose change depends on the
