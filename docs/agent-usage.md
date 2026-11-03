@@ -117,7 +117,9 @@ token's access.
   they are a 403 whose detail says "this action needs write access to
   every account" (or `transactions`). Unbound provider accounts are listed
   (in `GET /api/v1/provider-accounts` and in connections) only with `all`
-  at `transactions`; bound ones follow their account. A connection's
+  at `transactions`; bound ones follow their account. A connection itself is
+  listed only if it serves an account the token sees, at any level; one serving
+  no account yet needs an `all` grant, at any level. A connection's
   `last_error` could name any account it serves, so without `all` at
   `transactions` it is `null`, and so is `held_cursor` (below); its `status`
   still shows the problem. Using
@@ -498,10 +500,11 @@ the account's history, one per day with `source` `sync`, each day's last one,
 never over a balance the account already has for that day. They appear nowhere
 before the bind, so an unbound account adds nothing to a forecast. A balance
 that doesn't convert, was reported in a currency other than the account's, or
-is dated more than 31 days before the day it was reported is not brought in. So
+is dated more than 31 days before the day it was reported is not kept. So
 that a bind never reads an amount in the wrong currency, a provider account's
-last balance is cleared when its currency changes without a new balance, and
-the bind ignores a last balance more than 31 days old. The audit entry
+last balance is cleared when its currency changes without a new balance. The bind
+judges the last balance by the rule below, so an account whose only report is old
+still gets a balance, dated 31 days back. The audit entry
 `provider_account.bind` says what happened: `balances_brought_in`, the days
 `balances_first_day` and `balances_last_day`, `balances_other_currency` for those
 dropped, and `balances_already_there` for those skipped. It holds no amount.
@@ -510,7 +513,19 @@ kept for its unbound accounts. There is no way to unbind: a bound provider
 account stays bound. coffer syncs every connection on a schedule
 (`COFFER_SYNC_INTERVAL_HOURS`), and you can ask for a sync.
 
-- `GET /api/v1/connections` returns `{"items": [...]}`: each connection's
+A balance's date may honestly be old: it can be the day the balance last changed.
+A date within 31 days of the household's today is believed, and one later than today
+is dated today. For an older one on a bound account: with no balance yet, or a latest
+balance before the reported day, the amount is taken and dated 31 days back, so the
+balance can be older than its date says, and the audit entry gives `reported_on`. The
+amount the account already holds changes nothing. Anything else is refused, the
+account's transactions still come in, and the provider account's `old_balance_note`
+says so until a newer balance arrives, from a sync or set with `PUT`. It isn't an
+`error`, and it raises nothing in the forecast, where `balance_stale` is the only
+sign of an old balance. A balance you set with `PUT` may be dated any day.
+
+- `GET /api/v1/connections` returns `{"items": [...]}`, the connections the
+  token may see: each one's
   `status` (`active`, `error`, `reauth_required` or `removed`),
   `last_error` (sanitized), `last_attempt_at`, `last_success_at`,
   `next_sync_at`, `held_cursor` and the provider accounts the token may see.
@@ -561,6 +576,14 @@ account stays bound. coffer syncs every connection on a schedule
   contact Plaid or check their Plaid dashboard. The audit log records
   `connection.forget` rather than `connection.remove`. Tell the member this
   instead of retrying.
+- `POST /api/v1/provider-accounts/{provider_account_id}/dismiss` says an unbound
+  provider account is meant to stay unbound, so it raises no forecast caution
+  and is not counted as waiting to be set up; ask a member first. It stays in
+  the list (`unbound=true` included) with `dismissed_at` set, sync keeps
+  tracking it, and binding it later clears the dismissal. `.../restore` takes
+  it back. Both need `write`, are audited as `provider_account.dismiss` and
+  `provider_account.restore`, and answer 409 for a bound account, a state it
+  is already in, or a removed connection.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and

@@ -11,7 +11,7 @@ use coffer_server::ledger::settings::ForecastSettingsPatch;
 use coffer_server::secrets::SecretToken;
 use serde_json::{Value, json};
 
-use super::{SETTINGS, World, all, day, on, world};
+use super::{SETTINGS, TODAY, World, all, day, on, world};
 
 impl World {
     async fn settings_as(&self, token: &SecretToken) -> Value {
@@ -97,6 +97,47 @@ async fn it_rewrites_the_history_in_its_own_request() {
         .iter()
         .find(|row| row.account == golden.checking && row.on == day("2026-10-30"));
     assert_eq!(row.unwrap().display_minor, Some(492_302));
+}
+
+/// More rows than one transaction holds: the request doesn't wait for them, and until
+/// they are done a report has no number, not one in the old currency.
+#[tokio::test]
+async fn a_long_history_is_rewritten_after_the_request() {
+    let world = world().await;
+    world.display("USD").await;
+    for name in ["One", "Two"] {
+        let holder = world.holding(name, "USD").await;
+        world.balance(holder, "1970-01-01", 1_000).await;
+    }
+    let query = "from=2026-10-01&interval=month";
+    assert_eq!(world.report(query).await["through"], TODAY);
+
+    world.display("JPY").await;
+
+    assert_eq!(
+        world.settings_as(&world.admin).await["display_currency"],
+        "JPY"
+    );
+    let report = world.report(query).await;
+    assert_eq!(report["status"], "unavailable");
+    assert_eq!(report["blockers"], json!([{"kind": "rebuilding"}]));
+    assert_eq!(report["through"], Value::Null);
+    assert_eq!(report["points"], json!([]));
+
+    world
+        .server
+        .store
+        .finish_net_worth_rebuild(day(TODAY))
+        .await
+        .unwrap();
+    let report = world.report(query).await;
+    assert_eq!(report["through"], TODAY);
+    assert_ne!(report["status"], "unavailable");
+    assert!(
+        report["points"]
+            .as_array()
+            .is_some_and(|points| !points.is_empty())
+    );
 }
 
 #[tokio::test]

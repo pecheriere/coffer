@@ -36,6 +36,9 @@
 //! account, decided by [`authorize_account`]. A connection's last error is
 //! shown only to an actor who sees every account at `Transactions`.
 //!
+//! A connection serving no account the actor sees is treated as missing, and one
+//! serving no account at all needs an `all` grant ([`connection_visible`], spec §8.2).
+//!
 //! A planned item whose hint names an account the actor cannot see at
 //! `Transactions` is treated as missing: left out of lists and answered like
 //! an item that does not exist ([`plan_item_visible`], spec §8.9 R3). A
@@ -557,6 +560,23 @@ pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> boo
             .is_some_and(|level| level >= AccountLevel::Transactions),
         None => access.some_account_at(AccountLevel::Transactions),
     }
+}
+
+/// Whether an actor holding `access` may know a connection serving the accounts
+/// `bound` exists. A connection's label is a member's free text, which could name
+/// who an account is for, so it follows what it serves: one account the actor sees,
+/// at any level, is enough. With none bound it could come to serve any account, so
+/// only an `all` grant, at any level, shows it. Below that it is treated as missing:
+/// left out of lists, and no route naming it answers differently (spec §8.2).
+#[must_use]
+pub fn connection_visible(
+    access: &AccountAccess,
+    bound: impl IntoIterator<Item = AccountId>,
+) -> bool {
+    access.sees_every_account(AccountLevel::Balances)
+        || bound
+            .into_iter()
+            .any(|account| access.level_for(account).is_some())
 }
 
 /// Rejects a token scope above what `role` may exercise.

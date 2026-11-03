@@ -279,6 +279,12 @@ fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
     }
 }
 
+/// Whether the number reads this account: its balance is summed, or spending linked to a goal
+/// on it lowers a goal's need. A feed that stalls on any other account changes nothing.
+fn read_by_number(account: &AccountInput) -> bool {
+    not_counted(account).is_none() || account.goal_spending
+}
+
 fn account_line(account: &AccountInput, book: &mut Book) -> AccountLine {
     let reason = not_counted(account);
     if reason.is_none() {
@@ -613,10 +619,27 @@ fn cautions(
                 currency_supported: Currency::parse(&unbound.currency_raw).is_ok(),
             }),
     );
+    // Only a connection that could change the number: one that has no provider account yet
+    // (a first sync that failed), one with provider accounts still unbound, or one serving an
+    // account the number reads. The rest show as failing where connections are listed.
+    let read: BTreeSet<AccountId> = input
+        .accounts
+        .iter()
+        .filter(|account| read_by_number(account))
+        .map(|account| account.id)
+        .collect();
     cautions.extend(
         input
             .feeds
             .iter()
+            .filter(|feed| {
+                !feed.has_accounts
+                    || feed.serves.iter().any(|id| read.contains(id))
+                    || input
+                        .unbound
+                        .iter()
+                        .any(|unbound| unbound.connection == feed.connection)
+            })
             .map(|feed| Caution::ConnectionNeedsAttention {
                 connection: feed.connection,
                 label: feed.label.clone(),

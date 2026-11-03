@@ -139,9 +139,11 @@ async fn a_table_far_ahead_warns_once_a_day() {
     }
     assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
 
-    let mut tx = server.store.begin().await.unwrap();
-    tx.rebuild_net_worth(date(2026, 11, 3)).await.unwrap();
-    tx.commit().await.unwrap();
+    server
+        .store
+        .rebuild_net_worth(date(2026, 11, 3))
+        .await
+        .unwrap();
     server.clock.advance(hours(24));
     fx.keep_table_current().await.unwrap();
     assert_eq!(table_warnings(&start_log, "2044-03-03"), 2);
@@ -191,6 +193,99 @@ async fn the_migration_s_rebuild_runs_at_start() {
     let state = server.store.net_worth_state().await.unwrap();
     assert!(!state.rebuild_needed);
     assert_eq!(rows_of(&server.store, usd).await.len(), 41);
+}
+
+/// A rebuild a crash left part way goes on where it stopped, up to the day it began with,
+/// and the pass after it fills the days since.
+#[tokio::test]
+async fn a_rebuild_left_part_way_is_finished() {
+    let server = TestServer::new().await;
+    server.clock.set(noon(MONDAY));
+    let (one, two) = (
+        holding(&server.store, "USD").await,
+        holding(&server.store, "USD").await,
+    );
+    let started = date(2026, 9, 30);
+    for account in [one, two] {
+        snap(&server.store, account, date(2026, 9, 23), 100).await;
+    }
+    let mut tx = server.store.begin().await.unwrap();
+    let first = tx.rebuild_net_worth_batch(started, 1).await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(!first.finished);
+    let fx = service(&server, None);
+
+    fx.keep_table_current().await.unwrap();
+
+    let state = server.store.net_worth_state().await.unwrap();
+    assert!(!state.rebuild_needed);
+    assert_eq!(state.filled_through, Some(started));
+    assert_eq!(rows_of(&server.store, two).await.len(), 8);
+
+    fx.keep_table_current().await.unwrap();
+
+    assert_eq!(
+        server.store.net_worth_state().await.unwrap().filled_through,
+        Some(MONDAY)
+    );
+    assert_eq!(rows_of(&server.store, one).await.len(), 41);
+    assert_eq!(rows_of(&server.store, two).await.len(), 41);
+}
+
+/// With `coffer rebuild-net-worth` at work the job leaves the rebuild to it, and fails
+/// nothing; if the command dies the job takes it from there.
+#[tokio::test]
+async fn the_job_leaves_a_rebuild_to_the_command() {
+    let server = TestServer::new().await;
+    server.clock.set(noon(MONDAY));
+    let usd = holding(&server.store, "USD").await;
+    snap(&server.store, usd, date(2026, 9, 23), 100).await;
+    let held = server
+        .store
+        .hold_net_worth_rebuild_for_tests()
+        .unwrap()
+        .unwrap();
+    let fx = service(&server, None);
+    let start_log = log_marker();
+    let said = |start: &str| {
+        let logged = captured_log_text();
+        let (_, after) = logged.split_once(start).unwrap();
+        after
+            .lines()
+            .filter(|line| line.contains("INFO") && line.contains("another process is running"))
+            .count()
+    };
+
+    fx.keep_table_current().await.unwrap();
+    fx.keep_table_current().await.unwrap();
+
+    assert!(server.store.net_worth_state().await.unwrap().rebuild_needed);
+    assert_eq!(rows_of(&server.store, usd).await.len(), 0);
+    assert_eq!(said(&start_log), 1, "once, not every pass");
+
+    drop(held);
+    fx.keep_table_current().await.unwrap();
+
+    assert!(!server.store.net_worth_state().await.unwrap().rebuild_needed);
+    assert_eq!(rows_of(&server.store, usd).await.len(), 41);
+
+    // The next runner gets a line of its own.
+    let held = server
+        .store
+        .hold_net_worth_rebuild_for_tests()
+        .unwrap()
+        .unwrap();
+    server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE net_worth_state SET rebuild_needed = 1 WHERE id = ?",
+            "1",
+        )
+        .await
+        .unwrap();
+    fx.keep_table_current().await.unwrap();
+    assert_eq!(said(&start_log), 2);
+    drop(held);
 }
 
 /// The table's day moves while a fetch hangs: two tasks, not one.

@@ -14,6 +14,7 @@ mod bucket_channels;
 mod endpoints;
 mod fx_channels;
 mod hidden_accounts;
+mod hidden_connections;
 mod management;
 mod net_worth_channels;
 mod plan_channels;
