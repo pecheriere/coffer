@@ -123,6 +123,11 @@ a throwaway server and seed. What holds it together:
   of the stack's own, on a Docker network with no route out. A scenario is named by the
   request, a SimpleFin setup token or an ECB currency, never set as a mode, so tests
   running side by side don't disturb each other.
+- **End-to-end tests (`scripts/staging.sh test`, `staging/e2e/`) cover the image:** real
+  HTTP, the real configuration and the egress rules, with each server a new copy and every
+  API response checked against `docs/api/openapi.json`. Logic and edge cases stay in
+  `crates/*/tests/it/`. Packages keep to the rules below: exact versions at least 7 days
+  old, a committed lockfile, `npm ci` and no install scripts.
 - **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
   `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
   localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost

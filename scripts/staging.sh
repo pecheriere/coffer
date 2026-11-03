@@ -7,15 +7,19 @@
 #   scripts/staging.sh down                remove everything the stack made
 #   scripts/staging.sh link [username]     a link to enroll your own passkey
 #   scripts/staging.sh token               the seeded admin's agent token
-#   scripts/staging.sh template [day]      make sure the template for a day exists
+#   scripts/staging.sh test [args]         the end-to-end tests, args going to Playwright
+#   scripts/staging.sh template [days]     make sure the templates for these days exist
 #   scripts/staging.sh start <port> [day]  a throwaway server on a copy of the template
 #   scripts/staging.sh stop <port>         throw it away
+#   scripts/staging.sh sweep               remove the throwaway servers, keeping the one on 18080
+#   scripts/staging.sh elsewhere [day]     what the image does with the seed away from localhost
 #
 # COFFER_STAGING_IMAGE names an image to use instead of building one.
 set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 state="$root/staging/.state"
+test_lock="$state/test.lock"
 image=${COFFER_STAGING_IMAGE:-coffer:staging}
 manual_port=18080
 relay=172.30.90.10
@@ -40,6 +44,24 @@ check_day() {
 check_port() {
   [[ $1 =~ ^[0-9]+$ ]] && [ "$1" -ge 18080 ] && [ "$1" -le 18099 ] ||
     fail "a port is from 18080 to 18099"
+}
+
+# Two test runs in one checkout would remove each other's servers. A run that died can't
+# let go, so its lock is taken over.
+lock_test_run() {
+  local holder
+  mkdir -p "$state"
+  if ! mkdir "$test_lock" 2>/dev/null; then
+    holder=$(cat "$test_lock/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      fail "the tests are already running in this checkout (process $holder)"
+    fi
+    rm -f "$test_lock/pid"
+    rmdir "$test_lock"
+    mkdir "$test_lock"
+  fi
+  echo $$ >"$test_lock/pid"
+  trap 'rm -f "$test_lock/pid"; rmdir "$test_lock" 2>/dev/null || true' EXIT
 }
 
 # A stack is one per machine: its network, ports and container names are fixed. Another
@@ -109,8 +131,8 @@ fingerprint() {
 # relay and the staging CA in place of the CA bundle, which leaves it nothing else to
 # trust.
 create_server() {
-  local name=$1 port=$2
-  docker create --name "$name" --label coffer.staging=server \
+  local name=$1 port=$2 kind=${3:-server}
+  docker create --name "$name" --label "coffer.staging=$kind" \
     --network "$network" \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
     --mount "type=bind,source=$state/certs/trust/ca.crt,target=/etc/ssl/certs/ca-certificates.crt,readonly" \
@@ -135,7 +157,7 @@ wait_healthy() {
 # Seeds an empty server and keeps its stopped data directory as the read-only
 # template: a tar, whose copy into a new container keeps each file's owner and mode.
 build_template() {
-  local day=$1 stamp=$2 dir="$state/templates/$1" name=coffer-staging-seed
+  local day=$1 stamp=$2 dir="$state/templates/$1" name="coffer-staging-seed-$1"
   echo "staging: seeding the template for $day" >&2
   docker rm -f -v "$name" >/dev/null 2>&1 || true
   rm -rf "$dir"
@@ -168,15 +190,59 @@ ensure_template() {
   fi
 }
 
+# Seeds days at the same time: most of each is waiting for the rates job's next minute.
+ensure_templates() {
+  local pids=() pid status=0
+  for day in "$@"; do
+    ensure_template "$day" &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" || status=1
+  done
+  return "$status"
+}
+
+copy_template_to() {
+  local name=$1 day=$2
+  [ -f "$state/templates/$day/data.tar" ] || fail "no template for $day: run '$0 template $day'"
+  docker cp --archive - "$name:/data" <"$state/templates/$day/data.tar" >/dev/null
+}
+
+# Runs the image on a copy of the template with a public URL that isn't localhost, and
+# answers with its exit code.
+serve_elsewhere() {
+  check_day "$1"
+  local day=$1 name=coffer-staging-elsewhere code
+  docker rm -f -v "$name" >/dev/null 2>&1 || true
+  docker create --name "$name" --label coffer.staging=server --network "$network" \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    -e COFFER_PUBLIC_URL=https://coffer.example.com "$image" >/dev/null
+  copy_template_to "$name" "$day"
+  docker start "$name" >/dev/null
+  code=$(docker wait "$name")
+  docker logs "$name" 2>&1
+  docker rm -v "$name" >/dev/null
+  return "$code"
+}
+
+remove_servers() {
+  docker ps --all --quiet --filter "label=$1" | xargs -r docker rm -f -v >/dev/null
+}
+
 start_server() {
   local port=$1 day=${2-$(today)} name
   check_port "$port"
   check_day "$day"
   name=$(container "$port")
-  [ -f "$state/templates/$day/data.tar" ] || fail "no template for $day: run '$0 template $day'"
   docker rm -f -v "$name" >/dev/null 2>&1 || true
-  create_server "$name" "$port"
-  docker cp --archive - "$name:/data" <"$state/templates/$day/data.tar" >/dev/null
+  # The served copy stays when a test run sweeps up its own.
+  if [ "$port" = "$manual_port" ]; then
+    create_server "$name" "$port" manual
+  else
+    create_server "$name" "$port"
+  fi
+  copy_template_to "$name" "$day"
   docker start "$name" >/dev/null
   wait_healthy "$name"
 }
@@ -205,7 +271,7 @@ case "${1:-}" in
     ;;
   down)
     refuse_another_checkout
-    docker ps --all --quiet --filter label=coffer.staging=server | xargs -r docker rm -f -v >/dev/null
+    remove_servers coffer.staging
     compose down --volumes --remove-orphans
     rm -rf "$state"
     ;;
@@ -216,11 +282,30 @@ case "${1:-}" in
     jq -r .adminToken "$state/templates/$(today)/fixture.json"
     ;;
   template)
-    day=${2-$(today)}
-    check_day "$day"
+    shift
+    if [ "$#" -eq 0 ]; then set -- "$(today)"; fi
+    for day in "$@"; do check_day "$day"; done
     refuse_another_checkout
     ensure_mocks
-    ensure_template "$day"
+    ensure_templates "$@"
+    ;;
+  test)
+    shift
+    refuse_another_checkout
+    lock_test_run
+    build_image
+    ensure_mocks
+    npm ci --prefix "$root/staging/e2e"
+    cd "$root/staging/e2e"
+    npx playwright test "$@"
+    ;;
+  sweep)
+    refuse_another_checkout
+    remove_servers coffer.staging=server
+    ;;
+  elsewhere)
+    refuse_another_checkout
+    serve_elsewhere "${2-$(today)}"
     ;;
   start)
     refuse_another_checkout

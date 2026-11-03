@@ -73,10 +73,10 @@ async function seedPlan(api, data, categories) {
   }
 }
 
-async function seedConnection(api, data) {
+async function seedConnection(api, data, categories) {
   const connection = await api.post('/connections/simplefin', {
     label: 'Bramblewood Bank',
-    setup_token: Buffer.from(`${data.simplefinClaim}/${randomUUID()}`).toString('base64'),
+    setup_token: Buffer.from(`${data.simplefinClaim}/${randomUUID()}/${today}`).toString('base64'),
   });
   const { items } = await until('the first sync', async () => {
     const list = await api.get('/provider-accounts');
@@ -88,6 +88,14 @@ async function seedConnection(api, data) {
     kind,
     name,
   });
+  // Categorized, or which days hold card spending would change the forecast's cautions.
+  // Not groceries, or it would change what is left of that budget.
+  const { items: purchases } = await api.get(`/transactions?account=${account.id}&limit=200`);
+  for (const { id, amount } of purchases) {
+    await api.patch(`/transactions/${id}`, {
+      splits: [{ category: categories['Eating out'], minor_units: amount.minor_units }],
+    });
+  }
   return { connection: connection.id, card: account.id };
 }
 
@@ -121,7 +129,7 @@ async function seed() {
   const accounts = await seedAccounts(api, data);
   await seedTransactions(api, data, accounts.current, categories);
   await seedPlan(api, data, categories);
-  const { connection, card } = await seedConnection(api, data);
+  const { connection, card } = await seedConnection(api, data, categories);
   await ratesFetched(api, data);
   await closeAccounts(api, data, accounts);
 
