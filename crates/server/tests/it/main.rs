@@ -38,6 +38,7 @@ mod scheduler_clock;
 mod serve;
 mod sessions;
 mod simplefin;
+mod staging_seed;
 mod sync_engine;
 mod transactions_api;
 mod transactions_core;
