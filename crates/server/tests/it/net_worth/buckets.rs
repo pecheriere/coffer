@@ -409,9 +409,12 @@ async fn the_answer_has_the_documented_shape() {
                 "period_start": TODAY,
                 "partial": false,
                 "total": usd(2_000_000),
-                "by_liquidity": [{"liquidity": "invested", "amount": usd(2_000_000)}],
+                "by_liquidity": [
+                    {"liquidity": "invested", "amount": usd(2_000_000), "manual_rate": false},
+                ],
                 "by_currency": [usd(2_000_000)],
                 "unconverted": [],
+                "manual_rate": false,
             }],
             "accounts": [{
                 "account": fund,
@@ -430,6 +433,7 @@ async fn the_answer_has_the_documented_shape() {
                     "counted": true,
                     "amount": usd(2_000_000),
                     "rate_on": null,
+                    "manual_rate": false,
                     "conversion": "same",
                 }],
             }],

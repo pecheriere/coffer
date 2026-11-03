@@ -8,8 +8,8 @@ use proptest::prelude::{Just, Strategy, prop_assert, prop_assert_eq, prop_oneof,
 use proptest::{collection, sample};
 
 use super::{
-    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory, RateLeg,
-    RateLookup, RateObservation, convert,
+    Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateBook, RateHistory,
+    RateLeg, RateLookup, RateObservation, convert,
 };
 use crate::money::Currency;
 
@@ -63,6 +63,7 @@ fn converted(minor: i64, rate_on: Date, leg: RateLeg) -> Conversion {
         minor,
         rate_on,
         leg,
+        manual: None,
     }
 }
 
@@ -251,7 +252,11 @@ fn no_later_rate_is_used() {
     );
     assert_eq!(
         book.rate(usd, first),
-        RateLookup::Found(first, rate("1.1789"))
+        RateLookup::Found(HeldRate {
+            on: first,
+            rate: rate("1.1789"),
+            manual: false,
+        })
     );
 }
 
@@ -362,13 +367,84 @@ fn opposite(conversion: Conversion) -> Conversion {
             minor,
             rate_on,
             leg,
+            manual,
         } => Conversion::Converted {
             minor: -minor,
             rate_on,
             leg,
+            manual,
         },
         other => other,
     }
+}
+
+/// Only the manual rate of a day counts, the fetched one under it stays behind it, and a
+/// later fetched rate takes over: what an admin's rate does and doesn't win.
+#[test]
+fn a_manual_rate_wins_its_own_day_and_a_later_published_rate_takes_over() {
+    let [before, entered, after] = [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)];
+    let observed = |on, text| RateObservation {
+        on,
+        rate: rate(text),
+    };
+    let history = RateHistory::merged(
+        vec![
+            observed(before, "1.1"),
+            observed(entered, "1.2"),
+            observed(after, "1.3"),
+        ],
+        vec![observed(entered, "9")],
+    );
+    let held = |on: Date| history.on_or_before(on).unwrap();
+
+    assert_eq!(
+        (held(before).rate, held(before).manual),
+        (rate("1.1"), false)
+    );
+    assert_eq!(
+        (held(entered).rate, held(entered).manual),
+        (rate("9"), true)
+    );
+    let carried = held(date(2026, 10, 4));
+    assert_eq!(
+        (carried.on, carried.manual),
+        (entered, true),
+        "carried forward"
+    );
+    assert_eq!((held(after).rate, held(after).manual), (rate("1.3"), false));
+    assert_eq!(history.rates().len(), 3, "one rate a day");
+}
+
+/// A conversion says which side's rate an admin entered, not just that one did.
+#[test]
+fn a_conversion_names_the_side_with_a_manual_rate() {
+    let on = date(2026, 10, 2);
+    let observed = RateObservation {
+        on,
+        rate: rate("2"),
+    };
+    let mut book = RateBook::default();
+    book.insert(currency("USD"), RateHistory::new(vec![observed]));
+    book.insert(
+        currency("XAF"),
+        RateHistory::merged(Vec::new(), vec![observed]),
+    );
+    book.insert(
+        currency("XOF"),
+        RateHistory::merged(Vec::new(), vec![observed]),
+    );
+    let manual_of =
+        |from: &str, to: &str| match convert(100, currency(from), currency(to), on, &book) {
+            Conversion::Converted { manual, .. } => manual,
+            other => panic!("expected a conversion, got {other:?}"),
+        };
+
+    assert_eq!(manual_of("USD", "EUR"), None);
+    assert_eq!(manual_of("XAF", "EUR"), Some(RateLeg::Held));
+    assert_eq!(manual_of("EUR", "XAF"), Some(RateLeg::Display));
+    assert_eq!(manual_of("XAF", "USD"), Some(RateLeg::Held));
+    assert_eq!(manual_of("USD", "XAF"), Some(RateLeg::Display));
+    assert_eq!(manual_of("XAF", "XOF"), Some(RateLeg::Both));
 }
 
 /// Leap days, month ends and the days around them.
@@ -418,7 +494,7 @@ proptest! {
             .collect();
         let latest = days.iter().copied().filter(|day| *day <= on).max();
         let found = RateHistory::new(rates).on_or_before(on);
-        prop_assert_eq!(found.map(|(day, _)| day), latest);
-        prop_assert!(found.is_none_or(|(day, _)| day <= on));
+        prop_assert_eq!(found.map(|held| held.on), latest);
+        prop_assert!(found.is_none_or(|held| held.on <= on));
     }
 }

@@ -141,9 +141,15 @@ pub(super) fn bucket_heading(belongs_to: BelongsTo, beneficiary: Option<&str>) -
 fn rate_reason(reason: RateMissingReason) -> &'static str {
     match reason {
         RateMissingReason::NotFetchedYet => "coffer hasn't fetched its rates yet",
-        RateMissingReason::NotPublished => "the source of rates doesn't publish it",
+        RateMissingReason::NotPublished => {
+            "the source of rates doesn't publish it, though an admin can enter a rate on the \
+             household page"
+        }
         RateMissingReason::FetchFailing => "fetching its rates is failing, and coffer will retry",
-        RateMissingReason::ProviderOff => "this server is set up with no source of rates",
+        RateMissingReason::ProviderOff => {
+            "this server is set up with no source of rates, though an admin can enter a rate on \
+             the household page"
+        }
         RateMissingReason::NoneThatEarly => "coffer's rates for it don't go back that far",
     }
 }
@@ -233,6 +239,16 @@ fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &CautionW
             day(*on),
             day(*rate_on),
             days(*age_days),
+        ),
+        NetWorthCaution::RateManual {
+            currency,
+            first_on,
+            last_on,
+        } => format!(
+            "The {} rate used {} was entered by hand, not published, so those amounts are only \
+             as good as that entry.",
+            currency.as_str(),
+            stretch(*first_on, *last_on),
         ),
         NetWorthCaution::AmountTooLarge { account, on } => format!(
             "{} is too large to convert, last on {}. Those periods have no total, which isn't \
@@ -398,6 +414,11 @@ mod tests {
                 on: ON,
                 rate_on: date(2026, 10, 1),
                 age_days: 32,
+            },
+            NetWorthCaution::RateManual {
+                currency: usd(),
+                first_on: date(2026, 10, 1),
+                last_on: ON,
             },
             NetWorthCaution::AmountTooLarge { account, on: ON },
             NetWorthCaution::BalanceStale {

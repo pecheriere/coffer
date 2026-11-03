@@ -121,14 +121,15 @@ point.)
       "partial": false,
       "total": {"minor_units": 581720, "currency": "USD"},
       "by_liquidity": [
-        {"liquidity": "cash", "amount": {"minor_units": 611720, "currency": "USD"}},
-        {"liquidity": "short_term_liability", "amount": {"minor_units": -30000, "currency": "USD"}}
+        {"liquidity": "cash", "amount": {"minor_units": 611720, "currency": "USD"}, "manual_rate": false},
+        {"liquidity": "short_term_liability", "amount": {"minor_units": -30000, "currency": "USD"}, "manual_rate": false}
       ],
       "by_currency": [
         {"minor_units": 100000, "currency": "EUR"},
         {"minor_units": 470000, "currency": "USD"}
       ],
-      "unconverted": []
+      "unconverted": [],
+      "manual_rate": false
     },
     {
       "on": "2026-11-02",
@@ -137,7 +138,8 @@ point.)
       "total": {"minor_units": 581720, "currency": "USD"},
       "by_liquidity": ["..."],
       "by_currency": ["..."],
-      "unconverted": []
+      "unconverted": [],
+      "manual_rate": false
     }
   ],
   "accounts": [
@@ -159,6 +161,7 @@ point.)
           "counted": true,
           "amount": {"minor_units": 111720, "currency": "USD"},
           "rate_on": "2026-10-30",
+          "manual_rate": false,
           "conversion": "converted"
         }
       ]
@@ -178,13 +181,14 @@ point.)
           "partial": false,
           "total": {"minor_units": 2111720, "currency": "USD"},
           "by_liquidity": [
-            {"liquidity": "invested", "amount": {"minor_units": 2111720, "currency": "USD"}}
+            {"liquidity": "invested", "amount": {"minor_units": 2111720, "currency": "USD"}, "manual_rate": false}
           ],
           "by_currency": [
             {"minor_units": 100000, "currency": "EUR"},
             {"minor_units": 2000000, "currency": "USD"}
           ],
-          "unconverted": []
+          "unconverted": [],
+          "manual_rate": false
         },
         {
           "on": "2026-11-02",
@@ -193,7 +197,8 @@ point.)
           "total": {"minor_units": 2111720, "currency": "USD"},
           "by_liquidity": ["..."],
           "by_currency": ["..."],
-          "unconverted": []
+          "unconverted": [],
+          "manual_rate": false
         }
       ],
       "accounts": [
@@ -215,6 +220,7 @@ point.)
               "counted": true,
               "amount": {"minor_units": 2000000, "currency": "USD"},
               "rate_on": null,
+              "manual_rate": false,
               "conversion": "same"
             }
           ]
@@ -237,6 +243,7 @@ point.)
               "counted": true,
               "amount": {"minor_units": 111720, "currency": "USD"},
               "rate_on": "2026-10-30",
+              "manual_rate": false,
               "conversion": "converted"
             }
           ]
@@ -256,12 +263,13 @@ point.)
           "partial": false,
           "total": {"minor_units": 500000, "currency": "USD"},
           "by_liquidity": [
-            {"liquidity": "invested", "amount": {"minor_units": 500000, "currency": "USD"}}
+            {"liquidity": "invested", "amount": {"minor_units": 500000, "currency": "USD"}, "manual_rate": false}
           ],
           "by_currency": [
             {"minor_units": 500000, "currency": "USD"}
           ],
-          "unconverted": []
+          "unconverted": [],
+          "manual_rate": false
         },
         {
           "on": "2026-11-02",
@@ -270,7 +278,8 @@ point.)
           "total": {"minor_units": 500000, "currency": "USD"},
           "by_liquidity": ["..."],
           "by_currency": ["..."],
-          "unconverted": []
+          "unconverted": [],
+          "manual_rate": false
         }
       ],
       "accounts": [
@@ -292,6 +301,7 @@ point.)
               "counted": true,
               "amount": {"minor_units": 500000, "currency": "USD"},
               "rate_on": null,
+              "manual_rate": false,
               "conversion": "same"
             }
           ]
@@ -324,6 +334,9 @@ How to read it:
 - `conversion` says how an amount came about: `same` (the account is in the
   display currency), `converted`, `missing` (no rate on or before that day),
   `too_large` (it doesn't fit in 64 bits) or `no_display_currency`.
+- `manual_rate` is `true` on an account's point whose `amount` used a rate an admin
+  entered, and on a report's point or `by_liquidity` line with such an amount in it,
+  so a total resting on one says so. The caution `rate_manual` says which currency.
 - `rate_on` is the date of the rate used: the most recent rate on or before the
   day, never a later one. A weekend or a holiday reports the Friday before. A
   conversion between two currencies neither of which is the euro goes through
@@ -399,7 +412,7 @@ bucket's own accounts and numbers alone.
 - `closed_account_owing` means the debt keeps counting in that bucket's sums, not in
   net worth. Setting `include_in_net_worth` to `false` changes nothing, since it
   already is: if it was paid off, record its balance as 0.
-- `rate_missing`, `rate_stale`, `amount_too_large`, `balance_stale`,
+- `rate_missing`, `rate_stale`, `rate_manual`, `amount_too_large`, `balance_stale`,
   `to_date_not_yet_filled`, `daily_value_missing`, `nothing_counted_after_last_point`
   and `liability_balance_positive` mean what the table says, and call for the same
   step, with "counted" meaning in the bucket's sums.
@@ -452,7 +465,8 @@ point are left out; each class's `amount` is `null` as well):
         {"minor_units": 100000, "currency": "EUR"},
         {"minor_units": 470000, "currency": "USD"}
       ],
-      "unconverted": []
+      "unconverted": [],
+      "manual_rate": false
     }
   ],
   "blockers": [{"kind": "display_currency_not_set"}],
@@ -467,6 +481,7 @@ point are left out; each class's `amount` is `null` as well):
 |---|---|---|
 | `rate_missing` (`currency`, `reason`, `first_on`, `last_on`) | From the point `first_on` to the point `last_on` that currency's rate is missing, so the accounts it converts have no amount and those periods have `total: null`. `currency` is the one whose rate is missing: for a euro account, the display currency, never the euro. | See the reasons below. Report `by_currency` meanwhile, and say that the total is unknown, not lower. |
 | `rate_stale` (`currency`, `on`, `rate_on`, `age_days`) | The point `on` used a rate more than 7 days older than the day, the worst such point. A source that stopped publishing (the ECB's rouble rate ends on 2022-03-01) would otherwise be converted at its last rate for ever. The amount is included. | Say that the amount uses an old rate, from `rate_on`. Tell the owner: the currency may no longer be published. |
+| `rate_manual` (`currency`, `first_on`, `last_on`) | From the point `first_on` to the point `last_on` amounts were converted with a rate of that currency that an admin entered, not one a source published. The amounts are included. | Say that the total rests on a rate entered by hand. Ask the owner if it looks wrong: `GET /fx/manual-rates` lists them, and the audit log says who entered each. |
 | `amount_too_large` (`account`, `on`) | The last point at which that account's amount didn't fit in 64 bits. Its amount and the total are `null`. | Check the account for a mistyped balance, and tell the owner. |
 | `balance_stale` (`account`, `on`, `age_days`) | On the latest point, that counted account's balance dates from `on`, older than `stale_after_days`. | Sync, or ask the owner for a current balance. The total may have changed. |
 | `to_date_not_yet_filled` (`through`) | The daily values stop at `through`, before the range's end or today. | Right after midnight, ask again in a minute. If it persists for hours, tell the owner: the job that fills the days is failing. Say the date the number is for. |
@@ -480,10 +495,10 @@ The `reason` of a `rate_missing`:
 | `reason` | Means | Do |
 |---|---|---|
 | `not_fetched_yet` | No fetch has been tried for the currency. | Wait a minute and ask again, then check `GET /fx/coverage`. |
-| `not_published` | The source has no series for the currency. | Tell the owner. coffer can't enter a rate by hand yet, so these accounts stay unconverted: report them per currency. It is asked again every 24 hours. |
+| `not_published` | The source has no series for the currency. | Tell the owner, who can enter a rate by hand (see [Exchange rates](#exchange-rates)). Until then these accounts stay unconverted: report them per currency. It is asked again every 24 hours. |
 | `fetch_failing` | The last fetch failed (coverage says how). It is tried again every hour. | If it lasts, tell the owner: the host may be unable to reach the source (see below). |
-| `provider_off` | The server is set up with no source of rates (`COFFER_FX_PROVIDER=none`). | Tell the owner. Report per currency. |
-| `none_that_early` | The currency has rates, none on or before that day: the balance is older than the source's series. | Report per currency for those periods. |
+| `provider_off` | The server is set up with no source of rates (`COFFER_FX_PROVIDER=none`). | Tell the owner, who can enter a rate by hand. Report per currency. |
+| `none_that_early` | The currency has rates, none on or before that day: the balance is older than the source's series, or than the first rate entered by hand. | Report per currency for those periods. |
 
 After a change of display currency, `rate_missing` with `not_fetched_yet` is
 normal for a minute: the new currency's rates have yet to be fetched.
@@ -505,7 +520,8 @@ Here is one with a yen account, last updated on 2026-10-20, whose fetch is faili
         {"minor_units": 5000000, "currency": "JPY"},
         {"minor_units": 470000, "currency": "USD"}
       ],
-      "unconverted": ["<travel-yen>"]
+      "unconverted": ["<travel-yen>"],
+      "manual_rate": false
     }
   ],
   "cautions": [
@@ -521,7 +537,8 @@ Here is one with a yen account, last updated on 2026-10-20, whose fetch is faili
 | Operation | Needs |
 |---|---|
 | `GET /api/v1/reports/net-worth` | `read`. A token with grants gets the sum of what it holds at `balances`, unmarked, in each bucket as at the top (above). |
-| `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` | `read`, and with grants `all` at `balances`: which rates are stored depends on the currencies in use. A 403 whose detail is "this action needs balances access to every account", whether or not any account is hidden. |
+| `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates`, `GET /api/v1/fx/manual-rates` | `read`, and with grants `all` at `balances`: which rates are stored depends on the currencies in use. A 403 whose detail is "this action needs balances access to every account", whether or not any account is hidden. |
+| `PUT` and `DELETE /api/v1/fx/manual-rates/{currency}/{on}` | `admin`, and with grants `all` at `balances`, with the same 403 whatever exists: which codes convert at once depends on the currencies in use. |
 | `GET /api/v1/household/settings` | `read`. `display_currency` reads the same for every token. |
 | `PATCH /api/v1/household/settings` naming `display_currency` | `admin`, and with grants `all` at `balances`, whatever the patch names, since which codes convert at once depends on the currencies in use. The same 403. |
 | `PATCH /api/v1/household/settings`, any other setting | `admin` only. |
@@ -592,7 +609,9 @@ went (a currency never tried has no entry):
 `status` is `ready`, `not_published` (the source has no series) or `failing`;
 `last_error` is a fixed code: `unavailable` (the source answered with an error),
 `malformed` (its answer wasn't what was expected, so none of it was used) or
-`network`.
+`network`. This is all about fetching, so its `first_on` and `last_on` are of fetched
+rates. The answer's `manual` list says, per currency, the `first_on` and `last_on` of rates
+an admin entered; such a currency may have no entry in `items`.
 
 `GET /api/v1/fx/rates?currency=USD&from=2026-10-26&to=2026-11-02` lists a
 currency's rates in a range of at most 1,000 days (both ends counted), newest
@@ -605,14 +624,35 @@ date not written `YYYY-MM-DD` is 400.
 {
   "currency": "USD",
   "items": [
-    {"on": "2026-10-30", "rate": "1.1172"},
-    {"on": "2026-10-29", "rate": "1.113"},
-    {"on": "2026-10-28", "rate": "1.1133"},
-    {"on": "2026-10-27", "rate": "1.115"},
-    {"on": "2026-10-26", "rate": "1.1188"}
+    {"on": "2026-10-30", "rate": "1.1172", "manual": false},
+    {"on": "2026-10-29", "rate": "1.113", "manual": false},
+    {"on": "2026-10-28", "rate": "1.1133", "manual": false},
+    {"on": "2026-10-27", "rate": "1.115", "manual": false},
+    {"on": "2026-10-26", "rate": "1.1188", "manual": false}
   ]
 }
 ```
+
+**Entering a rate by hand.** The ECB publishes about 30 currencies. For another, or a day
+it has wrong, an admin enters a rate on `/admin/household`, or a token with `admin` calls
+`PUT /api/v1/fx/manual-rates/{currency}/{on}` with `{"rate": "655.957"}`. `GET
+/api/v1/fx/manual-rates` lists them and `DELETE` on the same path removes one (404 if there
+is none). Each write is audited with the old and new rate, as `fx.manual_rate.set` or
+`fx.manual_rate.remove`. The rule:
+
+- **A fetch never overwrites a manual rate.** They are kept apart, and a rate on `/fx/rates`
+  says `"manual": true`.
+- **On its own day a manual rate wins over a published one.** **A published rate on a later
+  day takes over as usual**, as a later manual rate would. A rate is never used for a day
+  before its own.
+- Removing one falls back on what it covered: the published rate of that day, or an earlier
+  rate, or none, and then `rate_missing` again.
+- It is refused when it isn't text above zero with at most 10 digits, 6 of them decimals
+  (400), and for the euro, the display currency, a day after today or before 1970 (422).
+- An old one is an old rate: `rate_stale` applies after 7 days as it does to any other. To
+  cover an old balance, date the rate on or before it.
+
+Don't enter a rate unless the owner gave it to you: it moves net worth at once.
 
 How coffer gets and keeps them:
 
@@ -660,6 +700,4 @@ API's.
 - **A forecast doesn't convert.** `mixed_currencies` still blocks a forecast
   of a household in more than one currency, whatever rates are held; see
   [agent-forecast.md](agent-forecast.md). Net worth is where conversion lives.
-- **No rate can be entered by hand**, so a currency the ECB doesn't publish stays
-  unconverted (`not_published`).
 - One display currency for the household, not one per member.

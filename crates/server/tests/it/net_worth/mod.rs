@@ -14,6 +14,7 @@ mod buckets;
 mod conversion;
 mod documented;
 mod fx_api;
+mod manual_rates;
 mod settings;
 
 use axum::body::Body;

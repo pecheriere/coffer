@@ -233,6 +233,9 @@ pub struct NetWorthPoint {
     /// there is a display currency, or holding no value on this day though they
     /// did earlier.
     pub unconverted: Vec<AccountId>,
+    /// An amount on this point was converted with a rate an admin entered, so `total`, if
+    /// there is one, rests on it: see the caution `rate_manual`.
+    pub manual_rate: bool,
 }
 
 /// One liquidity class on one day.
@@ -243,6 +246,8 @@ pub struct LiquidityLine {
     /// `null` when a counted account in it has no amount.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub amount: Option<Money>,
+    /// An amount in this class was converted with a rate an admin entered.
+    pub manual_rate: bool,
 }
 
 /// One visible account and its values.
@@ -300,6 +305,8 @@ pub struct AccountPoint {
     /// The older of the rate dates used.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub rate_on: Option<Date>,
+    /// `amount` was converted with a rate an admin entered.
+    pub manual_rate: bool,
     pub conversion: ConversionState,
 }
 
@@ -341,6 +348,15 @@ pub enum NetWorthCaution {
         on: Date,
         rate_on: Date,
         age_days: u32,
+    },
+    /// Between these points amounts were converted with a rate of this currency that an
+    /// admin entered, not one a source published, so they are only as good as that entry.
+    RateManual {
+        currency: Currency,
+        /// The first point using it.
+        first_on: Date,
+        /// The last point using it.
+        last_on: Date,
     },
     /// The last point at which this account's amount did not fit, so it is
     /// `null`.

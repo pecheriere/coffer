@@ -346,7 +346,7 @@ async fn all_at_balances_reads_coverage_and_rates_and_no_more() {
 
     assert_eq!(
         parsed(&rates.3),
-        json!({"currency": "JPY", "items": [{"on": "2026-10-01", "rate": "175.68"}]})
+        json!({"currency": "JPY", "items": [{"on": "2026-10-01", "rate": "175.68", "manual": false}]})
     );
     let listed = parsed(&coverage.3);
     let codes: Vec<_> = listed["items"]

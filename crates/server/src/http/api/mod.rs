@@ -75,6 +75,8 @@ fn routes() -> ApiRouter {
         .op(routes!(reports::net_worth))
         .op(routes!(fx::coverage))
         .op(routes!(fx::rates))
+        .op(routes!(fx::manual_rates))
+        .op(routes!(fx::set_manual_rate, fx::remove_manual_rate))
         .op(routes!(connections::list))
         .op(routes!(connections::remove))
         .op(routes!(connections::create_simplefin))

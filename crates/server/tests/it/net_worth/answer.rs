@@ -43,8 +43,8 @@ async fn the_api_matches_the_golden_week() {
     assert_eq!(
         friday["by_liquidity"],
         json!([
-            {"liquidity": "cash", "amount": usd(661_720)},
-            {"liquidity": "short_term_liability", "amount": usd(-30_000)},
+            {"liquidity": "cash", "amount": usd(661_720), "manual_rate": false},
+            {"liquidity": "short_term_liability", "amount": usd(-30_000), "manual_rate": false},
         ])
     );
     assert_eq!(
@@ -287,9 +287,9 @@ async fn changing_liquidity_moves_the_breakdown_with_no_rebuild() {
     assert_eq!(
         friday["by_liquidity"],
         json!([
-            {"liquidity": "cash", "amount": usd(550_000)},
-            {"liquidity": "short_term_liability", "amount": usd(-30_000)},
-            {"liquidity": "invested", "amount": usd(111_720)},
+            {"liquidity": "cash", "amount": usd(550_000), "manual_rate": false},
+            {"liquidity": "short_term_liability", "amount": usd(-30_000), "manual_rate": false},
+            {"liquidity": "invested", "amount": usd(111_720), "manual_rate": false},
         ])
     );
     assert_eq!(friday["total"], usd(631_720));

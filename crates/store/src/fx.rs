@@ -1,11 +1,12 @@
 //! Exchange rates and their coverage (spec §8.10). A rate is stored as the
 //! canonical text of an `FxRate`, so two texts are equal exactly when the
-//! rates are, and the euro has no row.
+//! rates are, and the euro has no row. `manual` holds the rates an admin entered, which
+//! join these when they are read, and only then.
 
 use std::collections::BTreeSet;
 
 use coffer_domain::fx::{
-    FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateBook, RateHistory,
+    FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateBook, RateHistory,
     RateObservation,
 };
 use coffer_domain::money::Currency;
@@ -17,8 +18,12 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 use crate::convert::{parsed, parsed_opt, text, time, time_opt};
 use crate::{Store, StoreError, StoreTx};
 
+mod manual;
+
+pub(crate) use manual::currencies_with_manual_rates;
+
 /// The most rates one `Store::fx_rates` call returns.
-const MAX_RATES_PER_READ: i64 = 1_000;
+const MAX_RATES_PER_READ: usize = 1_000;
 
 /// Rows per `INSERT`: five binds each stay far below `SQLite`'s limit.
 const UPSERT_CHUNK: usize = 500;
@@ -50,9 +55,84 @@ pub(crate) fn coverage_from_row(row: &SqliteRow) -> Result<FxCoverage, StoreErro
     })
 }
 
+/// One kind of rate, as a table holds it.
+struct RateQueries {
+    in_window: &'static str,
+    latest_before: &'static str,
+    newest_in_range: &'static str,
+}
+
+const PUBLISHED: RateQueries = RateQueries {
+    in_window: "SELECT on_date, rate FROM fx_rates WHERE quote = ? AND on_date BETWEEN ? AND ?",
+    latest_before: "SELECT on_date, rate FROM fx_rates \
+                    WHERE quote = ? AND on_date < ? ORDER BY on_date DESC LIMIT 1",
+    newest_in_range: "SELECT on_date, rate FROM fx_rates \
+                      WHERE quote = ? AND on_date BETWEEN ? AND ? \
+                      ORDER BY on_date DESC LIMIT ?",
+};
+
+const MANUAL: RateQueries = RateQueries {
+    in_window: "SELECT on_date, rate FROM fx_manual_rates \
+                WHERE quote = ? AND on_date BETWEEN ? AND ?",
+    latest_before: "SELECT on_date, rate FROM fx_manual_rates \
+                    WHERE quote = ? AND on_date < ? ORDER BY on_date DESC LIMIT 1",
+    newest_in_range: "SELECT on_date, rate FROM fx_manual_rates \
+                      WHERE quote = ? AND on_date BETWEEN ? AND ? \
+                      ORDER BY on_date DESC LIMIT ?",
+};
+
+/// The rates of one kind behind `[from, to]`: those inside it and the latest before it.
+async fn rates_for_window(
+    conn: &mut SqliteConnection,
+    kind: &RateQueries,
+    currency: Currency,
+    from: Date,
+    to: Date,
+) -> Result<Vec<RateObservation>, StoreError> {
+    let mut rows = sqlx::query(kind.in_window)
+        .bind(currency.as_str())
+        .bind(from.to_string())
+        .bind(to.to_string())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+    rows.extend(
+        sqlx::query(kind.latest_before)
+            .bind(currency.as_str())
+            .bind(from.to_string())
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(StoreError::from_sqlx)?,
+    );
+    rows.iter().map(observation_from_row).collect()
+}
+
+/// The newest rates of one kind in `[from, to]`, as many as a read answers.
+async fn newest_rates(
+    conn: &mut SqliteConnection,
+    kind: &RateQueries,
+    currency: Currency,
+    from: Date,
+    to: Date,
+) -> Result<Vec<RateObservation>, StoreError> {
+    let limit = i64::try_from(MAX_RATES_PER_READ).map_err(StoreError::backend)?;
+    sqlx::query(kind.newest_in_range)
+        .bind(currency.as_str())
+        .bind(from.to_string())
+        .bind(to.to_string())
+        .bind(limit)
+        .fetch_all(conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(observation_from_row)
+        .collect()
+}
+
 /// The rates `currencies` need to value every day in `[from, to]`: each one's
 /// rates inside the window and its latest before it, which a weekend or a
-/// holiday carries forward. The euro has no rates to load.
+/// holiday carries forward, of both kinds, so a rate an admin entered counts as any
+/// other would. The euro has no rates to load.
 pub(crate) async fn load_rate_book(
     conn: &mut SqliteConnection,
     currencies: &[Currency],
@@ -64,32 +144,9 @@ pub(crate) async fn load_rate_book(
         if currency.as_str() == "EUR" {
             continue;
         }
-        let mut rows = sqlx::query(
-            "SELECT on_date, rate FROM fx_rates \
-             WHERE quote = ? AND on_date BETWEEN ? AND ?",
-        )
-        .bind(currency.as_str())
-        .bind(from.to_string())
-        .bind(to.to_string())
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(StoreError::from_sqlx)?;
-        rows.extend(
-            sqlx::query(
-                "SELECT on_date, rate FROM fx_rates \
-                 WHERE quote = ? AND on_date < ? ORDER BY on_date DESC LIMIT 1",
-            )
-            .bind(currency.as_str())
-            .bind(from.to_string())
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(StoreError::from_sqlx)?,
-        );
-        let observations = rows
-            .iter()
-            .map(observation_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-        book.insert(currency, RateHistory::new(observations));
+        let published = rates_for_window(&mut *conn, &PUBLISHED, currency, from, to).await?;
+        let manual = rates_for_window(&mut *conn, &MANUAL, currency, from, to).await?;
+        book.insert(currency, RateHistory::merged(published, manual));
     }
     Ok(book)
 }
@@ -115,7 +172,8 @@ impl Store {
     }
 
     /// `currency`'s rates for the days in `[from, to]`, newest first, at most
-    /// 1,000 of them: the newest of a longer range.
+    /// 1,000 of them: the newest of a longer range. A day with a rate an admin entered
+    /// has that one, marked.
     ///
     /// Which currencies have rates reveals the currencies accounts hold: a
     /// caller must not return it to anyone below `all` accounts at
@@ -129,22 +187,20 @@ impl Store {
         currency: Currency,
         from: Date,
         to: Date,
-    ) -> Result<Vec<RateObservation>, StoreError> {
-        sqlx::query(
-            "SELECT on_date, rate FROM fx_rates \
-             WHERE quote = ? AND on_date BETWEEN ? AND ? \
-             ORDER BY on_date DESC LIMIT ?",
-        )
-        .bind(currency.as_str())
-        .bind(from.to_string())
-        .bind(to.to_string())
-        .bind(MAX_RATES_PER_READ)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(StoreError::from_sqlx)?
-        .iter()
-        .map(observation_from_row)
-        .collect()
+    ) -> Result<Vec<HeldRate>, StoreError> {
+        // One read transaction, so a commit can't fall between the two kinds.
+        let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
+        let published = newest_rates(&mut tx, &PUBLISHED, currency, from, to).await?;
+        let manual = newest_rates(&mut tx, &MANUAL, currency, from, to).await?;
+        tx.commit().await.map_err(StoreError::from_sqlx)?;
+        let history = RateHistory::merged(published, manual);
+        Ok(history
+            .rates()
+            .iter()
+            .rev()
+            .take(MAX_RATES_PER_READ)
+            .copied()
+            .collect())
     }
 
     /// The currencies accounts hold, closed ones included, in code order.

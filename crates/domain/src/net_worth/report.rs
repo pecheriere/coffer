@@ -305,15 +305,20 @@ fn point(day: &Day<'_>, display: Option<Currency>) -> Result<NetWorthPoint, NetW
             .absent
             .iter()
             .any(|hole| hole.holder.liquidity == liquidity);
+        let manual_rate = counted()
+            .filter(|line| line.holder.liquidity == liquidity)
+            .any(uses_manual_rate);
         if holed {
             by_liquidity.push(LiquidityLine {
                 liquidity,
                 amount: None,
+                manual_rate,
             });
         } else if in_class.peek().is_some() {
             by_liquidity.push(LiquidityLine {
                 liquidity,
                 amount: sum_of(in_class, display)?,
+                manual_rate,
             });
         }
     }
@@ -339,7 +344,13 @@ fn point(day: &Day<'_>, display: Option<Currency>) -> Result<NetWorthPoint, NetW
             .map(|(currency, sum)| money(sum, currency))
             .collect::<Result<_, _>>()?,
         unconverted: no_amount.into_iter().map(|(_, id)| id).collect(),
+        manual_rate: counted().any(uses_manual_rate),
     })
+}
+
+/// Whether the line's amount, if it has one, came from a rate an admin entered.
+fn uses_manual_rate(line: &Line<'_>) -> bool {
+    line.amount.is_some() && line.row.manual_rate_leg.is_some()
 }
 
 /// The lines' amounts added up: `None` when any has none, or there is no
@@ -416,6 +427,7 @@ fn account_points(index: usize, days: &[Day<'_>]) -> Vec<AccountPoint> {
             counted: line.counted,
             amount: line.amount,
             rate_on: line.row.rate_on,
+            manual_rate: uses_manual_rate(line),
             conversion: line.row.conversion,
         })
         .collect()
@@ -500,10 +512,19 @@ fn rate_cautions(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<NetWorthCaution
     };
     let mut missing: BTreeMap<Currency, (RateMissingReason, Date, Date)> = BTreeMap::new();
     let mut stale: BTreeMap<Currency, (Date, Date, u32)> = BTreeMap::new();
+    let mut manual: BTreeMap<Currency, (Date, Date)> = BTreeMap::new();
     for day in days {
         let on = day.period.on;
         for line in day.lines.iter().filter(|line| line.counted) {
             let held = line.holder.currency;
+            if let (Some(_), Some(leg)) = (line.amount, line.row.manual_rate_leg) {
+                for currency in leg_currencies(leg, held, display) {
+                    manual
+                        .entry(currency)
+                        .and_modify(|seen| seen.1 = on)
+                        .or_insert((on, on));
+                }
+            }
             if line.amount.is_none() {
                 if line.row.conversion == ConversionState::TooLarge {
                     continue;
@@ -544,7 +565,15 @@ fn rate_cautions(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<NetWorthCaution
                 age_days,
             },
         );
-    missing.chain(stale).collect()
+    let manual =
+        manual.into_iter().map(
+            |(currency, (first_on, last_on))| NetWorthCaution::RateManual {
+                currency,
+                first_on,
+                last_on,
+            },
+        );
+    missing.chain(stale).chain(manual).collect()
 }
 
 /// The row's rate date and age, when that is more than a week older than its day.
@@ -563,7 +592,12 @@ fn rate_currencies(row: &DailyValue, held: Currency, display: Currency) -> Vec<C
     } else {
         RateLeg::Held
     };
-    match row.rate_leg.unwrap_or(foreign) {
+    leg_currencies(row.rate_leg.unwrap_or(foreign), held, display)
+}
+
+/// The currencies on `leg` of a conversion from `held` to `display`.
+fn leg_currencies(leg: RateLeg, held: Currency, display: Currency) -> Vec<Currency> {
+    match leg {
         RateLeg::Held => vec![held],
         RateLeg::Display => vec![display],
         RateLeg::Both => vec![held, display],

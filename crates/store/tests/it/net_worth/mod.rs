@@ -23,6 +23,7 @@ use tempfile::TempDir;
 
 mod batches;
 mod incremental;
+mod manual_rates;
 mod reads;
 mod rebuild;
 mod runners;

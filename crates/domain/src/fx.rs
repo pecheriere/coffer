@@ -199,6 +199,39 @@ pub struct RateObservation {
     pub rate: FxRate,
 }
 
+/// One day's rate of one currency as a calculation uses it: on a day with both, an
+/// admin's rate rather than the published one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct HeldRate {
+    pub on: Date,
+    pub rate: FxRate,
+    /// An admin entered this rate; no source published it.
+    pub manual: bool,
+}
+
+/// A rate an admin entered for one currency and one day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ManualRate {
+    pub currency: Currency,
+    pub on: Date,
+    pub rate: FxRate,
+    /// When it was last entered. Who entered it is in the audit log.
+    pub entered_at: Timestamp,
+}
+
+/// Which days a currency has rates an admin entered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ManualCoverage {
+    pub currency: Currency,
+    /// The first day with a manual rate.
+    pub first_on: Date,
+    /// The last day with a manual rate.
+    pub last_on: Date,
+}
+
 /// What is known about fetching one currency's rates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -222,26 +255,49 @@ pub struct FxCoverage {
 /// One currency's rates.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RateHistory {
-    /// Sorted by date.
-    rates: Vec<RateObservation>,
+    /// Sorted by date, one per day.
+    rates: Vec<HeldRate>,
 }
 
 impl RateHistory {
-    /// A history of `rates`, in any order.
+    /// A history of published `rates`, in any order.
     #[must_use]
-    pub fn new(mut rates: Vec<RateObservation>) -> Self {
-        rates.sort_by_key(|observation| observation.on);
-        Self { rates }
+    pub fn new(rates: Vec<RateObservation>) -> Self {
+        Self::merged(rates, Vec::new())
+    }
+
+    /// A history of `published` and `manual` rates, each in any order. The one rule
+    /// joining them: a manual rate wins over a published rate on its own day, and a
+    /// published rate on a later day takes over from it as any later rate would.
+    #[must_use]
+    pub fn merged(published: Vec<RateObservation>, manual: Vec<RateObservation>) -> Self {
+        let held = |manual| {
+            move |observation: RateObservation| {
+                let RateObservation { on, rate } = observation;
+                (on, HeldRate { on, rate, manual })
+            }
+        };
+        let by_day: BTreeMap<Date, HeldRate> = published
+            .into_iter()
+            .map(held(false))
+            .chain(manual.into_iter().map(held(true)))
+            .collect();
+        Self {
+            rates: by_day.into_values().collect(),
+        }
+    }
+
+    /// Every rate, oldest first.
+    #[must_use]
+    pub fn rates(&self) -> &[HeldRate] {
+        &self.rates
     }
 
     /// The most recent rate on or before `on`, never a later one.
     #[must_use]
-    pub fn on_or_before(&self, on: Date) -> Option<(Date, FxRate)> {
-        let after = self
-            .rates
-            .partition_point(|observation| observation.on <= on);
-        let found = self.rates.get(after.checked_sub(1)?)?;
-        Some((found.on, found.rate))
+    pub fn on_or_before(&self, on: Date) -> Option<HeldRate> {
+        let after = self.rates.partition_point(|held| held.on <= on);
+        self.rates.get(after.checked_sub(1)?).copied()
     }
 }
 
@@ -256,8 +312,8 @@ pub struct RateBook {
 pub enum RateLookup {
     /// The euro is 1 on every day, published by nobody.
     Euro,
-    /// The most recent rate on or before the day, and its date.
-    Found(Date, FxRate),
+    /// The most recent rate on or before the day.
+    Found(HeldRate),
     Missing,
 }
 
@@ -276,9 +332,7 @@ impl RateBook {
         self.histories
             .get(&currency)
             .and_then(|history| history.on_or_before(on))
-            .map_or(RateLookup::Missing, |(day, rate)| {
-                RateLookup::Found(day, rate)
-            })
+            .map_or(RateLookup::Missing, RateLookup::Found)
     }
 }
 
@@ -293,10 +347,12 @@ pub enum Conversion {
     /// The currencies are the same, so no rate was involved.
     Same { minor: i64 },
     /// `rate_on` is the older of the rate dates used, and `leg` the side it is on.
+    /// `manual` is the side using a rate an admin entered, if any does.
     Converted {
         minor: i64,
         rate_on: Date,
         leg: RateLeg,
+        manual: Option<RateLeg>,
     },
     /// A rate on or before the day is missing, on `leg`.
     Missing { leg: RateLeg },
@@ -312,7 +368,8 @@ pub fn convert(minor: i64, from: Currency, to: Currency, on: Date, book: &RateBo
     if from == to {
         return Conversion::Same { minor };
     }
-    let (from_rate, to_rate, rate_on, leg) = match (book.rate(from, on), book.rate(to, on)) {
+    let (from_rate, to_rate, rate_on, leg, manual) = match (book.rate(from, on), book.rate(to, on))
+    {
         (RateLookup::Missing, RateLookup::Missing) => {
             return Conversion::Missing { leg: RateLeg::Both };
         }
@@ -323,17 +380,33 @@ pub fn convert(minor: i64, from: Currency, to: Currency, on: Date, book: &RateBo
             };
         }
         (RateLookup::Euro, RateLookup::Euro) => return Conversion::Same { minor },
-        (RateLookup::Euro, RateLookup::Found(day, rate)) => {
-            (FxRate::ONE, rate, day, RateLeg::Display)
-        }
-        (RateLookup::Found(day, rate), RateLookup::Euro) => (rate, FxRate::ONE, day, RateLeg::Held),
-        (RateLookup::Found(from_on, from_rate), RateLookup::Found(to_on, to_rate)) => {
-            let leg = match from_on.cmp(&to_on) {
+        (RateLookup::Euro, RateLookup::Found(to)) => (
+            FxRate::ONE,
+            to.rate,
+            to.on,
+            RateLeg::Display,
+            manual_leg(false, to.manual),
+        ),
+        (RateLookup::Found(from), RateLookup::Euro) => (
+            from.rate,
+            FxRate::ONE,
+            from.on,
+            RateLeg::Held,
+            manual_leg(from.manual, false),
+        ),
+        (RateLookup::Found(from), RateLookup::Found(to)) => {
+            let leg = match from.on.cmp(&to.on) {
                 Ordering::Less => RateLeg::Held,
                 Ordering::Greater => RateLeg::Display,
                 Ordering::Equal => RateLeg::Both,
             };
-            (from_rate, to_rate, from_on.min(to_on), leg)
+            (
+                from.rate,
+                to.rate,
+                from.on.min(to.on),
+                leg,
+                manual_leg(from.manual, to.manual),
+            )
         }
     };
     let magnitude = scaled_magnitude(
@@ -348,13 +421,25 @@ pub fn convert(minor: i64, from: Currency, to: Currency, on: Date, book: &RateBo
             minor: -magnitude,
             rate_on,
             leg,
+            manual,
         },
         Some(magnitude) => Conversion::Converted {
             minor: magnitude,
             rate_on,
             leg,
+            manual,
         },
         None => Conversion::TooLarge,
+    }
+}
+
+/// The side of a conversion using a manual rate, if any does.
+fn manual_leg(held: bool, display: bool) -> Option<RateLeg> {
+    match (held, display) {
+        (false, false) => None,
+        (true, false) => Some(RateLeg::Held),
+        (false, true) => Some(RateLeg::Display),
+        (true, true) => Some(RateLeg::Both),
     }
 }
 

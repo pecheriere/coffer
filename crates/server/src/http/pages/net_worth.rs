@@ -36,6 +36,8 @@ use chart::{ChartPoint, ChartSize, line_chart, scale_misses_zero};
 use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount_sentence};
 
 const NO_TOTAL: &str = "No total";
+/// Beside a figure resting on an exchange rate an admin entered.
+const BY_HAND: &str = "(a rate entered by hand)";
 const NO_VALUE_THAT_DAY: &str = "No value that day";
 const NOTHING_COUNTED: &str = "Nothing counted";
 const NOT_COUNTED: &str = "Not counted";
@@ -561,8 +563,11 @@ fn period_cell(
             Period::Nothing { .. } => {
                 (nothing_counted)
             }
-            Period::Point(NetWorthPoint { total: Some(total), .. }) => {
+            Period::Point(NetWorthPoint { total: Some(total), manual_rate, .. }) => {
                 (grouped(total.minor_units, total.currency))
+                @if *manual_rate {
+                    " " span.fine { (BY_HAND) }
+                }
             }
             Period::Point(_) if as_above => {
                 span.no-total { (NO_TOTAL) ", as above." }
@@ -601,6 +606,9 @@ fn latest(report: &NetWorthReport, names: &Names<'_>) -> Markup {
                                     @match line.amount {
                                         Some(amount) => { (grouped(amount.minor_units, amount.currency)) }
                                         None => { (NO_TOTAL) }
+                                    }
+                                    @if line.manual_rate {
+                                        " " span.fine { (BY_HAND) }
                                     }
                                 }
                             }
@@ -777,9 +785,14 @@ fn account_cells(
         },
         AccountCell {
             value: amount,
-            note: point
-                .rate_on
-                .map(|on| format!("at the rate of {}", short_day(on))),
+            note: point.rate_on.map(|on| {
+                let by_hand = if point.manual_rate {
+                    ", entered by hand"
+                } else {
+                    ""
+                };
+                format!("at the rate of {}{by_hand}", short_day(on))
+            }),
         },
         first_day,
     ]

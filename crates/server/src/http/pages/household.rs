@@ -1,5 +1,8 @@
 //! Household settings: the theme everyone sees unless they choose their
-//! own, and the display currency. Admin-only; a denial renders as a 403 page.
+//! own, the display currency and the exchange rates entered by hand. Admin-only;
+//! a denial renders as a 403 page.
+
+mod manual_rates;
 
 use axum::Router;
 use axum::extract::State;
@@ -27,6 +30,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route(HOUSEHOLD, get(household).post(set_theme))
         .route(DISPLAY_CURRENCY, post(set_display_currency))
+        .merge(manual_rates::routes())
 }
 
 async fn household(
@@ -40,6 +44,12 @@ async fn household(
         .household_settings(&actor)
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
+    let rates = state
+        .ledger
+        .manual_rates(&actor)
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
+    let today = state.ledger.today();
     let viewer = viewer(&state, &session).await;
     let look = session.look(&state).await;
     let current = state.appearance.household_theme().await;
@@ -88,6 +98,7 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save display currency" }
             }
         }
+        (manual_rates::card(&viewer.csrf, &rates.items, settings.display_currency, today))
     };
     let frame = Frame {
         look,

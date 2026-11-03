@@ -1,0 +1,154 @@
+//! Exchange rates an admin enters by hand (spec §8.10 N16), for a currency no source
+//! publishes or a day it got wrong.
+//!
+//! A wrong rate moves net worth, so every write is validated, audited with its old and new
+//! value, and marked in everything built from it. Whether a code converts at once depends on
+//! the currencies in use, so a write spans every account as a display currency does (N8).
+
+use coffer_domain::audit::AuditChanges;
+use coffer_domain::fx::{FxRate, ManualRate};
+use coffer_domain::identity::Actor;
+use coffer_domain::money::Currency;
+use coffer_domain::net_worth::MIN_VALUE_DATE;
+use coffer_domain::policy::{AccountLevel, Action, authorize};
+use jiff::civil::Date;
+use serde::Serialize;
+use utoipa::ToSchema;
+
+use super::{Ledger, LedgerError, audit};
+
+/// The audit entity of a manual rate.
+const ENTITY: &str = "fx_manual_rate";
+
+const NOT_THE_EURO: &str = "the euro is 1 on every day, so it takes no rate";
+const NOT_THE_DISPLAY_CURRENCY: &str = "a rate can't be entered for the display currency";
+const NOT_IN_THE_FUTURE: &str = "a rate can't be entered for a day after today";
+const NOT_BEFORE_THE_TABLE: &str = "a rate can't be entered for a day before 1970";
+
+/// The rates admins have entered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ManualRateList {
+    /// The newest day first, then by currency: at most 1,000, the newest of a longer list.
+    pub items: Vec<ManualRate>,
+}
+
+/// An audit entity's id: one currency's one day.
+fn entity_id(currency: Currency, on: Date) -> String {
+    format!("{}:{on}", currency.as_str())
+}
+
+impl Ledger {
+    /// The rates admins have entered.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fx_coverage`].
+    pub async fn manual_rates(&self, actor: &Actor) -> Result<ManualRateList, LedgerError> {
+        self.authorize_fx(actor).await?;
+        Ok(ManualRateList {
+            items: self.store.manual_rates().await?,
+        })
+    }
+
+    /// Enters `rate` for `currency` on `on`, replacing what an admin entered for that day.
+    /// It rewrites the daily values it moves, in this transaction or if there are too many
+    /// for one, in a rebuild the daily job runs. The same rate again writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Denied`] without [`Action::ManageHousehold`] and `balances` access to
+    /// every account; [`LedgerError::Invalid`] for the euro, the display currency, a day
+    /// after today or before 1970; a failure to resolve access; storage failures.
+    pub async fn set_manual_rate(
+        &self,
+        actor: &Actor,
+        currency: Currency,
+        on: Date,
+        rate: FxRate,
+    ) -> Result<ManualRate, LedgerError> {
+        self.authorize_manual_rate(actor).await?;
+        if currency.as_str() == "EUR" {
+            return Err(LedgerError::Invalid(NOT_THE_EURO));
+        }
+        if on > self.today() {
+            return Err(LedgerError::Invalid(NOT_IN_THE_FUTURE));
+        }
+        if on < MIN_VALUE_DATE {
+            return Err(LedgerError::Invalid(NOT_BEFORE_THE_TABLE));
+        }
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        if tx.display_currency().await? == Some(currency) {
+            return Err(LedgerError::Invalid(NOT_THE_DISPLAY_CURRENCY));
+        }
+        let before = tx.manual_rate(currency, on).await?;
+        if let Some(same) = before.filter(|before| before.rate == rate) {
+            return Ok(same);
+        }
+        tx.set_manual_rate(currency, on, rate, now).await?;
+        audit(
+            &mut tx,
+            now,
+            actor,
+            "fx.manual_rate.set",
+            ENTITY,
+            entity_id(currency, on),
+            AuditChanges::new().change(
+                "rate",
+                before.map(|before| before.rate.to_string()),
+                rate.to_string(),
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(ManualRate {
+            currency,
+            on,
+            rate,
+            entered_at: now,
+        })
+    }
+
+    /// Removes the rate an admin entered for `currency` on `on`: what it covered falls back
+    /// on the published rate of that day, an earlier rate or none. The daily values move as
+    /// with [`Self::set_manual_rate`].
+    ///
+    /// # Errors
+    ///
+    /// [`LedgerError::Denied`] as [`Self::set_manual_rate`]; [`LedgerError::NotFound`] with
+    /// no such rate, so a mistyped day doesn't read as done; a failure to resolve access;
+    /// storage failures.
+    pub async fn remove_manual_rate(
+        &self,
+        actor: &Actor,
+        currency: Currency,
+        on: Date,
+    ) -> Result<(), LedgerError> {
+        self.authorize_manual_rate(actor).await?;
+        let now = self.clock.now();
+        let mut tx = self.store.begin().await?;
+        let Some(before) = tx.manual_rate(currency, on).await? else {
+            return Err(LedgerError::NotFound);
+        };
+        tx.remove_manual_rate(currency, on).await?;
+        audit(
+            &mut tx,
+            now,
+            actor,
+            "fx.manual_rate.remove",
+            ENTITY,
+            entity_id(currency, on),
+            AuditChanges::new().change("rate", before.rate.to_string(), None::<String>),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Decided from the actor alone, before anything is read or checked.
+    async fn authorize_manual_rate(&self, actor: &Actor) -> Result<(), LedgerError> {
+        authorize(actor, Action::ManageHousehold)?;
+        self.authorize_every_account_access(actor, AccountLevel::Balances)
+            .await
+    }
+}

@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 mod bucket_words;
 mod buckets;
 mod form;
+mod manual_rates;
 mod truth;
 
 use super::forecast::{row, section, text_of};

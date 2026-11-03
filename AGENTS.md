@@ -38,6 +38,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
+  `manual_rates` (exchange rates an admin enters: validated, audited and marked),
   transactions and their splits, merging, un-merging and dismissing possible duplicates; `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates in accounts it
   can't read and goal links it can't see); `fx` (the `RateProvider` interface,
@@ -126,9 +127,9 @@ worktree when its branch has merged.
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
 - Every mutation goes through a `StoreTx` together with its audit entry. The one
-  exception is exchange rates and the daily net worth rows (spec §8.10 N10): public
+  exception is fetched exchange rates and the daily net worth rows (spec §8.10 N10): public
   reference data and derived values, written in the transaction of whatever changes
-  them. What changes them is audited.
+  them. What changes them is audited, and a rate an admin enters is (N16).
 - Every handler authorizes through `coffer_domain::policy`: `authorize` for
   household actions, `authorize_account` for anything tied to an account,
   `authorize_every_account` for what spans every account (the rule table in

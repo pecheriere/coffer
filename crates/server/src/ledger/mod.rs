@@ -8,6 +8,7 @@ pub mod accounts;
 pub mod categories;
 pub mod duplicates;
 pub mod forecast;
+pub mod manual_rates;
 pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;

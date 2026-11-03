@@ -2537,7 +2537,7 @@
           "fx"
         ],
         "summary": "What is known of fetching each currency's rates.",
-        "description": "For each currency a fetch was tried for: `status` (`ready`, `not_published` or `failing`), the `first_on` and `last_on` of the rates held, when it was last tried and last succeeded, and `last_error`, a fixed code (`unavailable`, `malformed` or `network`). A currency never tried has no entry.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
+        "description": "For each currency a fetch was tried for: `status` (`ready`, `not_published` or `failing`), the `first_on` and `last_on` of the rates held, when it was last tried and last succeeded, and `last_error`, a fixed code (`unavailable`, `malformed` or `network`). A currency never tried has no entry. `manual` lists, apart from that, each currency holding rates an admin entered, with its `first_on` and `last_on`: such a currency can have no entry in `items`.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
         "operationId": "getFxCoverage",
         "responses": {
           "200": {
@@ -2628,13 +2628,349 @@
         ]
       }
     },
+    "/api/v1/fx/manual-rates": {
+      "get": {
+        "tags": [
+          "fx"
+        ],
+        "summary": "The rates admins have entered.",
+        "description": "The rates admins have entered, the newest day first, then by currency: at most 1,000, the newest of a longer list. `getFxRates` also shows each, marked. Needs `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
+        "operationId": "listManualRates",
+        "responses": {
+          "200": {
+            "description": "The rates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualRateList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fx/manual-rates/{currency}/{on}": {
+      "put": {
+        "tags": [
+          "fx"
+        ],
+        "summary": "Enters a rate for a currency and a day.",
+        "description": "`rate` is units of the currency per one euro, as exact decimal text: above zero, at most 10 digits, 6 of them decimals. It is carried forward like a fetched rate, from its day until a later rate of either kind. A fetch never overwrites it. On its own day it wins over a published rate, which stays behind it, and a published rate on a later day takes over as usual. Everything built from it is marked: `manual_rate` on a report's points, the caution `rate_manual` and `manual` on `getFxRates`. It rewrites the net worth values it moves; with very many, a report answers `rebuilding` for a moment. Audited with the old and new rate. The same rate again writes nothing and answers with what is held.\n\nA rate that is malformed, not above zero or a JSON number is 400, as is an unknown code or a day not written `YYYY-MM-DD`. The euro, the display currency, a day after today or before 1970 is 422.\n\nNeeds `admin`; a token with account grants also needs `all` at `balances`: which codes convert at once depends on the currencies in use. The refusal is the same whatever exists.",
+        "operationId": "setManualRate",
+        "parameters": [
+          {
+            "name": "currency",
+            "in": "path",
+            "description": "The currency, an ISO 4217 code.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          {
+            "name": "on",
+            "in": "path",
+            "description": "The day, written exactly `YYYY-MM-DD`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualRateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rate as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualRate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "fx"
+        ],
+        "summary": "Removes a rate an admin entered.",
+        "description": "What it covered falls back on the published rate of that day if one is held, or else the most recent earlier rate; with neither, amounts in the currency go back to `null`, with the caution `rate_missing`. Audited with the old rate. With no such rate it is 404, and writes nothing. Needs what `setManualRate` needs.",
+        "operationId": "removeManualRate",
+        "parameters": [
+          {
+            "name": "currency",
+            "in": "path",
+            "description": "The currency, an ISO 4217 code.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          {
+            "name": "on",
+            "in": "path",
+            "description": "The day, written exactly `YYYY-MM-DD`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The rate is removed."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/fx/rates": {
       "get": {
         "tags": [
           "fx"
         ],
         "summary": "One currency's stored rates.",
-        "description": "A currency's published rates in a range of at most 1,000 days, newest first: `rate` is units of the currency per one euro, as exact decimal text. A weekend or holiday has no entry, and a report uses the most recent earlier rate. The euro has no entries, being 1 on every day. A range too long or inverted is 422; an unknown code or a date not written `YYYY-MM-DD` is 400.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
+        "description": "A currency's rates in a range of at most 1,000 days, newest first: `rate` is units of the currency per one euro, as exact decimal text. `manual` is true of a rate an admin entered, which on its day stands in for any published rate. A weekend or holiday has no entry, and a report uses the most recent earlier rate. The euro has no entries, being 1 on every day. A range too long or inverted is 422; an unknown code or a date not written `YYYY-MM-DD` is 400.\n\nNeeds `read`; a token with account grants also needs `all` at `balances`, since which rates are stored depends on the currencies in use. The refusal is the same whatever exists.",
         "operationId": "getFxRates",
         "parameters": [
           {
@@ -4370,7 +4706,7 @@
           "reports"
         ],
         "summary": "Net worth over time.",
-        "description": "What the household is worth, period by period, in the display currency.\n\nA point is the value on the last day of its period, or on the last day available when it says `partial`: `on` is that day and `period_start` the first day of the period inside the range. A week ends on Sunday. Each account's latest balance on or before `on` counts, so a balance carries forward until a newer one. A period where nothing counts is left out, and at most 1,000 periods are answered: a longer range is 422, whatever is stored. `through` is the last day with values: no later day, and no day after today, is a point. It is `null` while the values are being rebuilt.\n\n`total` is the sum of the counted accounts' amounts, each converted and rounded on its own, so every breakdown adds up to it. It is `null`, never a partial sum, when one of them has no amount: `unconverted` names the accounts, and a caution says why. A `by_liquidity` line is `null` the same way. `by_currency` is the native sum per currency, with no rate involved, so nothing is omitted; only an account with no value that day can't be in it.\n\nIn `accounts`, each account that is the household's says whether it counts, its `first_on` (a jump that day is an account arriving, not money) and its `closed_on` (a closed account stops counting that day unless it still owes). Its `points` say the `balance` in its own currency, `balance_on`, the date of the snapshot that balance comes from, `balance_source`, the `amount` in the display currency and `rate_on`, the older of the dates of the rates used: a weekend reports Friday's.\n\n`status` says how far to trust it. `firm` is numbers with nothing to warn about. `provisional` is numbers with `cautions`. `unavailable` is `blockers`: `display_currency_not_set` (an admin has to choose one, and points still hold `by_currency`), `rebuilding` (no points until the values are rebuilt) or `no_counted_accounts` (not a net worth of zero).\n\nThe cautions: `rate_missing`, with a reason of `not_fetched_yet`, `not_published`, `fetch_failing`, `provider_off` or `none_that_early`; `rate_stale`, a rate more than a week older than its day, as for a discontinued currency; `amount_too_large`, a conversion that doesn't fit; `balance_stale`, an old balance on the latest point; `to_date_not_yet_filled`, later days not answered yet; `daily_value_missing`, an account with no value on a day after its first, which is a hole and not money leaving; `nothing_counted_after_last_point`, so the last point isn't the value now; `liability_balance_positive`, perhaps a wrong sign, added as it stands; and `closed_account_owing`, a debt still counting.\n\n`buckets` holds the money that isn't the household's, in no number above: **nothing adds a bucket to `total`, or one bucket to another**, and nothing about one touches the household's `status`, `points`, `accounts`, `blockers` or `cautions`. There is one per `belongs_to` and exact `beneficiary`, so two spellings of a name are two buckets: `someone_else` before `given_away`, and within one no label (`beneficiary` is `null`) first, then labels by their bytes. Each is the same calculation over its own accounts, listed only there, all of them `counted` in that bucket, with its own `status`, `points`, `accounts`, `blockers` and `cautions`. There, `no_counted_accounts` means nothing in it has a value in this range. It answers from balances as they stand and whose money an account is now: moving an account moves its whole history. While `rebuilding`, `buckets` is empty.\n\nNeeds `read`. **A token with account grants gets the sum of the accounts it can see at `balances`, and nothing marks it as partial**, since that would reveal that there are others. An agent holding such a token must not report the sum as the whole household's. A bucket is made from those same accounts and sums them, unmarked: holding one of a child's two accounts, it sees a bucket of one. Nothing in the answer depends on an account the token can't see, except that rates are stored once for the household: a currency the token sees has its rates as soon as anyone's use fetched them. A sum too large to represent, in the household's money or a bucket's the token sees, refuses the whole report with 422. Amounts are integer minor units. It writes nothing.",
+        "description": "What the household is worth, period by period, in the display currency.\n\nA point is the value on the last day of its period, or on the last day available when it says `partial`: `on` is that day and `period_start` the first day of the period inside the range. A week ends on Sunday. Each account's latest balance on or before `on` counts, so a balance carries forward until a newer one. A period where nothing counts is left out, and at most 1,000 periods are answered: a longer range is 422, whatever is stored. `through` is the last day with values: no later day, and no day after today, is a point. It is `null` while the values are being rebuilt.\n\n`total` is the sum of the counted accounts' amounts, each converted and rounded on its own, so every breakdown adds up to it. It is `null`, never a partial sum, when one of them has no amount: `unconverted` names the accounts, and a caution says why. A `by_liquidity` line is `null` the same way. `by_currency` is the native sum per currency, with no rate involved, so nothing is omitted; only an account with no value that day can't be in it.\n\nIn `accounts`, each account that is the household's says whether it counts, its `first_on` (a jump that day is an account arriving, not money) and its `closed_on` (a closed account stops counting that day unless it still owes). Its `points` say the `balance` in its own currency, `balance_on`, the date of the snapshot that balance comes from, `balance_source`, the `amount` in the display currency and `rate_on`, the older of the dates of the rates used: a weekend reports Friday's. `manual_rate` on a point, a `by_liquidity` line or an account's point says an amount there used a rate an admin entered, and the caution `rate_manual` names the currency.\n\n`status` says how far to trust it. `firm` is numbers with nothing to warn about. `provisional` is numbers with `cautions`. `unavailable` is `blockers`: `display_currency_not_set` (an admin has to choose one, and points still hold `by_currency`), `rebuilding` (no points until the values are rebuilt) or `no_counted_accounts` (not a net worth of zero).\n\nThe cautions: `rate_missing`, with a reason of `not_fetched_yet`, `not_published`, `fetch_failing`, `provider_off` or `none_that_early`; `rate_stale`, a rate more than a week older than its day, as for a discontinued currency; `amount_too_large`, a conversion that doesn't fit; `balance_stale`, an old balance on the latest point; `to_date_not_yet_filled`, later days not answered yet; `daily_value_missing`, an account with no value on a day after its first, which is a hole and not money leaving; `nothing_counted_after_last_point`, so the last point isn't the value now; `liability_balance_positive`, perhaps a wrong sign, added as it stands; and `closed_account_owing`, a debt still counting.\n\n`buckets` holds the money that isn't the household's, in no number above: **nothing adds a bucket to `total`, or one bucket to another**, and nothing about one touches the household's `status`, `points`, `accounts`, `blockers` or `cautions`. There is one per `belongs_to` and exact `beneficiary`, so two spellings of a name are two buckets: `someone_else` before `given_away`, and within one no label (`beneficiary` is `null`) first, then labels by their bytes. Each is the same calculation over its own accounts, listed only there, all of them `counted` in that bucket, with its own `status`, `points`, `accounts`, `blockers` and `cautions`. There, `no_counted_accounts` means nothing in it has a value in this range. It answers from balances as they stand and whose money an account is now: moving an account moves its whole history. While `rebuilding`, `buckets` is empty.\n\nNeeds `read`. **A token with account grants gets the sum of the accounts it can see at `balances`, and nothing marks it as partial**, since that would reveal that there are others. An agent holding such a token must not report the sum as the whole household's. A bucket is made from those same accounts and sums them, unmarked: holding one of a child's two accounts, it sees a bucket of one. Nothing in the answer depends on an account the token can't see, except that rates are stored once for the household: a currency the token sees has its rates as soon as anyone's use fetched them. A sum too large to represent, in the household's money or a bucket's the token sees, refuses the whole report with 422. Amounts are integer minor units. It writes nothing.",
         "operationId": "getNetWorth",
         "parameters": [
           {
@@ -6053,6 +6389,7 @@
           "counted",
           "amount",
           "rate_on",
+          "manual_rate",
           "conversion"
         ],
         "properties": {
@@ -6085,6 +6422,10 @@
           "counted": {
             "type": "boolean",
             "description": "Whether it counts on this day: not on or after its closing day, unless it\nstill owes."
+          },
+          "manual_rate": {
+            "type": "boolean",
+            "description": "`amount` was converted with a rate an admin entered."
           },
           "on": {
             "type": "string",
@@ -7847,7 +8188,8 @@
         "type": "object",
         "description": "What is known of fetching each currency's rates.",
         "required": [
-          "items"
+          "items",
+          "manual"
         ],
         "properties": {
           "items": {
@@ -7855,7 +8197,14 @@
             "items": {
               "$ref": "#/components/schemas/FxCoverage"
             },
-            "description": "One per currency tried, by currency. A currency never tried has no entry."
+            "description": "One per currency tried, by currency. A currency never tried has no entry. This is\nabout fetching: `first_on` and `last_on` here are of fetched rates alone."
+          },
+          "manual": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManualCoverage"
+            },
+            "description": "One per currency holding rates an admin entered, by currency. Such a currency may have\nno entry in `items`, and a fetch that fails or finds nothing doesn't change these."
           }
         }
       },
@@ -7896,9 +8245,9 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RateObservation"
+              "$ref": "#/components/schemas/HeldRate"
             },
-            "description": "Newest first. A day with no entry had no published rate."
+            "description": "Newest first. A day with no entry had no rate. A day with both a published rate and\none an admin entered has that one, with `manual` true."
           }
         }
       },
@@ -8002,6 +8351,28 @@
           "text": {
             "type": "string",
             "description": "Fixed text."
+          }
+        }
+      },
+      "HeldRate": {
+        "type": "object",
+        "description": "One day's rate of one currency as a calculation uses it: on a day with both, an\nadmin's rate rather than the published one.",
+        "required": [
+          "on",
+          "rate",
+          "manual"
+        ],
+        "properties": {
+          "manual": {
+            "type": "boolean",
+            "description": "An admin entered this rate; no source published it."
+          },
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/FxRate"
           }
         }
       },
@@ -8315,7 +8686,8 @@
         "description": "One liquidity class on one day.",
         "required": [
           "liquidity",
-          "amount"
+          "amount",
+          "manual_rate"
         ],
         "properties": {
           "amount": {
@@ -8331,6 +8703,90 @@
           },
           "liquidity": {
             "$ref": "#/components/schemas/LiquidityClass"
+          },
+          "manual_rate": {
+            "type": "boolean",
+            "description": "An amount in this class was converted with a rate an admin entered."
+          }
+        }
+      },
+      "ManualCoverage": {
+        "type": "object",
+        "description": "Which days a currency has rates an admin entered.",
+        "required": [
+          "currency",
+          "first_on",
+          "last_on"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "first_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The first day with a manual rate."
+          },
+          "last_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The last day with a manual rate."
+          }
+        }
+      },
+      "ManualRate": {
+        "type": "object",
+        "description": "A rate an admin entered for one currency and one day.",
+        "required": [
+          "currency",
+          "on",
+          "rate",
+          "entered_at"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "entered_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was last entered. Who entered it is in the audit log."
+          },
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/FxRate"
+          }
+        }
+      },
+      "ManualRateInput": {
+        "type": "object",
+        "description": "A rate to enter.",
+        "required": [
+          "rate"
+        ],
+        "properties": {
+          "rate": {
+            "$ref": "#/components/schemas/FxRate"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ManualRateList": {
+        "type": "object",
+        "description": "The rates admins have entered.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManualRate"
+            },
+            "description": "The newest day first, then by currency: at most 1,000, the newest of a longer list."
           }
         }
       },
@@ -8707,6 +9163,37 @@
           },
           {
             "type": "object",
+            "description": "Between these points amounts were converted with a rate of this currency that an\nadmin entered, not one a source published, so they are only as good as that entry.",
+            "required": [
+              "currency",
+              "first_on",
+              "last_on",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "first_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The first point using it."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rate_manual"
+                ]
+              },
+              "last_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The last point using it."
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "The last point at which this account's amount did not fit, so it is\n`null`.",
             "required": [
               "account",
@@ -8908,7 +9395,8 @@
           "total",
           "by_liquidity",
           "by_currency",
-          "unconverted"
+          "unconverted",
+          "manual_rate"
         ],
         "properties": {
           "by_currency": {
@@ -8924,6 +9412,10 @@
               "$ref": "#/components/schemas/LiquidityLine"
             },
             "description": "One line per liquidity class holding a counted account."
+          },
+          "manual_rate": {
+            "type": "boolean",
+            "description": "An amount on this point was converted with a rate an admin entered, so `total`, if\nthere is one, rests on it: see the caution `rate_manual`."
           },
           "on": {
             "type": "string",
@@ -10062,23 +10554,6 @@
           "provider_off",
           "none_that_early"
         ]
-      },
-      "RateObservation": {
-        "type": "object",
-        "description": "One day's rate of one currency.",
-        "required": [
-          "on",
-          "rate"
-        ],
-        "properties": {
-          "on": {
-            "type": "string",
-            "format": "date"
-          },
-          "rate": {
-            "$ref": "#/components/schemas/FxRate"
-          }
-        }
       },
       "RawBalanceView": {
         "type": "object",

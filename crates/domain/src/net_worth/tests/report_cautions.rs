@@ -4,7 +4,7 @@ use jiff::civil::{Date, date};
 
 use super::{TODAY, cash, currency, holding, id, input, money, point_on, rates};
 use crate::accounts::LiquidityClass;
-use crate::fx::RateBook;
+use crate::fx::{RateBook, RateHistory, RateObservation};
 use crate::money::Currency;
 use crate::net_worth::{
     CurrencyState, NetWorthCaution, NetWorthInterval, NetWorthStatus, RateMissingReason,
@@ -576,4 +576,110 @@ fn a_stale_balance_is_aged_to_the_last_point_by_period() {
             age_days: 33,
         }]
     );
+}
+
+/// A book with `code` holding only a rate an admin entered on `on`.
+fn manual_book(code: &str, on: Date) -> RateBook {
+    let mut book = usd_book();
+    book.insert(
+        currency(code),
+        RateHistory::merged(
+            Vec::new(),
+            vec![RateObservation {
+                on,
+                rate: "655.957".parse().unwrap(),
+            }],
+        ),
+    );
+    book
+}
+
+/// Every figure resting on a manual rate says so, and the rest don't: a total, a class, the
+/// account, and a caution naming the currency and the stretch.
+#[test]
+fn a_manual_rate_gives_a_total_and_marks_all_it_touches() {
+    let oct_31 = date(2026, 10, 31);
+    let held = [
+        cash(1, "USD", &[(OCT_26, 500)]),
+        holding(2, "XAF", LiquidityClass::Illiquid, &[(OCT_26, 900_000)]),
+    ];
+    let mut asked = input(&held, Some("USD"), &manual_book("XAF", OCT_26));
+    asked.from = OCT_26;
+    asked.to = NOV_1;
+
+    let report = net_worth_report(&asked).unwrap();
+
+    let point = point_on(&report, oct_31);
+    assert!(point.total.is_some(), "it no longer blocks the total");
+    assert!(point.manual_rate);
+    assert_eq!(point.unconverted.len(), 0);
+    let manual_of = |class| {
+        point
+            .by_liquidity
+            .iter()
+            .find(|line| line.liquidity == class)
+            .unwrap()
+            .manual_rate
+    };
+    assert!(!manual_of(LiquidityClass::Cash));
+    assert!(manual_of(LiquidityClass::Illiquid));
+    let account_point = |index: usize| {
+        report.accounts[index]
+            .points
+            .iter()
+            .find(|one| one.on == oct_31)
+            .unwrap()
+    };
+    assert!(!account_point(0).manual_rate);
+    assert!(account_point(1).manual_rate);
+    assert_eq!(report.status, NetWorthStatus::Provisional);
+    assert!(report.cautions.contains(&NetWorthCaution::RateManual {
+        currency: currency("XAF"),
+        first_on: report.points[0].on,
+        last_on: NOV_1,
+    }));
+}
+
+/// An old manual rate is an old rate: it isn't excused from `rate_stale`.
+#[test]
+fn an_old_manual_rate_raises_the_same_caution_as_an_old_published_one() {
+    let entered = date(2026, 10, 1);
+    let held = [cash(1, "XAF", &[(entered, 900_000)])];
+    let mut asked = input(&held, Some("EUR"), &manual_book("XAF", entered));
+    asked.from = OCT_26;
+    asked.to = NOV_1;
+
+    let report = net_worth_report(&asked).unwrap();
+
+    assert!(report.cautions.iter().any(|caution| matches!(
+        caution,
+        NetWorthCaution::RateStale { currency: code, rate_on, .. }
+            if *code == currency("XAF") && *rate_on == entered
+    )));
+}
+
+/// A published rate on a later day takes over, so a later point is no longer marked.
+#[test]
+fn a_later_published_rate_clears_the_mark() {
+    let mut book = usd_book();
+    let observed = |on, text: &str| RateObservation {
+        on,
+        rate: text.parse().unwrap(),
+    };
+    book.insert(
+        currency("JPY"),
+        RateHistory::merged(
+            vec![observed(date(2026, 11, 1), "175")],
+            vec![observed(OCT_26, "170")],
+        ),
+    );
+    let held = [cash(1, "JPY", &[(OCT_26, 900_000)])];
+    let mut asked = input(&held, Some("EUR"), &book);
+    asked.from = OCT_26;
+    asked.to = NOV_1;
+
+    let report = net_worth_report(&asked).unwrap();
+
+    assert!(point_on(&report, date(2026, 10, 31)).manual_rate);
+    assert!(!point_on(&report, NOV_1).manual_rate);
 }

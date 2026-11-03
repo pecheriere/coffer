@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use coffer_domain::fx::{FxCoverage, FxFetchStatus, RateObservation};
+use coffer_domain::fx::{FxCoverage, FxFetchStatus, HeldRate, ManualCoverage};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::Currency;
 use coffer_domain::net_worth::{
@@ -77,16 +77,21 @@ pub struct FxRatesQuery {
 /// What is known of fetching each currency's rates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct FxCoverageList {
-    /// One per currency tried, by currency. A currency never tried has no entry.
+    /// One per currency tried, by currency. A currency never tried has no entry. This is
+    /// about fetching: `first_on` and `last_on` here are of fetched rates alone.
     pub items: Vec<FxCoverage>,
+    /// One per currency holding rates an admin entered, by currency. Such a currency may have
+    /// no entry in `items`, and a fetch that fails or finds nothing doesn't change these.
+    pub manual: Vec<ManualCoverage>,
 }
 
 /// One currency's rates, in units of it per one euro.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct FxRateList {
     pub currency: Currency,
-    /// Newest first. A day with no entry had no published rate.
-    pub items: Vec<RateObservation>,
+    /// Newest first. A day with no entry had no rate. A day with both a published rate and
+    /// one an admin entered has that one, with `manual` true.
+    pub items: Vec<HeldRate>,
 }
 
 /// The message for a refused report, which is fixed.
@@ -102,10 +107,15 @@ fn refused(error: NetWorthError) -> LedgerError {
     })
 }
 
-/// Why a rate missing for this currency is missing. With a rate held, any later day would
-/// find it, so a day lacking one is before the first (`None`), whatever the last fetch did.
-fn missing_reason(known: Option<&FxCoverage>, provider_on: bool) -> Option<RateMissingReason> {
-    if known.is_some_and(|known| known.first_on.is_some()) {
+/// Why a rate missing for this currency is missing. With a rate held, fetched or entered, any
+/// later day would find it, so a day lacking one is before the first (`None`), whatever the
+/// last fetch did.
+fn missing_reason(
+    known: Option<&FxCoverage>,
+    manual_held: bool,
+    provider_on: bool,
+) -> Option<RateMissingReason> {
+    if manual_held || known.is_some_and(|known| known.first_on.is_some()) {
         return None;
     }
     if !provider_on {
@@ -222,6 +232,7 @@ impl Ledger {
                 currency,
                 reason: missing_reason(
                     data.coverage.iter().find(|one| one.currency == currency),
+                    data.manual_rates_held.contains(&currency),
                     self.rate_provider_configured,
                 ),
             })
@@ -238,6 +249,7 @@ impl Ledger {
         self.authorize_fx(actor).await?;
         Ok(FxCoverageList {
             items: self.store.fx_coverage().await?,
+            manual: self.store.manual_coverage().await?,
         })
     }
 
@@ -274,7 +286,7 @@ impl Ledger {
 
     /// Which rates are stored depends on the currencies in use, so these span every
     /// account (N2); the refusal is the same whatever exists.
-    async fn authorize_fx(&self, actor: &Actor) -> Result<(), LedgerError> {
+    pub(super) async fn authorize_fx(&self, actor: &Actor) -> Result<(), LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         self.authorize_every_account_access(actor, AccountLevel::Balances)
             .await
