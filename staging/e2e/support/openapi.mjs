@@ -19,7 +19,7 @@ function closed(schema) {
   if (schema === null || typeof schema !== 'object') return schema;
   if (schema.allOf) throw new Error('a schema with allOf needs unevaluatedProperties here');
   const copy = Object.fromEntries(Object.entries(schema).map(([key, value]) => [key, closed(value)]));
-  if (copy.properties && typeof schema.properties.type !== 'string' && copy.additionalProperties === undefined) {
+  if (copy.properties && copy.additionalProperties === undefined) {
     copy.additionalProperties = false;
   }
   return copy;

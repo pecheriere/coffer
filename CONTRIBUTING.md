@@ -79,10 +79,12 @@ scripts/staging.sh test                       # all of them, with stack and temp
 scripts/staging.sh test api/sync.spec.mjs     # arguments go to Playwright
 ```
 
-They need Node 24 or later on the machine, and run from `staging/e2e/` in
+They need Node 24 or later on the machine, with npm 11.10 or later, the first to read
+`min-release-age` in `staging/e2e/.npmrc`, and run from `staging/e2e/` in
 [Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
 install scripts. Each test gets its own server on a new copy of the template, and every
-API response is checked against `docs/api/openapi.json`, whichever test made it. They cover
+API response is checked against `docs/api/openapi.json`, whichever test made it, a field the
+document doesn't name included. One run goes at a time in a checkout. They cover
 what the in-process tests in `crates/*/tests/it/` can't, the built image, the real
 configuration and the egress rules, and logic and edge cases stay there. A server that
 panics or logs a mock credential fails the test using it.

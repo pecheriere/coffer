@@ -19,6 +19,7 @@ set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 state="$root/staging/.state"
+test_lock="$state/test.lock"
 image=${COFFER_STAGING_IMAGE:-coffer:staging}
 manual_port=18080
 relay=172.30.90.10
@@ -48,19 +49,19 @@ check_port() {
 # Two test runs in one checkout would remove each other's servers. A run that died can't
 # let go, so its lock is taken over.
 lock_test_run() {
-  local lock="$state/test.lock" holder
+  local holder
   mkdir -p "$state"
-  if ! mkdir "$lock" 2>/dev/null; then
-    holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if ! mkdir "$test_lock" 2>/dev/null; then
+    holder=$(cat "$test_lock/pid" 2>/dev/null || true)
     if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
       fail "the tests are already running in this checkout (process $holder)"
     fi
-    rm -f "$lock/pid"
-    rmdir "$lock"
-    mkdir "$lock"
+    rm -f "$test_lock/pid"
+    rmdir "$test_lock"
+    mkdir "$test_lock"
   fi
-  echo $$ >"$lock/pid"
-  trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true' EXIT
+  echo $$ >"$test_lock/pid"
+  trap 'rm -f "$test_lock/pid"; rmdir "$test_lock" 2>/dev/null || true' EXIT
 }
 
 # A stack is one per machine: its network, ports and container names are fixed. Another
