@@ -10,6 +10,7 @@
 mod crud;
 mod goal_links;
 mod grants;
+mod real_clock;
 mod settlements;
 mod validation;
 
@@ -45,7 +46,11 @@ struct World {
 
 /// Admin "alice", signed in with a passkey, and one expense category.
 async fn world() -> World {
-    let server = TestServer::new().await;
+    world_on(TestServer::new().await).await
+}
+
+/// [`world`] over `server`.
+async fn world_on(server: TestServer) -> World {
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     let alice = Actor {
