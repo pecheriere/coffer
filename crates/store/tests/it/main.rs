@@ -10,4 +10,5 @@ mod identity;
 mod ledger;
 mod net_worth;
 mod plan;
+mod provider_dismissal;
 mod sync;
