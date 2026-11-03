@@ -1,6 +1,6 @@
 //! Rules (spec §8.13): keeping them here, and trying or running one in [`run`]. What a
 //! rule does is decided only by [`coffer_domain::rules::decide`] and written only by
-//! [`crate::canonical::fill_from_rules`]; the sync offers each new transaction to them
+//! `canonical::fill_from_rules`; the sync offers each new transaction to them
 //! itself.
 
 pub mod run;
