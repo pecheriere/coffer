@@ -34,6 +34,7 @@ use crate::ledger::LedgerError;
 use crate::ledger::accounts::{AccountView, assert_no_debug};
 
 mod binding;
+mod dismissal;
 mod forget;
 mod held;
 pub(super) mod plaid_budget;
@@ -115,6 +116,11 @@ pub struct ProviderAccountView {
     #[schema(required)]
     pub old_balance_note: Option<String>,
     pub last_seen_at: Timestamp,
+    /// When a member dismissed it, leaving it unbound on purpose: it raises no forecast caution
+    /// and is not counted as waiting to be set up, and can still be bound. `null` unless
+    /// dismissed; binding it clears this.
+    #[schema(required)]
+    pub dismissed_at: Option<Timestamp>,
 }
 
 impl From<ProviderAccountRecord> for ProviderAccountView {
@@ -143,6 +149,7 @@ impl From<ProviderAccountRecord> for ProviderAccountView {
                 .old_balance_refused
                 .then(|| OLD_BALANCE_NOTE.to_owned()),
             last_seen_at: record.last_seen_at,
+            dismissed_at: record.dismissed_at,
         }
     }
 }

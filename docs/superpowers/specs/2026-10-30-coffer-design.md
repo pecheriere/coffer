@@ -773,8 +773,8 @@ is an accepted risk, and hinting the item hides it.
 `floor_not_set`, `no_counted_accounts`, `balance_missing`. Everything else is a
 `caution`, which keeps the number but makes it not firm, including stale
 balances and unbound provider accounts. A counted account without any balance
-could hold anything; an unbound account cannot be dismissed yet, so blocking on
-it could block forever.
+could hold anything; an unbound account never blocks, since a member can leave it
+unbound on purpose by dismissing it (§8.11 B12a), and then it raises no caution either.
 
 **R5. The floor must be set.** An unset floor blocks the number, because a silent
 floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
@@ -782,8 +782,8 @@ allowed. A floor of some months of outflows that comes to 0 keeps the number, wi
 a caution.
 
 **R6. Plan versus actual** is defined by category (§6.9): actuals are categorized
-splits, and `transfer` is a category kind. A transfer link takes a movement inside the
-household out of them whatever it is filed as (§8.12 T5).
+splits, and `transfer` is a category kind. A transfer link takes a movement between counted
+accounts out of them whatever it is filed as (§8.12 T5).
 Uncategorized money is never spending and is reported separately, without
 invested and illiquid accounts.
 
@@ -1330,6 +1330,22 @@ refused doesn't put the guess back in its row, which may be what the member reje
 provider's own hint is preselected there. Plaid's subtypes `529`, `education savings account`,
 `utma` and `ugma` become `kind_hint`s.
 
+**B12a. A member can dismiss an unbound provider account (#75).** Someone who means to keep one
+unbound, such as a custodial or charity account, dismisses it and the forecast stops warning about
+it. `provider_accounts.dismissed_at` holds when, and a CHECK keeps it NULL on a bound one. A
+dismissed account is still an unbound one in every other way: it stays on `/connections` under its
+connection, marked as dismissed, with an undo; sync keeps tracking its last report, holds its records
+and keeps its balances exactly as for any unbound account, and writes nothing more; if the provider
+drops it, it is treated as an unbound one is. It raises no `unbound_provider_account` caution and
+isn't counted among the accounts to set up (the navigation notice), and `suggested_kind` is
+unchanged. It can still be bound, by either route, and binding clears the dismissal. Dismissing and
+restoring (`POST /provider-accounts/{id}/dismiss` and `/restore`, and forms on the page, on the same
+service) need `ManageConnections` and write access to every account, as binding does; an actor who
+without write access to every account is refused before any lookup, so a real id and a missing one get the same answer. A dismissal stands even if real money later appears on the account: no caution until a member restores it. Both are audited
+(`provider_account.dismiss`, `provider_account.restore`), with the agent named as ever. Asking for
+a state it is already in, or for a bound account or a removed connection, is a 409, which also
+answers a page or form older than the change.
+
 **B13. Not in this plan:** target allocation (#3), holdings (#42), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.
 
@@ -1354,57 +1370,69 @@ category with no link. Neither writes anything.
 **T3. Access.** Creating or removing a link needs `write` on both accounts, and reading one
 `transactions` on both. A token with one side hidden gets the answer a missing transaction or link
 gets, and a transaction it can read shows `transfer_link: null`. A refusal such a token gets because
-of the link (a split, a goal, a delete, a merge) doesn't word it as a link, as R3 has it for goals.
+of the link (a split, a goal, a delete, a merge) doesn't word it as a link, and one refused for a goal
+it isn't shown doesn't word it as a goal, as R3 has it.
 Audited as `transfer_link.create` and `transfer_link.remove`, with the agent as usual, and undone by
 removing it or making it again. Nothing in the policy changes.
 
 **T4. What a leg holds.** At most one split, so a link is refused on a split transaction and a leg
 can't become one. Part of a split may be spending, and a report can't say which part, so a rule of
-counting the rest would be a guess. Remove the link to split it. A goal is refused on a leg inside the
-household, either way round, since money moved to savings is still cash (R8). A contribution out of the
-household keeps its goal (B10). R8's refusal of a goal on a `transfer` category stands.
+counting the rest would be a guess. Remove the link to split it. A goal is refused on a link that is one
+movement (T5), either way round, since money moved between counted accounts is still cash (R8). Any
+other link keeps its goal, as a contribution out of counted cash may lower one's need (B10). R8's
+refusal of a goal on a `transfer` category stands.
 
-**T5. What it does to a report.** A link is *inside the household* when both accounts are
-`belongs_to = household`, counted or not, read at the time as every count is (B6), so changing
-`belongs_to` changes what a link means, its history included. Both legs of such a link are one
-movement, neither spending nor income, whatever they are filed as:
+**T5. What it does to a report.** A link is *one movement* when both accounts are in counted cash,
+the definition the forecast's actuals use (R10): open, `include_in_forecast`, and `cash` or
+`short_term_liability`. Only then did the money stay in the cash the forecast adds up. It is one
+definition in the store, behind every number here, read at the time as every count is (B6), so
+closing an account or switching a flag changes what its links mean, history included. A link also
+stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs
+of one sign.
 
-| Number | Effect of linking |
-|---|---|
-| `actual`, `rolling_average`, `rollovers` | Both legs leave, in any category. |
-| `uncategorized` | An uncategorized outflow leg leaves: a person has said where it went. |
-| a goal's `spent_against` | A leg's split leaves, into the line's `left_out`. Only `belongs_to` changing after the link can put one there (T4). |
-| `moved_within_household` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6) and a fee shows. |
-
-A link out of the household, or between two accounts that aren't its own, changes nothing: B9's
-contribution stays `actual` and pays its bill, B10's money inside stays in `not_the_households`, and
-one in a `transfer` category stays out of `actual` as it was, since a link doesn't correct a
-category. `within_household` says which. Pending legs are in none of this, as in R10.
-
-**T6. What it does to the forecast.** Inside the household too, read at the time:
+What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
+link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
+currencies there is no difference without a rate, so all of each leg moved. A known limit: nothing
+bounds a link across currencies, and it takes all of each leg out on a person's word.
 
 | Number | Effect of linking |
 |---|---|
-| A budget's `reduced_by`, a bill's `unpaid` | A leg no longer reduces or pays. Cash fell on one side, so if the other is counted it rose by as much, and the need is really still there: without the link the surplus was overstated by the leg, and with it the surplus falls by that. |
-| `uncategorized_spending` | A leg isn't in it. |
+| `actual`, `rolling_average`, `rollovers` | What moved leaves, in any category. |
+| `uncategorized` | What a link says of an uncategorized outflow leaves, for any link while it stands: a person has said what it is. |
+| a goal's `spent_against` | What moved of a charge leaves, into the line's `left_out`; of a refund, it just isn't counted. Only an account changing after the link can put one there (T4). |
+| `moved_between_counted_accounts` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6). |
+
+Any other link, to a brokerage, a loan, a closed account, or across or outside the household's money,
+records the movement and changes no other number: B9's contribution stays `actual` and pays its bill,
+a monthly auto-invest stays paid, B10's money inside stays in `not_the_households`, and one in a
+`transfer` category stays out of `actual` as it was, since a link doesn't correct a category.
+`one_movement` says which. Pending legs are in none of this, as in R10.
+
+**T6. What it does to the forecast.** For one movement, read at the time:
+
+| Number | Effect of linking |
+|---|---|
+| A budget's `reduced_by`, a bill's `unpaid` | What moved no longer reduces or pays. The other side is counted cash, so nothing left it, and the need is really still there: without the link the surplus was overstated by that much, and with it the surplus falls by that. |
+| `uncategorized_spending` | What a link says isn't in it, for any link while it stands. |
 | `possible_duplicates` | Unchanged: a leg may still be a duplicate. |
-| Goal need, `goal_linked_both_sides` | A leg's split doesn't lower the need or count as a side. |
+| Goal need, `goal_linked_both_sides` | What moved doesn't lower the need or count as a side. |
 | Cash, net worth | Unchanged: they read balances. |
-| `spending_newer_than_balance` | Unchanged: a link doesn't say which balances have moved, and the side not yet shown may be the outflow. |
+| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown and the outflow not, it stays: that is the balance missing money. |
 
-So the one thing moving money between counted accounts could do wrong, count as spending and lower
-what is needed, it no longer does. To an uncounted account of the household's, the same holds, and
-cash has fallen, which errs toward holding more. A known limit: a fee inside a link is in no `actual`
-and lowers no budget, though it did leave. Cash shows it, and `difference` says it; a member who wants
-it in a budget files it as its own transaction.
+A link to any other account changes none of these but the second. Its money left counted cash, so
+counting it as spent is what makes the number right: a bill paid by an auto-invest stays paid, where
+treating it as a movement would owe the bill again on top of the fallen balance.
 
 **T7. A leg over time.** Only a person ends a link. A link is user state (§8.4):
 
 - Pending to posted is one transaction, so nothing changes.
 - A provider's record vanishing doesn't delete a leg, which holds a person's say-so. It stays with its
-  link, flagged `source_removed` for a person to look at. Until then both legs stay out of the counts:
-  counting the other leg would lower a budget for money that may only have moved, the wrong direction
-  (R10a). A record attaching again clears the flag, as for any transaction.
+  link, flagged `source_removed`, and the link stops counting: real spending comes back rather than
+  disappears. The flagged leg follows R10a, so a withdrawn charge is in `left_out`, and the other leg
+  counts as it is filed. Between counted accounts with a leg in `as_of`'s month, the caution
+  `transfer_leg_removed` names the link and makes the forecast `provisional`. A pending record taken
+  back is in no `spending_newer_than_balance`, link or not. A record attaching again clears the flag
+  and the link counts again.
 - A merge: the target keeps its link. A duplicate holding one is refused with `merge_conflict` unless
   `discard_duplicate_state` is sent, like its notes, and the end of the link is audited; that also
   needs `write` on the other leg's account. To keep a link, merge into the leg. A target flagged
@@ -1413,5 +1441,6 @@ it in a budget files it as its own transaction.
 - A manual leg can't be deleted until its link is removed: 409, and the reference refuses it should
   anything else try.
 - A closed account may hold a leg, and links can still be made and removed on it: the last sweep out
-  of an account is often what closed it. R10 keeps its own spending out of a budget either way.
+  of an account is often what closed it. A link to one is no movement (T5), so what it records of the
+open side stays spending, which holds for a sweep out of a closing account too, until a person files it.
 - A provider revising a leg's amount leaves the link, and `difference` shows what it says now.

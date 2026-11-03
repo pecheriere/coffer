@@ -368,6 +368,8 @@ fn provider_view(
                     .or_default()
                     .extend(feed_problems(&record, expected));
             }
+            // A dismissed account is left unbound on purpose: no caution.
+            None if record.dismissed_at.is_some() => {}
             None => unbound.push(UnboundAccount {
                 provider_account: record.id,
                 connection: record.connection,
