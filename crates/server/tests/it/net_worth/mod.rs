@@ -351,9 +351,11 @@ impl World {
 
     /// What the daily job does after the migration.
     pub(crate) async fn rebuild(&self, through: &str) {
-        let mut tx = self.server.store.begin().await.unwrap();
-        tx.rebuild_net_worth(day(through)).await.unwrap();
-        tx.commit().await.unwrap();
+        self.server
+            .store
+            .rebuild_net_worth(day(through))
+            .await
+            .unwrap();
     }
 
     /// Every row of the daily table.

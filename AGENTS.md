@@ -23,6 +23,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   display currency), exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
   a snapshot, a rate or the display currency changes it in its own transaction,
+  or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
   transaction that gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
@@ -172,7 +173,8 @@ a throwaway server and seed. What holds it together:
   the `policy` module docs), with the `AccountAccess` that `AccessResolver`
   resolves (never built by hand). A `Denied` becomes a problem only through
   `impl From<Denied> for Problem`. Whether a planned item exists for an actor
-  is decided only by `plan_item_visible`, whose hidden answer is the missing one.
+  is decided only by `plan_item_visible`, whose hidden answer is the missing one, and
+  whether a connection does only by `connection_visible`.
 - **An account that isn't the household's is out of every count through its flags,
   held by a CHECK, and anything reading by class alone must also read `belongs_to`**
   (spec §8.11 B4, B8). Net worth reports it in buckets, and nothing adds a bucket to
@@ -201,6 +203,11 @@ a throwaway server and seed. What holds it together:
   (`cli/panic_report.rs`) leaves it out and `http/panic_answer.rs` answers a
   fixed 500. A `tokio` `JoinError`'s text holds that message, so log
   `err.is_panic()` instead of the error.
+- The release binary keeps its symbols and line tables so a panic report names
+  file and line. CI's `docker-build` job reads both images' binaries with
+  `scripts/check-backtrace-lines.sh`, which fails when a known function no
+  longer resolves to its file and line (`strip` in `[profile.release]`, a
+  linker flag the symbolizer cannot read).
 - A page may set its own `Content-Security-Policy` only for Plaid Link
   (`http/pages/plaid.rs`): the default plus the exact hosts Link needs and a
   per-response nonce, never an `unsafe-*` source. Changes there are in the

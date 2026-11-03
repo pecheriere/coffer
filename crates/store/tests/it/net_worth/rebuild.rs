@@ -10,8 +10,8 @@ use proptest::prelude::{Just, ProptestConfig, Strategy, prop_assert_eq, prop_one
 use proptest::{collection, sample};
 
 use super::{
-    at, connection, cur, dump, fill, fx, holding, kept, mark, observations, oct, open, rebuild,
-    rows_of, show_in, snap, snapshot, state, written_days,
+    at, batch, connection, cur, dump, fill, flag, fx, holding, kept, mark, observations, oct, open,
+    rebuild, rows_of, show_in, snap, snapshot, state, written_days,
 };
 
 #[tokio::test]
@@ -244,6 +244,8 @@ enum Op {
     },
     Display(&'static str),
     Fill(i8),
+    /// A rebuild is asked for and gets this many batches of one account for now.
+    SomeBatches(u8),
     Bind {
         account: usize,
         kept: Vec<(i8, i64, bool)>,
@@ -319,6 +321,7 @@ fn op() -> impl Strategy<Value = Op> {
             }),
         1 => code().prop_map(Op::Display),
         1 => (1_i8..10).prop_map(Op::Fill),
+        2 => (0_u8..3).prop_map(Op::SomeBatches),
         1 => (
             0_usize..8,
             collection::vec((offset(), minor(), proptest::bool::weighted(0.8)), 0..5)
@@ -402,6 +405,14 @@ impl World {
                 self.through = self.through.checked_add(i64::from(more).days()).unwrap();
                 fill(&self.store, self.through).await;
             }
+            Op::SomeBatches(batches) => {
+                if !state(&self.store).await.rebuild_needed {
+                    flag(&self.store).await;
+                }
+                for _ in 0..batches {
+                    batch(&self.store, self.through, 1).await;
+                }
+            }
             Op::Bind {
                 account,
                 kept: days,
@@ -467,6 +478,9 @@ proptest! {
             for change in after {
                 world.apply(change).await;
             }
+            // A rebuild left running finishes, and the days it didn't reach are filled.
+            world.store.finish_net_worth_rebuild(world.through).await.unwrap();
+            fill(&world.store, world.through).await;
             let incremental = dump(&world.store).await;
             rebuild(&world.store, world.through).await;
             let full = dump(&world.store).await;

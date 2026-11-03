@@ -17,16 +17,15 @@ use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId, SyncRunId};
-use coffer_domain::money::Currency;
+use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
-    StoreTx, SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, QueuedRun, Store, StoreError, StoreTx,
+    SyncRunRecord,
 };
+use jiff::Timestamp;
 use jiff::civil::Date;
-use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -43,7 +42,11 @@ mod accounts;
 mod convert;
 mod fetch;
 mod released;
+mod reported_balance;
 mod results;
+
+pub(super) use reported_balance::{Judged, judge_reported};
+use reported_balance::{ReportedBalance, record_balance};
 
 const RUN_FINISHED: &str = "the sync run has already finished";
 pub(super) const CONNECTION_REMOVED: &str = "the connection is removed";
@@ -320,63 +323,16 @@ pub(super) async fn ensure_not_removed(
     Ok(record)
 }
 
-/// How many days back a balance reported for an unbound account may be dated:
-/// a bank's date can honestly lag, but nothing older is believed.
-const KEPT_BALANCE_MAX_AGE_DAYS: i64 = 31;
-
-/// The oldest day a balance of an unbound account may be taken for.
-pub(super) fn oldest_kept_day(today: Date) -> Date {
-    today.saturating_sub(Span::new().days(KEPT_BALANCE_MAX_AGE_DAYS))
-}
-
-/// A balance a provider reported, converted to minor units of its currency.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ReportedBalance {
-    pub(super) on: Date,
-    pub(super) balance_minor: i64,
-    pub(super) currency: Currency,
-}
-
-/// Records the balance a provider reported for `provider_account`: the day's
-/// snapshot of the account it is bound to or, while unbound, kept for the bind
-/// to bring in, unless it is dated before [`oldest_kept_day`]. Never on a future
-/// day, which would hide later balances.
-/// Keeping isn't audited: the audit log would then hold the balances of an
-/// account nobody has bound, and the bind's entry counts them.
-pub(super) async fn record_balance(
-    tx: &mut StoreTx,
-    now: Timestamp,
-    provider_account: ProviderAccountId,
-    account: Option<AccountId>,
-    balance: ReportedBalance,
-    today: Date,
-) -> Result<(), SyncError> {
-    let on = balance.on.min(today);
-    if let Some(account) = account {
-        return write_balance(tx, now, account, on, balance.balance_minor).await;
-    }
-    if on < oldest_kept_day(today) {
-        tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
-        return Ok(());
-    }
-    tx.keep_balance(KeptBalance {
-        provider_account,
-        on,
-        balance_minor: balance.balance_minor,
-        currency: balance.currency,
-        recorded_at: now,
-    })
-    .await?;
-    Ok(())
-}
-
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
-/// the day's value or source.
+/// the day's value or source. The provider dated it `reported_on`, which the
+/// audit entry also gives when that isn't the day written, so the trail says what
+/// was reported.
 pub(super) async fn write_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     account: AccountId,
     on: Date,
+    reported_on: Date,
     balance_minor: i64,
 ) -> Result<(), SyncError> {
     let previous = tx
@@ -394,8 +350,11 @@ pub(super) async fn write_balance(
     if unchanged {
         return Ok(());
     }
-    let changes = AuditChanges::new()
-        .set("on", on)
+    let mut changes = AuditChanges::new().set("on", on);
+    if reported_on != on {
+        changes = changes.set("reported_on", reported_on);
+    }
+    let changes = changes
         .change(
             "balance_minor",
             previous.as_ref().map(|p| p.balance_minor),

@@ -8,6 +8,7 @@
 //! and dates read strictly, and a status.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -152,6 +153,8 @@ pub struct FxService {
     tick: Duration,
     /// The household's day it was last said that the table runs ahead of it.
     ahead_said_on: Mutex<Option<Date>>,
+    /// It has been said that another process is running the rebuild.
+    other_runner_said: AtomicBool,
 }
 
 impl std::fmt::Debug for FxService {
@@ -176,6 +179,7 @@ impl FxService {
             provider,
             tick: TICK,
             ahead_said_on: Mutex::new(None),
+            other_runner_said: AtomicBool::new(false),
         }
     }
 
@@ -298,8 +302,10 @@ impl FxService {
         tx.commit().await
     }
 
-    /// Brings the table up to today: the rebuild it is waiting for, or the days
-    /// since it was last filled. Reads one row when there is nothing to do.
+    /// Brings the table up to today: the rebuild it is waiting for, going on from
+    /// wherever one stopped, or the days since it was last filled. A rebuild that
+    /// resumes keeps to its own last day, and the next pass fills from there. Reads
+    /// one row when there is nothing to do.
     ///
     /// # Errors
     ///
@@ -313,18 +319,22 @@ impl FxService {
             self.say_if_far_ahead(filled, today);
             return Ok(());
         }
-        let mut tx = self.store.begin().await?;
-        // Asked again under the write lock: `coffer rebuild-net-worth` may have
-        // got there first.
-        if tx.net_worth_state().await?.rebuild_needed {
-            let rows = tx.rebuild_net_worth(today).await?;
-            tx.commit().await?;
-            tracing::info!(rows, through = %today, "the net worth table was rebuilt");
-            Ok(())
-        } else {
-            tx.fill_net_worth(today).await?;
-            tx.commit().await
+        if state.rebuild_needed {
+            if let Some(rows) = self.store.finish_net_worth_rebuild(today).await? {
+                self.other_runner_said.store(false, Ordering::Relaxed);
+                tracing::info!(rows, "the net worth table was rebuilt");
+            } else if !self.other_runner_said.swap(true, Ordering::Relaxed) {
+                // Once, not every tick, and it is what explains reports saying
+                // `rebuilding` for as long as a hung process holds the lock.
+                tracing::info!(
+                    "another process is running the net worth rebuild; reports say rebuilding \
+                     until it ends"
+                );
+            }
+            return Ok(());
         }
+        self.other_runner_said.store(false, Ordering::Relaxed);
+        self.store.fill_net_worth(today).await.map(drop)
     }
 }
 

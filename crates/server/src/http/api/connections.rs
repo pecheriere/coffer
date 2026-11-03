@@ -62,7 +62,7 @@ pub struct ConnectionPath {
     pub connection_id: ConnectionId,
 }
 
-/// Every connection.
+/// The connections the token may see.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ConnectionList {
     pub items: Vec<ConnectionView>,
@@ -215,18 +215,20 @@ pub(super) async fn reconnect_simplefin(
     Ok(Json(view))
 }
 
-/// Every connection.
+/// The connections the token may see.
 #[utoipa::path(
     get,
     path = "/api/v1/connections",
     operation_id = "listConnections",
     tag = tags::CONNECTIONS,
-    description = "Every connection, removed ones included, oldest first: its status, last \
-                   error (sanitized), last attempt and success, when the schedule syncs it \
-                   next, and the provider accounts the token may see. Never its credentials. \
-                   Needs `read`. The last error could name any account the connection serves: \
-                   a token with account grants gets it only with `all` at `transactions`, \
-                   otherwise it is `null` and the status still shows the problem.",
+    description = "The connections the token may see, removed ones included, oldest first: each \
+                   one's status, last error (sanitized), last attempt and success, when the \
+                   schedule syncs it next, and the provider accounts the token may see. Never \
+                   its credentials. Needs `read`. A token with account grants sees a connection \
+                   only if it serves an account the token sees; one serving none needs an `all` \
+                   grant, at any level. The last error could name any account the connection \
+                   serves: a token with account grants gets it only with `all` at \
+                   `transactions`, otherwise it is `null` and the status still shows the problem.",
     security(("bearer" = [])),
     responses(
         (status = 200, description = "The connections.", body = ConnectionList),
