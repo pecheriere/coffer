@@ -14,7 +14,7 @@ plus a safety floor), so that everything above that can be invested.
 > transactions with SimpleFin and Plaid sync, and per-account limits for agent
 > tokens, and a spending plan, a cash forecast with what-if, and a plan-versus-actual
 > report, and net worth history in one display currency with exchange rates from the
-> ECB, through the API and on two read-only pages. The API, the database schema and
+> ECB, through the API, MCP and two pages. The API, the database schema and
 > the configuration will change without migration paths between 0.x releases. Do not
 > put financial data you care about in it yet.
 
@@ -37,11 +37,16 @@ What exists and what comes next:
   only when the household holds more than one currency), with a read-only net worth
   page and chart; balances kept for provider accounts that aren't bound yet; server
   panics and browser errors reported in the log; and sturdier syncing.
-- **Unreleased:** accounts that aren't the household's (529, custodial, donor-advised),
-  reported in buckets beside net worth and left out of the forecast, a suggested
-  kind when binding a provider account, rules that file and assign transactions nobody has
-  filled yet, and an MCP endpoint giving agents the forecast, what-if, plan, net worth and
-  review queue as tools under their token's own access.
+- **0.4.0:** accounts that aren't the household's (529, custodial, donor-advised),
+  reported in buckets beside net worth and left out of the forecast; a suggested
+  kind when binding a provider account, and dismissing one you won't bind; transfer
+  links between accounts; rules that file and assign transactions nobody has filled
+  yet, with a dry run and an undo; exchange rates entered by hand; the household's time
+  zone in settings; a forecast that looks back a month for unpaid bills and matches each
+  one to its payment; an old balance from a bank no longer rewrites history, and net worth
+  rebuilds in short steps; an MCP endpoint giving agents the forecast, what-if, plan, net
+  worth and review queue as tools under their token's own access; and end-to-end tests
+  on a staging stack with made-up data.
 - **Next:** a forecast across currencies and more MCP tools. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
