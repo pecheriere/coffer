@@ -300,11 +300,10 @@ fn point_at_the_rest(
         });
         match (found, bill.settled) {
             // A person said it was paid, and this is likely how. Left in the pool, the same money
-            // would lower a budget as well. No more than the bill, so settling can't raise the need.
+            // would lower a budget as well, what is over the bill included, as it would for a bill
+            // it matched.
             (Some(payment), Some(_)) => {
-                matching
-                    .taken
-                    .insert(payment.at, payment.amount.min(bill.amount));
+                matching.taken.insert(payment.at, payment.amount);
             }
             // Paid some way nothing fits, such as in two parts: any of the category's money may
             // be how, so that much of it is no budget's. For last month's bill, that is what

@@ -1014,14 +1014,17 @@ month, last month or a later one in the window: no gross, no gap, no `bill_not_s
 `bill_unpaid_last_month`, no payment of its own, so a transaction goes on to the next bill or a
 budget, and a settled one-off raises no `goal_one_off_overlap`. One narrowing of that, toward
 holding more: a month settled as `paid` says the money was spent, so it is no budget's. A transaction
-that fits it and paid nothing else leaves the pool, up to the bill's amount. With none that fits, such
+that fits it and paid nothing else leaves the pool, all of it. With none that fits, such
 as a charge of 230 on a bill of 200 or a rent paid in two parts, the bill's amount comes off the pool
 whatever it holds, for an occurrence looked at or later in `as_of`'s month; for last month's, what last
 month's unmatched spending in the category didn't cover. That caps it at the bill, so of that 230 the
 30 beyond the bill still reduces a budget. And so that settling can't raise the need, no pool ends
-lower than it would with nothing settled, less what settling saved in its category, which can be
+lower than what its budgets would use with nothing settled, less what settling saved in its category, which can be
 nothing: an occurrence dated before the first transaction owed nothing, so it takes nothing, and a
-payment sent on to a bill dated `as_of` pays one that counts in full anyway. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
+payment sent on to a bill dated `as_of` pays one that counts in full anyway. Known limit: both can read
+low with no caution, and only the budget's `reduced_by` shows it. Rent of 2,000 charged 2,300 doesn't
+fit, so 300 reduces a budget of 500, which reads 200 against a truth of 500; up to the whole budget.
+`skipped` takes nothing. A months floor keeps them, since it says how much to hold
 rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
 month from last month to the window's end with its amount, so no number silently differs, and settling raises
 no caution, so it doesn't make a forecast `provisional` of itself: a person decided. A

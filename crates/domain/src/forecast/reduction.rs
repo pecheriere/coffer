@@ -15,7 +15,9 @@
 //! 0. The pool then pays for the month's budget occurrences in date order, so one purchase never
 //! reduces two items, and a paid bill never eats a budget.
 //!
-//! A settled occurrence (R9a) is out of all of this: it owes no gap and takes no spending.
+//! A settled occurrence (R9a) is out of all of this: it owes no gap and pays no transaction away
+//! from another bill. One settled as paid does keep what it was paid with off a budget, but never
+//! so far that settling raises the need.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -182,7 +184,7 @@ pub(super) fn reduce(
         }
     }
 
-    let pools = pools_settled(&pools, &bills, &matching, input);
+    let pools = pools_settled(&pools, &bills, &matching, &month_budgets, input);
 
     let Outcome {
         not_seen,
@@ -254,14 +256,15 @@ fn bills_counted(bills: &[Bill], seen: &[Seen], as_of: Date) -> BTreeMap<PoolKey
     counted
 }
 
-/// The pools `matching` leaves, none lower than it would be with nothing settled, less what settling
-/// saved in its category. A budget's need rises by no more than its pool falls, so settling can't
-/// raise the need, however a settled bill sends a payment on: to today's bill, which counts in full
-/// whatever pays it, or to a smaller one in tolerance.
+/// The pools `matching` leaves, none lower than what its budgets would use with nothing settled,
+/// less what settling saved in its category. A budget's need rises by no more than that use falls,
+/// so settling can't raise the need, however a settled bill sends a payment on: to today's bill,
+/// which counts in full whatever pays it, or to a smaller one in tolerance.
 fn pools_settled(
     spent: &BTreeMap<PoolKey, i128>,
     bills: &[Bill],
     matching: &Matching,
+    month_budgets: &[Occurrence],
     input: &ForecastInput,
 ) -> BTreeMap<PoolKey, i128> {
     let mut pools = pools_after(spent, matching, input);
@@ -279,8 +282,16 @@ fn pools_settled(
     let pools_unsettled = pools_after(spent, &unsettled, input);
     let counted_unsettled = bills_counted(&plain, &unsettled.seen, input.as_of);
     let counted = bills_counted(bills, &matching.seen, input.as_of);
+    let mut planned: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    for budget in month_budgets {
+        *planned.entry(budget.key).or_default() += budget.amount;
+    }
     for (key, pool) in &mut pools {
-        let before = pools_unsettled.get(key).copied().unwrap_or_default();
+        let before = pools_unsettled
+            .get(key)
+            .copied()
+            .unwrap_or_default()
+            .min(planned.get(key).copied().unwrap_or_default());
         let saved = counted_unsettled.get(key).copied().unwrap_or_default()
             - counted.get(key).copied().unwrap_or_default();
         *pool = (*pool).max(before - saved);

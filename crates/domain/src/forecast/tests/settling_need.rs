@@ -197,6 +197,49 @@ fn a_settled_bill_costs_a_budget_no_more_than_settling_saved() {
     assert_eq!(need(&input), 100);
 }
 
+/// All of a charge that fits a settled bill is no budget's. Rent of 2,000, charged 2,100, and a
+/// budget of 500: unsettled the charge pays the rent and the budget needs all 500, and settling
+/// the rent, which says the same, changes nothing.
+#[test]
+fn a_settled_bill_keeps_all_of_a_charge_that_fits_off_the_budget() {
+    let home = CategoryId::new();
+    let mut rent = one_off("Rent", usd(2_000), date(2026, 11, 5), home);
+    rent.settled.insert(month("2026-11"), SettlementKind::Paid);
+    let input = ForecastInput {
+        items: vec![
+            rent,
+            budget(monthly("Upkeep", usd(500), date(2026, 11, 20), home)),
+        ],
+        category_spent: vec![spent(home, 2_100)],
+        spent_transactions: vec![paid_on(home, usd(2_100), date(2026, 11, 5))],
+        horizon_months: 1,
+        floor: Some(fixed_floor(usd(0))),
+        ..household()
+    };
+    assert_eq!(need(&unsettled(&input)), 500);
+    assert_eq!(need(&input), 500);
+}
+
+/// The floor reads from what the budget could use, not all the pool held. Unsettled: 1,000 pays
+/// October, today's rent counts 1,000, 200 is owed on the 2nd, and the 800 left clears the budget
+/// of 500, so 1,200. Settling October and the 200 saves that 200, so the budget may lose 200 of the
+/// 500 it used, though the pool held 800: today's rent and 200 of the budget, 1,200.
+#[test]
+fn the_floor_keeps_only_what_the_budget_could_use() {
+    let home = CategoryId::new();
+    let mut input = on_rent_day(
+        home,
+        1_800,
+        vec![paid_on(home, usd(1_000), date(2026, 11, 5))],
+    );
+    input.items[1] = budget(monthly("Upkeep", usd(500), date(2026, 11, 20), home));
+    let mut extra = one_off("Extra", usd(200), date(2026, 11, 2), home);
+    extra.settled.insert(month("2026-11"), SettlementKind::Paid);
+    input.items.push(extra);
+    assert_eq!(need(&unsettled(&input)), 1_200);
+    assert_eq!(need(&input), 1_200);
+}
+
 /// Dates where a month's length matters, an ordinary one, and a bill's own day.
 fn crowded_as_of() -> impl Strategy<Value = Date> {
     prop_oneof![

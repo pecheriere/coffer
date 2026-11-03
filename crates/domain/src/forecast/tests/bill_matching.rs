@@ -383,9 +383,9 @@ fn settled_beside_a_budget(
     })
 }
 
-/// Settled as paid, the money it was paid with is no budget's, whether or not a transaction fits:
-/// charged 230 on a bill of 200, only the 30 beyond the bill can be the budget's, so it needs 120.
-/// It can't take the whole 230, since then settling could raise the need.
+/// Settled as paid, the money it was paid with is no budget's, whether or not a transaction fits.
+/// 230 doesn't fit a bill of 200, so nothing says it paid it: the bill's 200 comes off the pool and
+/// the 30 left reduces the budget, which needs 120. If all 230 was the bill's, that is 30 low.
 #[test]
 fn a_settled_bill_keeps_a_charge_that_does_not_fit_off_the_budget() {
     let forecast = settled_beside_a_budget(

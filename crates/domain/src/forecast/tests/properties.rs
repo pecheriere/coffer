@@ -699,8 +699,9 @@ proptest! {
         prop_assert_eq!(check_settled_list(&input, &forecast), Ok(()), "settled oracle");
     }
 
-    /// A settled occurrence owes nothing and takes no spending, so spending moves on to
-    /// other bills and budgets: the need can only fall, whatever the plan.
+    /// A settled occurrence owes nothing, so spending moves on to other bills and budgets, and
+    /// what it keeps off a budget is no more than settling saved: the need can only fall,
+    /// whatever the plan.
     #[test]
     fn settling_never_raises_the_need_nor_touches_cash_or_the_floor(input in input()) {
         let settled = compute_forecast(&input).unwrap();

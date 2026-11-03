@@ -721,9 +721,11 @@ one pool of spending:
 4. A bill or one-off a person [settled](#settling-a-month) for the month counts as
    nothing there, last month, this month or a later one in the window: no `gross`, no
    `unpaid`, no caution and no payment of its own, so a transaction goes to the next bill
-   or a budget. Settled as `paid` it also keeps what it was paid with off the budgets, up to
-   its amount: a transaction that fits, or, this month, that much of the pool. Its other
-   months are as ever.
+   or a budget. Settled as `paid` it also keeps what it was paid with off the budgets: all of a
+   transaction that fits, or else up to its amount of the pool, never so far that settling
+   raises the need. A budget can then read low with no caution, and only its `reduced_by`
+   shows it: rent of 2,000 charged 2,300 doesn't fit, so 300 reduces a budget of 500. Its
+   other months are as ever.
 5. A bill or one-off dated `as_of` counts in full even if it was paid that day and
    the balance already shows it: it is held twice for that day, the safe
    direction. A hypothetical item neither reduces nor consumes, a hypothetical
