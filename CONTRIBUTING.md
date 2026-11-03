@@ -50,6 +50,9 @@ For work in parallel, use one git worktree per task; see "Parallel work" in
 A staging stack on your Mac, or any machine with Docker and `openssl`: the real image,
 built from your checkout, with a made-up household, on `http://localhost:18080`.
 
+Don't start it, or the end-to-end tests below, on a machine busy with other builds: it builds
+an image and starts several containers, and CI runs the tests on every pull request anyway.
+
 ```sh
 scripts/staging.sh up      # build, seed if need be, and serve
 scripts/staging.sh token   # the seeded admin's agent token, for the API
