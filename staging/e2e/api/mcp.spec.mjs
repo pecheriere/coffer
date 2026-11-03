@@ -200,6 +200,7 @@ test('nothing of a call reaches the log, at the image\'s own level', async ({ se
   await mcp.call('list_transactions', { limit: 1 });
 
   const logs = await server.logs();
+  expect(logs).toContain('coffer is serving');
   expect(logs.includes(page.items[0].description)).toBe(false);
   expect(logs.includes('a client that says this of itself')).toBe(false);
 });
