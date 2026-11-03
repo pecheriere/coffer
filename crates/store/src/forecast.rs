@@ -687,6 +687,36 @@ async fn spending(
     Ok((by_category, by_transaction))
 }
 
+/// What could yet change a category's spending: from `month_start` to `as_of`, and in the month
+/// before, from `looked_at_from`.
+async fn loose_ends(
+    conn: &mut SqliteConnection,
+    as_of: &str,
+    month_start: &str,
+    looked_at_from: &str,
+) -> Result<(Vec<LooseEndsRow>, Vec<LooseEndsRow>), StoreError> {
+    let this_month = sqlx::query(LOOSE_ENDS)
+        .bind(as_of)
+        .bind(month_start)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(loose_ends_from_row)
+        .collect::<Result<_, _>>()?;
+    let last_month = sqlx::query(LAST_MONTH_LOOSE_ENDS)
+        .bind(as_of)
+        .bind(looked_at_from)
+        .bind(month_start)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(loose_ends_from_row)
+        .collect::<Result<_, _>>()?;
+    Ok((this_month, last_month))
+}
+
 /// Each account with its latest balance on or before `as_of`.
 async fn accounts_with_balances(
     conn: &mut SqliteConnection,
@@ -770,25 +800,8 @@ impl Store {
             .collect::<Result<_, _>>()?;
         let (category_spent, spent_transactions) =
             spending(&mut tx, &day, &month_start, &read_from).await?;
-        let loose_ends = sqlx::query(LOOSE_ENDS)
-            .bind(&day)
-            .bind(&month_start)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(loose_ends_from_row)
-            .collect::<Result<_, _>>()?;
-        let last_month_loose_ends = sqlx::query(LAST_MONTH_LOOSE_ENDS)
-            .bind(&day)
-            .bind(&looked_at_from)
-            .bind(&month_start)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(loose_ends_from_row)
-            .collect::<Result<_, _>>()?;
+        let (loose_ends, last_month_loose_ends) =
+            loose_ends(&mut tx, &day, &month_start, &looked_at_from).await?;
         let earliest_transaction = sqlx::query(EARLIEST_TRANSACTION)
             .bind(&day)
             .fetch_one(&mut *tx)

@@ -202,11 +202,17 @@ fn connection_sentence(label: &str, status: FeedStatus) -> String {
 
 /// Bills and one-offs in a category, dated earlier this month, that no transaction paid. One
 /// amount can sum several of them.
-fn bill_sentence(items: &[&str], category: Option<&str>, amount: Money) -> String {
-    let who = if items.is_empty() {
+fn bill_sentence(
+    names: &Names<'_>,
+    items: &[LineSource],
+    category: CategoryId,
+    amount: Money,
+) -> String {
+    let found: Vec<&str> = items.iter().filter_map(|item| names.item(*item)).collect();
+    let who = if found.is_empty() {
         "Bills or one-offs".to_owned()
     } else {
-        listed(items)
+        listed(&found)
     };
     format!(
         "{who} in {} dated earlier this month come to {} that no payment of about that amount has \
@@ -214,7 +220,7 @@ fn bill_sentence(items: &[&str], category: Option<&str>, amount: Money) -> Strin
          category or at another amount, there is more to invest than this shows. If one was paid \
          some other way, such as from an account that isn't the household's, settle that bill for \
          the month.",
-        category.unwrap_or("a category"),
+        names.category(category).unwrap_or("a category"),
         magnitude(amount),
     )
 }
@@ -421,6 +427,41 @@ fn positive_liability_sentence(account: &str, balance: Money) -> String {
     )
 }
 
+fn stale_sentence(account: &str, age_days: u32, on: Date) -> String {
+    format!(
+        "The balance of {account} is {} old, from {}, so the cash available may be out of date.",
+        days(age_days),
+        day(on),
+    )
+}
+
+fn uncategorized_sentence(count: u32, total: Money) -> String {
+    format!(
+        "This month has {} with no category, {} in all. Categorizing that spending could lower \
+         what is still needed.",
+        transactions(count),
+        magnitude(total),
+    )
+}
+
+fn duplicates_sentence(count: u32) -> String {
+    format!(
+        "This month has {} that may be duplicated. That could inflate a category's spending, \
+         which could make the need look smaller than it is. A possible duplicate doesn't count as \
+         paying a bill until it is cleared.",
+        transactions(count),
+    )
+}
+
+fn dip_sentence(month: CalendarMonth, projected_cash: Money) -> String {
+    format!(
+        "In {}, cash is projected to fall to {}, below the safety floor. Income arriving later \
+         can't pay for that month.",
+        month_name(month),
+        money(projected_cash),
+    )
+}
+
 /// What might change the number. `as_of` is the first day of the forecast.
 pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>) -> String {
     match caution {
@@ -428,12 +469,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             account,
             on,
             age_days,
-        } => format!(
-            "The balance of {} is {} old, from {}, so the cash available may be out of date.",
-            names.account(*account),
-            days(*age_days),
-            day(*on),
-        ),
+        } => stale_sentence(names.account(*account), *age_days, *on),
         Caution::UnboundProviderAccount {
             name,
             institution,
@@ -457,10 +493,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             category,
             amount,
             items,
-        } => {
-            let named: Vec<&str> = items.iter().filter_map(|item| names.item(*item)).collect();
-            bill_sentence(&named, names.category(*category), *amount)
-        }
+        } => bill_sentence(names, items, *category, *amount),
         Caution::BillHistoryMissing {
             starts_on,
             occurrences,
@@ -468,15 +501,11 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             ..
         } => history_sentence(*starts_on, *occurrences, *amount),
         Caution::LastMonthLooseEnds {
-            uncategorized_count,
-            uncategorized_total,
-            possible_duplicates,
+            uncategorized_count: count,
+            uncategorized_total: total,
+            possible_duplicates: duplicates,
             ..
-        } => last_month_loose_sentence(
-            *uncategorized_count,
-            *uncategorized_total,
-            *possible_duplicates,
-        ),
+        } => last_month_loose_sentence(*count, *total, *duplicates),
         Caution::BillUnpaidLastMonth { item, on, amount } => {
             unpaid_last_month_sentence(names, *item, *on, *amount)
         }
@@ -506,11 +535,13 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             &names.one_off(*one_off),
             names.category(*category),
         ),
-        Caution::GoalOverdue { goal, due_on } => format!(
-            "{} was due on {} and still has money to find.",
-            names.goal(*goal),
-            day(*due_on),
-        ),
+        Caution::GoalOverdue { goal, due_on } => {
+            format!(
+                "{} was due on {} and still has money to find.",
+                names.goal(*goal),
+                day(*due_on)
+            )
+        }
         Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
         Caution::TransferLegRemoved { .. } => TRANSFER_LEG_REMOVED.to_owned(),
         Caution::ItemHintNotCounted {
@@ -518,18 +549,10 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             account,
             effect,
         } => hint_sentence(names, *item, *account, *effect),
-        Caution::UncategorizedSpending { count, total, .. } => format!(
-            "This month has {} with no category, {} in all. Categorizing that spending could lower \
-             what is still needed.",
-            transactions(*count),
-            magnitude(*total),
-        ),
-        Caution::PossibleDuplicates { count } => format!(
-            "This month has {} that may be duplicated. That could inflate a category's spending, \
-             which could make the need look smaller than it is. A possible duplicate doesn't \
-             count as paying a bill until it is cleared.",
-            transactions(*count),
-        ),
+        Caution::UncategorizedSpending { count, total, .. } => {
+            uncategorized_sentence(*count, *total)
+        }
+        Caution::PossibleDuplicates { count } => duplicates_sentence(*count),
         Caution::SpendingNewerThanBalance { total, pending, .. } => {
             newer_spending_sentence(*total, *pending)
         }
@@ -537,12 +560,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             month,
             projected_cash,
             ..
-        } => format!(
-            "In {}, cash is projected to fall to {}, below the safety floor. Income arriving \
-             later can't pay for that month.",
-            month_name(*month),
-            money(*projected_cash),
-        ),
+        } => dip_sentence(*month, *projected_cash),
     }
 }
 
