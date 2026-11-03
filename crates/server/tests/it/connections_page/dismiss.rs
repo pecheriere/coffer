@@ -141,8 +141,8 @@ async fn a_missing_or_wrong_csrf_token_changes_nothing() {
     for path in [dismiss_path(checking.id), restore_path(card.id)] {
         let missing = world.admin.post_form(&path, &[]).await;
         let wrong = world.admin.post_form(&path, &[("csrf", "AAAA")]).await;
-        assert_eq!(missing.status, StatusCode::FORBIDDEN, "{path}");
-        assert_eq!(wrong.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(missing.status, StatusCode::FORBIDDEN);
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
     }
 
     assert!(
