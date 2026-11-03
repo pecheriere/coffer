@@ -1,0 +1,19 @@
+{
+  "note": "Made up for the staging stack, and useless anywhere else: these keys are public. coffer serve refuses a database where an admin holds the first one, unless COFFER_PUBLIC_URL is localhost.",
+  "members": [
+    {
+      "username": "alex",
+      "displayName": "Alex Rowan",
+      "role": "admin",
+      "credentialId": "Y29mZmVyLXN0YWdpbmctZml4dHVyZS1hZG1pbi1wYXNza2V5",
+      "privateKeyPkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgk1eBmJLL7qpHigOgy/KZ/fGxLcc1NEtO7ZZZif+1EJihRANCAASSQNwkLNBPoUafjbXUflqEoHiR5gKR9xtKD3rmShRTNlMx52E2qulUBoMXSJd4irDNJ+EV/oZ4p45py4S3D0yf"
+    },
+    {
+      "username": "sam",
+      "displayName": "Sam Rowan",
+      "role": "member",
+      "credentialId": "Y29mZmVyLXN0YWdpbmctZml4dHVyZS1tZW1iZXItcGFzc2tleQ",
+      "privateKeyPkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIHUNQhiEQF6gicQBZOHC3ZuDdOXUd1jC1kI+qBFGCymhRANCAATxFLWVwV1wjOaHgQAdhSn0hMpxDv0yULZnCtVyIVRADLw+lq52qxqj41gRR3COQK0ST27wswdxCD64E1tTjwEe"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ use crate::vault::CredentialVault;
 
 mod healthcheck;
 mod panic_report;
+mod staging_seed;
 
 pub use panic_report::install_panic_hook;
 
@@ -502,16 +503,18 @@ async fn serve(config: Config) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// When the setup link cannot be issued or the listener fails.
+/// When the database is the staging seed and the public URL isn't localhost, when
+/// the setup link cannot be issued or when the listener fails.
 pub async fn serve_with(
     state: AppState,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), CliError> {
+    let listen = listener.local_addr()?;
+    staging_seed::refuse_outside_localhost(&state.store, &state.config, listen).await?;
     if let Some(link) = state.identity.bootstrap_link().await? {
         tracing::info!(%link, "no admin exists yet; open this single-use link to create the first admin");
     }
-    let listen = listener.local_addr()?;
     tracing::info!(%listen, public_url = %state.config.public_url, "coffer is serving");
     let (stop, stopped) = watch::channel(false);
     let stop_with_the_server = |mut stopped: watch::Receiver<bool>| async move {

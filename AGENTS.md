@@ -75,6 +75,7 @@ cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the 
 
 cargo fmt
 scripts/gate.sh                                         # the full gate
+scripts/staging.sh up                                   # the staging stack (below)
 ```
 
 While iterating, test only the crate you change with
@@ -99,6 +100,32 @@ fails the other's build and checks. A shared build directory makes builds wait
 for each other and can hand one worktree a binary built from another's source.
 A read-only reviewer may share a worktree if it does not build. Remove a
 worktree when its branch has merged.
+
+## Staging
+
+`scripts/staging.sh` runs the real image, built from the checkout, with made-up data
+and mock providers, one stack per machine (`staging/`, how to use it in
+`CONTRIBUTING.md`). Use it to try something in the running product instead of writing
+a throwaway server and seed. What holds it together:
+
+- **The seed goes through the public pages and API** (`staging/seed/`), never a
+  committed database, so it keeps working as migrations change. Everything in it is
+  made up. Its amounts stay fixed whichever day it is seeded on, so a test can compare
+  them with fixed answers; `staging/seed/household.mjs` says how, and a change there
+  must keep it true.
+- **Each server is a copy of a read-only template**, seeded once for the image,
+  migrations, seed and day. Nothing clock-related is added to the image: the seed dates
+  everything from the template's day.
+- **The mocks stand behind the real egress settings:** `COFFER_EGRESS_RELAY` and a CA
+  of the stack's own, on a Docker network with no route out. A scenario is named by the
+  request, a SimpleFin setup token or an ECB currency, never set as a mode, so tests
+  running side by side don't disturb each other.
+- **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
+  `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
+  localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost
+  (`auth/staging_fixture.rs`). That is an accident guard, not a security boundary: with a
+  localhost URL, a script holding the key signs in from anywhere that can reach the server, so
+  keep the seed where only this machine can. No staging flag or backdoor belongs in the image.
 
 ## CI and supply chain
 

@@ -170,4 +170,20 @@ impl Store {
         .map_err(StoreError::from_sqlx)?;
         rows.iter().map(passkey_from_row).collect()
     }
+
+    /// Whether a member with the admin role holds the passkey with this credential id.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn admin_holds_credential(&self, credential_id: &[u8]) -> Result<bool, StoreError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM passkeys p JOIN members m ON m.id = p.member_id \
+             WHERE p.credential_id = ? AND m.role = 'admin')",
+        )
+        .bind(credential_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)
+    }
 }

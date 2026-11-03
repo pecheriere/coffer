@@ -6,6 +6,7 @@ pub mod agent_tokens;
 pub mod identity;
 pub mod passkeys;
 pub mod sessions;
+pub mod staging_fixture;
 
 use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
 use coffer_domain::identity::IdentityError;
@@ -60,6 +61,9 @@ pub enum AuthError {
     /// This credential is registered already (to this or another member).
     #[error("this passkey is already registered")]
     PasskeyAlreadyRegistered,
+    /// A key of the staging seed, whose private half is public, away from localhost.
+    #[error("this passkey can't be used here: its private key is public")]
+    PasskeyPublic,
     /// The member is disabled.
     #[error("this member is disabled")]
     MemberDisabled,
