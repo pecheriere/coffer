@@ -13,6 +13,7 @@ mod goals;
 mod limits;
 mod merged;
 mod rollover;
+mod rule_numbers;
 mod settled;
 mod transfer_links;
 

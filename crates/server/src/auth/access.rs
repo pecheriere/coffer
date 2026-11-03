@@ -4,7 +4,8 @@
 
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::policy::{AccountAccess, account_access_for_scope, account_access_with_grants};
-use coffer_store::Store;
+use coffer_store::{Store, StoreError};
+use jiff::Timestamp;
 
 use super::AuthError;
 
@@ -19,6 +20,44 @@ impl AccessResolver {
     #[must_use]
     pub fn new(store: Store) -> Self {
         Self { store }
+    }
+
+    /// `actor` as it is now, for a long operation that outlives the check its request
+    /// passed: a token revoked or expired since, or a member disabled, stops it, and a
+    /// member's new role or a token's scope applies. A session is read through its member,
+    /// since an `Actor` doesn't name the session.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::Unauthenticated`] when the actor no longer holds; storage failures.
+    pub async fn current(&self, actor: &Actor, now: Timestamp) -> Result<Actor, AuthError> {
+        let member = match self.store.get_member(actor.member).await {
+            Ok(member) if member.disabled_at.is_none() => member,
+            Ok(_) | Err(StoreError::NotFound) => return Err(AuthError::Unauthenticated),
+            Err(other) => return Err(other.into()),
+        };
+        let via = match actor.via {
+            Via::Session => Via::Session,
+            Via::Agent { token, .. } => {
+                let record = match self.store.get_agent_token(token).await {
+                    Ok(record) => record,
+                    Err(StoreError::NotFound) => return Err(AuthError::Unauthenticated),
+                    Err(other) => return Err(other.into()),
+                };
+                if record.revoked_at.is_some() || record.expires_at.is_some_and(|at| at <= now) {
+                    return Err(AuthError::Unauthenticated);
+                }
+                Via::Agent {
+                    token,
+                    scope: record.scope,
+                }
+            }
+        };
+        Ok(Actor {
+            member: member.id,
+            role: member.role,
+            via,
+        })
     }
 
     /// The account access of `actor`. A session has uniform access at the

@@ -472,6 +472,7 @@ pub(crate) async fn insert_pending(
             member: Some(world.alice.member),
             agent: None,
             system: None,
+            rule: None,
             at: now,
         },
     )

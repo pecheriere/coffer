@@ -167,8 +167,9 @@ Entities (names indicative; the builder chooses exact schema):
   kind: `expense` | `income` | `transfer`. Ships with no categories (an
   optional, generic starter set may be offered via an API call; the builder
   decides).
-- **Rule** — ordered; conditions on description/payee (contains, equals,
-  regex), account, amount range, direction; actions: set category, set payee.
+- **Rule** — ordered; conditions on the description (contains or starts with,
+  no regular expressions), account, amount range; actions: set category, set
+  assignee (§8.13).
 - **PlannedItem** — see §6.7.
 - **FxRate** — date, base, quote, rate (exact decimal), source.
 - **AuditEvent** — see §6.6.
@@ -263,8 +264,9 @@ coffer uses:
 - **Errors:** SimpleFin per-account errors and connection failures are stored
   on the Connection and exposed via API; sync never partially commits one
   account's data.
-- **Rules** run on newly imported, uncategorized transactions only. Applied
-  rules are attributed in the audit log as `system:rule:<id>`.
+- **Rules** run on newly created imported transactions, filling only what
+  nobody has set, and are attributed in the audit log as `system:rules`, naming
+  the rule behind each field (§8.13).
 
 ### 6.3 Authentication
 
@@ -344,7 +346,7 @@ component plus the queries it scopes, not a sweep through every handler.
 
 Every mutation writes an AuditEvent in the same database transaction:
 timestamp, actor member (or `system` with a reason such as
-`system:sync`/`system:rule:<id>`), agent token (nullable), action, entity type
+`system:sync`/`system:rules`), agent token (nullable), action, entity type
 and id, and a before/after JSON diff of changed fields. Credentials never
 appear in it. Readable via API (filter by entity, actor, agent, time).
 Transaction responses include who last changed the categorization and who
@@ -1541,3 +1543,114 @@ treating it as a movement would owe the bill again on top of the fallen balance.
   of an account is often what closed it. The forecast reads such a link as no movement and a report, for
 a leg posted before the close, as one (T5).
 - A provider revising a leg's amount leaves the link, and `difference` shows what it says now.
+
+### 8.13 Rules
+
+Decisions made for issue #71. Where they differ from an earlier section, they govern. API only for
+now (#49 tracks the pages).
+
+**U1. What a rule is.** It matches a transaction's description, as its source gave it: `contains` or
+`starts_with`, lowercasing each character on its own. That is all the folding there is, so `É` matches
+`é`, but a composed and a decomposed `é` differ and `ß` isn't `SS`. Optionally it is narrowed to one account and to a
+range of signed amounts in one currency, since a number of minor units means nothing without one. It
+sets a category, an assignee or both. A category is one split of the whole amount, with no goal.
+
+**U2. Bank text is data.** Matching is plain text in Rust, in time linear in what it reads: no regular
+expressions, no `LIKE`, no wildcard. A pattern is 1 to 200 characters, not only spaces, kept as written, so `"TAX "` doesn't match
+`TAXI`. A household holds at most 200 rules, which bounds the work per transaction. A description and a pattern never reach a log.
+
+**U3. When rules run.** Only when a transaction is first created from a provider's record, held records
+placed at binding included, and when a person or an agent runs one by hand. So not on a record seen
+again, a manual transaction's creation, a merge, or an un-merge. A rule that is off doesn't run on
+arrival, but can be tried and run by hand. Rules run inside the sync's own transaction, so a failure
+rolls back that account's data with it.
+
+**U4. Order.** By `position`, ties oldest first. For each field on its own, the first match wins.
+Running a rule by hand applies only what it would win against the rules that are on, so running rules
+one at a time in any order gives what running them together would. What it loses is counted as
+`earlier_rule`.
+
+**U5. Only what nobody has set.** A category is open while the transaction has no splits and
+`categorized_by` is `null`, and an assignee while it has none and `assigned_by` is `null`. So a person
+or an agent clearing a value has set it, and that stands against every later run. The migration reads
+who last changed each assignee from the audit log, so this holds for edits made before it. A rule never
+touches the review. Clearing a field nobody has set is still a no-op that writes nothing (a patch that
+changes nothing records nothing), so nobody can say "no category" before anything is there to clear.
+
+**U6. Everything says who did it.** `categorized_by` and `assigned_by` carry `rule`: on arrival with
+`system: "system:rules"`, and in a run by hand with the member and agent who ran it. Each transaction
+gets a `transaction.rule_applied` audit entry naming the rule behind each field, as `system:rules` or
+the runner. Undoing is the same edit as any other, and clears `rule`. Changing or deleting a rule
+leaves what it did in place, still naming it, so the id has no foreign key.
+
+**U7. What only a rule chose is not user state, and a clear is.** `user_state` counts a field someone
+cleared, so a transaction holding one isn't discarded when its record vanishes, and its choice isn't
+dropped by a merge without asking. If the bank then posts something nothing ties to it, that is a new
+transaction to the rules, and the cleared one stays, flagged `source_removed`. `user_state` leaves out what
+only a rule chose, for two reasons a person would otherwise trip over. A pending record its bank takes back would be kept and flagged
+`source_removed` for a rule's work, and stay in the numbers. And two duplicates a rule filed the same way
+couldn't merge without `discard_duplicate_state`. What a merge drops is still in its audit entry.
+Reviewing or editing it makes it a person's. Setting the same value again changes nothing, so it doesn't.
+
+**U8. How rules meet the rest.**
+
+- **Several splits:** left alone whole, assignee too. Someone divided it, and one person assigned the
+  whole of it would say otherwise. Counted as `split`.
+- **Reviewed:** left alone whole, since the review covered what it held then. Counted as `reviewed`.
+- **A pending record posting:** runs no rule. What a rule chose stays, even if the new description no
+  longer matches, and a single split follows the amount (`categorized_by` then says `system:sync` and
+  still names the rule). One that didn't match while pending stays empty until someone runs the rule,
+  and a dry run shows it.
+- **Merged duplicates:** U7. The target keeps its own, so a duplicate's rule-filled category doesn't pass
+  to an empty target; a run by hand can fill that.
+- **A transfer leg (§8.12):** on one movement (in the forecast and in reports) it takes only a `transfer`
+  category, since an `expense` or `income` one would file a movement as spending or income. On any other
+  link, such as to a brokerage, it takes no category: `transfer` would take B9's real spending out of `actual`
+  and off the uncategorized list, so that is left for a person. Either way it may still be assigned, the
+  next rule may fill it, and it is counted as `transfer_leg`. A rule filing a transaction before anyone links
+  it is ordinary: T1 leaves a leg's category alone, and T5 says what it then counts as.
+- **A `transfer` category on a goal link:** can't happen. A goal link lives on a split, so its transaction
+  isn't open, and a rule's split has no goal. Adding one to a `transfer` split is refused as ever (R8), and a
+  category with goal-linked splits still can't change kind.
+- **An archived category, or one in an archived group:** categories are never deleted, so this is how one
+  is removed. It takes no new splits, so the rule doesn't count as a match for that field, the next one
+  may fill it, its other field still works, and `category_archived` says so. Restored, it files again.
+  A rule can't be created on one, or moved to one. A disabled member is the same (`assignee_disabled`).
+- **A zero amount:** can't take a split, so only an assignee. Counted as `zero_amount`.
+- **An `income` category on money going out:** refused, since it would leave spending and the uncategorized
+  list with no caution ("PAYROLL" catching a -45.00 "PAYROLL FEE"). The next rule may fill it. Counted as
+  `income_on_outflow`. The reverse isn't refused: money coming in under an `expense` category is a refund,
+  which spending nets by design (R10).
+
+A `transfer` category on a transaction with no link clears an outflow from `uncategorized_spending` as it
+always does, so a broad rule filing under one hides real spending from that caution. It is allowed, since
+filing a sweep to savings is what such a rule is for, and a link can't exist yet on arrival. That is why a dry run exists; the agent docs say so.
+
+**U9. Trying and running.** `GET .../dry-run` writes nothing, lists up to `limit` changes (default 50, at
+most 200) and counts them all, with why matches are left alone. Since `read` may ask for one, it reads at
+most the oldest 20,000 open transactions, and `complete: false` says it stopped. `POST .../apply` reads a page of 500 open
+transactions without the write lock, and fills 100 at a time, deciding again under the lock, since a person
+may have got there first. Each batch also asks again whether the actor may, reading the token, the member,
+the grants and the rule as they are now, so revoking a token or a grant, or disabling a member, stops a run
+at its next batch; a session is read through its member, since an actor doesn't name the session. Each batch commits its `transaction.rule_applied` entries and a `rule.apply`
+entry with its counts, then rests 25 ms. Stopped partway, what is done stays done and audited, and running
+it again carries on. So one run may leave several `rule.apply` entries.
+
+**U10. Who may.** There is no `ManageCategories`. Changing or running a rule needs `WriteHousehold` (the
+closest: the `write` scope, as for categories), plus `write` on the rule's account, or on every account
+for a rule without one (`authorize_rule_change`). Changing one needs that as it is and as it would be.
+Reading follows a planned item (R3): `transactions` on its account, or for a rule of every account on at
+least one account, so anyone who can see a transaction a rule could fill can read that rule, and anything
+below answers as missing. The text of a rule for every account is therefore visible to a token limited to
+one account: scope a rule to its account to keep its text there. A dry run reads only transactions the
+token can read, so no list or count says anything of others. The audit log keeps its own `all` grant.
+
+**U11. Finding and undoing.** `GET /api/v1/transactions?rule=` lists what a rule filled and nobody has
+changed since, within what the token can read. `POST .../undo` takes that back in the same batches and
+with the same check on each, audited as `transaction.rule_undone` and `rule.undo` with a count. Each field
+reopens: empty, with nobody having set it, so a corrected rule can fill it, where clearing by hand would
+stop it for good. A reviewed transaction is left for a person and counted. Undo doesn't change the rule, so
+turn it off or correct it first. It needs the same rights as running. Write on every account also reaches
+an account the rule has since moved off, and a token limited to one account reaches only the rule's. A
+deleted rule's account isn't known, so its undo needs write on every account, and below that answers as
+missing; asked of an id that never was a rule, it finds nothing.
