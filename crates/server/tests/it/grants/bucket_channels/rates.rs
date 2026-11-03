@@ -303,7 +303,7 @@ async fn fetch_rates(world: &World) {
     FxService::new(
         world.server.store.clone(),
         world.server.clock.clone(),
-        world.server.config.timezone.clone(),
+        world.server.config.default_timezone.clone(),
         Some(Arc::new(OneRate) as Arc<dyn RateProvider>),
     )
     .fetch_due()

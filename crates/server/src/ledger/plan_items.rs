@@ -548,7 +548,8 @@ impl Ledger {
         // ends those still to matter. Earlier months are what happened. It errs toward
         // counting, and the member can settle again.
         if changes.amount.is_some() || changes.schedule.is_some() {
-            let this_month = CalendarMonth::of(self.today()).map_err(invalid_month)?;
+            let this_month = CalendarMonth::of(self.time.today_seen_by(&mut tx).await?)
+                .map_err(invalid_month)?;
             let (ended, earlier): (Vec<_>, Vec<_>) = settlements
                 .into_iter()
                 .partition(|one| one.month >= this_month);

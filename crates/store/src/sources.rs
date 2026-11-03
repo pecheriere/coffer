@@ -9,6 +9,7 @@ use coffer_domain::ids::{
     AccountId, ConnectionId, ProviderAccountId, SourceRecordId, TransactionId,
 };
 use coffer_domain::matching::{FINGERPRINT_VERSION, fingerprint};
+use coffer_domain::time::IanaZone;
 use coffer_domain::transactions::{Description, Memo, Payee, TransactionFlag};
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -24,7 +25,7 @@ macro_rules! columns {
     () => {
         "id, connection_id, provider_account_ref, provider_txn_id, transaction_id, posted_on, \
          transacted_on, amount_raw, amount_minor, description, payee, memo, pending, \
-         fingerprint, fingerprint_version, first_seen_at, last_seen_at"
+         fingerprint, fingerprint_version, first_seen_at, last_seen_at, dated_in, transacted_in"
     };
 }
 
@@ -58,6 +59,11 @@ pub struct SourceRecord {
     /// decimal text).
     pub amount_raw: String,
     pub fingerprint: String,
+    /// The chosen zone `posted_on` was worked out in; `None` means the server's default,
+    /// and also a provider that reports calendar days.
+    pub dated_in: Option<IanaZone>,
+    /// The same for `transacted_on`, which can be older than `posted_on`.
+    pub transacted_in: Option<IanaZone>,
     pub fingerprint_version: u8,
     pub first_seen_at: Timestamp,
     pub last_seen_at: Timestamp,
@@ -74,6 +80,10 @@ pub struct NewSource {
     pub fields: ImportedFields,
     pub amount_raw: String,
     pub seen_at: Timestamp,
+    /// See [`SourceRecord::dated_in`].
+    pub dated_in: Option<IanaZone>,
+    /// See [`SourceRecord::transacted_in`].
+    pub transacted_in: Option<IanaZone>,
 }
 
 /// A source record's fields as the latest fetch reports them.
@@ -82,6 +92,10 @@ pub struct SourceUpdate {
     pub fields: ImportedFields,
     pub amount_raw: String,
     pub seen_at: Timestamp,
+    /// See [`SourceRecord::dated_in`].
+    pub dated_in: Option<IanaZone>,
+    /// See [`SourceRecord::transacted_in`].
+    pub transacted_in: Option<IanaZone>,
 }
 
 /// An imported transaction that may receive an incoming record, with its
@@ -102,6 +116,12 @@ fn label<T>(
 ) -> Result<Option<T>, StoreError> {
     text_opt(row, column)?
         .map(|value| parse(&value).map_err(StoreError::backend))
+        .transpose()
+}
+
+fn zone_of(row: &SqliteRow, column: &str) -> Result<Option<IanaZone>, StoreError> {
+    text_opt(row, column)?
+        .map(|name| IanaZone::parse(&name).map_err(StoreError::backend))
         .transpose()
 }
 
@@ -135,6 +155,8 @@ fn source_from_row(row: &SqliteRow) -> Result<SourceRecord, StoreError> {
         },
         amount_raw: text(row, "amount_raw")?,
         fingerprint: text(row, "fingerprint")?,
+        dated_in: zone_of(row, "dated_in")?,
+        transacted_in: zone_of(row, "transacted_in")?,
         fingerprint_version: u8::try_from(version)
             .map_err(|_| corrupt("fingerprint version out of range"))?,
         first_seen_at: time(row, "first_seen_at")?,
@@ -268,8 +290,8 @@ impl StoreTx {
             "INSERT INTO transaction_sources (id, connection_id, provider_account_ref, \
              provider_txn_id, transaction_id, posted_on, transacted_on, amount_raw, \
              amount_minor, description, payee, memo, pending, fingerprint, \
-             fingerprint_version, first_seen_at, last_seen_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             fingerprint_version, first_seen_at, last_seen_at, dated_in, transacted_in) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(new.connection.to_string())
@@ -291,6 +313,8 @@ impl StoreTx {
         .bind(i64::from(FINGERPRINT_VERSION))
         .bind(seen)
         .bind(seen)
+        .bind(new.dated_in.as_ref().map(IanaZone::name))
+        .bind(new.transacted_in.as_ref().map(IanaZone::name))
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
@@ -330,7 +354,8 @@ impl StoreTx {
         let result = sqlx::query(
             "UPDATE transaction_sources SET posted_on = ?, transacted_on = ?, amount_raw = ?, \
              amount_minor = ?, description = ?, payee = ?, memo = ?, pending = ?, \
-             fingerprint = ?, fingerprint_version = ?, last_seen_at = ? WHERE id = ?",
+             fingerprint = ?, fingerprint_version = ?, last_seen_at = ?, dated_in = ?, \
+             transacted_in = ? WHERE id = ?",
         )
         .bind(fields.posted_on.to_string())
         .bind(fields.transacted_on.map(|day| day.to_string()))
@@ -346,6 +371,8 @@ impl StoreTx {
         ))
         .bind(i64::from(FINGERPRINT_VERSION))
         .bind(update.seen_at.as_millisecond())
+        .bind(update.dated_in.as_ref().map(IanaZone::name))
+        .bind(update.transacted_in.as_ref().map(IanaZone::name))
         .bind(id.to_string())
         .execute(&mut *self.tx)
         .await

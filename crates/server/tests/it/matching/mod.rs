@@ -158,6 +158,7 @@ fn record(
         memo: None,
         pending,
         replaces_provider_id: None,
+        dating: None,
     }
 }
 

@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod egress;
 pub mod fx;
+pub mod household_time;
 pub mod http;
 pub mod ledger;
 pub mod secrets;

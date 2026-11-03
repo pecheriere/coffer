@@ -125,6 +125,7 @@ impl World {
                     memo: None,
                     pending: false,
                     replaces_provider_id: None,
+                    instants: None,
                 }],
                 removed: Vec::new(),
                 coverage: Coverage::Delta,
