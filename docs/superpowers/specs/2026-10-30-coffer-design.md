@@ -690,6 +690,34 @@ reason (too large) is left out and noted on the provider account, while its
 records still apply and the cursor can move. Transaction amounts are never
 rounded: a record that does not convert exactly is unusable.
 
+A provider chooses the day of the balance it reports, and a balance's date may
+honestly be when it last changed, so an old date alone doesn't lose the amount. What
+must not happen is a report rewriting or extending history backward. A date within
+31 days of the household's today (§8.7) is believed, except that a repeat of the latest
+amount on a day holding a balance writes nothing, for a change of zone (§8.7); a later one
+is dated today. For
+an older date on a bound account:
+
+1. **No snapshot yet, or the latest is before the reported day:** the amount is
+   taken, dated 31 days back. This dates it later than reported, on purpose: a date
+   in 1970 adds no history and a long-past row can't change a year of carried net
+   worth, and the account has a balance, so the forecast isn't blocked for want of
+   one. So a dormant account's history starts on that day, and the age shown for its
+   balance can be less than its real age. The audit entry gives `reported_on`.
+2. **The amount of the latest snapshot, or the day and amount of any snapshot:**
+   nothing is written and nothing said. The first is needed as well as the second,
+   because an account taken under rule 1 goes on reporting its real, earlier date.
+3. **Anything else** would add or change history at or before the latest snapshot.
+   It is refused, and the provider account shows a fixed note, `old_balance_note`.
+
+A bind judges the balance last reported the same way, never over a snapshot already
+there. An unbound account's balance is kept only if its date is believed, as #77 set.
+A refused report's records still apply and the cursor can move. The note is not
+`error`, because the bank reported no error: it raises no forecast caution, and the
+age of the balance kept stays the only signal (`balance_stale`). A report not refused
+clears it, and so does a balance set by hand on or after the latest day. A balance a
+member or a token sets by hand is no report, and none of this limits it.
+
 ### 8.7 Household timezone
 
 The household has one time zone, an IANA name. An admin chooses it in the household
@@ -731,12 +759,16 @@ one consistently.
 
 **The daily table.** A change that leaves today on or after the table's last day needs
 nothing, as the table is right as far as it goes, and the job adds any new day within a
-minute, as at midnight. A change that puts today before the last day would leave a row
-for a day still to come, so the table is rebuilt to end today in the change's own
-transaction (§8.10 N3 explains what a rebuild holds), and the later days return one at
-a time as they arrive, from the same snapshots: no gap, no day twice. The job and the
-command read the zone under the write lock, so neither can write a day from the zone
-before. A `COFFER_TIMEZONE` changed at a restart is not a setting and has no such step;
+minute, as at midnight. A change that puts today before the last day would leave rows
+for days still to come, so in its own transaction those rows are removed and the table
+ends today. That is no rebuild: a row depends only on balances and rates of its own day
+and before, so the rows kept are right, and a report goes on answering with no
+`rebuilding` and no null `through`. The days removed return one at a time as they
+arrive, from the same snapshots: no gap, no day twice. A rebuild under way (§8.10 N3)
+goes on with the accounts it has left, up to the new last day. Rebuilds and fills work
+out the day inside each transaction, in the zone that transaction sees, so a runner that
+started before a change can't write a day from the zone before. A `COFFER_TIMEZONE`
+changed at a restart is not a setting and has no such step;
 `coffer rebuild-net-worth` resets a table left ahead, and reports never answer past
 today in any case.
 
@@ -1083,12 +1115,29 @@ changing them needs no rebuild.
 A changed snapshot rebuilds its account from that date up to its next snapshot, and a bind
 bringing in an unbound account's kept balances rebuilds it from the earliest of them. A new or
 corrected rate rebuilds the accounts it converts, from that date. A changed display
-currency rebuilds everything. Each happens in the same transaction as the change. The
+currency rebuilds everything. Each happens in the same transaction as the change, unless a
+rate or the display currency would rewrite more than 25,000 rows. Then that transaction only
+asks for a full rebuild, and until it has run the read answers `rebuild_needed`. One account's
+whole history always fits, so a back-dated balance or a bind stays in its own transaction. The
 daily job fills days forward up to today. Where a row can't exist yet the read says so
 instead of serving an old number: `through` names the last day filled, later dates aren't
-answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table) answers no number
+answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table, or by a change too large for its own transaction) answers no number
 at all until the rebuild has run. `coffer rebuild-net-worth` rebuilds the whole table, and
 a test holds that incremental updates match it.
+
+A full rebuild runs in batches of whole accounts in id order, at most 25,000 rows unless one
+account alone holds more, each in its own transaction, with a pause between them, so other
+writers get the lock whatever the table's size. One process runs it at a time, decided by an
+operating system lock on a file beside the database, so two can't fill each other's pauses and
+one that died blocks nobody. The daily fill takes as many days as fit in the same limit at a
+time, with the same pause, and the table can answer between them, with `through` saying how far
+it has come. `rebuild_needed` stays set throughout, so a
+read never sees old and new rows together. `rebuilt_up_to` records the last account done and
+the day the rebuild runs up to is held in `filled_through`, so a crash or a failure resumes
+where the last batch committed. A write between two batches rewrites its rows as usual if its account's turn
+has passed, and otherwise leaves them to the rebuild, so none is lost. A display currency
+change, or a rate past the limit, starts the rebuild over, since the rows done so far no
+longer hold.
 
 Rows start no earlier than 1970-01-01, so a snapshot dated in the distant past can't make
 hundreds of thousands of rows, and never run past `through`, so a future-dated snapshot has

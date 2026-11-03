@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use coffer_domain::time::{Clock, IanaZone};
-use coffer_store::{Store, StoreError, StoreTx};
+use coffer_store::{RunsThrough, Store, StoreError, StoreTx};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
@@ -89,6 +89,16 @@ impl HouseholdTime {
     /// Backend failures, including a stored name that is not a zone.
     pub async fn today(&self) -> Result<Date, StoreError> {
         Ok(self.today_in(&self.zone().await?))
+    }
+
+    /// The household's day now, for a runner to work out in each of its transactions, in
+    /// the zone that transaction sees.
+    #[must_use]
+    pub fn runs_through(&self) -> RunsThrough {
+        RunsThrough::HouseholdDay {
+            at: self.clock.now(),
+            default_zone: self.default_zone.clone(),
+        }
     }
 
     /// The household's day as `tx` sees it. A writer whose change depends on the day

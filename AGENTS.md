@@ -24,6 +24,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
   a snapshot, a rate, the display currency or a time zone that puts today before its
   last day changes it in its own transaction,
+  or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
   transaction that gathers a forecast's or a report's data.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`

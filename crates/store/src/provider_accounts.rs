@@ -17,7 +17,7 @@ macro_rules! columns {
         "id, connection_id, provider_account_id, name, institution, currency_raw, kind_hint, \
          account_id, last_balance_raw, last_balance_on, error, first_seen_at, last_seen_at, \
          last_applied_at, held_syncs, hold_released, released_records, release_withdrawn, \
-         held_records"
+         held_records, old_balance_refused"
     };
 }
 
@@ -82,6 +82,10 @@ pub struct ProviderAccountRecord {
     /// How many records the last sync that held the cursor fetched for this
     /// account and could not store.
     pub held_records: u32,
+    /// Whether the last balance reported while bound was refused, for adding or
+    /// changing history at or before the account's latest snapshot. Not an error
+    /// of the provider's, so kept apart from `error`.
+    pub old_balance_refused: bool,
 }
 
 /// A provider account as a fetch reports it: created the first time it is
@@ -133,6 +137,7 @@ pub(crate) fn provider_account_from_row(
         release_withdrawn: int(row, "release_withdrawn")? != 0,
         held_records: u32::try_from(int(row, "held_records")?)
             .map_err(|_| corrupt("a negative record count"))?,
+        old_balance_refused: int(row, "old_balance_refused")? != 0,
     })
 }
 
@@ -267,6 +272,45 @@ impl StoreTx {
             .await
             .map_err(StoreError::from_sqlx)?;
         expect_one(result.rows_affected())
+    }
+
+    /// Record whether the balance a provider just reported was refused for its
+    /// age.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the provider account does not exist.
+    pub async fn set_old_balance_refused(
+        &mut self,
+        id: ProviderAccountId,
+        refused: bool,
+    ) -> Result<(), StoreError> {
+        let result =
+            sqlx::query("UPDATE provider_accounts SET old_balance_refused = ? WHERE id = ?")
+                .bind(i64::from(refused))
+                .bind(id.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
+    }
+
+    /// Forget any refusal noted on the provider accounts bound to `account`: it now
+    /// has a newer balance than the one they were told about.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn clear_old_balance_refused(
+        &mut self,
+        account: AccountId,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE provider_accounts SET old_balance_refused = 0 WHERE account_id = ?")
+            .bind(account.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
     }
 
     /// Record that a provider account's data was applied in full at `at`,

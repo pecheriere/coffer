@@ -17,16 +17,15 @@ use std::time::Duration;
 
 use coffer_domain::accounts::BalanceSource;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::ids::{AccountId, ConnectionId, ProviderAccountId, SyncRunId};
-use coffer_domain::money::Currency;
+use coffer_domain::ids::{AccountId, ConnectionId, SyncRunId};
 use coffer_domain::sync::{SyncRunStatus, SyncTrigger};
 use coffer_domain::time::Clock;
 use coffer_store::{
-    BalanceSnapshot, ConnectionRecord, ConnectionStatus, KeptBalance, QueuedRun, Store, StoreError,
-    StoreTx, SyncRunRecord,
+    BalanceSnapshot, ConnectionRecord, ConnectionStatus, QueuedRun, Store, StoreError, StoreTx,
+    SyncRunRecord,
 };
+use jiff::Timestamp;
 use jiff::civil::Date;
-use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -44,7 +43,11 @@ mod accounts;
 mod convert;
 mod fetch;
 mod released;
+mod reported_balance;
 mod results;
+
+pub(super) use reported_balance::{Judged, judge_reported};
+use reported_balance::{ReportedBalance, record_balance};
 
 const RUN_FINISHED: &str = "the sync run has already finished";
 pub(super) const CONNECTION_REMOVED: &str = "the connection is removed";
@@ -320,114 +323,16 @@ pub(super) async fn ensure_not_removed(
     Ok(record)
 }
 
-/// How many days back a balance reported for an unbound account may be dated:
-/// a bank's date can honestly lag, but nothing older is believed.
-const KEPT_BALANCE_MAX_AGE_DAYS: i64 = 31;
-
-/// The oldest day a balance of an unbound account may be taken for.
-pub(super) fn oldest_kept_day(today: Date) -> Date {
-    today.saturating_sub(Span::new().days(KEPT_BALANCE_MAX_AGE_DAYS))
-}
-
-/// A balance a provider reported, converted to minor units of its currency.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ReportedBalance {
-    pub(super) on: Date,
-    pub(super) balance_minor: i64,
-    pub(super) currency: Currency,
-}
-
-/// Records the balance a provider reported for `provider_account`: the day's
-/// snapshot of the account it is bound to or, while unbound, kept for the bind
-/// to bring in, unless it is dated before [`oldest_kept_day`]. Never on a future
-/// day, which would hide later balances.
-/// Keeping isn't audited: the audit log would then hold the balances of an
-/// account nobody has bound, and the bind's entry counts them.
-pub(super) async fn record_balance(
-    tx: &mut StoreTx,
-    now: Timestamp,
-    provider_account: ProviderAccountId,
-    account: Option<AccountId>,
-    balance: ReportedBalance,
-    today: Date,
-) -> Result<(), SyncError> {
-    let on = balance.on.min(today);
-    let minor = balance.balance_minor;
-    if let Some(account) = account {
-        let latest = tx.latest_balance(account).await?;
-        let moved = latest.is_some_and(|latest| {
-            latest.source == BalanceSource::Sync
-                && repeats(minor, on, latest.on, latest.balance_minor)
-        }) && tx.balance_on(account, on).await?.is_some();
-        if !moved {
-            write_balance(tx, now, account, on, minor).await?;
-        }
-        for day in later_days_past_today(on, today) {
-            let row = tx.balance_on(account, day).await?;
-            if row.is_some_and(|row| row.source == BalanceSource::Sync) {
-                write_balance(tx, now, account, day, minor).await?;
-            }
-        }
-        return Ok(());
-    }
-    if on < oldest_kept_day(today) {
-        tracing::warn!(provider_account = %provider_account, "a balance too old to keep was left out");
-        return Ok(());
-    }
-    let keep = |on| KeptBalance {
-        provider_account,
-        on,
-        balance_minor: minor,
-        currency: balance.currency,
-        recorded_at: now,
-    };
-    let latest = tx.latest_kept_balance(provider_account).await?;
-    let moved = latest.is_some_and(|(day, kept)| repeats(minor, on, day, kept))
-        && tx.kept_balance_on(provider_account, on).await?.is_some();
-    if !moved {
-        tx.keep_balance(keep(on)).await?;
-    }
-    for day in later_days_past_today(on, today) {
-        if tx.kept_balance_on(provider_account, day).await?.is_some() {
-            tx.keep_balance(keep(day)).await?;
-        }
-    }
-    Ok(())
-}
-
-/// The most a change of zone can move an instant's day: the zones furthest apart differ by
-/// 25 hours.
-const MOST_A_ZONE_MOVES_A_DAY: i64 = 2;
-
-/// Whether `minor`, on `on`, is what the latest provider-written balance says, from a day
-/// at most a change of zone away. It is what a report of the same moment looks like after
-/// the zone moved back (spec §8.7). The caller goes on only if `on` already holds a balance,
-/// which writing this would replace with what that day didn't end on; an empty day loses
-/// nothing by being written.
-fn repeats(minor: i64, on: Date, latest_on: Date, latest_minor: i64) -> bool {
-    minor == latest_minor
-        && on < latest_on
-        && on
-            .checked_add(Span::new().days(MOST_A_ZONE_MOVES_A_DAY))
-            .is_ok_and(|furthest| latest_on <= furthest)
-}
-
-/// The days after `on` and after `today` that a change of zone can have left a
-/// provider-written balance on. A newer report replaces those, or that old amount would
-/// come back as the household's latest when the day arrives.
-fn later_days_past_today(on: Date, today: Date) -> impl Iterator<Item = Date> {
-    (1..=MOST_A_ZONE_MOVES_A_DAY)
-        .filter_map(move |ahead| on.checked_add(Span::new().days(ahead)).ok())
-        .filter(move |day| *day > today)
-}
-
 /// Writes the day's `sync` snapshot of `account`, audited when it changes
-/// the day's value or source.
+/// the day's value or source. The provider dated it `reported_on`, which the
+/// audit entry also gives when that isn't the day written, so the trail says what
+/// was reported.
 pub(super) async fn write_balance(
     tx: &mut StoreTx,
     now: Timestamp,
     account: AccountId,
     on: Date,
+    reported_on: Date,
     balance_minor: i64,
 ) -> Result<(), SyncError> {
     let previous = tx
@@ -445,8 +350,11 @@ pub(super) async fn write_balance(
     if unchanged {
         return Ok(());
     }
-    let changes = AuditChanges::new()
-        .set("on", on)
+    let mut changes = AuditChanges::new().set("on", on);
+    if reported_on != on {
+        changes = changes.set("reported_on", reported_on);
+    }
+    let changes = changes
         .change(
             "balance_minor",
             previous.as_ref().map(|p| p.balance_minor),

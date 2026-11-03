@@ -383,7 +383,7 @@ async fn rebuild_net_worth_reports_what_it_wrote() {
     let count = rows.len();
     assert_eq!(
         done.out,
-        format!("net worth rebuilt: {count} rows, through {last}\n")
+        format!("net worth rebuilt through {last}: {count} rows written\n")
     );
     assert_eq!(done.err, "");
 }
@@ -499,6 +499,30 @@ async fn rebuild_net_worth_waits_for_a_writer() {
         rows.iter()
             .any(|row| row.account == later && row.balance_minor == 7)
     );
+}
+
+/// Waiting with no end in sight says what for, and then does the work.
+#[tokio::test]
+async fn rebuild_net_worth_says_it_is_waiting_for_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env(&dir);
+    let (store, _account, _first) = populated_database(&dir).await;
+    let held = store.hold_net_worth_rebuild_for_tests().unwrap().unwrap();
+
+    let command = run(&["rebuild-net-worth"], &env);
+    tokio::pin!(command);
+    tokio::select! {
+        _ = &mut command => panic!("the command did not wait"),
+        () = tokio::time::sleep(std::time::Duration::from_millis(300)) => {}
+    }
+    drop(held);
+
+    let done = command.await;
+    assert_eq!(done.code, ExitCode::SUCCESS);
+    let (waiting, result) = done.out.split_once('\n').unwrap();
+    assert_eq!(waiting, "waiting for another net worth rebuild to finish");
+    assert!(result.starts_with("net worth rebuilt through "), "{result}");
+    assert!(!store.net_worth_state().await.unwrap().rebuild_needed);
 }
 
 /// An empty file isn't a database: opening it would migrate it into an empty one,

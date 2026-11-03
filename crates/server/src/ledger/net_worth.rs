@@ -208,7 +208,7 @@ impl Ledger {
             interval,
             account_points: query.account_points.unwrap_or(true),
             coverage: self.currency_states(&data),
-            through: data.state.filled_through,
+            through: data.state.current_through(),
             rebuild_needed: data.state.rebuild_needed,
             display: data.display,
             stale_after_days: data.stale_after_days,

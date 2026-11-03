@@ -55,8 +55,8 @@ pub(super) async fn get(
                    name, and alone among these `null` clears it, returning to the server's \
                    default. A new zone applies at once, is audited with the old and new names, \
                    and rewrites no day already recorded: only new days use it. If it makes today \
-                   earlier than the net worth table's last day, the table is rebuilt to end today \
-                   before this answers. A name that isn't a zone is 422, and so is a number out \
+                   earlier than the net worth table's last day, the table ends today from this \
+                   change on. A name that isn't a zone is 422, and so is a number out \
                    of range; one outside the field's type (such as 300 months) or an unknown currency \
                    code is 400. Needs `admin`, whatever the token's account grants, but the \
                    answer shows `floor` only as `getHouseholdSettings` would to that token. A \

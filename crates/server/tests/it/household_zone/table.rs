@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use coffer_domain::ids::AccountId;
 use coffer_server::fx::FxService;
+use coffer_server::household_time::HouseholdTime;
 use jiff::SignedDuration;
 use jiff::civil::Date;
 use serde_json::{Value, json};
@@ -150,6 +151,115 @@ async fn a_rebuild_still_to_come_uses_the_new_zone() {
     assert!(state.rebuild_needed);
     job(&world).keep_table_current().await.unwrap();
     assert_eq!(through(&world).await, Some(day(LOS_ANGELES_DAY)));
+}
+
+/// Today moves back while a rebuild is between two batches. Rows of accounts it has done and
+/// of those it hasn't are past today: none stay, the rebuild ends on the new day, and until
+/// then nothing firm can be read.
+#[tokio::test]
+async fn a_change_during_a_batched_rebuild_leaves_no_day_to_come() {
+    let world = world_at(AUCKLAND, AUCKLAND_DAY).await;
+    let first = world.holding("First", "USD").await;
+    let second = world.holding("Second", "USD").await;
+    world.balance(first, "2026-10-29", 100).await;
+    world.balance(second, "2026-10-29", 200).await;
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.ask_for_net_worth_rebuild().await.unwrap();
+    let batch = tx
+        .rebuild_net_worth_batch(day(AUCKLAND_DAY), 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(!batch.finished, "one account of two");
+
+    set_zone(&world, json!(LOS_ANGELES)).await;
+
+    let state = world.server.store.net_worth_state().await.unwrap();
+    assert!(state.rebuild_needed, "still rebuilding");
+    assert_eq!(state.filled_through, Some(day(LOS_ANGELES_DAY)));
+    assert!(
+        world
+            .rows()
+            .await
+            .iter()
+            .all(|row| row.on <= day(LOS_ANGELES_DAY)),
+        "no row past today"
+    );
+    let report = world.report("").await;
+    assert_eq!(report["through"], Value::Null, "nothing firm yet");
+    assert_eq!(report["blockers"][0]["kind"], "rebuilding");
+
+    let job = job(&world);
+    job.keep_table_current().await.unwrap();
+
+    let state = world.server.store.net_worth_state().await.unwrap();
+    assert!(!state.rebuild_needed);
+    assert_eq!(state.filled_through, Some(day(LOS_ANGELES_DAY)));
+    for account in [first, second] {
+        assert_every_day_once(
+            &row_days(&world, account).await,
+            "2026-10-29",
+            LOS_ANGELES_DAY,
+        );
+    }
+    assert_eq!(world.report("").await["through"], LOS_ANGELES_DAY);
+
+    world.server.clock.advance(SignedDuration::from_hours(24));
+    job.keep_table_current().await.unwrap();
+    for account in [first, second] {
+        assert_every_day_once(&row_days(&world, account).await, "2026-10-29", AUCKLAND_DAY);
+    }
+}
+
+/// A report keeps answering across the change: moving today back needs no rebuild.
+#[tokio::test]
+async fn moving_today_back_never_says_rebuilding() {
+    let world = world_at(AUCKLAND, AUCKLAND_DAY).await;
+    let account = world.holding("Checking", "USD").await;
+    world.balance(account, "2026-10-29", 100).await;
+
+    set_zone(&world, json!(LOS_ANGELES)).await;
+
+    let state = world.server.store.net_worth_state().await.unwrap();
+    assert!(!state.rebuild_needed);
+    assert_eq!(world.report("").await["through"], LOS_ANGELES_DAY);
+}
+
+/// A runner that starts before a change and writes after it uses the new zone's day, in a
+/// rebuild and in a fill.
+#[tokio::test]
+async fn a_runner_started_before_a_change_writes_no_day_to_come() {
+    let world = world_at(AUCKLAND, "2026-10-30").await;
+    let account = world.holding("Checking", "USD").await;
+    world.balance(account, "2026-10-29", 100).await;
+    let time = HouseholdTime::new(
+        world.server.store.clone(),
+        world.server.clock.clone(),
+        world.server.config.default_timezone.clone(),
+    );
+    let fill = time.runs_through();
+    let rebuild = time.runs_through();
+
+    set_zone(&world, json!(LOS_ANGELES)).await;
+
+    world.server.store.fill_net_worth(fill).await.unwrap();
+    assert_eq!(through(&world).await, Some(day(LOS_ANGELES_DAY)));
+
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.ask_for_net_worth_rebuild().await.unwrap();
+    tx.commit().await.unwrap();
+    world
+        .server
+        .store
+        .finish_net_worth_rebuild(rebuild)
+        .await
+        .unwrap();
+    assert_eq!(through(&world).await, Some(day(LOS_ANGELES_DAY)));
+    assert_every_day_once(
+        &row_days(&world, account).await,
+        "2026-10-29",
+        LOS_ANGELES_DAY,
+    );
 }
 
 /// A balance dated a day that is now still to come is out of the report until it comes,

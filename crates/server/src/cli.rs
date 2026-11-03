@@ -90,7 +90,7 @@ enum ConfiguredCommand {
         dest: PathBuf,
     },
     /// Rebuild the daily net worth table from balances, rates and the display
-    /// currency. Safe while the server runs: other writes wait for it.
+    /// currency. Safe while the server runs: other writes take turns with it.
     RebuildNetWorth,
 }
 
@@ -264,13 +264,23 @@ async fn execute(
                 Arc::new(SystemClock),
                 config.default_timezone,
             );
-            // One transaction, under the write lock like any writer's: other
-            // writes wait for it, and it holds what they committed before it.
-            let mut tx = store.begin().await?;
-            let today = time.today_seen_by(&mut tx).await?;
-            let rows = tx.rebuild_net_worth(today).await?;
-            tx.commit().await?;
-            writeln!(out, "net worth rebuilt: {rows} rows, through {today}")?;
+            let today = time.today().await?;
+            let through = time.runs_through();
+            // In short transactions under the write lock like any writer's, so
+            // other writes get their turn and none of them is lost. The count is what
+            // this run wrote, not what the table holds: a display currency change or a
+            // large rate can start it over, and a balance can add rows it didn't write.
+            let rows = if let Some(rows) = store.try_rebuild_net_worth(through.clone()).await? {
+                rows
+            } else {
+                writeln!(out, "waiting for another net worth rebuild to finish")?;
+                out.flush()?;
+                store.rebuild_net_worth(through).await?
+            };
+            writeln!(
+                out,
+                "net worth rebuilt through {today}: {rows} rows written"
+            )?;
             Ok(ExitCode::SUCCESS)
         }
     }

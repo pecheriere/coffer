@@ -203,8 +203,10 @@ impl Ledger {
     }
 
     /// Changes the household's settings. A patch that changes nothing writes
-    /// nothing, audit included. A new display currency rewrites the daily values in this
-    /// transaction, and so does a new time zone if the table then ends after today (see
+    /// nothing, audit included. A new display currency rewrites the daily values: in this
+    /// transaction, or if there are too many for one, in a rebuild the daily job runs, while
+    /// reports answer as rebuilding. A new time zone that puts today before the table's last
+    /// day cuts the table back to today in this transaction (see
     /// [`coffer_store::StoreTx::set_household_zone`]). The answer shows the floor as
     /// [`Self::household_settings`] does, so it can't confirm a guess at it.
     ///

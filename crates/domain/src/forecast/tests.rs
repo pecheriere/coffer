@@ -91,6 +91,7 @@ fn cash(name: &str, balance: Money) -> AccountInput {
             minor_units: balance.minor_units,
         }),
         feed_problems: Vec::new(),
+        goal_spending: false,
     }
 }
 

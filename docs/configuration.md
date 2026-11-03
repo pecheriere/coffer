@@ -272,7 +272,7 @@ coffer serve                    # run the server
 coffer bootstrap-link           # print a single-use first-admin link; exit 1 if an admin exists
 coffer recover-admin <username> # print a re-enroll link for an admin who lost every passkey
 coffer backup <dest>            # consistent copy of the database, mode 0600; refuses an existing file
-coffer rebuild-net-worth        # recompute the daily net worth table up to today; prints rows and last day
+coffer rebuild-net-worth        # recompute the daily net worth table up to today; prints rows written and last day
 coffer healthcheck              # exit 0 if the running server is healthy, 1 otherwise
 ```
 
@@ -287,9 +287,17 @@ Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `rebuild-net-worth` recomputes the whole daily table from the balances, the
 rates and the display currency, with today taken from the household's zone: the one
 chosen in its settings, else `COFFER_TIMEZONE`. It is
-safe while the server runs: it takes the database's write lock in one
-transaction like any writer, so other writes wait for it, for up to the store's
-15 s busy timeout. Opening the database applies this version's migrations, as
+safe while the server runs: it works in short transactions, so other writes take
+turns with it, and reports say `rebuilding` until it ends if the table takes more
+than one. One rebuild runs at a time, so it first waits for one the server has
+under way, and the server leaves it alone until it ends. If it stops part way, the
+running server's job finishes it. A file named after the database with
+`.rebuild-lock` added says who is running. It stays there, and deleting it is safe only
+while no rebuild runs. Its lock needs a local filesystem, as SQLite's WAL mode already does.
+While another rebuild runs the command prints that it is waiting, for as long as that takes,
+and the server logs once, at `info`, that it is leaving the rebuild to the other process.
+The rows it prints are what it wrote, which can differ from what the table holds if a change
+starts it over or a balance arrives while it runs. Opening the database applies this version's migrations, as
 `backup` does, so run the same version as the server. It never creates a
 database: no database found, or an empty file, is exit code 1. You rarely need
 it: the first start after the upgrade that adds the table rebuilds it in the
