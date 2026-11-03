@@ -165,6 +165,24 @@ async fn rates_coverage_and_the_list_mark_it() {
     assert_eq!(items.as_array().unwrap().len(), 2);
 }
 
+/// The answer to a save is the rate as it was stored, so it reads the same as in the list:
+/// the store keeps milliseconds, and a clock reading finer than that must not show.
+#[tokio::test]
+async fn a_saved_rate_is_answered_as_the_list_shows_it() {
+    let world = world().await;
+    world
+        .server
+        .clock
+        .advance(jiff::SignedDuration::from_nanos(123_456));
+
+    let saved = world.enter("XAF", "2026-10-26", "655.957").await;
+    let (_, list) = world
+        .send(Method::GET, "/api/v1/fx/manual-rates", &world.admin, None)
+        .await;
+
+    assert_eq!(parsed(&list)["items"], json!([saved]));
+}
+
 /// The rule of N16: never overwritten, wins its own day, gives way to a later day.
 #[tokio::test]
 async fn a_manual_rate_beats_a_fetch_on_its_day_and_gives_way_to_a_later_one() {
