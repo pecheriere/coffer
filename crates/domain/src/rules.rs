@@ -307,7 +307,7 @@ impl RuleFills {
 /// A transaction with several splits is left alone, as is a reviewed one: someone
 /// has divided it or looked at it, and assigning or filing it afterwards would
 /// change what they saw. A zero amount can't take a split. A category that would change
-/// what the money means isn't one this rule may set ([`refusal`]). A rule like that, or
+/// what the money means isn't one this rule may set. A rule like that, or
 /// with an archived category or a disabled member, doesn't count as a match for that
 /// field, so the next one may fill it.
 #[must_use]
