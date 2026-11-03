@@ -488,9 +488,9 @@ async fn a_leg_of_any_other_link_is_left_for_a_person_even_by_a_transfer_rule() 
     let brokerage = world
         .account_of_kind("Brokerage", AccountKind::Brokerage)
         .await;
-    let (from, to) = (world.feed(&checking).await, world.feed(&brokerage).await);
-    let outflow = world.arrive(&from, "a", -5000, "MOVE OUT").await;
-    let inflow = world.arrive(&to, "b", 5000, "MOVE IN").await;
+    let (paying, receiving) = (world.feed(&checking).await, world.feed(&brokerage).await);
+    let outflow = world.arrive(&paying, "a", -5000, "MOVE OUT").await;
+    let inflow = world.arrive(&receiving, "b", 5000, "MOVE IN").await;
     link(&world, outflow, inflow).await;
     let moving = world
         .category_of_kind("Moving", CategoryKind::Transfer)
@@ -508,13 +508,13 @@ async fn a_leg_of_any_other_link_is_left_for_a_person_even_by_a_transfer_rule() 
 async fn an_income_rule_takes_no_money_going_out_and_the_next_rule_may() {
     let world = world().await;
     let pay = world.category_of_kind("Pay", CategoryKind::Income).await;
-    let fees = world.category("Fees").await;
+    let bank_costs = world.category("Fees").await;
     let income = world.filing("PAYROLL", pay).await;
     let account = world.account("Everyday").await;
     let feed = world.feed(&account).await;
 
-    let fee = world.arrive(&feed, "a", -4500, "PAYROLL FEE").await;
-    assert_eq!(world.stored(fee).await.splits.len(), 0);
+    let charge = world.arrive(&feed, "a", -4500, "PAYROLL FEE").await;
+    assert_eq!(world.stored(charge).await.splits.len(), 0);
     let salary = world.arrive(&feed, "b", 450_000, "PAYROLL").await;
     assert_eq!(world.stored(salary).await.splits[0].category, pay);
     assert_eq!(
@@ -522,9 +522,9 @@ async fn an_income_rule_takes_no_money_going_out_and_the_next_rule_may() {
         1
     );
 
-    let next = world.filing("PAYROLL", fees).await;
+    let next = world.filing("PAYROLL", bank_costs).await;
     assert_eq!(world.run(&next).await["categorized"], 1);
-    assert_eq!(world.stored(fee).await.splits[0].category, fees);
+    assert_eq!(world.stored(charge).await.splits[0].category, bank_costs);
 }
 
 #[tokio::test]
