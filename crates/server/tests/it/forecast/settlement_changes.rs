@@ -43,7 +43,7 @@ async fn a_new_amount_ends_the_settlement() {
     let (world, _) = holding().await;
     let housing = world.expense("Housing").await;
     let rent = world
-        .item(&outflow("Rent", 10_000, housing, &monthly("2026-01-20")))
+        .item(&outflow("Rent", 10_000, housing, &monthly("2026-11-20")))
         .await;
     world.settle(&rent, "2026-12", "paid").await;
     assert_eq!(world.forecast().await["surplus"], usd(980_000));
@@ -94,7 +94,7 @@ async fn a_new_cadence_ends_the_settlement() {
     let (world, _) = holding().await;
     let home = world.expense("Home").await;
     let cleaner = world
-        .item(&outflow("Cleaner", 10_000, home, &monthly("2026-01-20")))
+        .item(&outflow("Cleaner", 10_000, home, &monthly("2026-11-20")))
         .await;
     world.settle(&cleaner, "2026-12", "skipped").await;
 

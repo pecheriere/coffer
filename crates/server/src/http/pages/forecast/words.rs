@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
     AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
-    SettledLine,
+    SettledLine, bills_looked_at_from,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
@@ -200,14 +200,15 @@ fn connection_sentence(label: &str, status: FeedStatus) -> String {
     }
 }
 
-/// Bills and one-offs in a category, dated earlier this month, that its spending doesn't
-/// cover. One amount can sum several of them.
+/// Bills and one-offs in a category, dated earlier this month, that no transaction paid. One
+/// amount can sum several of them.
 fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     format!(
-        "Bills or one-offs in {} dated earlier this month come to {} more than that category's \
-         spending so far, so that much still counts as needed. If they were paid under another \
-         category, there is more to invest than this shows. If one was paid from an account \
-         that isn't the household's, even in this category, settle that bill for the month.",
+        "Bills or one-offs in {} dated earlier this month come to {} that no payment of about \
+         that amount has been seen for, so that much still counts as needed. If they were paid \
+         under another category or at another amount, there is more to invest than this shows. \
+         If one was paid some other way, such as from an account that isn't the household's, \
+         settle that bill for the month.",
         category.unwrap_or("a category"),
         magnitude(amount),
     )
@@ -295,6 +296,69 @@ fn newer_spending_sentence(total: Money, pending: Money) -> String {
     )
 }
 
+/// A bill from last month that nothing paid.
+fn unpaid_last_month_sentence(
+    names: &Names<'_>,
+    item: LineSource,
+    on: Date,
+    amount: Money,
+) -> String {
+    format!(
+        "{} was due on {} and no payment of about {} has been seen, so it still counts as \
+         needed. If it was paid or won't be, settle it for that month.",
+        names.item(item).unwrap_or("A bill"),
+        day(on),
+        magnitude(amount),
+    )
+}
+
+/// A transaction that may be a bill's payment or a budget's spending.
+fn unclear_payment_sentence(
+    names: &Names<'_>,
+    item: LineSource,
+    on: Date,
+    amount: Money,
+    spent: Money,
+) -> String {
+    format!(
+        "{} was due on {} for {}. A transaction of {} in its category may have paid it, but it \
+         could also be spending on a budget there, so the bill still counts as needed. If it was \
+         the payment, settle the bill for that month.",
+        names.item(item).unwrap_or("A bill"),
+        day(on),
+        magnitude(amount),
+        magnitude(spent),
+    )
+}
+
+/// A window that doesn't start today.
+fn not_today_sentence(today: Date, as_of: Date) -> String {
+    format!(
+        "This forecast starts on {start}, not today, {}. Anything due before {} is left out, and \
+         so is income expected on or before {start} and any what-if item dated before it.",
+        day(today),
+        bills_looked_at_from(as_of).strftime("%B %Y"),
+        start = day(as_of),
+    )
+}
+
+/// A closed card still owing. `account` starts the sentence.
+fn closed_owing_sentence(account: &str, balance: Money) -> String {
+    format!(
+        "{account} is closed but still owes {}, which counts against the cash available.",
+        magnitude(balance),
+    )
+}
+
+/// A card or loan showing money in hand. `account` starts the sentence.
+fn positive_liability_sentence(account: &str, balance: Money) -> String {
+    format!(
+        "{account} is a card or loan, but shows {} in hand rather than owed. It may have been \
+         entered with the wrong sign, and it counts as it stands.",
+        magnitude(balance),
+    )
+}
+
 /// What might change the number. `as_of` is the first day of the forecast.
 pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>) -> String {
     match caution {
@@ -326,31 +390,30 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         Caution::ConnectionNeedsAttention { label, status, .. } => {
             connection_sentence(label, *status)
         }
-        Caution::AsOfNotToday { today } => format!(
-            "This forecast starts on {start}, not today, {}. Anything due before {} is left out, \
-             and so is income expected on or before {start} and any what-if item dated before it.",
-            day(*today),
-            as_of.strftime("%B %Y"),
-            start = day(as_of),
-        ),
+        Caution::AsOfNotToday { today } => not_today_sentence(*today, as_of),
         Caution::BillNotSeen { category, amount } => {
             bill_sentence(names.category(*category), *amount)
         }
-        Caution::ClosedLiabilityOwing { account, balance } => format!(
-            "{} is closed but still owes {}, which counts against the cash available.",
-            names.account_first(*account),
-            magnitude(*balance),
-        ),
+        Caution::BillUnpaidLastMonth { item, on, amount } => {
+            unpaid_last_month_sentence(names, *item, *on, *amount)
+        }
+        Caution::BillPaymentUnclear {
+            item,
+            on,
+            amount,
+            transaction_amount,
+            ..
+        } => unclear_payment_sentence(names, *item, *on, *amount, *transaction_amount),
+        Caution::ClosedLiabilityOwing { account, balance } => {
+            closed_owing_sentence(names.account_first(*account), *balance)
+        }
         Caution::MonthsFloorIsZero {
             currency,
             months: floor_months,
         } => zero_floor_sentence(*floor_months, *currency),
-        Caution::LiabilityBalancePositive { account, balance } => format!(
-            "{} is a card or loan, but shows {} in hand rather than owed. It may have been \
-             entered with the wrong sign, and it counts as it stands.",
-            names.account_first(*account),
-            magnitude(*balance),
-        ),
+        Caution::LiabilityBalancePositive { account, balance } => {
+            positive_liability_sentence(names.account_first(*account), *balance)
+        }
         Caution::GoalOneOffOverlap {
             goal,
             one_off,
@@ -380,7 +443,8 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         ),
         Caution::PossibleDuplicates { count } => format!(
             "This month has {} that may be duplicated. That could inflate a category's spending, \
-             which could make the need look smaller than it is or hide an unpaid bill.",
+             which could make the need look smaller than it is. A possible duplicate doesn't \
+             count as paying a bill until it is cleared.",
             transactions(*count),
         ),
         Caution::SpendingNewerThanBalance { total, pending, .. } => {

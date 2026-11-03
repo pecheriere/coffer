@@ -55,7 +55,7 @@ async fn spending_before_a_budgets_first_occurrence_this_month_reduces_it() {
 }
 
 /// Rent of 200,000 paid today with a balance dated today, and 5,000 more spent: what is
-/// spent on `as_of` reaches the pool, and the rent takes its share of it.
+/// spent on `as_of` reaches the pool, and the payment of the rent leaves it.
 #[tokio::test]
 async fn a_bill_paid_on_as_of_leaves_only_the_rest_to_a_budget() {
     let world = world().await;
@@ -64,9 +64,10 @@ async fn a_bill_paid_on_as_of_leaves_only_the_rest_to_a_budget() {
     world.floor(0).await;
     let home = budget(&world, "Upkeep", 20_000, "2026-01-20").await;
     world
-        .item(&outflow("Rent", 200_000, home, &monthly("2026-01-15")))
+        .item(&outflow("Rent", 200_000, home, &monthly("2026-11-15")))
         .await;
-    world.spend(checking, AS_OF, 205_000, home).await;
+    world.spend(checking, AS_OF, 200_000, home).await;
+    world.spend(checking, AS_OF, 5_000, home).await;
 
     let forecast = world.forecast().await;
 

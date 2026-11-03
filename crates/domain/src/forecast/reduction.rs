@@ -1,22 +1,19 @@
-//! What this month's actual spending does to the plan (spec §6.8, §8.9 R9). Only
-//! stored outflows are touched: a hypothetical item neither reduces, consumes nor
-//! owes, and a goal has spending of its own.
+//! What actual spending does to the plan (spec §6.8, §8.9 R9, R9b). Only stored outflows are
+//! touched: a hypothetical item neither reduces, consumes nor owes, and a goal has spending of
+//! its own.
 //!
-//! A recurring bill or a one-off counts in full until its date passes, so one dated
-//! `as_of` counts in full even if it was paid that day. Past it, spending in its category
-//! pays them in date order, and whatever it does not cover is still needed: a gap,
-//! reported, since the money may have gone under another category. Spending goes to them
-//! before any budget, since the data cannot tell which it was for, so money spent on a
-//! budget can hide an unpaid bill.
+//! A recurring bill or a one-off counts in full until its date passes, so one dated `as_of`
+//! counts in full even if it was paid that day. Past it, and back through last month, it is
+//! paid only by a transaction [`bill_matching`](super::bill_matching) matches to it: whatever
+//! isn't paid is still needed, and reported, since the money may have gone under another
+//! category.
 //!
 //! A budget is reduced, and it counts its whole calendar month: all its occurrences in
 //! `as_of`'s month, before `as_of` too, go into its line and the first bucket, so what it
 //! has not spent is still needed. Later months count only inside the window. Each
-//! category and currency has one pool: the month's spending less the recurring bills and
-//! one-offs dated this month up to and including `as_of`, since that spending was already
-//! planned for, floored at 0. The pool then pays for the month's budget occurrences in
-//! date order, so one purchase never reduces two items, and a paid bill never eats a
-//! budget.
+//! category and currency has one pool: the month's spending less what paid a bill, floored at
+//! 0. The pool then pays for the month's budget occurrences in date order, so one purchase never
+//! reduces two items, and a paid bill never eats a budget.
 //!
 //! A settled occurrence (R9a) is out of all of this: it owes no gap and takes no spending.
 
@@ -25,14 +22,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Span;
 use jiff::civil::Date;
 
-use super::count;
-use super::settled::is_settled;
-use super::types::{ForecastError, ForecastInput, ItemInput, LineSource};
+use super::bill_matching::{Bill, Seen, bills_looked_at_from, match_bills};
+use super::money;
+use super::settled::settlement_of;
+use super::types::{
+    Caution, ForecastError, ForecastInput, ItemInput, LineSource, OccurrencePayment, PaidBy,
+};
 use crate::ids::CategoryId;
 use crate::money::Currency;
 use crate::plan::{PlanDirection, PlanSchedule, PlanSpending};
 
-type PoolKey = (CategoryId, Currency);
+pub(super) type PoolKey = (CategoryId, Currency);
 
 /// One occurrence of an item, by its position in the input.
 struct Occurrence {
@@ -42,29 +42,30 @@ struct Occurrence {
     amount: i128,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct ItemAdjustment {
     /// What comes off a budget's occurrences this month.
     pub(super) reduced_by: i128,
-    /// What a recurring bill or one-off dated earlier this month still needs.
+    /// What a recurring bill or one-off dated before `as_of` still needs.
     pub(super) unpaid: i128,
+    /// What the transactions say of each occurrence the look-back reaches, by date.
+    pub(super) payments: Vec<OccurrencePayment>,
 }
 
 pub(super) struct Reduction {
     /// One per item, in input order.
     pub(super) by_item: Vec<ItemAdjustment>,
-    /// The gaps, per category and currency.
+    /// The gaps dated this month, per category and currency.
     pub(super) not_seen: BTreeMap<PoolKey, i128>,
+    /// What to say of a single occurrence: unpaid from last month, or unclear.
+    pub(super) bill_cautions: Vec<Caution>,
     /// The currencies where more spending found this month could change the number:
     /// a budget still to reduce, or a gap it might close.
     pub(super) spending_sensitive_currencies: BTreeSet<Currency>,
-    /// The currencies where spending paid an earlier bill or one-off: were part of it
-    /// a duplicate, a gap would open.
-    pub(super) paid_currencies: BTreeSet<Currency>,
 }
 
 /// A stored outflow's category, the only kind of item that shares a pool.
-fn pool_key(item: &ItemInput) -> Option<PoolKey> {
+pub(super) fn pool_key(item: &ItemInput) -> Option<PoolKey> {
     let stored = matches!(item.source, LineSource::PlannedItem { .. });
     let outflow = item.direction == PlanDirection::Outflow;
     let category = item.category.filter(|_| stored && outflow)?;
@@ -73,7 +74,7 @@ fn pool_key(item: &ItemInput) -> Option<PoolKey> {
 
 /// A stored budget, which counts its whole month. Only a recurring outflow is one, so a
 /// one-off marked as a budget stays what it is.
-fn is_stored_budget(item: &ItemInput) -> bool {
+pub(super) fn is_stored_budget(item: &ItemInput) -> bool {
     pool_key(item).is_some()
         && item.spending == Some(PlanSpending::Budget)
         && matches!(item.schedule, PlanSchedule::Recurring { .. })
@@ -115,14 +116,14 @@ pub(super) fn reduce(
         .checked_add(Span::new().months(1))
         .map_or(end_exclusive, |next_month| next_month.min(end_exclusive));
 
-    let mut spent: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    let mut pools: BTreeMap<PoolKey, i128> = BTreeMap::new();
     for row in &input.category_spent {
-        *spent.entry((row.category, row.currency)).or_default() += i128::from(row.spent_minor);
+        *pools.entry((row.category, row.currency)).or_default() += i128::from(row.spent_minor);
     }
 
+    let looked_at_from = bills_looked_at_from(input.as_of);
     let through_as_of = input.as_of.tomorrow().unwrap_or(Date::MAX);
-    let mut planned_so_far: BTreeMap<PoolKey, i128> = BTreeMap::new();
-    let mut earlier_payments = Vec::new();
+    let mut bills = Vec::new();
     let mut month_budgets = Vec::new();
     for (index, item) in input.items.iter().enumerate() {
         let Some(key) = pool_key(item) else {
@@ -133,80 +134,125 @@ pub(super) fn reduce(
             let dates = item.schedule.occurrences(month_start, reducible_until);
             month_budgets.extend(occurrences(dates, index, key, amount));
         } else {
-            // A goal has no occurrences, so this is recurring bills and one-offs. Today's
-            // spending may be one dated `as_of`, so it takes its share of the pool, but it
-            // has not passed, so it owes no gap. A settled one does neither, so spending
-            // in its category goes to the next bill or a budget.
-            let mut so_far = item.schedule.occurrences(month_start, through_as_of);
-            so_far.retain(|&on| !is_settled(item, on));
-            *planned_so_far.entry(key).or_default() += amount * i128::from(count(&so_far)?);
-            let passed = so_far.into_iter().filter(|&on| on < input.as_of).collect();
-            earlier_payments.extend(occurrences(passed, index, key, amount));
+            // A goal has no occurrences, so this is recurring bills and one-offs. One dated
+            // `as_of` may be what today's spending paid, so it can take a transaction, but it
+            // has not passed, so it owes no gap.
+            let dates = item.schedule.occurrences(looked_at_from, through_as_of);
+            bills.extend(dates.into_iter().map(|on| Bill {
+                on,
+                index,
+                key,
+                amount,
+                settled: settlement_of(item, on),
+            }));
         }
     }
+    bills.sort_by_key(|bill| (bill.on, bill.index));
 
+    let matching = match_bills(&bills, input);
     let mut by_item = vec![ItemAdjustment::default(); input.items.len()];
-    let Payments {
-        not_seen,
-        paid_currencies,
-    } = pay_earlier_payments(earlier_payments, &spent, &mut by_item);
-
-    let mut spending_sensitive_currencies: BTreeSet<Currency> =
-        not_seen.keys().map(|&(_, currency)| currency).collect();
-    spending_sensitive_currencies.extend(month_budgets.iter().map(|one| one.key.1));
-
-    let mut pools = spent;
-    for (key, planned) in planned_so_far {
-        if let Some(pool) = pools.get_mut(&key) {
-            *pool -= planned;
+    let mut outcome = Outcome::default();
+    for (bill, seen) in bills.iter().zip(&matching.seen) {
+        if bill.settled.is_none()
+            && let (Some(item), Some(adjustment)) =
+                (input.items.get(bill.index), by_item.get_mut(bill.index))
+        {
+            record(input, bill, *seen, item, adjustment, &mut outcome)?;
         }
     }
+
+    for (&at, &amount) in &matching.taken {
+        if let Some(row) = input
+            .spent_transactions
+            .get(at)
+            .filter(|row| row.posted_on >= month_start)
+            && let Some(pool) = pools.get_mut(&(row.category, row.currency))
+        {
+            *pool -= amount;
+        }
+    }
+
+    let Outcome {
+        not_seen,
+        bill_cautions,
+        mut spending_sensitive_currencies,
+    } = outcome;
+    spending_sensitive_currencies.extend(month_budgets.iter().map(|one| one.key.1));
     reduce_budgets(month_budgets, pools, &mut by_item);
 
     Ok(Reduction {
         by_item,
         not_seen,
+        bill_cautions,
         spending_sensitive_currencies,
-        paid_currencies,
     })
 }
 
-struct Payments {
+/// What the occurrences add up to, across items.
+#[derive(Default)]
+struct Outcome {
     not_seen: BTreeMap<PoolKey, i128>,
-    paid_currencies: BTreeSet<Currency>,
+    bill_cautions: Vec<Caution>,
+    spending_sensitive_currencies: BTreeSet<Currency>,
 }
 
-/// Pays recurring bills and one-offs from their category's spending, earliest first
-/// and in input order on the same day, and returns what is left unpaid per category
-/// and currency.
-fn pay_earlier_payments(
-    mut payments: Vec<Occurrence>,
-    spent: &BTreeMap<PoolKey, i128>,
-    by_item: &mut [ItemAdjustment],
-) -> Payments {
-    payments.sort_by_key(|payment| payment.on);
-    let mut left = spent.clone();
-    let mut not_seen = BTreeMap::new();
-    let mut paid_currencies = BTreeSet::new();
-    for payment in payments {
-        let available = left.entry(payment.key).or_default();
-        let paid = payment.amount.min((*available).max(0));
-        *available -= paid;
-        if paid != 0 {
-            paid_currencies.insert(payment.key.1);
-        }
-        let unpaid = payment.amount - paid;
-        if unpaid != 0 {
-            *not_seen.entry(payment.key).or_default() += unpaid;
-            if let Some(item) = by_item.get_mut(payment.index) {
-                item.unpaid += unpaid;
-            }
-        }
+/// Enters what the transactions say of one unsettled occurrence. One dated `as_of` owes nothing
+/// yet, whatever they say: it counts in full, from the window.
+fn record(
+    input: &ForecastInput,
+    bill: &Bill,
+    seen: Seen,
+    item: &ItemInput,
+    adjustment: &mut ItemAdjustment,
+    outcome: &mut Outcome,
+) -> Result<(), ForecastError> {
+    let currency = bill.key.1;
+    let row_at = |at: usize| input.spent_transactions.get(at);
+    let paid_by = if let Seen::Paid(at, spent) = seen {
+        row_at(at).map(|row| {
+            money(spent, currency).map(|amount| PaidBy {
+                transaction: row.transaction,
+                posted_on: row.posted_on,
+                amount,
+            })
+        })
+    } else {
+        None
     }
-    Payments {
-        not_seen,
-        paid_currencies,
+    .transpose()?;
+    let amount = money(bill.amount, currency)?;
+    adjustment.payments.push(OccurrencePayment {
+        on: bill.on,
+        amount,
+        paid_by,
+    });
+    if matches!(seen, Seen::Paid(..)) || bill.on >= input.as_of {
+        return Ok(());
     }
+
+    adjustment.unpaid += bill.amount;
+    outcome.spending_sensitive_currencies.insert(currency);
+    if bill.on < input.as_of.first_of_month() {
+        outcome.bill_cautions.push(Caution::BillUnpaidLastMonth {
+            item: item.source,
+            on: bill.on,
+            amount,
+        });
+    } else {
+        *outcome.not_seen.entry(bill.key).or_default() += bill.amount;
+    }
+    if let Seen::Unclear(at, spent) = seen
+        && let Some(row) = row_at(at)
+    {
+        outcome.bill_cautions.push(Caution::BillPaymentUnclear {
+            item: item.source,
+            on: bill.on,
+            amount,
+            transaction: row.transaction,
+            transaction_amount: money(spent, currency)?,
+        });
+    }
+    Ok(())
 }
 
 /// Spends each pool on its budgets, earliest first and in input order on the same

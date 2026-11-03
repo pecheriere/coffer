@@ -893,29 +893,68 @@ reduced by this month's spending, and it counts its whole calendar month, as a h
 reads a budget: its occurrences anywhere in `as_of`'s month, those before `as_of` too, are
 on its line and in the first month. Later months count only inside the window, and an
 occurrence before the budget's start or after its end date does not count. Each category
-and currency has one pool: the month's actual spending, minus the recurring bills and
-one-offs in that category dated this month up to and including `as_of`, floored at 0. It
-reduces the month's budget occurrences in date order, and then in the deterministic order
-items load in, since applied per item, one purchase would reduce every item in the
-category. So this month's budget amount, less the category's spending once bills and
-one-offs have taken their share, floored at 0, is still needed. A paid bill therefore
-never eats a budget. A recurring bill or a one-off, a specific expected payment, counts in
-full until its date passes, so one dated `as_of` counts in full even if paid that day,
-when a balance of that date already shows it: the forecast holds it twice for that day,
-the safe direction. Past its date, spending in its category pays them in date order, and
-any gap is still needed, with a caution naming the category and the amount. If it was paid
-under another category the forecast shows less to invest, the safe direction. A budget can
-simply underspend, so what it still needs is never a gap and raises no caution. Spending
-in a category before a budget's first occurrence this month still reduces it, since a
-budget is a month's envelope for its category. A known
-limit: the data cannot tell where the money went, so spending goes to these before any
-budget, and money spent on a budget can hide an unpaid bill; from a bill's own date, money
-spent on a budget does not reduce it until the bill is covered. A second known limit: the
-look-back is this month only, so a bill or one-off from last month that is still unpaid is
-not counted, and an October bill posting in November counts as paying November's. Goals
-and hypothetical items never owe, and hypothetical items neither reduce nor consume, nor
-look back: an imagined budget counts only inside the window. What a person settled for a
-month is out of all of this (R9a).
+and currency has one pool: the month's actual spending, minus the transactions in it that
+paid a recurring bill or a one-off (R9b), floored at 0. It reduces the month's budget
+occurrences in date order, and then in the deterministic order items load in, since applied
+per item, one purchase would reduce every item in the category. So this month's budget
+amount, less the category's spending that paid no bill, floored at 0, is still needed. A paid
+bill therefore never eats a budget. A recurring bill or a one-off, a specific expected
+payment, counts in full until its date passes, so one dated `as_of` counts in full even if
+paid that day, when a balance of that date already shows it: the forecast holds it twice for
+that day, the safe direction. Past its date it is still needed until a transaction pays it,
+with a caution naming the category and the amount. If it was paid under another category the
+forecast shows less to invest, the safe direction. A budget can simply underspend, so what it
+still needs is never a gap and raises no caution. Spending in a category before a budget's
+first occurrence this month still reduces it, since a budget is a month's envelope for its
+category. Goals and hypothetical items never owe, and hypothetical items neither reduce nor
+consume, nor look back: an imagined budget counts only inside the window. What a person
+settled for a month is out of all of this (R9a).
+
+**R9b. What paid a bill (issue #76).** A surplus that reads high can send away money still
+needed, so a dated bill is paid by a transaction, never by its category's total. The forecast
+looks at occurrences of recurring bills and one-offs from the first of the month before
+`as_of`'s (`BILL_LOOK_BACK_MONTHS`, 1) up to and including `as_of`, and at each transaction
+R10 counts as spending in their category and currency from that same day. Transactions go
+oldest first, and each pays the oldest unpaid occurrence it fits, then the closest in amount,
+then the first in the order items load in. It pays one at most. An October bill paid in
+November therefore pays October's, and one payment for two months pays the older.
+
+A transaction fits an occurrence when it is in the same category and currency, within 10% of
+its amount either way (`BILL_AMOUNT_TOLERANCE_PERCENT`), so a utility that varies still pays,
+and posted no more than 7 days before its date (`BILL_EARLY_PAYMENT_DAYS`), for a debit moved
+around a weekend. A smaller or larger transaction pays none of it, however close the category's
+total: part-payments are for a person to settle. An occurrence nothing paid counts in full.
+
+A payment comes out of the budget's pool, whole, and what paid no bill stays in it, so money
+spent on a budget can't hide a bill. A transaction that fits but might be the budget's is said
+rather than guessed: when its category's budgets plan as much or more for that calendar month, and
+it isn't the exact amount, it pays nothing, stays in the pool and raises
+`bill_payment_unclear` for the occurrence, with the transaction and its amount. In `as_of`'s
+month that holds no less than either truth. The exact amount, or more than the budgets plan, is
+the bill. A possible duplicate pays nothing, since it may be the same charge again (R10a), and
+stays in the pool with its caution. A refund within the tolerance of an earlier charge in its
+category undoes the newest one, which then pays nothing; any other refund only lowers the pool.
+
+What nothing paid is in `unpaid` and counts in the first month. This month's raises
+`bill_not_seen`, summed by category, and last month's `bill_unpaid_last_month`, naming the item,
+the date and the amount. `payments` on the item's line lists each occurrence looked at, by date,
+with `paid_by`: the transaction, the day it posted and its amount. It is null for one nothing
+paid. A paid item with nothing else to count still has a line, with `counted` 0, for that list,
+and adds nothing to the number: not even its currency to `totals`. A wrong match is corrected
+without new machinery: settling the month (R9a) takes the occurrence out, so its transaction
+goes on to the next, and filing the transaction elsewhere takes the transaction out. The page
+shows the cautions only (R14); `payments` is in the API.
+
+Known limits. A bill's past occurrences are read at the item's amount and category today, so
+changing either can leave last month's unpaid, the safe direction. Nothing reaches before the
+look-back: a September bill paid in the 7 days before October's date pays October's, and October's
+own payment then has nothing to pay, so that month reads right and the month's money is held. A
+household that starts using coffer, or adds a bill anchored in the past, sees last month's
+occurrences as unpaid until settled, since no transaction shows them paid. A coincidence at the
+exact amount beside a budget is taken as the bill, which in `as_of`'s month changes no total
+while the budget has room, and which `payments` shows. Plan versus actual's rollovers still
+give bills their share of a month by amount (above): they say what a month came to, and pay no
+one occurrence.
 
 **R9a. Settling a month.** A bill can be paid with no transaction to categorize, such as a
 transfer or from an account coffer doesn't track, and the safe default of R9 would then
@@ -944,11 +983,14 @@ at most 60; a `DELETE` may clear any month of the plan's years, so one that has 
 make room.
 
 In a forecast a settled item's occurrences in that month count as nothing, in the current
-month or a later one in the window: no gross, no gap, no `bill_not_seen`, no share of the
-category's pool, so spending goes on to the next bill or a budget, and a settled one-off
-raises no `goal_one_off_overlap`. A months floor keeps them, since it says how much to hold
+month, last month or a later one in the window: no gross, no gap, no `bill_not_seen` or
+`bill_unpaid_last_month`, no payment of its own, so a transaction goes on to the next bill or a
+budget, and a settled one-off raises no `goal_one_off_overlap`. One narrowing of that, toward
+holding more: a month settled as `paid` takes out of the pool a transaction that fits it and paid
+nothing else, up to the bill's amount, so a payment `bill_payment_unclear` asked about doesn't
+lower the need twice. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
 rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
-month the window reaches with its amount, so no number silently differs, and settling raises
+month from last month to the window's end with its amount, so no number silently differs, and settling raises
 no caution, so it doesn't make a forecast `provisional` of itself: a person decided. A
 what-if reads settlements as they stand and can't add one, and a hypothetical item has none.
 
@@ -981,8 +1023,8 @@ its balance does not show. The number does not change, since a provider's balanc
 may lag what its balance reflects and guessing could count the money twice or not at
 all: the forecast assumes each balance already reflects this money. Where one does not,
 as with pending charges on many depository balances, the cash available is overstated
-by up to these amounts. A bill past its date is still unpaid until spending on or before
-the balance date pays it (R9).
+by up to these amounts. A bill past its date is still unpaid until a transaction on or before
+the balance date pays it (R9b).
 
 **R10a. Charges that say nothing about what was spent.** An outflow on a transaction
 flagged `source_removed` or `split_mismatch` counts neither as a category's spending nor
@@ -993,7 +1035,7 @@ on such a transaction keeps counting, split by split, because leaving a refund o
 raise net spending, the opposite direction: a reversal the provider revised still reverses
 the charge, and a refund the provider removed still counts, since whether it was real is
 unknown and counting it holds more. A possible duplicate in a category keeps counting
-there, with the caution `possible_duplicates`.
+there, with the caution `possible_duplicates`, but pays no bill (R9b).
 
 **R11. No base or display currency yet.** §6.8's "in the requester's display
 currency" waits for FX. A fixed floor carries its own currency.
@@ -1041,8 +1083,8 @@ no field of their own. A yearly item anchored on February 29 falls on February 2
 in other years. Occurrences are never after an end date, which is inclusive.
 
 **R19. `as_of`** may be any date in range, with a caution unless it is today, since
-what falls due before `as_of`'s month is left out; within that month a passed bill still
-owes its gap and a budget counts its whole month (R9), while a hypothetical item dated
+what falls due before the month before `as_of`'s is left out; from there a passed bill still
+owes what nothing paid (R9b), and a budget counts its whole month in `as_of`'s (R9), while a hypothetical item dated
 before `as_of` is left out. Planned inflows, stored or hypothetical, count only from the
 day after `as_of`, also in what `excluded_inflows` reports: a balance dated `as_of` may
 already hold that day's money, so counting it could count it twice, and if it hasn't

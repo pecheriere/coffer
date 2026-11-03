@@ -156,33 +156,37 @@ async fn settled_one_off_counts_as_nothing() {
     assert_eq!(only_settled(&forecast)["item_type"], "one_off");
 }
 
-/// 150.00 spent in Food, with a 100.00 bill on the 1st and a 300.00 budget on the 20th. The
-/// bill takes 100.00 of it, so the budget still needs 300.00 - 50.00 = 250.00. Settled, the
-/// bill takes none: the budget needs 300.00 - 150.00 = 150.00.
+/// 100.00 and 50.00 spent in Food, with a 100.00 bill on the 1st and a 300.00 budget on the 20th.
+/// The first pays the bill, so the budget still needs 300.00 - 50.00 = 250.00. Skipped, the bill
+/// takes none: the budget needs 300.00 - 150.00 = 150.00. Marked paid, a person says the 100.00 was
+/// the payment, so it stays off the budget.
 #[tokio::test]
-async fn settled_bill_takes_no_share_of_the_pool() {
-    let (world, checking) = holding().await;
-    let food = world.expense("Food").await;
-    let kit = world
-        .item(&outflow("Kit", 10_000, food, &monthly("2026-01-01")))
-        .await;
-    world
-        .item(&with(
-            outflow("Groceries", 30_000, food, &monthly("2026-01-20")),
-            "spending",
-            json!("budget"),
-        ))
-        .await;
-    world.spend(checking, "2026-11-05", 15_000, food).await;
-    let query = "?horizon_months=1";
-    let before = world.forecast_at(query).await;
-    assert_eq!(line(&before, "Groceries")["counted"], usd(25_000));
+async fn a_skipped_bill_takes_no_share_of_the_pool_and_a_paid_one_keeps_its_payment() {
+    for (kind, counted, reduced_by) in [("skipped", 15_000, 15_000), ("paid", 25_000, 5_000)] {
+        let (world, checking) = holding().await;
+        let food = world.expense("Food").await;
+        let kit = world
+            .item(&outflow("Kit", 10_000, food, &monthly("2026-11-01")))
+            .await;
+        world
+            .item(&with(
+                outflow("Groceries", 30_000, food, &monthly("2026-11-20")),
+                "spending",
+                json!("budget"),
+            ))
+            .await;
+        world.spend(checking, "2026-11-05", 10_000, food).await;
+        world.spend(checking, "2026-11-06", 5_000, food).await;
+        let query = "?horizon_months=1";
+        let before = world.forecast_at(query).await;
+        assert_eq!(line(&before, "Groceries")["counted"], usd(25_000));
 
-    world.settle(&kit, "2026-11", "paid").await;
+        world.settle(&kit, "2026-11", kind).await;
 
-    let after = world.forecast_at(query).await;
-    assert_eq!(line(&after, "Groceries")["reduced_by"], usd(15_000));
-    assert_eq!(line(&after, "Groceries")["counted"], usd(15_000));
+        let after = world.forecast_at(query).await;
+        assert_eq!(line(&after, "Groceries")["reduced_by"], usd(reduced_by));
+        assert_eq!(line(&after, "Groceries")["counted"], usd(counted));
+    }
 }
 
 /// One 100.00 charge and two 100.00 one-offs: it pays the first and the second has a gap.
@@ -204,7 +208,11 @@ async fn spending_goes_to_the_next_bill_past_a_settled_one() {
     world.settle(&first, "2026-11", "paid").await;
 
     let after = world.forecast().await;
-    assert!(no_line(&after, "Second"), "the charge paid it");
+    assert_eq!(
+        line(&after, "Second")["counted"],
+        usd(0),
+        "the charge paid it"
+    );
     assert_eq!(after["status"], "firm");
 }
 
@@ -215,7 +223,7 @@ async fn a_future_settled_month_counts_as_nothing() {
     let (world, _) = holding().await;
     let housing = world.expense("Housing").await;
     let rent = world
-        .item(&outflow("Rent", 100_000, housing, &monthly("2026-01-20")))
+        .item(&outflow("Rent", 100_000, housing, &monthly("2026-11-20")))
         .await;
 
     world.settle(&rent, "2026-12", "skipped").await;
@@ -262,7 +270,7 @@ async fn deleting_a_settlement_restores_the_number() {
     assert!(world.forecast().await == briefed, "as it was");
 }
 
-/// October is before the window's month and March after its end: neither changes anything
+/// September is before the look-back and March after the window's end: neither changes anything
 /// here, so neither is listed.
 #[tokio::test]
 async fn a_month_outside_the_window_changes_nothing() {
@@ -270,7 +278,7 @@ async fn a_month_outside_the_window_changes_nothing() {
     let briefed = world.forecast().await;
     let rent = id_of(&briefed, "Rent");
 
-    world.settle(&rent, "2026-10", "paid").await;
+    world.settle(&rent, "2026-09", "paid").await;
     world.settle(&rent, "2027-03", "paid").await;
 
     assert!(world.forecast().await == briefed, "as it was");

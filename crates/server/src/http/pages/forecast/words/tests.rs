@@ -4,7 +4,8 @@ use coffer_domain::forecast::{
     Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
 };
 use coffer_domain::ids::{
-    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
+    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransactionId,
+    TransferLinkId,
 };
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::CalendarMonth;
@@ -24,6 +25,26 @@ const ON: Date = date(2026, 11, 7);
 
 /// One of every caution, and of every reason inside one, so that each is read.
 fn cautions() -> Vec<Caution> {
+    let item = LineSource::PlannedItem {
+        id: PlannedItemId::new(),
+    };
+    let mut all = cautions_other_than_a_bills();
+    all.push(Caution::BillUnpaidLastMonth {
+        item,
+        on: ON,
+        amount: usd(12_000),
+    });
+    all.push(Caution::BillPaymentUnclear {
+        item,
+        on: ON,
+        amount: usd(12_000),
+        transaction: TransactionId::new(),
+        transaction_amount: usd(11_000),
+    });
+    all
+}
+
+fn cautions_other_than_a_bills() -> Vec<Caution> {
     let account = AccountId::new();
     let provider_account = ProviderAccountId::new();
     let connection = ConnectionId::new();
@@ -325,7 +346,7 @@ fn a_window_not_starting_today_gives_both_days() {
     );
     assert!(sentence.contains("starts on 15 November 2026"));
     assert!(sentence.contains("not today, 7 November 2026"));
-    assert!(sentence.contains("Anything due before November 2026"));
+    assert!(sentence.contains("Anything due before October 2026"));
     assert!(sentence.contains("income expected on or before 15 November 2026"));
     assert!(sentence.contains("any what-if item dated before it"));
 }
@@ -344,8 +365,40 @@ fn an_unseen_bill_reads_right_for_several_items() {
         &names,
     );
     assert!(sentence.contains("Bills or one-offs in Home"));
-    assert!(sentence.contains("120.00 USD more than that category's spending"));
+    assert!(sentence.contains("come to 120.00 USD that no payment"));
     assert!(!sentence.contains("of it"), "no single bill is implied");
+}
+
+#[test]
+fn a_bill_from_last_month_is_named_with_its_day_and_amount() {
+    let id = PlannedItemId::new();
+    let item = LineSource::PlannedItem { id };
+    let mut names = Names::of_accounts(&[]);
+    names.items.insert(id, "Rent".to_owned());
+    let unpaid = said(
+        &Caution::BillUnpaidLastMonth {
+            item,
+            on: ON,
+            amount: usd(12_000),
+        },
+        &names,
+    );
+    assert!(unpaid.starts_with("Rent was due on 7 November 2026"));
+    assert!(unpaid.contains("about 120.00 USD"));
+    assert!(unpaid.contains("settle it for that month"));
+
+    let unclear = said(
+        &Caution::BillPaymentUnclear {
+            item,
+            on: ON,
+            amount: usd(12_000),
+            transaction: TransactionId::new(),
+            transaction_amount: usd(11_000),
+        },
+        &names,
+    );
+    assert!(unclear.contains("A transaction of 110.00 USD"));
+    assert!(unclear.contains("the bill still counts as needed"));
 }
 
 /// With no names at all, each sentence still reads as one: nothing like "The goal A

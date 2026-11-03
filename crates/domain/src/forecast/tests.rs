@@ -8,16 +8,18 @@ use jiff::civil::{Date, date};
 
 use super::{
     AccountInput, BalanceInput, CategorySpent, CurrencyTotals, Forecast, ForecastInput,
-    ForecastStatus, ItemInput, ItemLine, LineSource, NotCountedReason, compute_forecast,
+    ForecastStatus, ItemInput, ItemLine, LineSource, NotCountedReason, SpentTransaction,
+    bills_looked_at_from, compute_forecast,
 };
 use crate::accounts::{BelongsTo, LiquidityClass};
-use crate::ids::{AccountId, CategoryId, PlannedItemId};
+use crate::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
     IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, SafetyFloor, spending_applies,
 };
 
 mod account_cautions;
+mod bill_matching;
 mod blockers;
 mod budget_month;
 mod clamp_and_duplicates;
@@ -69,6 +71,7 @@ fn household() -> ForecastInput {
         accounts: vec![cash("Checking", usd(1_000_000))],
         items: Vec::new(),
         category_spent: Vec::new(),
+        spent_transactions: Vec::new(),
         loose_ends: Vec::new(),
         newer_spending: Vec::new(),
         links_with_leg_removed: Vec::new(),
@@ -188,8 +191,64 @@ fn hypothetical(index: u32, item: ItemInput) -> ItemInput {
     }
 }
 
+/// What a test about this month means by its spending: last month's bills were paid on their
+/// dates, so only this month is in question, and unless it lists its own transactions each
+/// category's spending is one, the day before `as_of`.
 fn run(input: &ForecastInput) -> Forecast {
+    let month_start = input.as_of.first_of_month();
+    let mut rows = Vec::new();
+    for item in &input.items {
+        let stored = matches!(item.source, LineSource::PlannedItem { .. });
+        let (true, PlanDirection::Outflow, Some(category), false) = (
+            stored,
+            item.direction,
+            item.category,
+            item.spending == Some(PlanSpending::Budget),
+        ) else {
+            continue;
+        };
+        for on in item
+            .schedule
+            .occurrences(bills_looked_at_from(input.as_of), month_start)
+        {
+            rows.push(paid_on(category, item.amount, on));
+        }
+    }
+    if input.spent_transactions.is_empty() {
+        let yesterday = input.as_of.yesterday().unwrap().max(month_start);
+        for row in input
+            .category_spent
+            .iter()
+            .filter(|row| row.spent_minor > 0)
+        {
+            let amount = Money {
+                minor_units: row.spent_minor,
+                currency: row.currency,
+            };
+            rows.push(paid_on(row.category, amount, yesterday));
+        }
+    }
+    rows.extend(input.spent_transactions.iter().copied());
+    run_as_given(&ForecastInput {
+        spent_transactions: rows,
+        ..input.clone()
+    })
+}
+
+fn run_as_given(input: &ForecastInput) -> Forecast {
     compute_forecast(input).unwrap()
+}
+
+/// A transaction of `amount` in `category`.
+fn paid_on(category: CategoryId, amount: Money, on: Date) -> SpentTransaction {
+    SpentTransaction {
+        transaction: TransactionId::new(),
+        category,
+        currency: amount.currency,
+        posted_on: on,
+        spent_minor: amount.minor_units,
+        possible_duplicate: false,
+    }
 }
 
 fn totals_of(forecast: &Forecast, code: &str) -> CurrencyTotals {

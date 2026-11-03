@@ -2306,7 +2306,7 @@
           {
             "name": "as_of",
             "in": "query",
-            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since what\nfalls due before that day's month is left out, as is planned income dated on or\nbefore that day and any hypothetical item dated before it. Planned income counts\nonly from the day after it, today or not, since a balance of that day may already\nhold that day's money.",
+            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since what\nfalls due before the month before that day's is left out, as is planned income dated on or\nbefore that day and any hypothetical item dated before it. Planned income counts\nonly from the day after it, today or not, since a balance of that day may already\nhold that day's money.",
             "required": false,
             "schema": {
               "type": "string",
@@ -8114,7 +8114,7 @@
           },
           {
             "type": "object",
-            "description": "The window does not start today. What falls due before its month is left out, as is\nplanned income dated on or before `as_of` and any hypothetical item dated before it.",
+            "description": "The window does not start today. What falls due before last month, as seen from\n`as_of`, is left out, as is\nplanned income dated on or before `as_of` and any hypothetical item dated before it.",
             "required": [
               "today",
               "kind"
@@ -8134,7 +8134,7 @@
           },
           {
             "type": "object",
-            "description": "Recurring bills and one-offs dated earlier this month exceed the category's\nspending so far. The gap counts as still needed; if it was paid under another\ncategory, the number shows less to invest, which is the safe direction. The\ncategory's spending is taken to pay these before any budget, since the data\ncannot tell which it was for, so money spent on a budget can hide a gap.",
+            "description": "Recurring bills and one-offs dated earlier this month that no transaction paid, summed\nper category. They count as still needed; if one was paid under another category or at\nanother amount, the number shows less to invest, which is the safe direction.",
             "required": [
               "category",
               "amount",
@@ -8152,6 +8152,70 @@
                 "enum": [
                   "bill_not_seen"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A bill or one-off dated last month that no transaction paid and nobody settled. It counts\nas still needed until one does, or until a person settles that month.",
+            "required": [
+              "item",
+              "on",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "item": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_unpaid_last_month"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A transaction is close to this bill's amount, but its category also has a budget that\ncould have spent it, so it isn't taken as the payment. The bill counts as still needed,\nand the transaction stays with the budget. Settling the month as `paid` says it was the\npayment, and takes it off the budget.",
+            "required": [
+              "item",
+              "on",
+              "amount",
+              "transaction",
+              "transaction_amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "item": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_payment_unclear"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              },
+              "transaction": {
+                "$ref": "#/components/schemas/TransactionId"
+              },
+              "transaction_amount": {
+                "$ref": "#/components/schemas/Money"
               }
             }
           },
@@ -8373,7 +8437,7 @@
           },
           {
             "type": "object",
-            "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction or hide an unpaid bill or one-off.",
+            "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction. One pays no bill until a person says it isn't a duplicate.",
             "required": [
               "count",
               "kind"
@@ -8740,7 +8804,7 @@
             "items": {
               "$ref": "#/components/schemas/ItemLine"
             },
-            "description": "Every item that adds to the window, in input order."
+            "description": "Every item that adds to the window or has a payment to show, in input order."
           },
           "months": {
             "type": "array",
@@ -9268,7 +9332,8 @@
           "reduced_by",
           "unpaid",
           "counted",
-          "goal"
+          "goal",
+          "payments"
         ],
         "properties": {
           "account_hint": {
@@ -9318,7 +9383,7 @@
           },
           "gross": {
             "$ref": "#/components/schemas/Money",
-            "description": "The whole amount of `occurrences`, before any reduction. 0 only with `unpaid`."
+            "description": "The whole amount of `occurrences`, before any reduction. 0 only with `unpaid` or\n`payments`."
           },
           "item_type": {
             "$ref": "#/components/schemas/PlanItemType"
@@ -9339,6 +9404,13 @@
             "description": "How many times it falls in the window, and for a stored budget earlier in `as_of`'s\nmonth too: 0 for a goal. An inflow counts only from the day after `as_of`.",
             "minimum": 0
           },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OccurrencePayment"
+            },
+            "description": "For a stored recurring bill or one-off: each occurrence from the start of last month up\nto and including `as_of`, by date, and what paid it. A settled one isn't here but in\n`settled`. Empty for anything else."
+          },
           "reduced_by": {
             "$ref": "#/components/schemas/Money",
             "description": "What this month's actual spending takes off `gross`."
@@ -9348,7 +9420,7 @@
           },
           "unpaid": {
             "$ref": "#/components/schemas/Money",
-            "description": "What a recurring bill or one-off dated earlier this month, before the window,\nstill needs: the part its category's spending does not cover."
+            "description": "What a recurring bill or one-off dated before the window still needs, back through last\nmonth: the occurrences no transaction paid."
           }
         }
       },
@@ -10596,6 +10668,35 @@
           }
         }
       },
+      "OccurrencePayment": {
+        "type": "object",
+        "description": "One occurrence of a bill, and the transaction that paid it.",
+        "required": [
+          "on",
+          "amount",
+          "paid_by"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "paid_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaidBy",
+                "description": "Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated\nbefore `as_of`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "OpenApiDocument": {
         "type": "object",
         "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
@@ -10650,6 +10751,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "PaidBy": {
+        "type": "object",
+        "description": "The transaction matched to an occurrence. If it is wrong, settling the occurrence's month\nsends it to the next one, and filing it in another category takes it away.",
+        "required": [
+          "transaction",
+          "posted_on",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it spent in the item's category, a positive magnitude."
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionId"
+          }
+        }
       },
       "PlanDirection": {
         "type": "string",
@@ -11498,7 +11621,7 @@
       },
       "SettledLine": {
         "type": "object",
-        "description": "One item's occurrences in one month that a person settled: what would have counted, had\nthey not, as a bill's whole amount or a gap, and taken a share of its category's spending.\nA month the window doesn't reach isn't listed, since it changes nothing here.",
+        "description": "One item's occurrences in one month that a person settled: what would have counted, had\nthey not, as a bill's whole amount or a gap, and taken a share of its category's spending.\nA month before last month or past the window isn't listed, since it changes nothing here.",
         "required": [
           "source",
           "name",
@@ -11539,7 +11662,7 @@
           "occurrences": {
             "type": "integer",
             "format": "int32",
-            "description": "How many of the month's occurrences the window looks at. In `as_of`'s month that\nis those before `as_of` too.",
+            "description": "How many of the month's occurrences the forecast looks at, back to the first of last\nmonth and so before `as_of` too.",
             "minimum": 0
           },
           "source": {

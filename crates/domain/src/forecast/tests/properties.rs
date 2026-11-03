@@ -1,6 +1,6 @@
 //! Random households: the answer must explain itself, whatever goes in.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::ToSpan;
 use jiff::civil::{Date, date};
@@ -12,9 +12,10 @@ use super::{currency, eur, inflow, usd};
 use crate::accounts::LiquidityClass;
 use crate::forecast::{
     AccountInput, BalanceInput, Blocker, CategorySpent, Caution, Forecast, ForecastInput,
-    ForecastStatus, ItemInput, LineSource, LooseEnds, compute_forecast,
+    ForecastStatus, ItemInput, LineSource, LooseEnds, SpentTransaction, bills_looked_at_from,
+    compute_forecast,
 };
-use crate::ids::CategoryId;
+use crate::ids::{CategoryId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending,
@@ -157,6 +158,31 @@ fn window_end(as_of: Date, months: u8) -> Result<Date, String> {
     }
 }
 
+fn spent_rows(
+    picks: &[(usize, i64, i32, u8)],
+    items: &[ItemInput],
+    as_of: Date,
+) -> Vec<SpentTransaction> {
+    picks
+        .iter()
+        .filter_map(|&(pick, percent, days, kind)| {
+            let item = items.get(pick)?;
+            let minor = item.amount.minor_units * (100 + percent) / 100;
+            Some(SpentTransaction {
+                transaction: TransactionId::new(),
+                category: item.category?,
+                currency: item.amount.currency,
+                posted_on: as_of
+                    .checked_sub(days.days())
+                    .unwrap()
+                    .max(bills_looked_at_from(as_of)),
+                spent_minor: if kind == 0 { -minor } else { minor },
+                possible_duplicate: kind == 1,
+            })
+        })
+        .collect()
+}
+
 fn input() -> impl Strategy<Value = ForecastInput> {
     let categories = vec![CategoryId::new(), CategoryId::new(), CategoryId::new()];
     let spent = collection::vec(
@@ -176,7 +202,10 @@ fn input() -> impl Strategy<Value = ForecastInput> {
         any::<bool>(),
         -2..2,
         collection::vec((0_u32..3, 0_u32..3, 0..MAX_AMOUNT), 0..2),
-        as_of(),
+        (
+            as_of(),
+            collection::vec((0_usize..12, -15_i64..15, 0_i32..62, 0_u8..6), 0..12),
+        ),
     )
         .prop_map(
             move |(
@@ -188,16 +217,16 @@ fn input() -> impl Strategy<Value = ForecastInput> {
                 include_income,
                 shift,
                 loose,
-                as_of,
+                (as_of, picks),
             )| {
                 ForecastInput {
                     today: as_of.checked_add(i64::from(shift).days()).unwrap(),
                     as_of,
                     accounts,
-                    items,
                     floor,
                     horizon_months,
                     include_income,
+                    spent_transactions: spent_rows(&picks, &items, as_of),
                     category_spent: spent
                         .iter()
                         .filter_map(|&(pick, spent_minor, in_euros)| {
@@ -217,6 +246,7 @@ fn input() -> impl Strategy<Value = ForecastInput> {
                             possible_duplicates: duplicates,
                         })
                         .collect(),
+                    items,
                     ..household()
                 }
             },
@@ -241,10 +271,10 @@ fn in_currency(
 #[derive(Default)]
 struct PoolFigures {
     spent: i128,
-    /// Recurring bills and one-offs dated earlier this month.
+    /// Recurring bills and one-offs from the start of the look-back up to `as_of`.
     earlier_bills: i128,
-    /// The same, with those dated `as_of`: what comes off the pool.
-    bills_so_far: i128,
+    /// A settlement says it was paid, which can take a transaction out of the pool unseen.
+    settled_paid: bool,
     /// Budgets' occurrences anywhere in the month.
     month_budgets: i128,
     /// Budgets' occurrences in the window after the month.
@@ -280,9 +310,9 @@ fn settled_amount(item: &ItemInput, from: Date, to: Date) -> Result<i128, String
 }
 
 /// The list says exactly what was taken out, item by item: the settled occurrences from the
-/// first of `as_of`'s month to the window's end, and nothing with none.
+/// first day the look-back reaches to the window's end, and nothing with none.
 fn check_settled_list(input: &ForecastInput, forecast: &Forecast) -> Result<(), String> {
-    let month_start = input.as_of.first_of_month();
+    let looked_at_from = bills_looked_at_from(input.as_of);
     let window_ends = window_end(input.as_of, input.horizon_months)?;
     for item in &input.items {
         let listed: i128 = forecast
@@ -291,7 +321,7 @@ fn check_settled_list(input: &ForecastInput, forecast: &Forecast) -> Result<(), 
             .filter(|line| line.source == item.source)
             .map(|line| wide(line.amount))
             .sum();
-        if listed != settled_amount(item, month_start, window_ends)? {
+        if listed != settled_amount(item, looked_at_from, window_ends)? {
             return Err("the settled list is not what was taken out".to_owned());
         }
     }
@@ -310,10 +340,76 @@ fn unsettled(input: &ForecastInput) -> ForecastInput {
     clear
 }
 
+/// What the payments on `lines` say: a transaction pays one occurrence at most, in tolerance.
+fn check_payments(forecast: &Forecast) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for payment in forecast.items.iter().flat_map(|line| &line.payments) {
+        let Some(paid_by) = payment.paid_by else {
+            continue;
+        };
+        if !seen.insert(paid_by.transaction) {
+            return Err("a transaction paid two occurrences".to_owned());
+        }
+        if (wide(paid_by.amount) - wide(payment.amount)).abs() * 100 > wide(payment.amount) * 10 {
+            return Err("a payment is out of tolerance".to_owned());
+        }
+    }
+    Ok(())
+}
+
+/// What a category's lines owe is its bills before `as_of` less those paid, and this month's part
+/// of it is what `bill_not_seen` says.
+fn check_owed(
+    input: &ForecastInput,
+    forecast: &Forecast,
+    (category, code): (CategoryId, Currency),
+    earlier_bills: i128,
+) -> Result<(), String> {
+    let lines = || {
+        forecast
+            .items
+            .iter()
+            .filter(|line| line.category == Some(category) && line.gross.currency == code)
+    };
+    let before_as_of = || {
+        lines()
+            .flat_map(|line| &line.payments)
+            .filter(|payment| payment.on < input.as_of)
+    };
+    let unpaid: i128 = lines().map(|line| wide(line.unpaid)).sum();
+    let paid: i128 = before_as_of()
+        .filter(|payment| payment.paid_by.is_some())
+        .map(|payment| wide(payment.amount))
+        .sum();
+    if unpaid != earlier_bills - paid {
+        return Err("what a bill owes is wrong".to_owned());
+    }
+    let warned: i128 = forecast
+        .cautions
+        .iter()
+        .filter_map(|caution| match caution {
+            Caution::BillNotSeen {
+                category: found,
+                amount,
+            } if *found == category && amount.currency == code => Some(wide(*amount)),
+            _ => None,
+        })
+        .sum();
+    let this_month: i128 = before_as_of()
+        .filter(|payment| payment.paid_by.is_none())
+        .filter(|payment| payment.on >= input.as_of.first_of_month())
+        .map(|payment| wide(payment.amount))
+        .sum();
+    if warned != this_month {
+        return Err("a gap was not reported in full".to_owned());
+    }
+    Ok(())
+}
+
 /// Checks reductions and unpaid bills against aggregates worked out apart from the
-/// walk: the pool (spending less bills and one-offs dated up to `as_of`, floored at 0) is
-/// either all used or covers the month's budgets, and the gap is those dated before `as_of`
-/// less spending, floored at 0. What budgets count is then what the month's leave plus the later months' whole.
+/// walk: the pool (spending less what paid a bill this month, floored at 0) is either all used or
+/// covers the month's budgets, and what is unpaid is the bills dated before `as_of` less those
+/// paid. What budgets count is then what the month's leave plus the later months' whole.
 fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), String> {
     let month_start = input.as_of.first_of_month();
     let window_ends = window_end(input.as_of, input.horizon_months)?;
@@ -342,13 +438,11 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             figures.later_budgets += dated(item, month_end, window_ends)?;
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs.
-            figures.earlier_bills += dated(item, month_start, input.as_of)?;
-            figures.bills_so_far += dated(item, month_start, input.as_of)?
-                + dated(
-                    item,
-                    input.as_of,
-                    input.as_of.tomorrow().map_err(|_| "no tomorrow")?,
-                )?;
+            figures.earlier_bills += dated(item, bills_looked_at_from(input.as_of), input.as_of)?;
+            figures.settled_paid |= item
+                .settled
+                .values()
+                .any(|&kind| kind == SettlementKind::Paid);
         }
     }
     for (&(category, code), figures) in &pools {
@@ -358,9 +452,22 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
                 .iter()
                 .filter(move |line| line.category == Some(category) && line.gross.currency == code)
         };
+        check_owed(input, forecast, (category, code), figures.earlier_bills)?;
         let reduced: i128 = lines().map(|line| wide(line.reduced_by)).sum();
-        let pool = (figures.spent - figures.bills_so_far).max(0);
+        let payments = || lines().flat_map(|line| &line.payments);
+        let paid_this_month: i128 = payments()
+            .filter_map(|payment| payment.paid_by)
+            .filter(|paid_by| paid_by.posted_on >= month_start)
+            .map(|paid_by| wide(paid_by.amount))
+            .sum();
+        let pool = (figures.spent - paid_this_month).max(0);
         let reduced_expected = pool.min(figures.month_budgets);
+        if figures.settled_paid {
+            if reduced > reduced_expected {
+                return Err("a pool was spent more than once".to_owned());
+            }
+            continue;
+        }
         if reduced != reduced_expected {
             return Err("a pool was not spent exactly once".to_owned());
         }
@@ -383,26 +490,8 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
         if budgets_counted != figures.month_budgets - reduced_expected + figures.later_budgets {
             return Err("a budget's month was not held back".to_owned());
         }
-        let unpaid: i128 = lines().map(|line| wide(line.unpaid)).sum();
-        // A month of net refunds pays nothing, and doesn't add to what a bill owes either.
-        if unpaid != (figures.earlier_bills - figures.spent.max(0)).max(0) {
-            return Err("a bill's gap is wrong".to_owned());
-        }
-        let warned: i128 = forecast
-            .cautions
-            .iter()
-            .filter_map(|caution| match caution {
-                Caution::BillNotSeen {
-                    category: found,
-                    amount,
-                } if *found == category && amount.currency == code => Some(wide(*amount)),
-                _ => None,
-            })
-            .sum();
-        if warned != unpaid {
-            return Err("a gap was not reported in full".to_owned());
-        }
     }
+    check_payments(forecast)?;
     check_budget_months(input, forecast, month_start, month_end)
 }
 
@@ -556,7 +645,9 @@ proptest! {
         }
         for line in &forecast.items {
             prop_assert!(
-                line.gross.minor_units != 0 || line.unpaid.minor_units != 0,
+                line.gross.minor_units != 0
+                    || line.unpaid.minor_units != 0
+                    || !line.payments.is_empty(),
                 "no zero lines"
             );
             prop_assert_eq!(

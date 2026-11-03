@@ -4,7 +4,10 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, TransferLinkId};
+use coffer_domain::forecast::bills_looked_at_from;
+use coffer_domain::ids::{
+    AccountId, CategoryId, ConnectionId, PlannedItemId, TransactionId, TransferLinkId,
+};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
 use coffer_domain::plan_report::{
@@ -50,11 +53,14 @@ pub struct ForecastData {
     /// The accounts with spending linked to a goal that `goal_spent` counts, ordered by id.
     pub goal_spending_accounts: Vec<AccountId>,
     pub category_spent: Vec<CategorySpentRow>,
+    /// The same spending per transaction and category, from the first day the look-back reaches
+    /// up to `as_of`, ordered by date and id: what can pay a bill.
+    pub spent_transactions: Vec<SpentTransactionRow>,
     pub loose_ends: Vec<LooseEndsRow>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
-    /// The links between counted accounts with a leg its provider took back and a leg in
-    /// `as_of`'s month, ordered by id.
+    /// The links between counted accounts with a leg its provider took back and a leg the
+    /// look-back reaches, ordered by id.
     pub links_with_leg_removed: Vec<TransferLinkId>,
     /// Every provider account, ordered by id.
     pub provider_accounts: Vec<ProviderAccountRecord>,
@@ -68,6 +74,18 @@ pub struct CategorySpentRow {
     pub category: CategoryId,
     pub currency: Currency,
     pub spent_minor: i64,
+}
+
+/// What one transaction spent in one category, by the rules of [`CategorySpentRow`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpentTransactionRow {
+    pub transaction: TransactionId,
+    pub category: CategoryId,
+    pub currency: Currency,
+    pub posted_on: Date,
+    /// Positive for money out, negative for a refund.
+    pub spent_minor: i64,
+    pub possible_duplicate: bool,
 }
 
 /// Everything a plan versus actual report reads.
@@ -212,6 +230,22 @@ const CATEGORY_SPENT: &str = concat!(
      AND NOT ",
     left_out_of_category!(),
     " GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
+);
+
+/// [`CATEGORY_SPENT`] per transaction: what can pay a bill. What only moved between counted accounts
+/// is out by [`after_moved`], and a link out of counted cash stays a payment (spec §8.12 T6).
+const SPENT_TRANSACTIONS: &str = concat!(
+    "SELECT t.id AS id, s.category_id AS category, t.currency AS currency, \
+     t.posted_on AS posted_on, t.flag_possible_duplicate AS possible_duplicate, -SUM(",
+    after_moved!("s.minor_units", both_counted),
+    ") AS spent_minor \
+     FROM transaction_splits s JOIN categories c ON c.id = s.category_id, ",
+    shown_this_month!(),
+    " AND s.transaction_id = t.id AND s.goal_id IS NULL AND c.kind = 'expense' \
+     AND NOT ",
+    left_out_of_category!(),
+    " GROUP BY t.id, s.category_id, t.currency HAVING spent_minor <> 0 \
+     ORDER BY t.posted_on, t.id, s.category_id"
 );
 
 /// An outflow with no splits at all, in `t`, and something of it that didn't only move, by
@@ -422,7 +456,7 @@ const REPORT_MOVED: &str = concat!(
     " > 0 GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
-/// The links one movement but for a leg its provider took back, with a leg in `as_of`'s month:
+/// The links one movement but for a leg its provider took back, with a leg the look-back reaches:
 /// their money counts again as it is filed, and a person should look (spec §8.12 T7).
 const LINKS_WITH_LEG_REMOVED: &str = concat!(
     "SELECT lk.id AS link FROM ",
@@ -495,6 +529,17 @@ fn category_spent_from_row(row: &SqliteRow) -> Result<CategorySpentRow, StoreErr
         category: parsed(row, "category")?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         spent_minor: summed(row, "spent_minor")?,
+    })
+}
+
+fn spent_transaction_from_row(row: &SqliteRow) -> Result<SpentTransactionRow, StoreError> {
+    Ok(SpentTransactionRow {
+        transaction: parsed(row, "id")?,
+        category: parsed(row, "category")?,
+        currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
+        posted_on: parsed(row, "posted_on")?,
+        spent_minor: summed(row, "spent_minor")?,
+        possible_duplicate: int(row, "possible_duplicate")? != 0,
     })
 }
 
@@ -577,17 +622,46 @@ fn connection_health_from_row(row: &SqliteRow) -> Result<ConnectionHealth, Store
 async fn links_with_leg_removed(
     conn: &mut SqliteConnection,
     as_of: &str,
-    month_start: &str,
+    looked_at_from: &str,
 ) -> Result<Vec<TransferLinkId>, StoreError> {
     sqlx::query(LINKS_WITH_LEG_REMOVED)
         .bind(as_of)
-        .bind(month_start)
+        .bind(looked_at_from)
         .fetch_all(&mut *conn)
         .await
         .map_err(StoreError::from_sqlx)?
         .iter()
         .map(|row| parsed(row, "link"))
         .collect()
+}
+
+/// What was spent up to `as_of`: per category in its month, and per transaction from the first
+/// day the look-back reaches.
+async fn spending(
+    conn: &mut SqliteConnection,
+    as_of: &str,
+    month_start: &str,
+    looked_at_from: &str,
+) -> Result<(Vec<CategorySpentRow>, Vec<SpentTransactionRow>), StoreError> {
+    let by_category = sqlx::query(CATEGORY_SPENT)
+        .bind(as_of)
+        .bind(month_start)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(category_spent_from_row)
+        .collect::<Result<_, _>>()?;
+    let by_transaction = sqlx::query(SPENT_TRANSACTIONS)
+        .bind(as_of)
+        .bind(looked_at_from)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(spent_transaction_from_row)
+        .collect::<Result<_, _>>()?;
+    Ok((by_category, by_transaction))
 }
 
 /// Each account with its latest balance on or before `as_of`.
@@ -633,6 +707,7 @@ impl Store {
     pub async fn forecast_data(&self, as_of: Date) -> Result<ForecastData, StoreError> {
         let day = as_of.to_string();
         let month_start = as_of.first_of_month().to_string();
+        let looked_at_from = bills_looked_at_from(as_of).to_string();
         // One read transaction: a sync committing midway can't split a forecast.
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         let settings = fetch_forecast_settings(&mut *tx).await?;
@@ -669,15 +744,8 @@ impl Store {
             .iter()
             .map(|row| parsed(row, "account"))
             .collect::<Result<_, _>>()?;
-        let category_spent = sqlx::query(CATEGORY_SPENT)
-            .bind(&day)
-            .bind(&month_start)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(category_spent_from_row)
-            .collect::<Result<_, _>>()?;
+        let (category_spent, spent_transactions) =
+            spending(&mut tx, &day, &month_start, &looked_at_from).await?;
         let loose_ends = sqlx::query(LOOSE_ENDS)
             .bind(&day)
             .bind(&month_start)
@@ -695,7 +763,7 @@ impl Store {
             .iter()
             .map(newer_spending_from_row)
             .collect::<Result<_, _>>()?;
-        let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &month_start).await?;
+        let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &looked_at_from).await?;
         let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
             .fetch_all(&mut *tx)
             .await
@@ -720,6 +788,7 @@ impl Store {
             goals_linked_both_sides,
             goal_spending_accounts,
             category_spent,
+            spent_transactions,
             loose_ends,
             newer_spending,
             links_with_leg_removed,

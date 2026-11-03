@@ -7,8 +7,9 @@
 
 use jiff::civil::Date;
 
+use super::bill_matching::bills_looked_at_from;
 use super::{ForecastError, ForecastInput, ItemInput, SettledLine, count, money};
-use crate::plan::{CalendarMonth, occurrences_in};
+use crate::plan::{CalendarMonth, SettlementKind, occurrences_in};
 
 /// Whether `item`'s occurrence on `on` is in a settled month.
 pub(super) fn is_settled(item: &ItemInput, on: Date) -> bool {
@@ -16,19 +17,28 @@ pub(super) fn is_settled(item: &ItemInput, on: Date) -> bool {
         && CalendarMonth::of(on).is_ok_and(|month| item.settled.contains_key(&month))
 }
 
-/// The lines of what was settled and would have counted: occurrences from the first of
-/// `as_of`'s month, since one passed earlier in it would owe a gap or take spending, up to
+/// What a person said of `item`'s occurrence on `on`, if anything.
+pub(super) fn settlement_of(item: &ItemInput, on: Date) -> Option<SettlementKind> {
+    if item.settled.is_empty() {
+        return None;
+    }
+    let month = CalendarMonth::of(on).ok()?;
+    item.settled.get(&month).copied()
+}
+
+/// The lines of what was settled and would have counted: occurrences from the first day the
+/// look-back reaches, since one passed before `as_of` would owe a gap or take a payment, up to
 /// the window's end.
 pub(super) fn settled_lines(
     input: &ForecastInput,
     end_exclusive: Date,
 ) -> Result<Vec<SettledLine>, ForecastError> {
-    let month_start = input.as_of.first_of_month();
+    let looked_at_from = bills_looked_at_from(input.as_of);
     let mut lines = Vec::new();
     for item in &input.items {
         for (&month, &kind) in &item.settled {
             let mut dates = occurrences_in(&item.schedule, month);
-            dates.retain(|on| (month_start..end_exclusive).contains(on));
+            dates.retain(|on| (looked_at_from..end_exclusive).contains(on));
             let occurrences = count(&dates)?;
             if occurrences == 0 {
                 continue;

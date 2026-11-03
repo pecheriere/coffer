@@ -3,8 +3,10 @@
 use jiff::civil::{Date, date};
 
 use super::{assert_provisional, currency, inflow, line, monthly, one_off, run, usd, usd_totals};
-use super::{budget, has_line, household, spent};
-use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds};
+use super::{budget, has_line, household, paid_on, spent};
+use crate::forecast::{
+    Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds, SpentTransaction,
+};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule, PlanSpending};
 
@@ -197,41 +199,33 @@ fn loose(uncategorized_count: u32, possible_duplicates: u32) -> LooseEnds {
 }
 
 /// If one of the 2,000 spent is a duplicate, one bill has not been paid.
+/// It may be another charge again, so it doesn't say the bill was paid, and the bill still counts.
 #[test]
-fn a_possible_duplicate_can_hide_an_unpaid_bill() {
-    let home = CategoryId::new();
-    let forecast = run(&ForecastInput {
-        items: vec![
-            ended("A", 1_000, date(2026, 1, 1), home),
-            ended("B", 1_000, date(2026, 1, 5), home),
-        ],
-        category_spent: vec![spent(home, 2_000)],
-        loose_ends: vec![loose(0, 1)],
-        ..household()
-    });
-    assert_eq!(
-        forecast.cautions,
-        [Caution::PossibleDuplicates { count: 1 }],
-        "the spending that paid the bills may be wrong"
-    );
-    assert_provisional(&forecast);
-    assert_eq!(forecast.surplus, Some(usd(1_000_000)), "the number stands");
-}
-
-#[test]
-fn a_possible_duplicate_can_hide_an_unpaid_one_off() {
+fn a_possible_duplicate_pays_no_bill() {
     let car = CategoryId::new();
     let forecast = run(&ForecastInput {
         items: vec![one_off("Tyres", usd(1_000), date(2026, 11, 5), car)],
         category_spent: vec![spent(car, 1_000)],
+        spent_transactions: vec![SpentTransaction {
+            possible_duplicate: true,
+            ..paid_on(car, usd(1_000), date(2026, 11, 5))
+        }],
         loose_ends: vec![loose(0, 1)],
         ..household()
     });
+    assert_eq!(line(&forecast, "Tyres").unpaid, usd(1_000), "still needed");
     assert_eq!(
         forecast.cautions,
-        [Caution::PossibleDuplicates { count: 1 }],
-        "the same for a one-off"
+        [
+            Caution::BillNotSeen {
+                category: car,
+                amount: usd(1_000),
+            },
+            Caution::PossibleDuplicates { count: 1 },
+        ],
+        "both are said"
     );
+    assert_eq!(forecast.surplus, Some(usd(999_000)), "the safe direction");
 }
 
 /// More spending found cannot open a gap, so uncategorized money changes nothing.

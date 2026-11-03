@@ -9,7 +9,7 @@ use coffer_store::{
     AccountChanges, ConnectionHealth, ConnectionStatus, LooseEndsRow, NewAccount, NewConnection,
     NewPlannedItem,
 };
-use jiff::civil::date;
+use jiff::civil::{Date, date};
 
 use super::super::plan::{at, one_off, world};
 use super::{AS_OF, Flag, cash_account};
@@ -74,6 +74,42 @@ async fn category_spent_nets_refunds_and_floors_at_zero() {
 
     world.spend(world.account, date(2026, 11, 4), 700).await;
     assert_eq!(world.category_spent().await, [0], "floored at zero");
+}
+
+/// What can pay a bill: each transaction, by date, back to the first of last month, and no
+/// further; a refund shows as one; a removed charge and a newer one are out, as they are of the
+/// category's spending; and a possible duplicate says so.
+#[tokio::test]
+async fn spent_transactions_reach_back_a_month_one_by_one() {
+    let world = world().await;
+    let balance_on = date(2026, 11, 10);
+    world.balance(world.account, balance_on, 0).await;
+    world.spend(world.account, date(2026, 9, 30), -1).await;
+    world.spend(world.account, date(2026, 10, 1), -10).await;
+    world.spend(world.account, date(2026, 11, 2), 200).await;
+    world.spend(world.account, date(2026, 11, 3), -3_000).await;
+    world.flag(Flag::SourceRemoved, -3_000).await;
+    world.spend(world.account, date(2026, 11, 4), -40_000).await;
+    world.flag(Flag::PossibleDuplicate, -40_000).await;
+    world
+        .spend(world.account, date(2026, 11, 11), -500_000)
+        .await;
+
+    let data = world.store.forecast_data(AS_OF).await.unwrap();
+
+    let rows: Vec<(Date, i64, bool)> = data
+        .spent_transactions
+        .iter()
+        .map(|row| (row.posted_on, row.spent_minor, row.possible_duplicate))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (date(2026, 10, 1), 10, false),
+            (date(2026, 11, 2), -200, false),
+            (date(2026, 11, 4), 40_000, true),
+        ]
+    );
 }
 
 #[tokio::test]

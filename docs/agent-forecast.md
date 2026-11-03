@@ -446,9 +446,9 @@ household's settings. The first example is a household that has just started:
 Every number traces to its lines: `totals` has one row per currency,
 `accounts` says what each balance contributed, `items` what each planned item
 added (`gross`, `reduced_by`, `unpaid`, `counted`, how many `occurrences` and
-the goal's own figures), and `months` the same by calendar month, with the
-cash projected at each month's end. `partial` marks a month the window does
-not cover whole. Reading a month's `lines`:
+the goal's own figures, and `payments`, below), and `months` the same by calendar
+month, with the cash projected at each month's end. `partial` marks a month the
+window does not cover whole. Reading a month's `lines`:
 
 - `outflows` and `inflows` are the month's planned amounts. `inflows` shows
   planned income even with `include_income` off, while `projected_cash` (the
@@ -458,14 +458,53 @@ not cover whole. Reading a month's `lines`:
   already spent against them, and the first month holds everything that built
   up before it. It is not what the schedule alone would set aside.
 
+`payments` on a stored recurring bill's or one-off's line says which transaction paid
+which occurrence: one entry per occurrence from the first of last month up to and
+including `as_of`, by date, with `on`, `amount` and `paid_by` (`transaction`, `posted_on`,
+`amount`), or `paid_by: null` for one nothing paid. See [what pays a
+bill](#what-pays-a-bill). A paid item with nothing else to count still has a line, with
+`counted` 0, so you can see that.
+
 `settled` lists what a person [settled](#settling-a-month), and so what is in none of
 the numbers above: an entry per item and month, with `source`, `name`, `item_type`,
 `category`, `month`, `kind`, how many `occurrences` and their whole `amount`. A month
-the window doesn't reach changes nothing and isn't listed. `amount` is what was
-planned, so a bill spending had already covered changes the number by less: its
-spending goes to the category's next bill or budget instead. Settling raises no
+the forecast doesn't look at, before last month or past the window, changes nothing and
+isn't listed. `amount` is what was
+planned, so a bill a transaction had already paid changes the number by less: that
+transaction goes on to the category's next bill or budget instead. Settling raises no
 caution, so a forecast whose only doubt was that bill is `firm`, since a person
 decided. Say what was settled when you report the number.
+
+### What pays a bill
+
+A recurring bill or a one-off is paid by one transaction, never by its category's total.
+The forecast looks back to the first of last month. Transactions go oldest first, and each
+pays the oldest unpaid occurrence that fits it, so an October bill paid in November pays
+October's, and one payment for two months pays the older. A transaction fits an occurrence
+when:
+
+- it is in the same category and currency, counted as spending (posted, shown by its
+  account's balance, on a counted account, and not one movement between counted accounts: a
+  link out of counted cash is still a payment);
+- it is within 10% of the amount either way;
+- it posted no more than 7 days before the date.
+
+What fits nothing goes to a budget in the category, if there is one, so spending on a budget
+can't hide a bill. A part-payment pays nothing: settle it if the owner says it's paid.
+A possible duplicate pays nothing either, and a refund of about the amount undoes the charge.
+
+If a transaction fits but its category's budgets plan as much for that month, and it isn't
+the exact amount, it could be either. It stays with the budget, the bill still counts, and
+`bill_payment_unclear` says so. Filing the bill under a category of its own ends this for
+good.
+
+**When a match is wrong:**
+
+| What happened | What to do |
+|---|---|
+| The payment went to the wrong month | Settle the month it shouldn't have paid: its transaction goes on to the next. |
+| The transaction isn't that bill's | Recategorize it, or split it. |
+| It paid the bill but the bill still counts | Settle the month as `paid`. The transaction stops counting against a budget too. |
 
 ### Status, blockers and cautions
 
@@ -537,7 +576,18 @@ first entry):
       "reduced_by": {"minor_units": 0, "currency": "USD"},
       "unpaid": {"minor_units": 0, "currency": "USD"},
       "counted": {"minor_units": 540000, "currency": "USD"},
-      "goal": null
+      "goal": null,
+      "payments": [
+        {
+          "on": "2026-10-28",
+          "amount": {"minor_units": 180000, "currency": "USD"},
+          "paid_by": {
+            "transaction": "<october-rent>",
+            "posted_on": "2026-10-28",
+            "amount": {"minor_units": 180000, "currency": "USD"}
+          }
+        }
+      ]
     }
   ],
   "months": [
@@ -580,8 +630,10 @@ and the fields shown:
 | `unbound_provider_account` (`provider_account`, `connection`, `name`, `institution`, `currency_raw`, `currency_supported`) | A provider account's money is in no account, so it is not counted. | Bind it (`POST /provider-accounts/{id}/bind`, or `create-account`), or tell the owner. If a member means to keep it unbound, `POST /provider-accounts/{id}/dismiss` (with their say-so) ends the caution: it then stays listed with `dismissed_at` set, and `restore` takes it back. It does not block either way. It may be a 529, a custodial account or a donor-advised fund: ask a member what it is, since its name alone doesn't decide. Bound as one, it lifts this caution and the number doesn't change, as it is `not_household`. |
 | `account_feed_problem` (`account`, `provider_account`, `reason`: `provider_error`, `currency_unsupported` or `currency_differs`) | A counted account's feed may not be keeping it current. | Read the provider account in `GET /provider-accounts` and tell the owner. |
 | `connection_needs_attention` (`connection`, `label`, `status`: `error` or `reauth_required`) | A connection that could change the number is not syncing: it has no provider account yet, has some not yet bound, or feeds an account the number reads, meaning a counted one or one with spending linked to a goal, held or not. One that feeds only accounts the number does not read is not raised here, though it still shows as failing in `GET /connections`. | See [Connections and sync](agent-usage.md#connections-and-sync): ask for a reconnect. |
-| `as_of_not_today` (`today`) | The window does not start today. What falls due before `as_of`'s month is left out; within that month a passed bill still owes its gap and a budget counts its whole month, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
-| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, up to and including `as_of`, has not been paid, as far as the category's spending shows. The gap still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. If there is no transaction to recategorize, such as a transfer or a payment from an untracked account, or the transaction is in the right category but on an account that isn't the household's (`not_counted: "not_household"`), or it won't be paid this month, [settle it](#settling-a-month) for that month: `PUT /plan-items/{id}/settlements/{month}`. See the limits below. |
+| `as_of_not_today` (`today`) | The window does not start today. What falls due before the month before `as_of`'s is left out; from there a passed bill still owes what nothing paid, and a budget counts its whole month in `as_of`'s, while planned income dated on or before `as_of` and any hypothetical item dated before it are left out. | Say the date the number is for. Use `as_of` only to ask "from that day". |
+| `bill_not_seen` (`category`, `amount`) | A recurring bill or a one-off dated this month, before `as_of`, has no payment [that fits](#what-pays-a-bill). All of it still counts as needed. | Ask whether it was paid. If it was paid under another category, recategorize that transaction; the caution goes. If there is no transaction to recategorize, such as a transfer or a payment from an untracked account, or the transaction is in the right category but on an account that isn't the household's (`not_counted: "not_household"`), or at an amount that doesn't fit, or it won't be paid this month, [settle it](#settling-a-month) for that month: `PUT /plan-items/{id}/settlements/{month}`. See the limits below. |
+| `bill_unpaid_last_month` (`item`, `on`, `amount`) | A recurring bill or a one-off dated last month has no payment that fits and nobody settled it. It still counts as needed. | As for `bill_not_seen`, for that month. |
+| `bill_payment_unclear` (`item`, `on`, `amount`, `transaction`, `transaction_amount`) | That transaction may have paid this occurrence, but it could also be a budget's spending in the same category, so it stays with the budget and the bill still counts. | Ask. If it was the bill, settle the month as `paid`. Filing the bill under its own category stops this recurring. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
 | `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
@@ -591,7 +643,7 @@ and the fields shown:
 | `item_hint_not_counted` (`item`, `account`, `effect`) | An item is hinted at an account that is not counted (not the household's, excluded, closed or not cash). `effect` says what became of it. `still_needed`: an outflow counts anyway, since overstating the need is safe. `left_out`: an inflow into an account that doesn't count stays out of the number, since the money may never reach counted cash (an account that isn't the household's, or one left out of the forecast on purpose). The surplus can then read lower than the money you expect, and this says why. With `include_income` off, an inflow raises nothing. | For `still_needed`: fix the hint, or set the item `active: false` if that account really pays for it outside the household's cash. For `left_out`: the number is already right, so don't remove the hint just to clear the caution, since that adds the money to the number. If the money will reach counted cash, hint the item at a counted account instead. If the money isn't expected, set the item `active: false`. |
 | `transfer_leg_removed` (`link`) | A provider took back one leg of a [transfer link](agent-usage.md#transfer-links) between counted accounts, with a leg this month. Its money counts as filed again, spending included. | Read the link and its legs. Remove the link if it no longer holds, or merge the posted form into the leg. |
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. What a [transfer link](agent-usage.md#transfer-links) between counted accounts says moved isn't in it. A leg linked anywhere else is, until it is filed. | Categorize it with the [review workflow](agent-usage.md#review-workflow), or link it if the money only moved between counted accounts. |
-| `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget or hide an unpaid bill. | Merge or dismiss them. |
+| `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget. One pays no bill until it is cleared. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
 | `cash_dips_below_floor` (`month`, `currency`, `projected_cash`) | With `include_income` on, the first month whose cash at its end is below the floor. A later inflow cannot pay an earlier bill. | Report the month. The surplus nets all the income against all the outflows, and is optimistic. |
 
@@ -624,8 +676,9 @@ date counts as shown.
 ### What this month's spending does
 
 Only a budget is reduced by what was spent. A bill or a one-off is a specific
-payment, so it counts in full until its date passes; after that, spending in its
-category pays it. Each category and currency has one pool of spending:
+payment, so it counts in full until its date passes; after that, a transaction [that
+fits](#what-pays-a-bill) pays it, back through last month. Each category and currency has
+one pool of spending:
 
 1. The month's actual spending in the category counts posted `expense` splits on
    counted accounts, on or before that account's balance date, and not linked to
@@ -636,42 +689,40 @@ category pays it. Each category and currency has one pool of spending:
    `possible_duplicate`: the provider took it back or changed it, so its splits
    no longer say what happened, and a bill it paid is unpaid again. A refund on
    such a transaction keeps counting. A possible duplicate in a category keeps
-   counting there, with the `possible_duplicates` caution.
-3. The pool first pays this month's bills and one-offs dated this month up to
-   and including `as_of`, in date order. Any unpaid part is a gap: it still counts,
-   with the caution `bill_not_seen`, and shows as `unpaid` on its item. What is
+   counting there, with the `possible_duplicates` caution, but pays no bill.
+3. The transactions that paid a bill or one-off leave the pool. A bill dated before
+   `as_of` that nothing paid still counts, all of it, shows as `unpaid` on its item and
+   raises `bill_not_seen` or, from last month, `bill_unpaid_last_month`. What is
    left of the pool, floored at 0, reduces the budgets' occurrences in the current
    month in date order (`reduced_by`). A budget counts its whole month, whatever day
    it is anchored on, so for a stored budget `first_on`, `occurrences` and `gross`
    can include days before `as_of`, in `as_of`'s month only; later months count
    only inside the window, and never before the budget's start or after its
    `end_on`. What a budget still needs is its month's amount less the category's
-   spending once bills and one-offs took their share, floored at 0; that is never
+   spending that paid no bill, floored at 0; that is never
    a gap and raises no caution. So a paid bill never eats a budget, and one
    purchase never reduces two budgets. Spending in the category before a budget's
    first occurrence this month still reduces it, since a budget is a month's
    envelope for its category.
 4. A bill or one-off a person [settled](#settling-a-month) for the month counts as
-   nothing there, this month or a later one in the window: no `gross`, no `unpaid`,
-   no `bill_not_seen`, and no share of the pool, so spending in its category goes to
-   the next bill or a budget rather than being absorbed. Its other months are as
-   ever.
+   nothing there, last month, this month or a later one in the window: no `gross`, no
+   `unpaid`, no caution and no payment of its own, so a transaction goes to the next bill
+   or a budget. Settled as `paid`, it also takes out of the pool a transaction that fits it
+   and paid nothing else, up to its amount, so that money doesn't lower the need twice. Its
+   other months are as ever.
 5. A bill or one-off dated `as_of` counts in full even if it was paid that day and
    the balance already shows it: it is held twice for that day, the safe
    direction. A hypothetical item neither reduces nor consumes, a hypothetical
    budget counts only inside the window (it doesn't look back), and a goal never
    owes.
 
-The data cannot tell where money went, so three known limits can make the
-surplus too high, and the owner should check bills when the number matters:
+Matching a transaction by amount is a judgment, so some limits remain, and the owner should
+check bills when the number matters:
 
-- Spending goes to bills and one-offs before any budget, so money spent on a
-  budget can hide an unpaid bill. From a bill's own date, money spent on a
-  budget in its category does not reduce the budget until the bill is covered.
-- The look-back is this month only: last month's unpaid bill or one-off is not
-  counted, and a bill from last month that posts this month counts as paying
-  this month's.
-- A possible duplicate keeps counting as spending, so it can hide a gap too.
+- At the exact amount, or within 10% and more than the category's budgets plan, a
+  transaction is taken as the bill's. A coincidence pays it; `payments` shows which.
+- Nothing before last month is looked at: a bill older than that isn't counted.
+- A past occurrence is read at the item's amount and category today.
 
 In the other direction, a bill paid under another category shows less to
 invest, not more, until it is recategorized, and one paid with no transaction to
@@ -683,8 +734,8 @@ The examples from here on use one household. Today is 2026-11-15 and the
 balances are from the day before: Checking 9,000.00, Savings 30,000.00, a Card
 at -800.00. The floor is a fixed 3,000.00. The plan is the rent bill, the
 groceries budget, an internet bill of 80.00 on the 10th (Utilities), the
-dentist one-off, the holiday goal and the salary above. This month 250.00 was
-spent in Groceries and 500.00 in Travel, linked to the goal. Here is the
+dentist one-off, the holiday goal and the salary above. Last month's bills were all
+paid. This month 250.00 was spent in Groceries and 500.00 in Travel, linked to the goal. Here is the
 forecast, with `include_income` off and arrays dropped to the parts that
 matter:
 

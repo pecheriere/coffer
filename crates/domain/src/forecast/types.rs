@@ -12,7 +12,8 @@ use serde::Serialize;
 
 use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::{
-    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
+    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransactionId,
+    TransferLinkId,
 };
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -41,12 +42,15 @@ pub struct ForecastInput {
     /// Actual spending per category in `as_of`'s month, up to `as_of` and no later
     /// than its account's balance date, since a balance does not show what is newer.
     pub category_spent: Vec<CategorySpent>,
+    /// The same spending, one row per transaction and category, from the first day the look-back
+    /// reaches ([`bills_looked_at_from`](super::bills_looked_at_from)): what can pay a bill.
+    pub spent_transactions: Vec<SpentTransaction>,
     /// Spending in `as_of`'s month that is not settled yet.
     pub loose_ends: Vec<LooseEnds>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
-    /// Links between counted accounts with a leg its provider took back and a leg in `as_of`'s
-    /// month.
+    /// Links between counted accounts with a leg its provider took back and a leg the look-back
+    /// reaches.
     pub links_with_leg_removed: Vec<TransferLinkId>,
     /// Provider accounts bound to no account.
     pub unbound: Vec<UnboundAccount>,
@@ -144,6 +148,19 @@ pub struct CategorySpent {
     pub spent_minor: i64,
 }
 
+/// What one transaction spent in one category, by the rules of [`CategorySpent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpentTransaction {
+    pub transaction: TransactionId,
+    pub category: CategoryId,
+    pub currency: Currency,
+    pub posted_on: Date,
+    /// Positive for money out, negative for a refund.
+    pub spent_minor: i64,
+    /// It may be another transaction again, so it pays no bill.
+    pub possible_duplicate: bool,
+}
+
 /// This month's money in one currency that could yet change a category's
 /// spending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,7 +248,7 @@ pub struct Forecast {
     pub totals: Vec<CurrencyTotals>,
     /// Every account, with whether it counted.
     pub accounts: Vec<AccountLine>,
-    /// Every item that adds to the window, in input order.
+    /// Every item that adds to the window or has a payment to show, in input order.
     pub items: Vec<ItemLine>,
     /// One bucket per calendar month the window touches.
     pub months: Vec<MonthBucket>,
@@ -341,12 +358,13 @@ pub struct ItemLine {
     pub first_on: Option<Date>,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub last_on: Option<Date>,
-    /// The whole amount of `occurrences`, before any reduction. 0 only with `unpaid`.
+    /// The whole amount of `occurrences`, before any reduction. 0 only with `unpaid` or
+    /// `payments`.
     pub gross: Money,
     /// What this month's actual spending takes off `gross`.
     pub reduced_by: Money,
-    /// What a recurring bill or one-off dated earlier this month, before the window,
-    /// still needs: the part its category's spending does not cover.
+    /// What a recurring bill or one-off dated before the window still needs, back through last
+    /// month: the occurrences no transaction paid.
     pub unpaid: Money,
     /// What goes into the totals, `gross - reduced_by + unpaid`: 0 for an inflow unless
     /// `include_income`, and always for one hinted at an account that isn't the household's.
@@ -354,11 +372,38 @@ pub struct ItemLine {
     /// The sinking fund's own figures, for a goal.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub goal: Option<GoalLine>,
+    /// For a stored recurring bill or one-off: each occurrence from the start of last month up
+    /// to and including `as_of`, by date, and what paid it. A settled one isn't here but in
+    /// `settled`. Empty for anything else.
+    pub payments: Vec<OccurrencePayment>,
+}
+
+/// One occurrence of a bill, and the transaction that paid it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct OccurrencePayment {
+    pub on: Date,
+    pub amount: Money,
+    /// Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated
+    /// before `as_of`.
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub paid_by: Option<PaidBy>,
+}
+
+/// The transaction matched to an occurrence. If it is wrong, settling the occurrence's month
+/// sends it to the next one, and filing it in another category takes it away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PaidBy {
+    pub transaction: TransactionId,
+    pub posted_on: Date,
+    /// What it spent in the item's category, a positive magnitude.
+    pub amount: Money,
 }
 
 /// One item's occurrences in one month that a person settled: what would have counted, had
 /// they not, as a bill's whole amount or a gap, and taken a share of its category's spending.
-/// A month the window doesn't reach isn't listed, since it changes nothing here.
+/// A month before last month or past the window isn't listed, since it changes nothing here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SettledLine {
@@ -369,8 +414,8 @@ pub struct SettledLine {
     pub category: Option<CategoryId>,
     pub month: CalendarMonth,
     pub kind: SettlementKind,
-    /// How many of the month's occurrences the window looks at. In `as_of`'s month that
-    /// is those before `as_of` too.
+    /// How many of the month's occurrences the forecast looks at, back to the first of last
+    /// month and so before `as_of` too.
     pub occurrences: u32,
     /// The whole amount of `occurrences`. A bill spending had already covered wasn't in
     /// the number, so the number may differ by less than this.
@@ -477,15 +522,32 @@ pub enum Caution {
         label: String,
         status: FeedStatus,
     },
-    /// The window does not start today. What falls due before its month is left out, as is
+    /// The window does not start today. What falls due before last month, as seen from
+    /// `as_of`, is left out, as is
     /// planned income dated on or before `as_of` and any hypothetical item dated before it.
     AsOfNotToday { today: Date },
-    /// Recurring bills and one-offs dated earlier this month exceed the category's
-    /// spending so far. The gap counts as still needed; if it was paid under another
-    /// category, the number shows less to invest, which is the safe direction. The
-    /// category's spending is taken to pay these before any budget, since the data
-    /// cannot tell which it was for, so money spent on a budget can hide a gap.
+    /// Recurring bills and one-offs dated earlier this month that no transaction paid, summed
+    /// per category. They count as still needed; if one was paid under another category or at
+    /// another amount, the number shows less to invest, which is the safe direction.
     BillNotSeen { category: CategoryId, amount: Money },
+    /// A bill or one-off dated last month that no transaction paid and nobody settled. It counts
+    /// as still needed until one does, or until a person settles that month.
+    BillUnpaidLastMonth {
+        item: LineSource,
+        on: Date,
+        amount: Money,
+    },
+    /// A transaction is close to this bill's amount, but its category also has a budget that
+    /// could have spent it, so it isn't taken as the payment. The bill counts as still needed,
+    /// and the transaction stays with the budget. Settling the month as `paid` says it was the
+    /// payment, and takes it off the budget.
+    BillPaymentUnclear {
+        item: LineSource,
+        on: Date,
+        amount: Money,
+        transaction: TransactionId,
+        transaction_amount: Money,
+    },
     /// A closed card still owes money, which counts against cash.
     ClosedLiabilityOwing { account: AccountId, balance: Money },
     /// A floor of some months of recurring outflows came to 0 in this currency:
@@ -526,7 +588,7 @@ pub enum Caution {
     /// money counts as it is filed again, spending included, until a person says what happened.
     TransferLegRemoved { link: TransferLinkId },
     /// Possible duplicates this month might be inflating a category's spending, which
-    /// could shrink a reduction or hide an unpaid bill or one-off.
+    /// could shrink a reduction. One pays no bill until a person says it isn't a duplicate.
     PossibleDuplicates { count: u32 },
     /// Money out of counted accounts that their balances may not show yet: `total` posted
     /// after a balance's date, and separately `pending`, not yet posted, whatever that

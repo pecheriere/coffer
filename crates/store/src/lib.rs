@@ -51,7 +51,7 @@ pub use connections::{
 pub use error::StoreError;
 pub use forecast::{
     CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
-    PlanReportData,
+    PlanReportData, SpentTransactionRow,
 };
 pub use household::HouseholdSettingsRecord;
 pub use idempotency::{IdempotencyOwner, Reservation};

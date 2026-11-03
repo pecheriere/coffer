@@ -3,8 +3,8 @@
 use jiff::civil::date;
 
 use super::{
-    AS_OF, budget, cash, eur, fixed_floor, household, hypothetical, line, monthly, one_off, run,
-    spent,
+    AS_OF, budget, cash, eur, fixed_floor, household, hypothetical, line, monthly, one_off,
+    paid_on, run, run_as_given, spent,
 };
 use super::{assert_provisional, currency, usd};
 use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput};
@@ -91,12 +91,16 @@ fn spending_beyond_earlier_plans_reduces_what_remains() {
             budget(monthly("Maintenance", usd(20_000), date(2026, 1, 20), home)),
         ],
         category_spent: vec![spent(home, 205_000)],
+        spent_transactions: vec![
+            paid_on(home, usd(200_000), date(2026, 11, 1)),
+            paid_on(home, usd(5_000), date(2026, 11, 3)),
+        ],
         ..one_month()
     });
     assert_eq!(
         line(&forecast, "Maintenance").reduced_by,
         usd(5_000),
-        "205,000 spent less 200,000 planned"
+        "205,000 spent less the 200,000 that paid the rent"
     );
 }
 
@@ -109,12 +113,16 @@ fn an_earlier_one_off_consumes_the_pool() {
             budget(monthly("Fuel", usd(20_000), date(2026, 1, 20), car)),
         ],
         category_spent: vec![spent(car, 40_000)],
+        spent_transactions: vec![
+            paid_on(car, usd(30_000), date(2026, 11, 5)),
+            paid_on(car, usd(10_000), date(2026, 11, 6)),
+        ],
         ..one_month()
     });
     assert_eq!(
         line(&forecast, "Fuel").reduced_by,
         usd(10_000),
-        "40,000 spent less 30,000 planned"
+        "40,000 spent less the 30,000 that paid the tyres"
     );
 }
 
@@ -140,12 +148,16 @@ fn an_occurrence_on_the_first_of_the_month_consumes_the_pool() {
             budget(monthly("Later", usd(10_000), date(2026, 1, 20), bills)),
         ],
         category_spent: vec![spent(bills, 10_000)],
+        spent_transactions: vec![
+            paid_on(bills, usd(6_000), date(2026, 11, 1)),
+            paid_on(bills, usd(4_000), date(2026, 11, 2)),
+        ],
         ..one_month()
     });
     assert_eq!(
         line(&forecast, "Later").reduced_by,
         usd(4_000),
-        "10,000 spent less the 6,000 on November 1"
+        "10,000 spent less the 6,000 that paid November 1's"
     );
 }
 
@@ -448,20 +460,22 @@ fn a_bill_spent_in_full_adds_nothing() {
     assert_eq!(forecast.surplus, Some(usd(400_000)), "no extra need");
 }
 
+/// 150,000 is too far from 200,000 to say it paid the rent. It may have been part of it, which a
+/// person can settle.
 #[test]
-fn a_partly_spent_bill_counts_the_gap() {
+fn a_transaction_well_short_of_a_bill_pays_none_of_it() {
     let home = CategoryId::new();
     let forecast = run(&rent_on_the_10th(home, 150_000));
-    assert_eq!(line(&forecast, "Rent").unpaid, usd(50_000), "the gap");
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(200_000), "all of it");
     assert_eq!(
         forecast.cautions,
         [Caution::BillNotSeen {
             category: home,
-            amount: usd(50_000),
+            amount: usd(200_000),
         }],
-        "the gap, not the bill"
+        "the whole bill"
     );
-    assert_eq!(forecast.surplus, Some(usd(350_000)), "1,000,000 - 650,000");
+    assert_eq!(forecast.surplus, Some(usd(200_000)), "1,000,000 - 800,000");
 }
 
 #[test]
@@ -485,8 +499,7 @@ fn a_budget_can_simply_underspend() {
     assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
 }
 
-/// Spending pays the earliest bill first: 150,000 covers the 100,000 on the 1st and
-/// half of the 100,000 on the 10th.
+/// A payment goes to the earliest bill it fits: 100,000 pays the one on the 1st.
 #[test]
 fn unpaid_bills_are_traced_in_date_order() {
     let home = CategoryId::new();
@@ -495,20 +508,20 @@ fn unpaid_bills_are_traced_in_date_order() {
             monthly("Second bill", usd(100_000), date(2026, 1, 10), home),
             monthly("First bill", usd(100_000), date(2026, 1, 1), home),
         ],
-        category_spent: vec![spent(home, 150_000)],
+        category_spent: vec![spent(home, 100_000)],
         ..household()
     });
     assert_eq!(line(&forecast, "First bill").unpaid, usd(0), "paid first");
     assert_eq!(
         line(&forecast, "Second bill").unpaid,
-        usd(50_000),
-        "the rest"
+        usd(100_000),
+        "the other"
     );
     assert_eq!(
         forecast.cautions,
         [Caution::BillNotSeen {
             category: home,
-            amount: usd(50_000),
+            amount: usd(100_000),
         }],
         "one caution per category"
     );
@@ -612,26 +625,26 @@ fn an_earlier_one_off_spent_in_full_adds_nothing() {
         category_spent: vec![spent(car, 30_000)],
         ..household()
     });
-    assert!(forecast.items.is_empty(), "nothing left to show");
+    assert_eq!(line(&forecast, "Tyres").counted, usd(0), "only shown");
     assert_eq!(forecast.cautions, [], "no caution");
     assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
     assert_eq!(forecast.surplus, Some(usd(1_000_000)), "no extra need");
 }
 
 #[test]
-fn a_partly_spent_one_off_counts_the_gap() {
+fn a_transaction_well_short_of_a_one_off_pays_none_of_it() {
     let car = CategoryId::new();
     let forecast = run(&ForecastInput {
         items: vec![one_off("Tyres", usd(30_000), date(2026, 11, 10), car)],
         category_spent: vec![spent(car, 20_000)],
         ..household()
     });
-    assert_eq!(line(&forecast, "Tyres").unpaid, usd(10_000), "the gap");
-    assert_eq!(forecast.surplus, Some(usd(990_000)), "1,000,000 - 10,000");
+    assert_eq!(line(&forecast, "Tyres").unpaid, usd(30_000), "all of it");
+    assert_eq!(forecast.surplus, Some(usd(970_000)), "1,000,000 - 30,000");
 }
 
-/// Spending pays bills and one-offs alike, earliest first: 150 covers the 100 on the
-/// 5th and half of the 100 on the 10th, whichever kind each is.
+/// A payment goes to bills and one-offs alike, earliest first: 100 pays the one on the 5th,
+/// whichever kind it is, and leaves the one on the 10th.
 #[test]
 fn one_offs_and_bills_are_paid_in_date_order() {
     let home = CategoryId::new();
@@ -640,48 +653,46 @@ fn one_offs_and_bills_are_paid_in_date_order() {
             monthly("Rent", usd(100), date(2026, 1, 10), home),
             one_off("Boiler", usd(100), date(2026, 11, 5), home),
         ],
-        category_spent: vec![spent(home, 150)],
+        category_spent: vec![spent(home, 100)],
         ..household()
     });
-    assert!(
-        !forecast.items.iter().any(|line| line.name == "Boiler"),
-        "the earlier is paid, so nothing is left of it"
-    );
-    assert_eq!(line(&forecast, "Rent").unpaid, usd(50), "then the later");
+    assert_eq!(line(&forecast, "Boiler").counted, usd(0), "the earlier");
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(100), "then the later");
     assert_eq!(
         forecast.cautions,
         [Caution::BillNotSeen {
             category: home,
-            amount: usd(50),
+            amount: usd(100),
         }],
         "one caution per category"
     );
 }
 
 #[test]
-fn an_earlier_one_off_reaches_back_to_the_first_of_the_month() {
+fn an_earlier_one_off_reaches_back_to_the_first_of_last_month() {
     let car = CategoryId::new();
-    let forecast = run(&ForecastInput {
+    let forecast = run_as_given(&ForecastInput {
         items: vec![
-            one_off("On the first", usd(100), date(2026, 11, 1), car),
-            one_off("Last month", usd(1_000), date(2026, 10, 31), car),
+            one_off("This month", usd(100), date(2026, 11, 1), car),
+            one_off("Last month", usd(1_000), date(2026, 10, 1), car),
+            one_off("Too long ago", usd(5_000), date(2026, 9, 30), car),
             one_off("On as_of", usd(10_000), AS_OF, car),
         ],
         ..household()
     });
-    assert_eq!(
-        line(&forecast, "On the first").unpaid,
-        usd(100),
-        "this month"
-    );
+    assert_eq!(line(&forecast, "This month").unpaid, usd(100), "this month");
+    assert_eq!(line(&forecast, "Last month").unpaid, usd(1_000), "last");
     assert!(
-        !forecast.items.iter().any(|line| line.name == "Last month"),
-        "a one-off before this month stays out"
+        !forecast
+            .items
+            .iter()
+            .any(|line| line.name == "Too long ago"),
+        "a one-off before last month stays out"
     );
     let on_as_of = line(&forecast, "On as_of");
     assert_eq!(on_as_of.unpaid, usd(0), "still to come");
     assert_eq!(on_as_of.counted, usd(10_000), "and counted once");
-    assert_eq!(forecast.surplus, Some(usd(989_900)), "1,000,000 - 10,100");
+    assert_eq!(forecast.surplus, Some(usd(988_900)), "1,000,000 - 11,100");
 }
 
 #[test]
@@ -725,7 +736,14 @@ fn bill_and_budget(home: CategoryId, spent_minor: i64) -> ForecastInput {
 
 #[test]
 fn a_paid_bill_does_not_eat_a_budget() {
-    let forecast = run(&bill_and_budget(CategoryId::new(), 2_100));
+    let home = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        spent_transactions: vec![
+            paid_on(home, usd(2_000), date(2026, 11, 1)),
+            paid_on(home, usd(100), date(2026, 11, 2)),
+        ],
+        ..bill_and_budget(home, 2_100)
+    });
     assert_eq!(
         line(&forecast, "Rent").unpaid,
         usd(0),
@@ -741,20 +759,23 @@ fn a_paid_bill_does_not_eat_a_budget() {
     assert_eq!(forecast.cautions, [], "nothing to warn of");
 }
 
+/// 1,500 can't be told to be the 2,000 rent, so the rent is still owed in full and the money is
+/// the budget's, which it more than empties. 2,000 is needed, where calling it part of the rent
+/// would have said 800.
 #[test]
-fn a_bills_gap_leaves_a_budget_whole() {
+fn money_that_fits_no_bill_goes_to_the_budget() {
     let home = CategoryId::new();
     let forecast = run(&bill_and_budget(home, 1_500));
-    assert_eq!(line(&forecast, "Rent").unpaid, usd(500), "the bill's gap");
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(2_000), "all of it");
     let upkeep = line(&forecast, "Upkeep");
-    assert_eq!(upkeep.reduced_by, usd(0), "no remainder to reduce it");
-    assert_eq!(upkeep.counted, usd(300), "the budget stays at 300");
+    assert_eq!(upkeep.reduced_by, usd(300), "all the pool can take");
+    assert_eq!(upkeep.counted, usd(0), "the budget is spent");
     assert_eq!(
         forecast.cautions,
         [Caution::BillNotSeen {
             category: home,
-            amount: usd(500),
+            amount: usd(2_000),
         }],
-        "the gap is reported"
+        "the bill is reported"
     );
 }
