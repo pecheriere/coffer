@@ -66,6 +66,7 @@ fn simplefin_record(description: &str) -> ProviderTransaction {
         memo: None,
         pending: false,
         replaces_provider_id: None,
+        instants: None,
     }
 }
 

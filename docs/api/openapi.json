@@ -2763,7 +2763,7 @@
           "household"
         ],
         "summary": "The household's settings.",
-        "description": "The settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon, when a balance counts as stale, and the display currency net worth is shown in (`null` until an admin sets it: it is never guessed). Needs `read`. A token with account grants below `all` at `transactions` reads `floor` as `null`, the same as none set: a floor is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
+        "description": "The settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon, when a balance counts as stale, the display currency net worth is shown in (`null` until an admin sets it: it is never guessed), and the time zone that decides which day is today (`timezone`, always a name) with what an admin chose (`timezone_setting`, `null` while the server's default applies). Needs `read`. A token with account grants below `all` at `transactions` reads `floor` as `null`, the same as none set: a floor is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
         "operationId": "getHouseholdSettings",
         "responses": {
           "200": {
@@ -2858,7 +2858,7 @@
           "household"
         ],
         "summary": "Changes the household's settings.",
-        "description": "Changes the settings given; a field left out stays. A floor or a display currency can be replaced but never unset: `floor: null` or `display_currency: null` leaves it. A patch that changes nothing writes nothing. A new display currency recomputes all net worth history before this answers, and is audited with the old and new codes. A number out of range is 422; one outside the field's type (such as 300 months) or an unknown currency code is 400. Needs `admin`, whatever the token's account grants, but the answer shows `floor` only as `getHouseholdSettings` would to that token. A patch naming `display_currency`, whatever it names, also needs `all` at `balances` from a token with account grants: which codes convert at once depends on the currencies in use. The refusal is the same whatever exists.",
+        "description": "Changes the settings given; a field left out stays. A floor or a display currency can be replaced but never unset: `floor: null` or `display_currency: null` leaves it. A patch that changes nothing writes nothing. A new display currency recomputes all net worth history before this answers, and is audited with the old and new codes. `timezone` takes an IANA name, and alone among these `null` clears it, returning to the server's default. A new zone applies at once, is audited with the old and new names, and rewrites no day already recorded: only new days use it. If it makes today earlier than the net worth table's last day, the table ends today from this change on. A name that isn't a zone is 422, and so is a number out of range; one outside the field's type (such as 300 months) or an unknown currency code is 400. Needs `admin`, whatever the token's account grants, but the answer shows `floor` only as `getHouseholdSettings` would to that token. A patch naming `display_currency`, whatever it names, also needs `all` at `balances` from a token with account grants: which codes convert at once depends on the currencies in use. The refusal is the same whatever exists.",
         "operationId": "updateHouseholdSettings",
         "requestBody": {
           "content": {
@@ -7958,7 +7958,7 @@
       },
       "ForecastSettingsPatch": {
         "type": "object",
-        "description": "The settings to change. A field left out stays as it is. A floor can be\nreplaced but never unset: `null` leaves it.",
+        "description": "The settings to change. A field left out stays as it is. A floor or a display\ncurrency can be replaced but never unset: `null` leaves it. Only a time zone can be\ncleared.",
         "properties": {
           "default_horizon_months": {
             "type": [
@@ -8007,6 +8007,13 @@
             "description": "1 to 365 days.",
             "maximum": 365,
             "minimum": 1
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new time zone, an IANA name such as `America/Los_Angeles`; `null` clears it and\nreturns to the server's default, and absent keeps the current one. It applies at\nonce. Days already recorded stay as they are."
           }
         },
         "additionalProperties": false
@@ -8251,13 +8258,15 @@
       },
       "HouseholdSettings": {
         "type": "object",
-        "description": "The household's settings: those of a forecast and the display currency.",
+        "description": "The household's settings: those of a forecast, the display currency and the time zone.",
         "required": [
           "floor",
           "include_income",
           "default_horizon_months",
           "stale_after_days",
-          "display_currency"
+          "display_currency",
+          "timezone",
+          "timezone_setting"
         ],
         "properties": {
           "default_horizon_months": {
@@ -8299,6 +8308,17 @@
             "description": "How old a balance may be before it is flagged: 1 to 365 days.",
             "maximum": 365,
             "minimum": 1
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The IANA name of the zone that decides which day is today and which month is the\ncurrent one: `timezone_setting`, or the server's `COFFER_TIMEZONE` without one."
+          },
+          "timezone_setting": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The zone an admin chose; `null` while the server's default applies."
           }
         }
       },

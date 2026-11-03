@@ -45,6 +45,48 @@ fn count(rows: u64) -> u32 {
 }
 
 impl StoreTx {
+    /// The latest day kept for `provider_account` and the amount on it.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, or a day that no longer parses.
+    pub async fn latest_kept_balance(
+        &mut self,
+        provider_account: ProviderAccountId,
+    ) -> Result<Option<(Date, i64)>, StoreError> {
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT on_date, balance_minor FROM kept_balances \
+             WHERE provider_account_id = ? ORDER BY on_date DESC LIMIT 1",
+        )
+        .bind(provider_account.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        row.map(|(on, minor)| Ok((on.parse().map_err(StoreError::backend)?, minor)))
+            .transpose()
+    }
+
+    /// The amount kept for `provider_account` on the day `on`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn kept_balance_on(
+        &mut self,
+        provider_account: ProviderAccountId,
+        on: Date,
+    ) -> Result<Option<i64>, StoreError> {
+        sqlx::query_scalar(
+            "SELECT balance_minor FROM kept_balances \
+             WHERE provider_account_id = ? AND on_date = ?",
+        )
+        .bind(provider_account.to_string())
+        .bind(on.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)
+    }
+
     /// Keep `balance`, replacing what was kept for the same provider account
     /// and day.
     ///
