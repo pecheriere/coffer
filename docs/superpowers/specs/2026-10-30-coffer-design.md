@@ -1042,7 +1042,8 @@ month's unmatched spending in the category didn't cover. That caps it at the bil
 lower than what its budgets would use with nothing settled, less what settling saved in its category, which can be
 nothing: an occurrence dated before the first transaction owed nothing, so it takes nothing, and a
 payment sent on to a bill dated `as_of` pays one that counts in full anyway. Known limit: both can read
-low with no caution, and only the budget's `reduced_by` shows it. Rent of 2,000 charged 2,300 doesn't
+low with no caution, and the forecast says so in `settled_budgets`, a note per budget with the
+`reduced_by` its need may be low by, up to that much, which never changes `status` (a person decided). Rent of 2,000 charged 2,300 doesn't
 fit, so 300 reduces a budget of 500, which reads 200 against a truth of 500; up to the whole budget.
 `skipped` takes nothing. A months floor keeps them, since it says how much to hold
 rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
@@ -1055,7 +1056,7 @@ row's `settled` says how much of `planned` is, and the report's `settled` which 
 and kind, so the difference is no surprise. A settled occurrence takes no share of a rollover's
 spending, so the rollover and the forecast agree: a settlement says that bill was paid some other
 way, so spending in its category wasn't for it. The forecast page says what is settled in plain
-words, can settle what a caution asks about and can undo what it lists (R14).
+words, says each `settled_budgets` note in a sentence, can settle what a caution asks about and can undo what it lists (R14).
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the

@@ -17,6 +17,7 @@ use reduction::{ItemAdjustment, Reduction};
 mod bill_matching;
 mod reduction;
 mod settled;
+mod settled_budgets;
 mod types;
 
 pub use bill_matching::{
@@ -28,7 +29,7 @@ pub use types::{
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
     ForecastStatus, GoalLine, HintEffect, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
     MonthCurrency, MonthItem, NewerSpending, NotCountedReason, OccurrencePayment, PaidBy,
-    SettledLine, SpentTransaction, UnboundAccount,
+    SettledBudget, SettledLine, SpentTransaction, UnboundAccount,
 };
 
 /// Computes the forecast for `input`, which the caller has validated.
@@ -118,6 +119,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         blockers,
         cautions,
         settled: settled::settled_lines(input, end_exclusive)?,
+        settled_budgets: settled_budgets::settled_budgets(input, &reduction)?,
     })
 }
 

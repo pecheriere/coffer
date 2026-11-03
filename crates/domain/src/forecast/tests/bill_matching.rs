@@ -354,7 +354,18 @@ fn a_payment_off_by_less_than_the_tolerance_shows_the_difference() {
 
 /// One category with a settled bill and a budget of `budget_minor` on the 20th, what was spent, and
 /// the budget's line.
-fn settled_beside_a_budget(
+pub(super) fn settled_beside_a_budget(
+    bill: Money,
+    on: Date,
+    budget_minor: i64,
+    spent: &[(i64, Date)],
+) -> Forecast {
+    beside_a_budget(Some(SettlementKind::Paid), bill, on, budget_minor, spent)
+}
+
+/// As [`settled_beside_a_budget`], with the bill's month settled as `kind`, or not at all.
+pub(super) fn beside_a_budget(
+    kind: Option<SettlementKind>,
     bill: Money,
     on: Date,
     budget_minor: i64,
@@ -362,8 +373,9 @@ fn settled_beside_a_budget(
 ) -> Forecast {
     let home = CategoryId::new();
     let mut item = one_off("Bill", bill, on, home);
-    item.settled
-        .insert(CalendarMonth::of(on).unwrap(), SettlementKind::Paid);
+    if let Some(kind) = kind {
+        item.settled.insert(CalendarMonth::of(on).unwrap(), kind);
+    }
     run_as_given(&ForecastInput {
         items: vec![
             item,
