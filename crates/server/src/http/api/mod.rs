@@ -86,6 +86,8 @@ fn routes() -> ApiRouter {
         .op(routes!(provider_accounts::list))
         .op(routes!(provider_accounts::bind))
         .op(routes!(provider_accounts::create_account))
+        .op(routes!(provider_accounts::dismiss))
+        .op(routes!(provider_accounts::restore))
         .op(routes!(openapi::serve))
 }
 

@@ -97,6 +97,11 @@ impl Binding {
         self.may_create
     }
 
+    /// Whether the actor could dismiss a provider account, or take that back.
+    pub(super) fn may_dismiss(&self) -> bool {
+        self.may_link
+    }
+
     /// Whether the actor may change the account `id`.
     pub(super) fn may_change(&self, id: AccountId) -> bool {
         self.writable.contains(&id)
