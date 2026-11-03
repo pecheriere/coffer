@@ -1017,8 +1017,11 @@ holding more: a month settled as `paid` says the money was spent, so it is no bu
 that fits it and paid nothing else leaves the pool, up to the bill's amount. With none that fits, such
 as a charge of 230 on a bill of 200 or a rent paid in two parts, the bill's amount comes off the pool
 whatever it holds, for an occurrence looked at or later in `as_of`'s month; for last month's, what last
-month's unmatched spending in the category didn't cover. That caps it at the bill so that settling
-can't raise the need, so of that 230 the 30 beyond the bill still reduces a budget. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
+month's unmatched spending in the category didn't cover. That caps it at the bill, so of that 230 the
+30 beyond the bill still reduces a budget. And so that settling can't raise the need, no pool ends
+lower than it would with nothing settled, less what settling saved in its category, which can be
+nothing: an occurrence dated before the first transaction owed nothing, so it takes nothing, and a
+payment sent on to a bill dated `as_of` pays one that counts in full anyway. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
 rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
 month from last month to the window's end with its amount, so no number silently differs, and settling raises
 no caution, so it doesn't make a forecast `provisional` of itself: a person decided. A

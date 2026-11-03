@@ -56,6 +56,7 @@ pub fn payments_read_from(as_of: Date) -> Date {
 
 /// One occurrence of a stored recurring bill or one-off that the look-back reaches, or one settled
 /// as paid later in `as_of`'s month.
+#[derive(Clone, Copy)]
 pub(super) struct Bill {
     pub(super) on: Date,
     /// The item's position in the input.
@@ -282,7 +283,9 @@ fn point_at_the_rest(
     }
     for (position, bill) in bills.iter().enumerate() {
         let open = match bill.settled {
-            Some(SettlementKind::Paid) => true,
+            // Dated before the history it owes nothing anyway, so settling it saves nothing, and
+            // it takes nothing either.
+            Some(SettlementKind::Paid) => !bill.before_history,
             Some(SettlementKind::Skipped) => false,
             // Dated `as_of`, it counts in full anyway, so there is nothing to say.
             None => bill.on < input.as_of && !bill.before_history,

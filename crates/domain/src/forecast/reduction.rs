@@ -182,21 +182,7 @@ pub(super) fn reduce(
         }
     }
 
-    for (&at, &amount) in &matching.taken {
-        if let Some(row) = input
-            .spent_transactions
-            .get(at)
-            .filter(|row| row.posted_on >= month_start)
-            && let Some(pool) = pools.get_mut(&(row.category, row.currency))
-        {
-            *pool -= amount;
-        }
-    }
-    for (key, &charged) in &matching.settled_charges {
-        if let Some(pool) = pools.get_mut(key) {
-            *pool -= charged;
-        }
-    }
+    let pools = pools_settled(&pools, &bills, &matching, input);
 
     let Outcome {
         not_seen,
@@ -224,6 +210,82 @@ pub(super) fn reduce(
         last_month_unpaid_currencies,
         spending_sensitive_currencies,
     })
+}
+
+/// What each of `spent`'s pools holds once `matching` has taken what paid a bill.
+fn pools_after(
+    spent: &BTreeMap<PoolKey, i128>,
+    matching: &Matching,
+    input: &ForecastInput,
+) -> BTreeMap<PoolKey, i128> {
+    let month_start = input.as_of.first_of_month();
+    let mut pools = spent.clone();
+    for (&at, &amount) in &matching.taken {
+        if let Some(row) = input
+            .spent_transactions
+            .get(at)
+            .filter(|row| row.posted_on >= month_start)
+            && let Some(pool) = pools.get_mut(&(row.category, row.currency))
+        {
+            *pool -= amount;
+        }
+    }
+    for (key, &charged) in &matching.settled_charges {
+        if let Some(pool) = pools.get_mut(key) {
+            *pool -= charged;
+        }
+    }
+    pools
+}
+
+/// What `seen` leaves `bills` counting, per category and currency: an occurrence dated `as_of` or
+/// later counts in full, and one before that unless it was paid. Nothing that is settled or dated
+/// before the history counts.
+fn bills_counted(bills: &[Bill], seen: &[Seen], as_of: Date) -> BTreeMap<PoolKey, i128> {
+    let mut counted: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    for (bill, seen) in bills.iter().zip(seen) {
+        let counts = bill.settled.is_none()
+            && !bill.before_history
+            && (bill.on >= as_of || !matches!(seen, Seen::Paid(..)));
+        if counts {
+            *counted.entry(bill.key).or_default() += bill.amount;
+        }
+    }
+    counted
+}
+
+/// The pools `matching` leaves, none lower than it would be with nothing settled, less what settling
+/// saved in its category. A budget's need rises by no more than its pool falls, so settling can't
+/// raise the need, however a settled bill sends a payment on: to today's bill, which counts in full
+/// whatever pays it, or to a smaller one in tolerance.
+fn pools_settled(
+    spent: &BTreeMap<PoolKey, i128>,
+    bills: &[Bill],
+    matching: &Matching,
+    input: &ForecastInput,
+) -> BTreeMap<PoolKey, i128> {
+    let mut pools = pools_after(spent, matching, input);
+    if bills.iter().all(|bill| bill.settled.is_none()) {
+        return pools;
+    }
+    let plain: Vec<Bill> = bills
+        .iter()
+        .map(|bill| Bill {
+            settled: None,
+            ..*bill
+        })
+        .collect();
+    let unsettled = match_bills(&plain, input);
+    let pools_unsettled = pools_after(spent, &unsettled, input);
+    let counted_unsettled = bills_counted(&plain, &unsettled.seen, input.as_of);
+    let counted = bills_counted(bills, &matching.seen, input.as_of);
+    for (key, pool) in &mut pools {
+        let before = pools_unsettled.get(key).copied().unwrap_or_default();
+        let saved = counted_unsettled.get(key).copied().unwrap_or_default()
+            - counted.get(key).copied().unwrap_or_default();
+        *pool = (*pool).max(before - saved);
+    }
+    pools
 }
 
 /// What to say of refunds that undid no charge, beside a bill paid in their category.
