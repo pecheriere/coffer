@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::accounts::ConnectionLabel;
+use coffer_domain::fx::RateBook;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, TransferLinkId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
 use coffer_domain::plan_report::{
     GoalMonth, MonthActual, MonthMoved, MonthNotHousehold, MonthUncategorized,
 };
+use coffer_domain::transfer_rate::CrossCurrencyLink;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteConnection};
@@ -23,8 +25,9 @@ use crate::provider_accounts::provider_account_from_row;
 use crate::settlements;
 use crate::transfer_links::{
     after_moved, both_counted, both_counted_when_posted, counted_cash, counted_when_posted,
-    link_amount, link_legs, link_stands, moved_minor,
+    link_amount, link_legs, link_stands, links_with_leg_removed, moved_minor,
 };
+use crate::transfer_rates;
 use crate::{
     AccountRecord, BalanceSnapshot, ConnectionStatus, PlannedItemRecord, ProviderAccountRecord,
     SettlementRecord, Store, StoreError,
@@ -56,6 +59,11 @@ pub struct ForecastData {
     /// The links between counted accounts with a leg its provider took back and a leg in
     /// `as_of`'s month, ordered by id.
     pub links_with_leg_removed: Vec<TransferLinkId>,
+    /// The links between counted accounts in two currencies with a leg in `as_of`'s month,
+    /// ordered by id.
+    pub cross_currency_links: Vec<CrossCurrencyLink>,
+    /// The rates to compare their legs at.
+    pub rates: RateBook,
     /// Every provider account, ordered by id.
     pub provider_accounts: Vec<ProviderAccountRecord>,
     /// Every connection, removed ones included, ordered by id.
@@ -87,6 +95,11 @@ pub struct PlanReportData {
     pub not_household: Vec<MonthNotHousehold>,
     /// Per month and currency, ordered by them.
     pub moved: Vec<MonthMoved>,
+    /// The links that were between counted accounts in two currencies with a leg in the
+    /// window, ordered by id.
+    pub cross_currency_links: Vec<CrossCurrencyLink>,
+    /// The rates to compare their legs at.
+    pub rates: RateBook,
 }
 
 /// What in `as_of`'s month, in one currency, could yet change a category's spending.
@@ -422,17 +435,6 @@ const REPORT_MOVED: &str = concat!(
     " > 0 GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
-/// The links one movement but for a leg its provider took back, with a leg in `as_of`'s month:
-/// their money counts again as it is filed, and a person should look (spec §8.12 T7).
-const LINKS_WITH_LEG_REMOVED: &str = concat!(
-    "SELECT lk.id AS link FROM ",
-    link_legs!(),
-    " WHERE (lo.flag_source_removed = 1 OR li.flag_source_removed = 1) AND ",
-    both_counted!(),
-    " AND ((lo.posted_on >= ?2 AND lo.posted_on <= ?1) \
-     OR (li.posted_on >= ?2 AND li.posted_on <= ?1)) ORDER BY lk.id"
-);
-
 /// What is linked to each goal by month, on any account: `expense` splits only, as in
 /// [`GOAL_SPENT`]. A charge that moved is left out as one the flags keep out is. A refund that
 /// moved was never a refund, so it just isn't counted, and `left_out` stays charges only.
@@ -573,23 +575,6 @@ fn connection_health_from_row(row: &SqliteRow) -> Result<ConnectionHealth, Store
     })
 }
 
-/// See [`LINKS_WITH_LEG_REMOVED`].
-async fn links_with_leg_removed(
-    conn: &mut SqliteConnection,
-    as_of: &str,
-    month_start: &str,
-) -> Result<Vec<TransferLinkId>, StoreError> {
-    sqlx::query(LINKS_WITH_LEG_REMOVED)
-        .bind(as_of)
-        .bind(month_start)
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(StoreError::from_sqlx)?
-        .iter()
-        .map(|row| parsed(row, "link"))
-        .collect()
-}
-
 /// Each account with its latest balance on or before `as_of`.
 async fn accounts_with_balances(
     conn: &mut SqliteConnection,
@@ -696,6 +681,8 @@ impl Store {
             .map(newer_spending_from_row)
             .collect::<Result<_, _>>()?;
         let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &month_start).await?;
+        let (cross_currency_links, rates) =
+            transfer_rates::for_forecast(&mut tx, as_of.first_of_month(), as_of).await?;
         let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
             .fetch_all(&mut *tx)
             .await
@@ -723,6 +710,8 @@ impl Store {
             loose_ends,
             newer_spending,
             links_with_leg_removed,
+            cross_currency_links,
+            rates,
             provider_accounts,
             connections,
         })
@@ -740,6 +729,7 @@ impl Store {
         from: Date,
         to_exclusive: Date,
     ) -> Result<PlanReportData, StoreError> {
+        let (from_date, to_date) = (from, to_exclusive);
         let (from, to_exclusive) = (from.to_string(), to_exclusive.to_string());
         // One read transaction: a sync committing midway can't split a report.
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
@@ -796,6 +786,8 @@ impl Store {
             .iter()
             .map(month_moved_from_row)
             .collect::<Result<_, _>>()?;
+        let (cross_currency_links, rates) =
+            transfer_rates::for_report(&mut tx, from_date, to_date).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(PlanReportData {
             items,
@@ -805,6 +797,8 @@ impl Store {
             uncategorized,
             not_household,
             moved,
+            cross_currency_links,
+            rates,
         })
     }
 }

@@ -266,6 +266,8 @@ fn input(
         loose_ends,
         newer_spending,
         links_with_leg_removed,
+        cross_currency_links,
+        rates,
         provider_accounts,
         connections,
         ..
@@ -344,6 +346,8 @@ fn input(
             })
             .collect(),
         links_with_leg_removed,
+        cross_currency_links,
+        rates,
         unbound,
         feeds,
     }

@@ -30,13 +30,15 @@ use jiff::civil::Date;
 use serde::Serialize;
 
 use crate::forecast::{ForecastError, money};
-use crate::ids::{CategoryId, PlannedItemId};
+use crate::fx::RateBook;
+use crate::ids::{CategoryId, PlannedItemId, TransferLinkId};
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, PlanSchedule, PlanSpending, SettlementKind, div_half_even, goal_accrued,
     occurrences_in,
 };
 use crate::transactions::CategoryKind;
+use crate::transfer_rate::{CrossCurrencyLink, mismatches};
 
 /// Everything one report reads, gathered by the caller at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,11 @@ pub struct PlanReportInput {
     pub not_household: Vec<MonthNotHousehold>,
     /// Per month and currency, as far back as [`report_window`] says, ordered by them.
     pub moved: Vec<MonthMoved>,
+    /// The links between counted accounts in two currencies with a leg posted in the window
+    /// of [`report_window`].
+    pub cross_currency_links: Vec<CrossCurrencyLink>,
+    /// The rates to compare their legs at. No amount of the report depends on a rate.
+    pub rates: RateBook,
 }
 
 /// A planned item as a report reads it.
@@ -162,6 +169,32 @@ pub struct PlanReport {
     pub rollovers: Vec<RolloverRow>,
     /// The reported month holding today, whose figures aren't final.
     pub partial_months: Vec<CalendarMonth>,
+    /// What a person should look at, which changes no amount above. Ordered by link.
+    pub cautions: Vec<ReportCaution>,
+}
+
+/// Something in the reported months worth a look.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReportCaution {
+    /// The legs of this transfer link between counted accounts in two currencies differ by
+    /// more than the tolerance at the rate for the day they posted, such as for a slipped
+    /// decimal point. The link still counts as moved money, so spending may be missing from
+    /// the rows above until a person checks it.
+    TransferLinkRateMismatch {
+        link: TransferLinkId,
+        /// What left, negative.
+        outflow: Money,
+        /// What arrived.
+        inflow: Money,
+        /// What the outflow comes to in the inflow's currency at the rate used.
+        expected_inflow: Money,
+        /// The date of the older rate used.
+        rate_on: Date,
+        /// An admin entered a rate used.
+        manual_rate: bool,
+    },
 }
 
 /// One category in one month and currency.
@@ -381,7 +414,33 @@ pub fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastErr
             .copied()
             .filter(|&month| month == today_month)
             .collect(),
+        cautions: rate_cautions(input, reported),
     })
+}
+
+/// The links of the reported months whose legs disagree at the day's rate, by link.
+fn rate_cautions(input: &PlanReportInput, reported: &[CalendarMonth]) -> Vec<ReportCaution> {
+    let in_reported =
+        |day: Date| CalendarMonth::of(day).is_ok_and(|month| reported.contains(&month));
+    let mut found = mismatches(
+        input
+            .cross_currency_links
+            .iter()
+            .filter(|link| in_reported(link.outflow_on) || in_reported(link.inflow_on)),
+        &input.rates,
+    );
+    found.sort_by_key(|found| found.link);
+    found
+        .into_iter()
+        .map(|found| ReportCaution::TransferLinkRateMismatch {
+            link: found.link,
+            outflow: found.mismatch.outflow,
+            inflow: found.mismatch.inflow,
+            expected_inflow: found.mismatch.expected_inflow,
+            rate_on: found.mismatch.rate_on,
+            manual_rate: found.mismatch.manual_rate,
+        })
+        .collect()
 }
 
 /// A category in one currency.

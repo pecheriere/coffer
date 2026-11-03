@@ -11,6 +11,7 @@ use jiff::civil::Date;
 use serde::Serialize;
 
 use crate::accounts::{BelongsTo, LiquidityClass};
+use crate::fx::RateBook;
 use crate::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
 };
@@ -19,6 +20,7 @@ use crate::plan::{
     CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, SafetyFloor,
     SettlementKind,
 };
+use crate::transfer_rate::CrossCurrencyLink;
 
 /// Everything one forecast reads, gathered by the caller at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +50,11 @@ pub struct ForecastInput {
     /// Links between counted accounts with a leg its provider took back and a leg in `as_of`'s
     /// month.
     pub links_with_leg_removed: Vec<TransferLinkId>,
+    /// Links between counted accounts in two currencies with a leg in `as_of`'s month.
+    pub cross_currency_links: Vec<CrossCurrencyLink>,
+    /// The rates to compare their legs at. Nothing else reads them: no number of the
+    /// forecast depends on a rate.
+    pub rates: RateBook,
     /// Provider accounts bound to no account.
     pub unbound: Vec<UnboundAccount>,
     /// Connections that are not syncing.
@@ -525,6 +532,23 @@ pub enum Caution {
     /// A provider took back one leg of this transfer link between counted accounts, so its
     /// money counts as it is filed again, spending included, until a person says what happened.
     TransferLegRemoved { link: TransferLinkId },
+    /// The legs of this transfer link between counted accounts in two currencies differ by
+    /// more than the tolerance at the rate for the day they posted, which is the case for a
+    /// slipped decimal point. What moved is still taken as it stands, so spending that wasn't
+    /// really a movement may be missing from the number until a person checks the link.
+    TransferLinkRateMismatch {
+        link: TransferLinkId,
+        /// What left, negative.
+        outflow: Money,
+        /// What arrived.
+        inflow: Money,
+        /// What the outflow comes to in the inflow's currency at the rate used.
+        expected_inflow: Money,
+        /// The date of the older rate used.
+        rate_on: Date,
+        /// An admin entered a rate used.
+        manual_rate: bool,
+    },
     /// Possible duplicates this month might be inflating a category's spending, which
     /// could shrink a reduction or hide an unpaid bill or one-off.
     PossibleDuplicates { count: u32 },

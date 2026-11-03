@@ -7,11 +7,13 @@
 use std::cmp::Reverse;
 
 use coffer_domain::audit::AuditChanges;
+use coffer_domain::fx::RateBook;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, TransactionId, TransferLinkId};
-use coffer_domain::money::Money;
+use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account};
 use coffer_domain::transactions::{SplitInput, TransactionFlag};
+use coffer_domain::transfer_rate::{CrossCurrencyLink, RateCheck, check_rate};
 use coffer_store::{
     NewTransferLink, PageRequest, StoreTx, TransactionFilter, TransactionRecord,
     TransferLinkRecord, TransferLinkSide,
@@ -91,7 +93,7 @@ pub struct TransferLinkView {
     pub outflow: TransferLegView,
     pub inflow: TransferLegView,
     /// What arrived less what left, negative when less arrived, such as for a fee; `null` for
-    /// legs in two currencies, since a link doesn't read an exchange rate.
+    /// legs in two currencies, whose `rate_check` compares them instead.
     #[schema(required)]
     pub difference: Option<Money>,
     /// Both accounts are in counted cash (open, switched into the forecast, of a spendable
@@ -102,7 +104,54 @@ pub struct TransferLinkView {
     /// The same as reports read it, for what happened: an account closed since its leg posted
     /// still counts here, so closing one doesn't rewrite its past months.
     pub one_movement_in_reports: bool,
+    /// For legs in two currencies, whether they agree at the exchange rate for the day they
+    /// posted (the later of the two), within 5%. Only a check: what moved is the same either
+    /// way. `null` for legs in one currency.
+    #[schema(required)]
+    pub rate_check: Option<RateCheck>,
     pub created_by: AttributionView,
+}
+
+/// The currencies whose rates a link's check reads: both when the legs differ, and none for
+/// legs in one currency, which have nothing to compare.
+fn leg_currencies(outflow: &TransactionRecord, inflow: &TransactionRecord) -> Vec<Currency> {
+    if outflow.currency == inflow.currency {
+        Vec::new()
+    } else {
+        vec![outflow.currency, inflow.currency]
+    }
+}
+
+/// The day a link's legs are compared at: the later one posted.
+fn later_day(outflow: &TransactionRecord, inflow: &TransactionRecord) -> Date {
+    outflow.posted_on.max(inflow.posted_on)
+}
+
+/// How the legs of a link compare at `rates`, for legs in two currencies.
+fn rate_check(
+    link: TransferLinkId,
+    outflow: &TransactionRecord,
+    inflow: &TransactionRecord,
+    rates: &RateBook,
+) -> Option<RateCheck> {
+    (outflow.currency != inflow.currency).then(|| {
+        check_rate(
+            &CrossCurrencyLink {
+                link,
+                outflow: Money {
+                    minor_units: outflow.amount_minor,
+                    currency: outflow.currency,
+                },
+                inflow: Money {
+                    minor_units: inflow.amount_minor,
+                    currency: inflow.currency,
+                },
+                outflow_on: outflow.posted_on,
+                inflow_on: inflow.posted_on,
+            },
+            rates,
+        )
+    })
 }
 
 impl TransferLinkView {
@@ -110,6 +159,7 @@ impl TransferLinkView {
         link: &TransferLinkRecord,
         outflow: &TransactionRecord,
         inflow: &TransactionRecord,
+        rates: &RateBook,
     ) -> Self {
         Self {
             id: link.id,
@@ -125,6 +175,7 @@ impl TransferLinkView {
                 }),
             one_movement: link.one_movement,
             one_movement_in_reports: link.one_movement_in_reports,
+            rate_check: rate_check(link.id, outflow, inflow, rates),
             created_by: AttributionView::new(&link.created),
         }
     }
@@ -335,7 +386,13 @@ impl Ledger {
                 by: attribution(actor, now),
             })
             .await?;
-        let view = TransferLinkView::new(&link, &outflow, &inflow);
+        let rates = tx
+            .rates_on(
+                &leg_currencies(&outflow, &inflow),
+                later_day(&outflow, &inflow),
+            )
+            .await?;
+        let view = TransferLinkView::new(&link, &outflow, &inflow, &rates);
         audit(
             &mut tx,
             now,
@@ -406,7 +463,14 @@ impl Ledger {
         for account in accounts {
             authorize_account(actor, &access, account, AccountLevel::Transactions)?;
         }
-        Ok(TransferLinkView::new(&link, &outflow, &inflow))
+        let rates = self
+            .store
+            .rates_on(
+                &leg_currencies(&outflow, &inflow),
+                later_day(&outflow, &inflow),
+            )
+            .await?;
+        Ok(TransferLinkView::new(&link, &outflow, &inflow, &rates))
     }
 
     /// What might be the other leg of `transaction`: the same amount the other way, in the same

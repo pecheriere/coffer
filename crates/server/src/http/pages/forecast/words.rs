@@ -217,6 +217,37 @@ const TRANSFER_LEG_REMOVED: &str = "A bank took back one side of a linked transf
                                     counts as filed again. Check the link, and remove it if it \
                                     no longer holds.";
 
+/// A goal past its due date with money still to find. `goal` starts the sentence.
+fn overdue_sentence(goal: &str, due_on: Date) -> String {
+    format!(
+        "{goal} was due on {} and still has money to find.",
+        day(due_on)
+    )
+}
+
+/// The first month whose closing cash is below the floor.
+fn floor_dip_sentence(month: CalendarMonth, projected_cash: Money) -> String {
+    format!(
+        "In {}, cash is projected to fall to {}, below the safety floor. Income arriving \
+         later can't pay for that month.",
+        month_name(month),
+        money(projected_cash),
+    )
+}
+
+/// A linked transfer between currencies whose two sides don't agree at the day's rate.
+fn rate_mismatch_sentence(outflow: Money, inflow: Money, expected: Money) -> String {
+    format!(
+        "A linked transfer took {} out and brought {} in, but {} would be about {} at that \
+         day's rate. Check the link, and remove it if the two sides aren't one transfer: the \
+         money is counted as moved either way.",
+        magnitude(outflow),
+        money(inflow),
+        magnitude(outflow),
+        money(expected),
+    )
+}
+
 /// A goal with spending linked on both the household's accounts and money that isn't its own.
 /// `goal` starts the sentence.
 fn both_sides_sentence(goal: &str) -> String {
@@ -360,13 +391,15 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             &names.one_off(*one_off),
             names.category(*category),
         ),
-        Caution::GoalOverdue { goal, due_on } => format!(
-            "{} was due on {} and still has money to find.",
-            names.goal(*goal),
-            day(*due_on),
-        ),
+        Caution::GoalOverdue { goal, due_on } => overdue_sentence(&names.goal(*goal), *due_on),
         Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
         Caution::TransferLegRemoved { .. } => TRANSFER_LEG_REMOVED.to_owned(),
+        Caution::TransferLinkRateMismatch {
+            outflow,
+            inflow,
+            expected_inflow,
+            ..
+        } => rate_mismatch_sentence(*outflow, *inflow, *expected_inflow),
         Caution::ItemHintNotCounted {
             item,
             account,
@@ -390,12 +423,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             month,
             projected_cash,
             ..
-        } => format!(
-            "In {}, cash is projected to fall to {}, below the safety floor. Income arriving \
-             later can't pay for that month.",
-            month_name(*month),
-            money(*projected_cash),
-        ),
+        } => floor_dip_sentence(*month, *projected_cash),
     }
 }
 

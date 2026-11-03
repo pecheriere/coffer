@@ -61,6 +61,14 @@ pub struct TransferLinkPath {
                    its leg posted still counts. A leg its provider takes \
                    back suspends this: the money counts as filed again, with the caution \
                    `transfer_leg_removed`.\n\n\
+                   Across two currencies all of each leg moved, so the link is checked against \
+                   the exchange rate for the later posted day, carried forward as usual and \
+                   including a rate an admin entered. `rate_check` says `mismatch` when the \
+                   legs differ by more than 5% after conversion, with both amounts, what the \
+                   outflow comes to in the inflow's currency and the date of the rate; `agrees`; \
+                   or `not_checked` when no usable rate is held for that day (none, or one over a week older). A mismatch is also the \
+                   caution `transfer_link_rate_mismatch` in the forecast and the report. It \
+                   changes no amount.\n\n\
                    A transaction is in one link at most. One with more than one split is refused, \
                    since part of it may be spending, and so is one linked to a goal when both \
                    accounts are in counted cash. Needs `write` on both accounts; with one hidden, \

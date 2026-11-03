@@ -20,6 +20,13 @@ fn usd(minor_units: i64) -> Money {
     }
 }
 
+fn eur(minor_units: i64) -> Money {
+    Money {
+        minor_units,
+        currency: Currency::parse("EUR").unwrap(),
+    }
+}
+
 const ON: Date = date(2026, 11, 7);
 
 /// One of every caution, and of every reason inside one, so that each is read.
@@ -88,6 +95,14 @@ fn cautions() -> Vec<Caution> {
         Caution::GoalLinkedBothSides { goal },
         Caution::TransferLegRemoved {
             link: TransferLinkId::new(),
+        },
+        Caution::TransferLinkRateMismatch {
+            link: TransferLinkId::new(),
+            outflow: usd(-125_000),
+            inflow: eur(1_250),
+            expected_inflow: eur(111_900),
+            rate_on: ON,
+            manual_rate: false,
         },
         Caution::ItemHintNotCounted {
             item: goal,
@@ -382,6 +397,17 @@ fn missing_names_read_well() {
                 link: TransferLinkId::new(),
             },
             "A bank took back one side of a linked transfer",
+        ),
+        (
+            Caution::TransferLinkRateMismatch {
+                link: TransferLinkId::new(),
+                outflow: usd(-125_000),
+                inflow: eur(1_250),
+                expected_inflow: eur(111_900),
+                rate_on: ON,
+                manual_rate: false,
+            },
+            "A linked transfer took 1,250.00 USD out and brought 12.50 EUR in, but 1,250.00 USD would be about 1,119.00 EUR",
         ),
         (
             Caution::ItemHintNotCounted {

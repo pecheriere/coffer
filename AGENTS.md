@@ -14,7 +14,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual; `fx`, exchange rates held
-  exactly and conversion through the euro; `net_worth`, the daily values, the
+  exactly and conversion through the euro; `transfer_rate`, the check of a transfer link's legs in
+  two currencies against a rate, which changes no amount; `net_worth`, the daily values, the
   periods and the report). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
