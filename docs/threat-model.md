@@ -143,6 +143,13 @@
   handler. An agent token is capped by its scope and by its member's role,
   and the member is re-read on every request, so disabling a member or
   changing a role takes effect immediately.
+- **Rules read bank text as data** (spec §8.13). A provider chooses a description, and
+  through a rule it can choose a category or an assignee from those a member set up, which is
+  why a rule fills only what nobody has set, never reviews, and names itself on what it did.
+  Matching is plain text in linear time, with no regular expressions, so neither side can make it
+  slow, and neither a description nor a pattern is logged. A dry run reads only what its
+  caller can read, in its list and its counts, and stops at 20,000 open transactions, since
+  `read` may ask for one. A run or an undo asks again at each batch whether its caller still may.
 - **Account grants narrow an agent token.** A token may carry grants: a
   level (`balances`, `transactions`, `write`) on chosen accounts, or on
   `all` accounts including ones created later. Its level on an account is
@@ -385,6 +392,19 @@
 
 ## Accepted residual risks
 
+- **A rule for every account shows its text to a token limited to one.** A rule's pattern is a
+  member's free text, and could say what another account's money goes on. It is shown to a token with
+  `transactions` on any account, so that a token can always read a rule that could fill a transaction it
+  sees, as with a planned item without a hint. A rule for one account stays with that account.
+- **One narrow writer can use up the limit of 200 rules.** The limit is the household's, since it bounds
+  the work a sync does, so a token with write on one account can fill it and refuse everyone else's, and
+  reaching it tells that token that many exist. Each create is audited, and an admin can delete them.
+- **A rule outlives the token that made it.** It stays until someone deletes it, as a category does.
+  It can only fill what's empty on the accounts it is for, which for a rule of every account includes
+  accounts created later, it is audited, and it names itself on each change. A run by hand is different:
+  it stops at its next batch once its token is revoked. A run started from a session survives that
+  session's logout or expiry, since an `Actor` doesn't name its session, while disabling the member stops
+  it at the next batch, and a changed role applies from the next batch, though both roles today may run a rule.
 - **A bank's text can try to steer a model reading it.** Descriptions, payees, notes and account
   names reach a model through `/mcp`, as they reach any agent through the API, and a provider or
   anyone who can send a payment chooses some of those words. coffer can't tell an instruction

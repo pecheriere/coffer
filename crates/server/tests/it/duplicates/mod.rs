@@ -213,6 +213,7 @@ async fn transactions(world: &World, account: AccountId) -> Vec<TransactionRecor
                 categories: Vec::new(),
                 uncategorized: false,
                 unmatched_transfer: false,
+                rule: None,
                 pending: None,
                 flag: None,
                 min_minor: None,

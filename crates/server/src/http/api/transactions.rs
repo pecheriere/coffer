@@ -8,7 +8,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::Response;
-use coffer_domain::ids::{AccountId, CategoryId, MemberId, SourceRecordId, TransactionId};
+use coffer_domain::ids::{AccountId, CategoryId, MemberId, RuleId, SourceRecordId, TransactionId};
 use coffer_domain::policy::AccountLevel;
 use coffer_domain::transactions::{ReviewStatus, TransactionFlag};
 use coffer_store::{AssigneeFilter, PageRequest};
@@ -112,6 +112,9 @@ pub struct TransactionQuery {
     /// link, which is what is left to match. `false` does not filter. A transaction linked to
     /// one the token can't see stays out, since it has a link.
     unmatched_transfer: Option<bool>,
+    /// Only what this rule filled and nobody has changed since, category or assignee. A rule
+    /// since deleted still counts.
+    rule: Option<RuleId>,
     /// Only pending (`true`) or only posted (`false`) transactions.
     pending: Option<bool>,
     /// Only transactions with this flag.
@@ -151,6 +154,7 @@ impl TransactionQuery {
             categories: self.category.map(|Listed(ids)| ids).unwrap_or_default(),
             uncategorized: self.uncategorized.unwrap_or(false),
             unmatched_transfer: self.unmatched_transfer.unwrap_or(false),
+            rule: self.rule,
             pending: self.pending,
             flag: self.flag,
             min_minor: self.min_amount,

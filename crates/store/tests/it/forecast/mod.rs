@@ -129,6 +129,7 @@ impl World {
                     member: None,
                     agent: None,
                     system: Some("test".into()),
+                    rule: None,
                     at: at(0),
                 },
             )
@@ -206,6 +207,7 @@ impl World {
                 member: None,
                 agent: None,
                 system: Some("test".into()),
+                rule: None,
                 at: at(0),
             },
         )

@@ -452,6 +452,7 @@ impl Ledger {
             categories: Vec::new(),
             uncategorized: false,
             unmatched_transfer: false,
+            rule: None,
             pending: None,
             flag: None,
             min_minor: Some(opposite),
