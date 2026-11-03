@@ -69,7 +69,7 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 ## 3. Non-goals (v1)
 
 - A real UI (dashboards, transaction lists). Only the auth/admin pages and the
-  read-only forecast and net worth pages in §6.4.
+  forecast page, which can settle a bill, and read-only net worth page in §6.4.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
   local change, but no tables or code for it exist in v1 (superseded for agent
@@ -329,7 +329,7 @@ small page helpers such as copy buttons, and reporting browser errors to
 coffer's own log (`docs/configuration.md`, "Browser reports"). Pages:
 setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
-No financial data pages in v1, except a small read-only forecast page (§8.9,
+No financial data pages in v1, except a small forecast page, read-only but for settling a bill (§8.9,
 R14) and a read-only net worth page (§8.10, N13). (Connections get a page because pasting a setup token is a human step.)
 
 ### 6.5 Authorization
@@ -914,47 +914,62 @@ settled for a month is out of all of this (R9a).
 needed, so a dated bill is paid by a transaction, never by its category's total. The forecast
 looks at occurrences of recurring bills and one-offs from the first of the month before
 `as_of`'s (`BILL_LOOK_BACK_MONTHS`, 1) up to and including `as_of`, and at each transaction
-R10 counts as spending in their category and currency from that same day. Transactions go
-oldest first, and each pays the oldest unpaid occurrence it fits, then the closest in amount,
-then the first in the order items load in. It pays one at most. An October bill paid in
-November therefore pays October's, and one payment for two months pays the older.
+R10 counts as spending in their category and currency from 7 days before that first day (`BILL_EARLY_PAYMENT_DAYS`),
+since a bill on the 1st may be debited on the 30th. Transactions go oldest first, and each pays
+the oldest unpaid occurrence it fits, then the closest in amount, then the first in the order items
+load in. It pays one at most. An October bill paid in November therefore pays October's, and one
+payment for two months pays the older.
 
 A transaction fits an occurrence when it is in the same category and currency, within 10% of
 its amount either way (`BILL_AMOUNT_TOLERANCE_PERCENT`), so a utility that varies still pays,
-and posted no more than 7 days before its date (`BILL_EARLY_PAYMENT_DAYS`), for a debit moved
-around a weekend. A smaller or larger transaction pays none of it, however close the category's
-total: part-payments are for a person to settle. An occurrence nothing paid counts in full.
+and posted no more than 7 days before its date, for a debit moved around a weekend. A transaction
+posted before the first day looked at fits only if it is nearer that occurrence than the item's one
+before: otherwise it was that one's, and a weekly bill's row exactly 7 days before would shift
+every payment along by one and hide a missed week. A smaller or larger transaction pays none of it,
+however close the category's total: part-payments are for a person to settle. An occurrence nothing
+paid counts in full. An occurrence that is paid counts as paid whatever the difference within the
+tolerance: 1,800 pays a bill of 2,000, and `paid_by.difference` shows the -200. It raises no
+caution, since a bill that varies would then never be firm.
+
+**What coffer has no evidence for.** An occurrence dated before the first posted transaction on a
+counted account, or with none yet, can't be called paid or unpaid. So a household's first month, or
+a bill anchored before its history, doesn't lose a month of bills from its surplus. It takes no
+payment, isn't in `unpaid` and is in no total; its `payments` entry has `before_history`, and one
+`bill_history_missing` per currency gives the first day, how many and how much. One known limit: it
+reads all counted accounts together, so an account linked later has its earlier bills read as
+unpaid. Then `last_month_loose_ends` and settling are the ways out.
 
 A payment comes out of the budget's pool, whole, and what paid no bill stays in it, so money
 spent on a budget can't hide a bill. A transaction that fits but might be the budget's is said
 rather than guessed: when its category's budgets plan as much or more for that calendar month, and
-it isn't the exact amount, it pays nothing, stays in the pool and raises
-`bill_payment_unclear` for the occurrence, with the transaction and its amount. In `as_of`'s
-month that holds no less than either truth. The exact amount, or more than the budgets plan, is
-the bill. A possible duplicate pays nothing, since it may be the same charge again (R10a), and
-stays in the pool with its caution. A refund within the tolerance of an earlier charge in its
-category undoes the newest one, which then pays nothing; any other refund only lowers the pool.
+it isn't the exact amount, it pays nothing and raises `bill_payment_unclear` for the occurrence, with
+the transaction and its amount. No more than the bill's amount of it stays in the pool, so in
+`as_of`'s month the need is never below either truth: a budget of 500, a bill of 450 and a charge
+of 480 hold 500. The exact amount, or more than the budgets plan, is the bill. A possible
+duplicate pays nothing, since it may be the same charge again (R10a), and stays in the pool with
+its caution. A refund within the tolerance of an earlier charge in its category counts against the
+newest one, which then pays nothing; any other refund only lowers the pool, so hardware coming back
+doesn't unpay the rent. A known limit, the other way: three quarters of a rent refunded leaves it
+paid.
 
 What nothing paid is in `unpaid` and counts in the first month. This month's raises
-`bill_not_seen`, summed by category, and last month's `bill_unpaid_last_month`, naming the item,
-the date and the amount. `payments` on the item's line lists each occurrence looked at, by date,
-with `paid_by`: the transaction, the day it posted and its amount. It is null for one nothing
-paid. A paid item with nothing else to count still has a line, with `counted` 0, for that list,
-and adds nothing to the number: not even its currency to `totals`. A wrong match is corrected
-without new machinery: settling the month (R9a) takes the occurrence out, so its transaction
-goes on to the next, and filing the transaction elsewhere takes the transaction out. The page
-shows the cautions only (R14); `payments` is in the API.
+`bill_not_seen`, summed by category and naming its `items`, and last month's `bill_unpaid_last_month`,
+naming the item, the date and the amount. If last month has an uncategorized transaction or a
+possible duplicate, which pay nothing, and a bill from last month is unpaid in that currency,
+`last_month_loose_ends` says so, since one may be the payment waiting to be filed. `payments` on the
+item's line lists each occurrence looked at, by date, with `paid_by`: the transaction, the day it
+posted, its amount and the difference. It is null for one nothing paid. A paid item with nothing
+else to count still has a line, with `counted` 0, for that list, and adds nothing to the number: not
+even its currency to `totals`. A wrong match is corrected without new machinery: settling the month
+(R9a) takes the occurrence out, so its transaction goes on to the next, and filing the transaction
+elsewhere takes the transaction out. The page shows the cautions and buttons to settle (R14);
+`payments` is in the API.
 
 Known limits. A bill's past occurrences are read at the item's amount and category today, so
-changing either can leave last month's unpaid, the safe direction. Nothing reaches before the
-look-back: a September bill paid in the 7 days before October's date pays October's, and October's
-own payment then has nothing to pay, so that month reads right and the month's money is held. A
-household that starts using coffer, or adds a bill anchored in the past, sees last month's
-occurrences as unpaid until settled, since no transaction shows them paid. A coincidence at the
-exact amount beside a budget is taken as the bill, which in `as_of`'s month changes no total
-while the budget has room, and which `payments` shows. Plan versus actual's rollovers still
-give bills their share of a month by amount (above): they say what a month came to, and pay no
-one occurrence.
+changing either can leave last month's unpaid, the safe direction. A coincidence at the exact amount
+beside a budget is taken as the bill, which in `as_of`'s month changes no total while the budget has
+room, and which `payments` shows. Plan versus actual's rollovers still give bills their share of a
+month by amount (above): they say what a month came to, and pay no one occurrence.
 
 **R9a. Settling a month.** A bill can be paid with no transaction to categorize, such as a
 transfer or from an account coffer doesn't track, and the safe default of R9 would then
@@ -986,9 +1001,12 @@ In a forecast a settled item's occurrences in that month count as nothing, in th
 month, last month or a later one in the window: no gross, no gap, no `bill_not_seen` or
 `bill_unpaid_last_month`, no payment of its own, so a transaction goes on to the next bill or a
 budget, and a settled one-off raises no `goal_one_off_overlap`. One narrowing of that, toward
-holding more: a month settled as `paid` takes out of the pool a transaction that fits it and paid
-nothing else, up to the bill's amount, so a payment `bill_payment_unclear` asked about doesn't
-lower the need twice. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
+holding more: a month settled as `paid` says the money was spent, so it is no budget's. For an
+occurrence looked at or later in `as_of`'s month, a transaction that fits it and paid nothing else
+leaves the pool, up to the bill's amount; with none that fits, such as a charge of 230 on a bill of
+200 or a rent paid in two parts, the bill's amount comes off the pool whatever it holds. That caps it
+at the bill so that settling can't raise the need, so of that 230 the 30 beyond the bill still
+reduces a budget. `skipped` takes nothing. A months floor keeps them, since it says how much to hold
 rather than what is owed, so settling can't lower or zero it. `settled` lists each item and
 month from last month to the window's end with its amount, so no number silently differs, and settling raises
 no caution, so it doesn't make a forecast `provisional` of itself: a person decided. A
@@ -998,8 +1016,8 @@ Plan versus actual keeps a settled occurrence in `planned`, since it is what was
 row's `settled` says how much of `planned` is, and the report's `settled` which item, month
 and kind, so the difference is no surprise. A settled occurrence takes no share of a rollover's
 spending, so the rollover and the forecast agree: a settlement says that bill was paid some other
-way, so spending in its category wasn't for it. The forecast page stays read-only (R14): it
-says what is settled in plain words, and acting on it is API only for now.
+way, so spending in its category wasn't for it. The forecast page says what is settled in plain
+words and can settle what a caution asks about (R14); deleting a settlement is API only for now.
 
 **R10. Actuals** count only posted, non-goal-linked `expense` splits on counted
 accounts, on or before that account's balance date, since spending newer than the
@@ -1049,12 +1067,13 @@ this one persists nothing.
 no items also takes `floor` and `stale_after_days`, so a tagged floor is never
 flattened into query parameters.
 
-**R14. Settings are API-only; a small read-only forecast page is added.**
+**R14. Settings are API-only; a small forecast page is added.**
 `GET /forecast` is session-only and renders the same forecast as the API: cash
 available, cash needed, the surplus or the reason there is none, a monthly
-breakdown with expected income, and cautions. It has no write action, the same
-authorization as R2, the default content security policy, no inline script or
-style, and a link in the navigation.
+breakdown with expected income, and cautions. Its only write action settles a bill a caution asks
+about (`bill_not_seen`, `bill_unpaid_last_month`, `bill_payment_unclear`), through R9a's service, for a role that may
+write, with the session's CSRF token. It has the same authorization to read as R2, the default
+content security policy, no inline script or style, and a link in the navigation.
 
 **R15. Income is off by default.** With it on, a caution fires when projected
 cash at a month's end, before an inflow arrives, is below the floor: a later bonus
@@ -1568,7 +1587,7 @@ treating it as a movement would owe the bill again on top of the fallen balance.
 - A provider's record vanishing doesn't delete a leg, which holds a person's say-so. It stays with its
   link, flagged `source_removed`, and the link stops counting: real spending comes back rather than
   disappears. The flagged leg follows R10a, so a withdrawn charge is in `left_out`, and the other leg
-  counts as it is filed. Between counted accounts with a leg in `as_of`'s month, the caution
+  counts as it is filed. Between counted accounts with a leg from the first of last month on (R9b), the caution
   `transfer_leg_removed` names the link and makes the forecast `provisional`. A pending record taken
   back is in no `spending_newer_than_balance`, link or not. A record attaching again clears the flag
   and the link counts again.

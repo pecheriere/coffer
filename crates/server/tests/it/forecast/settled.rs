@@ -14,6 +14,7 @@ use super::{
 pub(crate) async fn holding() -> (World, coffer_domain::ids::AccountId) {
     let world = world().await;
     let checking = world.funded("Checking", 1_000_000).await;
+    world.with_history(checking).await;
     world.floor(0).await;
     (world, checking)
 }

@@ -20,7 +20,7 @@ mod types;
 
 pub use bill_matching::{
     BILL_AMOUNT_TOLERANCE_PERCENT, BILL_EARLY_PAYMENT_DAYS, BILL_LOOK_BACK_MONTHS,
-    bills_looked_at_from,
+    bills_looked_at_from, payments_read_from,
 };
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
@@ -682,10 +682,11 @@ fn cautions(
             })
             .map(|item| Caution::GoalLinkedBothSides { goal: item.source }),
     );
-    for (&(category, currency), &amount) in &reduction.not_seen {
+    for (&(category, currency), gap) in &reduction.not_seen {
         cautions.push(Caution::BillNotSeen {
             category,
-            amount: money(amount, currency)?,
+            amount: money(gap.amount, currency)?,
+            items: gap.items.clone(),
         });
     }
     cautions.extend(reduction.bill_cautions.iter().cloned());
@@ -850,6 +851,25 @@ fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &m
             count: possible_duplicates,
         });
     }
+    cautions.extend(
+        input
+            .last_month_loose_ends
+            .iter()
+            .filter(|loose| {
+                reduction
+                    .last_month_unpaid_currencies
+                    .contains(&loose.currency)
+            })
+            .map(|loose| Caution::LastMonthLooseEnds {
+                currency: loose.currency,
+                uncategorized_count: loose.uncategorized_count,
+                uncategorized_total: Money {
+                    minor_units: loose.uncategorized_minor,
+                    currency: loose.currency,
+                },
+                possible_duplicates: loose.possible_duplicates,
+            }),
+    );
     cautions.extend(
         input
             .links_with_leg_removed

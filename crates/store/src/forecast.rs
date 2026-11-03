@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::forecast::bills_looked_at_from;
+use coffer_domain::forecast::{bills_looked_at_from, payments_read_from};
 use coffer_domain::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, TransactionId, TransferLinkId,
 };
@@ -19,7 +19,7 @@ use sqlx::{Row as _, SqliteConnection};
 
 use crate::accounts::account_from_row;
 use crate::balances::snapshot_from_row;
-use crate::convert::{corrupt, int, parsed, text};
+use crate::convert::{corrupt, int, parsed, parsed_opt, text};
 use crate::household::fetch_forecast_settings;
 use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
@@ -53,10 +53,14 @@ pub struct ForecastData {
     /// The accounts with spending linked to a goal that `goal_spent` counts, ordered by id.
     pub goal_spending_accounts: Vec<AccountId>,
     pub category_spent: Vec<CategorySpentRow>,
-    /// The same spending per transaction and category, from the first day the look-back reaches
-    /// up to `as_of`, ordered by date and id: what can pay a bill.
+    /// The same spending per transaction and category, from [`payments_read_from`] up to `as_of`,
+    /// ordered by date and id: what can pay a bill.
     pub spent_transactions: Vec<SpentTransactionRow>,
     pub loose_ends: Vec<LooseEndsRow>,
+    /// The same for the month before `as_of`'s.
+    pub last_month_loose_ends: Vec<LooseEndsRow>,
+    /// The first posted transaction on a counted account, up to `as_of`.
+    pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
     /// The links between counted accounts with a leg its provider took back and a leg the
@@ -262,17 +266,37 @@ macro_rules! uncategorized {
     };
 }
 
-const LOOSE_ENDS: &str = concat!(
-    "SELECT t.currency AS currency, COUNT(*) ",
-    uncategorized!(both_counted),
-    " AS uncategorized_count, COALESCE(-SUM(",
-    after_moved!("t.amount_minor", both_counted),
-    ") ",
-    uncategorized!(both_counted),
-    ", 0) AS uncategorized_minor, SUM(t.flag_possible_duplicate) AS possible_duplicates FROM ",
-    shown_this_month!(),
-    " GROUP BY t.currency HAVING uncategorized_count > 0 OR possible_duplicates > 0 \
-     ORDER BY t.currency"
+/// What in the bound window could yet change a category's spending, by currency. `$until` narrows
+/// the window's end.
+macro_rules! loose_ends {
+    ($until:literal) => {
+        concat!(
+            "SELECT t.currency AS currency, COUNT(*) ",
+            uncategorized!(both_counted),
+            " AS uncategorized_count, COALESCE(-SUM(",
+            after_moved!("t.amount_minor", both_counted),
+            ") ",
+            uncategorized!(both_counted),
+            ", 0) AS uncategorized_minor, SUM(t.flag_possible_duplicate) AS possible_duplicates FROM ",
+            shown_this_month!(),
+            $until,
+            " GROUP BY t.currency HAVING uncategorized_count > 0 OR possible_duplicates > 0 \
+             ORDER BY t.currency"
+        )
+    };
+}
+
+const LOOSE_ENDS: &str = loose_ends!("");
+
+/// [`LOOSE_ENDS`] from the start of last month, up to the bound start of this one.
+const LAST_MONTH_LOOSE_ENDS: &str = loose_ends!(" AND t.posted_on < ?3");
+
+/// Before this day coffer has no evidence of whether a bill was paid (spec §8.9 R9b).
+const EARLIEST_TRANSACTION: &str = concat!(
+    "SELECT MIN(t.posted_on) AS earliest FROM transactions t \
+     JOIN accounts a ON a.id = t.account_id \
+     WHERE t.pending = 0 AND t.posted_on <= ?1 AND ",
+    counted_cash!("a")
 );
 
 /// Spending linked to each goal: `expense` splits only, since money moved to savings
@@ -635,13 +659,12 @@ async fn links_with_leg_removed(
         .collect()
 }
 
-/// What was spent up to `as_of`: per category in its month, and per transaction from the first
-/// day the look-back reaches.
+/// What was spent up to `as_of`: per category in its month, and per transaction from `read_from`.
 async fn spending(
     conn: &mut SqliteConnection,
     as_of: &str,
     month_start: &str,
-    looked_at_from: &str,
+    read_from: &str,
 ) -> Result<(Vec<CategorySpentRow>, Vec<SpentTransactionRow>), StoreError> {
     let by_category = sqlx::query(CATEGORY_SPENT)
         .bind(as_of)
@@ -654,7 +677,7 @@ async fn spending(
         .collect::<Result<_, _>>()?;
     let by_transaction = sqlx::query(SPENT_TRANSACTIONS)
         .bind(as_of)
-        .bind(looked_at_from)
+        .bind(read_from)
         .fetch_all(&mut *conn)
         .await
         .map_err(StoreError::from_sqlx)?
@@ -708,6 +731,7 @@ impl Store {
         let day = as_of.to_string();
         let month_start = as_of.first_of_month().to_string();
         let looked_at_from = bills_looked_at_from(as_of).to_string();
+        let read_from = payments_read_from(as_of).to_string();
         // One read transaction: a sync committing midway can't split a forecast.
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         let settings = fetch_forecast_settings(&mut *tx).await?;
@@ -745,7 +769,7 @@ impl Store {
             .map(|row| parsed(row, "account"))
             .collect::<Result<_, _>>()?;
         let (category_spent, spent_transactions) =
-            spending(&mut tx, &day, &month_start, &looked_at_from).await?;
+            spending(&mut tx, &day, &month_start, &read_from).await?;
         let loose_ends = sqlx::query(LOOSE_ENDS)
             .bind(&day)
             .bind(&month_start)
@@ -755,6 +779,22 @@ impl Store {
             .iter()
             .map(loose_ends_from_row)
             .collect::<Result<_, _>>()?;
+        let last_month_loose_ends = sqlx::query(LAST_MONTH_LOOSE_ENDS)
+            .bind(&day)
+            .bind(&looked_at_from)
+            .bind(&month_start)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(loose_ends_from_row)
+            .collect::<Result<_, _>>()?;
+        let earliest_transaction = sqlx::query(EARLIEST_TRANSACTION)
+            .bind(&day)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)
+            .and_then(|row| parsed_opt(&row, "earliest"))?;
         let newer_spending = sqlx::query(NEWER_SPENDING)
             .bind(&day)
             .fetch_all(&mut *tx)
@@ -790,6 +830,8 @@ impl Store {
             category_spent,
             spent_transactions,
             loose_ends,
+            last_month_loose_ends,
+            earliest_transaction,
             newer_spending,
             links_with_leg_removed,
             provider_accounts,

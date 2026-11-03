@@ -67,6 +67,7 @@ async fn on_the_10th() -> (World, AccountId) {
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
     world.balance(checking, BEFORE_THE_CHARGE, 300_000).await;
+    world.with_history(checking).await;
     world.floor(0).await;
     (world, checking)
 }

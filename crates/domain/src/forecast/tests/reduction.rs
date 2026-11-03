@@ -7,7 +7,7 @@ use super::{
     paid_on, run, run_as_given, spent,
 };
 use super::{assert_provisional, currency, usd};
-use crate::forecast::{CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput};
+use crate::forecast::{CategorySpent, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
 use crate::plan::{IntervalUnit, PlanSchedule};
 
@@ -424,10 +424,7 @@ fn an_unpaid_bill_counts_in_full_and_warns() {
     assert_eq!(rent.counted, usd(800_000), "so it still counts");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: home,
-            amount: usd(200_000),
-        }],
+        [super::not_seen(&forecast, home, usd(200_000))],
         "with the category and the amount"
     );
     assert_provisional(&forecast);
@@ -469,10 +466,7 @@ fn a_transaction_well_short_of_a_bill_pays_none_of_it() {
     assert_eq!(line(&forecast, "Rent").unpaid, usd(200_000), "all of it");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: home,
-            amount: usd(200_000),
-        }],
+        [super::not_seen(&forecast, home, usd(200_000))],
         "the whole bill"
     );
     assert_eq!(forecast.surplus, Some(usd(200_000)), "1,000,000 - 800,000");
@@ -519,10 +513,7 @@ fn unpaid_bills_are_traced_in_date_order() {
     );
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: home,
-            amount: usd(100_000),
-        }],
+        [super::not_seen(&forecast, home, usd(100_000))],
         "one caution per category"
     );
 }
@@ -601,10 +592,7 @@ fn an_earlier_one_off_counts_its_gap_and_warns() {
     assert_eq!(tyres.counted, usd(30_000), "so it still counts");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: car,
-            amount: usd(30_000),
-        }],
+        [super::not_seen(&forecast, car, usd(30_000))],
         "the same caution as a bill"
     );
     assert_provisional(&forecast);
@@ -660,10 +648,7 @@ fn one_offs_and_bills_are_paid_in_date_order() {
     assert_eq!(line(&forecast, "Rent").unpaid, usd(100), "then the later");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: home,
-            amount: usd(100),
-        }],
+        [super::not_seen(&forecast, home, usd(100))],
         "one caution per category"
     );
 }
@@ -772,10 +757,7 @@ fn money_that_fits_no_bill_goes_to_the_budget() {
     assert_eq!(upkeep.counted, usd(0), "the budget is spent");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: home,
-            amount: usd(2_000),
-        }],
+        [super::not_seen(&forecast, home, usd(2_000))],
         "the bill is reported"
     );
 }

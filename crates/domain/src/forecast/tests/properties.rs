@@ -13,7 +13,7 @@ use crate::accounts::LiquidityClass;
 use crate::forecast::{
     AccountInput, BalanceInput, Blocker, CategorySpent, Caution, Forecast, ForecastInput,
     ForecastStatus, ItemInput, LineSource, LooseEnds, SpentTransaction, bills_looked_at_from,
-    compute_forecast,
+    compute_forecast, payments_read_from,
 };
 use crate::ids::{CategoryId, TransactionId};
 use crate::money::{Currency, Money};
@@ -175,7 +175,7 @@ fn spent_rows(
                 posted_on: as_of
                     .checked_sub(days.days())
                     .unwrap()
-                    .max(bills_looked_at_from(as_of)),
+                    .max(payments_read_from(as_of)),
                 spent_minor: if kind == 0 { -minor } else { minor },
                 possible_duplicate: kind == 1,
             })
@@ -204,7 +204,7 @@ fn input() -> impl Strategy<Value = ForecastInput> {
         collection::vec((0_u32..3, 0_u32..3, 0..MAX_AMOUNT), 0..2),
         (
             as_of(),
-            collection::vec((0_usize..12, -15_i64..15, 0_i32..62, 0_u8..6), 0..12),
+            collection::vec((0_usize..12, -15_i64..15, 0_i32..70, 0_u8..6), 0..12),
         ),
     )
         .prop_map(
@@ -227,6 +227,12 @@ fn input() -> impl Strategy<Value = ForecastInput> {
                     horizon_months,
                     include_income,
                     spent_transactions: spent_rows(&picks, &items, as_of),
+                    // Now and then, history that starts inside the look-back.
+                    earliest_transaction: Some(if picks.len() % 4 == 0 {
+                        as_of.checked_sub(20.days()).unwrap()
+                    } else {
+                        date(2020, 1, 1)
+                    }),
                     category_spent: spent
                         .iter()
                         .filter_map(|&(pick, spent_minor, in_euros)| {
@@ -357,6 +363,15 @@ fn check_payments(forecast: &Forecast) -> Result<(), String> {
     Ok(())
 }
 
+/// `item`'s unsettled occurrences from the look-back to `as_of`, but for those before history.
+fn evidenced(input: &ForecastInput, item: &ItemInput) -> Result<i128, String> {
+    let from = bills_looked_at_from(input.as_of);
+    let from = input
+        .earliest_transaction
+        .map_or(input.as_of, |first| first.max(from));
+    dated(item, from.min(input.as_of), input.as_of)
+}
+
 /// What a category's lines owe is its bills before `as_of` less those paid, and this month's part
 /// of it is what `bill_not_seen` says.
 fn check_owed(
@@ -391,12 +406,13 @@ fn check_owed(
             Caution::BillNotSeen {
                 category: found,
                 amount,
+                ..
             } if *found == category && amount.currency == code => Some(wide(*amount)),
             _ => None,
         })
         .sum();
     let this_month: i128 = before_as_of()
-        .filter(|payment| payment.paid_by.is_none())
+        .filter(|payment| payment.paid_by.is_none() && !payment.before_history)
         .filter(|payment| payment.on >= input.as_of.first_of_month())
         .map(|payment| wide(payment.amount))
         .sum();
@@ -438,7 +454,7 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             figures.later_budgets += dated(item, month_end, window_ends)?;
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs.
-            figures.earlier_bills += dated(item, bills_looked_at_from(input.as_of), input.as_of)?;
+            figures.earlier_bills += evidenced(input, item)?;
             figures.settled_paid |= item
                 .settled
                 .values()
@@ -462,7 +478,11 @@ fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Result<(), Str
             .sum();
         let pool = (figures.spent - paid_this_month).max(0);
         let reduced_expected = pool.min(figures.month_budgets);
-        if figures.settled_paid {
+        // Unclear money leaves the pool beyond the bill, which `payments` doesn't show.
+        let unclear = forecast.cautions.iter().any(|caution| {
+            matches!(caution, Caution::BillPaymentUnclear { amount, .. } if amount.currency == code)
+        });
+        if figures.settled_paid || unclear {
             if reduced > reduced_expected {
                 return Err("a pool was spent more than once".to_owned());
             }
@@ -695,9 +715,16 @@ proptest! {
         let extra = settled.cautions.iter().filter(|caution| !plain.cautions.contains(caution));
         for caution in extra {
             // What a caution says can change with the need: a gap's amount, as spending moves
-            // to another bill, and the first month cash dips below the floor.
+            // to another bill, which may then be unclear, how much history is missing, and the
+            // first month cash dips below the floor.
             prop_assert!(
-                matches!(caution, Caution::BillNotSeen { .. } | Caution::CashDipsBelowFloor { .. }),
+                matches!(
+                    caution,
+                    Caution::BillNotSeen { .. }
+                        | Caution::BillPaymentUnclear { .. }
+                        | Caution::BillHistoryMissing { .. }
+                        | Caution::CashDipsBelowFloor { .. }
+                ),
                 "settling adds no caution of its own"
             );
         }

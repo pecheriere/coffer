@@ -217,10 +217,7 @@ fn a_possible_duplicate_pays_no_bill() {
     assert_eq!(
         forecast.cautions,
         [
-            Caution::BillNotSeen {
-                category: car,
-                amount: usd(1_000),
-            },
+            super::not_seen(&forecast, car, usd(1_000)),
             Caution::PossibleDuplicates { count: 1 },
         ],
         "both are said"

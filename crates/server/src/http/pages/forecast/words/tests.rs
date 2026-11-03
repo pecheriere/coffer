@@ -29,6 +29,18 @@ fn cautions() -> Vec<Caution> {
         id: PlannedItemId::new(),
     };
     let mut all = cautions_other_than_a_bills();
+    all.push(Caution::BillHistoryMissing {
+        starts_on: Some(ON),
+        currency: Currency::parse("USD").unwrap(),
+        occurrences: 8,
+        amount: usd(600_000),
+    });
+    all.push(Caution::LastMonthLooseEnds {
+        currency: Currency::parse("USD").unwrap(),
+        uncategorized_count: 2,
+        uncategorized_total: usd(5_000),
+        possible_duplicates: 1,
+    });
     all.push(Caution::BillUnpaidLastMonth {
         item,
         on: ON,
@@ -87,6 +99,7 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
         Caution::BillNotSeen {
             category,
             amount: usd(12_000),
+            items: Vec::new(),
         },
         Caution::ClosedLiabilityOwing {
             account,
@@ -236,6 +249,7 @@ fn an_unseen_bill_says_to_settle_one_paid_from_a_held_account() {
         &Caution::BillNotSeen {
             category,
             amount: usd(1),
+            items: Vec::new(),
         },
         &names,
     );
@@ -361,6 +375,7 @@ fn an_unseen_bill_reads_right_for_several_items() {
         &Caution::BillNotSeen {
             category,
             amount: usd(12_000),
+            items: Vec::new(),
         },
         &names,
     );
@@ -385,7 +400,10 @@ fn a_bill_from_last_month_is_named_with_its_day_and_amount() {
     );
     assert!(unpaid.starts_with("Rent was due on 7 November 2026"));
     assert!(unpaid.contains("about 120.00 USD"));
-    assert!(unpaid.contains("settle it for that month"));
+    assert!(unpaid.contains(&format!(
+        "PUT /api/v1/plan-items/{id}/settlements/2026-11 with {{\"kind\": \"paid\"}}"
+    )));
+    assert!(unpaid.contains("file it"));
 
     let unclear = said(
         &Caution::BillPaymentUnclear {
@@ -399,6 +417,38 @@ fn a_bill_from_last_month_is_named_with_its_day_and_amount() {
     );
     assert!(unclear.contains("A transaction of 110.00 USD"));
     assert!(unclear.contains("the bill still counts as needed"));
+}
+
+#[test]
+fn a_bill_not_seen_names_its_items() {
+    let id = PlannedItemId::new();
+    let category = CategoryId::new();
+    let mut names = Names::of_accounts(&[]);
+    names.items.insert(id, "Rent".to_owned());
+    let sentence = said(
+        &Caution::BillNotSeen {
+            category,
+            amount: usd(12_000),
+            items: vec![LineSource::PlannedItem { id }],
+        },
+        &names,
+    );
+    assert!(sentence.starts_with("Rent in a category dated earlier this month"));
+}
+
+#[test]
+fn missing_history_says_when_it_starts_and_how_much() {
+    let sentence = said(
+        &Caution::BillHistoryMissing {
+            starts_on: Some(ON),
+            currency: Currency::parse("USD").unwrap(),
+            occurrences: 8,
+            amount: usd(600_000),
+        },
+        &Names::of_accounts(&[]),
+    );
+    assert!(sentence.contains("start on 7 November 2026"));
+    assert!(sentence.contains("8 bills or one-offs due before then, 6,000.00 USD in all"));
 }
 
 /// With no names at all, each sentence still reads as one: nothing like "The goal A
@@ -456,6 +506,7 @@ fn missing_names_read_well() {
             Caution::BillNotSeen {
                 category,
                 amount: usd(1),
+                items: Vec::new(),
             },
             "Bills or one-offs in a category",
         ),

@@ -38,7 +38,17 @@ pub fn bills_looked_at_from(as_of: Date) -> Date {
         .unwrap_or(Date::MIN)
 }
 
-/// One occurrence of a stored recurring bill or one-off that the look-back reaches.
+/// The first day whose transactions a forecast from `as_of` reads: a payment up to
+/// [`BILL_EARLY_PAYMENT_DAYS`] before the first bill it looks at may be that bill's.
+#[must_use]
+pub fn payments_read_from(as_of: Date) -> Date {
+    bills_looked_at_from(as_of)
+        .checked_sub(Span::new().days(BILL_EARLY_PAYMENT_DAYS))
+        .unwrap_or(Date::MIN)
+}
+
+/// One occurrence of a stored recurring bill or one-off that the look-back reaches, or one settled
+/// as paid later in `as_of`'s month.
 pub(super) struct Bill {
     pub(super) on: Date,
     /// The item's position in the input.
@@ -47,6 +57,8 @@ pub(super) struct Bill {
     pub(super) amount: i128,
     /// What a person said of its month. A settled occurrence takes no part in paying.
     pub(super) settled: Option<SettlementKind>,
+    /// Dated before the first transaction anyone can see, so nothing can say it was paid or not.
+    pub(super) before_history: bool,
 }
 
 /// What the transactions say of one occurrence. The numbers are positions in the input.
@@ -64,6 +76,9 @@ pub(super) struct Matching {
     pub(super) seen: Vec<Seen>,
     /// The transactions that come out of a budget's pool, and how much of each.
     pub(super) taken: BTreeMap<usize, i128>,
+    /// What occurrences settled as paid in `as_of`'s month take from their pool, where no
+    /// transaction fits them: the money was spent somehow, and may be in the pool.
+    pub(super) settled_charges: BTreeMap<PoolKey, i128>,
 }
 
 /// Whether `paid` is within the tolerance of `planned`, a positive amount.
@@ -85,7 +100,7 @@ struct Payment<'a> {
 
 impl Payment<'_> {
     /// Whether it could pay `bill`, leaving its budget aside.
-    fn fits(self, bill: &Bill) -> bool {
+    fn fits(self, bill: &Bill, input: &ForecastInput) -> bool {
         let earliest = bill
             .on
             .checked_sub(Span::new().days(BILL_EARLY_PAYMENT_DAYS))
@@ -93,12 +108,32 @@ impl Payment<'_> {
         key_of(self.row) == bill.key
             && earliest <= self.row.posted_on
             && close_enough(self.amount, bill.amount)
+            && (self.row.posted_on >= bills_looked_at_from(input.as_of)
+                || self.is_closest_to(bill, input))
+    }
+
+    /// Whether this payment, read from before the look-back, is nearer `bill` than the occurrence
+    /// before it. If not, it paid that one: taking it here would shift a weekly bill's payments
+    /// along by one and hide a missed week.
+    fn is_closest_to(self, bill: &Bill, input: &ForecastInput) -> bool {
+        let days_to = |from: Date, to: Date| from.until(to).map_or(0, |span| span.get_days().abs());
+        let window = bill
+            .on
+            .checked_sub(Span::new().days(2 * BILL_EARLY_PAYMENT_DAYS))
+            .unwrap_or(Date::MIN);
+        let previous = input
+            .items
+            .get(bill.index)
+            .and_then(|item| item.schedule.occurrences(window, bill.on).last().copied());
+        previous.is_none_or(|previous| {
+            days_to(self.row.posted_on, bill.on) < days_to(previous, self.row.posted_on)
+        })
     }
 }
 
-/// The outflows in date order, each less the refunds in its category and currency, which come
-/// off the newest charge on or before their own day, then the one before it. What is left can be
-/// too little to pay anything, which holds more, whichever charge the refund was really for.
+/// The outflows in date order, each less the refund that undid it: a refund within the tolerance of
+/// a charge, on or before its own day and the newest such. A charge of 2,000 and a refund of 250
+/// aren't that, so the refund only lowers what its category spent, which a budget's pool reads.
 fn after_refunds(rows: &[SpentTransaction], order: &[usize]) -> Vec<i128> {
     let mut left: Vec<i128> = rows
         .iter()
@@ -108,16 +143,19 @@ fn after_refunds(rows: &[SpentTransaction], order: &[usize]) -> Vec<i128> {
         let Some(refund) = rows.get(refund_at).filter(|row| row.spent_minor < 0) else {
             continue;
         };
-        let mut to_take = -i128::from(refund.spent_minor);
-        for &at in order.iter().rev() {
-            if let (Some(row), Some(amount)) = (rows.get(at), left.get_mut(at))
-                && key_of(row) == key_of(refund)
-                && row.posted_on <= refund.posted_on
-            {
-                let taken = to_take.min(*amount);
-                *amount -= taken;
-                to_take -= taken;
-            }
+        let refunded = -i128::from(refund.spent_minor);
+        let undone = order.iter().rev().copied().find(|&at| {
+            rows.get(at)
+                .zip(left.get(at))
+                .is_some_and(|(row, &amount)| {
+                    amount > 0
+                        && key_of(row) == key_of(refund)
+                        && row.posted_on <= refund.posted_on
+                        && close_enough(refunded, amount)
+                })
+        });
+        if let Some(amount) = undone.and_then(|at| left.get_mut(at)) {
+            *amount -= refunded.min(*amount);
         }
     }
     left
@@ -156,8 +194,8 @@ impl BudgetPlans<'_> {
 }
 
 /// Matches `bills`, sorted by date and then input order, against the transactions. A possible
-/// duplicate pays nothing, since it may be the same payment again, and neither does a charge
-/// refunds emptied.
+/// duplicate pays nothing, since it may be the same payment again, and neither does a charge a
+/// refund undid.
 pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
     let rows = &input.spent_transactions;
     let mut order: Vec<usize> = (0..rows.len()).collect();
@@ -176,56 +214,90 @@ pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
         input,
         known: BTreeMap::new(),
     };
-    let mut seen = vec![Seen::Nothing; bills.len()];
-    let mut taken = BTreeMap::new();
+    let mut matching = Matching {
+        seen: vec![Seen::Nothing; bills.len()],
+        taken: BTreeMap::new(),
+        settled_charges: BTreeMap::new(),
+    };
     for &payment in &payments {
         let oldest = bills
             .iter()
             .enumerate()
             .filter(|&(position, bill)| {
-                seen.get(position) == Some(&Seen::Nothing)
+                matching.seen.get(position) == Some(&Seen::Nothing)
                     && bill.settled.is_none()
-                    && payment.fits(bill)
+                    && !bill.before_history
+                    && bill.on <= input.as_of
+                    && payment.fits(bill, input)
                     && plans.tells_apart(payment, bill)
             })
             .min_by_key(|&(position, bill)| {
                 (bill.on, (payment.amount - bill.amount).abs(), position)
             });
         if let Some((position, _)) = oldest
-            && let Some(found) = seen.get_mut(position)
+            && let Some(found) = matching.seen.get_mut(position)
         {
             *found = Seen::Paid(payment.at, payment.amount);
-            taken.insert(payment.at, payment.amount);
+            matching.taken.insert(payment.at, payment.amount);
         }
     }
+    point_at_the_rest(bills, input, &payments, &mut matching);
+    matching
+}
 
+/// What the transactions left over say of the bills they didn't pay.
+fn point_at_the_rest(
+    bills: &[Bill],
+    input: &ForecastInput,
+    payments: &[Payment<'_>],
+    matching: &mut Matching,
+) {
+    let month_start = input.as_of.first_of_month();
     let mut pointed_at = BTreeSet::new();
     for (position, bill) in bills.iter().enumerate() {
         let open = match bill.settled {
-            // A person said it was paid, and this is likely how: left in the pool, the same money
-            // would lower a budget as well.
             Some(SettlementKind::Paid) => true,
             Some(SettlementKind::Skipped) => false,
             // Dated `as_of`, it counts in full anyway, so there is nothing to say.
-            None => bill.on < input.as_of,
+            None => bill.on < input.as_of && !bill.before_history,
         };
-        if !open || seen.get(position) != Some(&Seen::Nothing) {
+        if !open || matching.seen.get(position) != Some(&Seen::Nothing) {
             continue;
         }
-        let Some(&payment) = payments.iter().find(|payment| {
-            !taken.contains_key(&payment.at)
+        let found = payments.iter().find(|payment| {
+            !matching.taken.contains_key(&payment.at)
                 && !pointed_at.contains(&payment.at)
-                && payment.fits(bill)
-        }) else {
-            continue;
-        };
-        if bill.settled.is_some() {
-            // No more than the bill, so settling it can't raise what is needed.
-            taken.insert(payment.at, payment.amount.min(bill.amount));
-        } else if let Some(found) = seen.get_mut(position) {
-            *found = Seen::Unclear(payment.at, payment.amount);
-            pointed_at.insert(payment.at);
+                && payment.fits(bill, input)
+        });
+        match (found, bill.settled) {
+            // A person said it was paid, and this is likely how. Left in the pool, the same money
+            // would lower a budget as well. No more than the bill, so settling can't raise the need.
+            (Some(payment), Some(_)) => {
+                matching
+                    .taken
+                    .insert(payment.at, payment.amount.min(bill.amount));
+            }
+            // Paid some way nothing fits, such as in two parts: any of the category's money may
+            // be how, so that much of it is no budget's.
+            (None, Some(_)) => {
+                if bill.on >= month_start {
+                    *matching.settled_charges.entry(bill.key).or_default() += bill.amount;
+                }
+            }
+            // It stays with the budget, but no more than the bill: were it the payment, what is
+            // over isn't the budget's either, and the need would read below the truth.
+            (Some(payment), None) => {
+                if let Some(seen) = matching.seen.get_mut(position) {
+                    *seen = Seen::Unclear(payment.at, payment.amount);
+                }
+                pointed_at.insert(payment.at);
+                if payment.amount > bill.amount {
+                    matching
+                        .taken
+                        .insert(payment.at, payment.amount - bill.amount);
+                }
+            }
+            (None, None) => {}
         }
     }
-    Matching { seen, taken }
 }

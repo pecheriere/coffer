@@ -330,6 +330,7 @@ async fn a_bill_past_its_date_stays_unpaid_with_the_caution() {
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
     world.balance(checking, "2026-11-10", 5_000_000).await;
+    world.with_history(checking).await;
     world.floor(0).await;
     let power = world.expense("Power").await;
     world
@@ -375,9 +376,9 @@ async fn a_goal_purchase_on_a_closed_card_without_a_balance_changes_nothing() {
     assert_eq!(forecast["surplus"], usd(4_000_000));
 }
 
-/// A rent paid by a charge of 200,000, reversed by +2000.00 split housing +150,000 and
-/// fun +50,000. Housing's charge comes to 50,000, which pays no rent, so November's is unpaid, on
-/// top of December's: 5,000,000 - 400,000.
+/// A rent paid by a charge of 200,000, reversed by +2000.00 split housing +190,000 and
+/// fun +10,000. Housing's refund is within the tolerance of the charge, which pays no rent, so
+/// November's is unpaid, on top of December's: 5,000,000 - 400,000.
 async fn rent_reversed(fed: &Fed) -> CategoryId {
     fed.linked_checking().await;
     fed.rent_paid().await;
@@ -392,8 +393,8 @@ async fn rent_reversed(fed: &Fed) -> CategoryId {
     fed.categorize(
         &back,
         &json!([
-            {"category": housing, "minor_units": 150_000},
-            {"category": fun, "minor_units": 50_000},
+            {"category": housing, "minor_units": 190_000},
+            {"category": fun, "minor_units": 10_000},
         ]),
     )
     .await;

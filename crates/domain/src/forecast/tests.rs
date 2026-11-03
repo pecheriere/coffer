@@ -7,7 +7,7 @@ use jiff::ToSpan;
 use jiff::civil::{Date, date};
 
 use super::{
-    AccountInput, BalanceInput, CategorySpent, CurrencyTotals, Forecast, ForecastInput,
+    AccountInput, BalanceInput, CategorySpent, Caution, CurrencyTotals, Forecast, ForecastInput,
     ForecastStatus, ItemInput, ItemLine, LineSource, NotCountedReason, SpentTransaction,
     bills_looked_at_from, compute_forecast,
 };
@@ -73,6 +73,8 @@ fn household() -> ForecastInput {
         category_spent: Vec::new(),
         spent_transactions: Vec::new(),
         loose_ends: Vec::new(),
+        last_month_loose_ends: Vec::new(),
+        earliest_transaction: Some(date(2020, 1, 1)),
         newer_spending: Vec::new(),
         links_with_leg_removed: Vec::new(),
         unbound: Vec::new(),
@@ -233,6 +235,20 @@ fn run(input: &ForecastInput) -> Forecast {
         spent_transactions: rows,
         ..input.clone()
     })
+}
+
+/// The one `bill_not_seen` `forecast` should hold for `category`, naming the items that owe.
+fn not_seen(forecast: &Forecast, category: CategoryId, amount: Money) -> Caution {
+    Caution::BillNotSeen {
+        category,
+        amount,
+        items: forecast
+            .items
+            .iter()
+            .filter(|line| line.category == Some(category) && line.unpaid.minor_units != 0)
+            .map(|line| line.source)
+            .collect(),
+    }
 }
 
 fn run_as_given(input: &ForecastInput) -> Forecast {

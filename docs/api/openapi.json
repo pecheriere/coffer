@@ -8134,10 +8134,11 @@
           },
           {
             "type": "object",
-            "description": "Recurring bills and one-offs dated earlier this month that no transaction paid, summed\nper category. They count as still needed; if one was paid under another category or at\nanother amount, the number shows less to invest, which is the safe direction.",
+            "description": "Recurring bills and one-offs dated earlier this month that no transaction paid, summed\nper category. They count as still needed; if one was paid under another category or at\nanother amount, the number shows less to invest, which is the safe direction. `items` are\nthe items they belong to, in input order.",
             "required": [
               "category",
               "amount",
+              "items",
               "kind"
             ],
             "properties": {
@@ -8146,6 +8147,12 @@
               },
               "category": {
                 "$ref": "#/components/schemas/CategoryId"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LineSource"
+                }
               },
               "kind": {
                 "type": "string",
@@ -8185,7 +8192,79 @@
           },
           {
             "type": "object",
-            "description": "A transaction is close to this bill's amount, but its category also has a budget that\ncould have spent it, so it isn't taken as the payment. The bill counts as still needed,\nand the transaction stays with the budget. Settling the month as `paid` says it was the\npayment, and takes it off the budget.",
+            "description": "Bills or one-offs dated before the first transaction on a counted account (`starts_on`,\nnull with none yet). Coffer can't tell whether they were paid, so they aren't treated as\nunpaid: `occurrences` of them, `amount` in all, are in none of the totals.",
+            "required": [
+              "starts_on",
+              "currency",
+              "occurrences",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_history_missing"
+                ]
+              },
+              "occurrences": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "starts_on": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Last month has money that can't pay a bill until a person files it, and a bill from last\nmonth is unpaid: an uncategorized transaction or a possible duplicate may be its payment.",
+            "required": [
+              "currency",
+              "uncategorized_count",
+              "uncategorized_total",
+              "possible_duplicates",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "last_month_loose_ends"
+                ]
+              },
+              "possible_duplicates": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "uncategorized_count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "uncategorized_total": {
+                "$ref": "#/components/schemas/Money"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A transaction is close to this bill's amount, but its category also has a budget that\ncould have spent it, so it isn't taken as the payment. The bill counts as still needed,\nand at most the bill's amount of it stays with the budget. Settling the month as `paid`\nsays it was the payment, and takes it off the budget.",
             "required": [
               "item",
               "on",
@@ -10674,11 +10753,16 @@
         "required": [
           "on",
           "amount",
-          "paid_by"
+          "paid_by",
+          "before_history"
         ],
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/Money"
+          },
+          "before_history": {
+            "type": "boolean",
+            "description": "Dated before the first transaction on a counted account, so there is no evidence either\nway: it takes no payment and isn't treated as unpaid."
           },
           "on": {
             "type": "string",
@@ -10688,7 +10772,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PaidBy",
-                "description": "Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated\nbefore `as_of`."
+                "description": "Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated\nbefore `as_of`, unless `before_history`."
               },
               {
                 "type": "null"
@@ -10758,12 +10842,17 @@
         "required": [
           "transaction",
           "posted_on",
-          "amount"
+          "amount",
+          "difference"
         ],
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/Money",
-            "description": "What it spent in the item's category, a positive magnitude."
+            "description": "What it spent in the item's category, a positive magnitude, after any refund of it."
+          },
+          "difference": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`amount` less the occurrence's: negative when it paid less than planned. Whatever it is,\nthe occurrence counts as paid."
           },
           "posted_on": {
             "type": "string",

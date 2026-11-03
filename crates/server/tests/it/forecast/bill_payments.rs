@@ -49,7 +49,13 @@ async fn a_bill_paid_on_the_2nd_pays_last_month() {
         json!([{
             "on": "2026-10-28",
             "amount": usd(1_000),
-            "paid_by": {"transaction": paid, "posted_on": "2026-11-02", "amount": usd(1_000)},
+            "before_history": false,
+            "paid_by": {
+                "transaction": paid,
+                "posted_on": "2026-11-02",
+                "amount": usd(1_000),
+                "difference": usd(0),
+            },
         }])
     );
     assert_eq!(forecast["surplus"], usd(999_000));
@@ -260,6 +266,154 @@ async fn a_link_pays_a_bill_only_if_money_left_counted_cash() {
 
         assert_eq!(line(&forecast, "Rent")["unpaid"], usd(unpaid));
     }
+}
+
+/// A debit on the day before the 1st, across the edge of what the look-back's bills reach: 30
+/// September pays 1 October, and 30 October pays 1 November, read through the store. Nothing is owed,
+/// as of 10 November: 10,000.00 - 20.00 on 1 December, the window's only one.
+#[tokio::test]
+async fn a_debit_before_the_first_bill_looked_at_pays_it() {
+    let (world, checking) = holding().await;
+    world.server.clock.set(noon("2026-11-10"));
+    world.balance(checking, "2026-11-09", 1_000_000).await;
+    let rent = world.expense("Rent").await;
+    world
+        .item(&outflow("Rent", 2_000, rent, &monthly("2026-01-01")))
+        .await;
+    world.spend(checking, "2026-09-30", 2_000, rent).await;
+    world.spend(checking, "2026-10-30", 2_000, rent).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(
+        paid_days(&forecast, "Rent"),
+        [
+            ("2026-10-01".to_owned(), json!("2026-09-30")),
+            ("2026-11-01".to_owned(), json!("2026-10-30")),
+        ]
+    );
+    assert_eq!(forecast["surplus"], usd(998_000));
+    assert_eq!(forecast["status"], "firm");
+}
+
+/// A weekly bill paid on its days, but for 1 October. The row of 24 September is that week's, so
+/// though it is exactly 7 days before 1 October it doesn't pay it: 1 October takes the row of 8
+/// October, and so on along, and one week of the seven is owed however they line up.
+#[tokio::test]
+async fn a_row_before_the_look_back_cannot_hide_a_missed_week() {
+    let (world, checking) = holding().await;
+    world.server.clock.set(noon("2026-11-10"));
+    world.balance(checking, "2026-11-09", 1_000_000).await;
+    let sitter = world.expense("Sitter").await;
+    world
+        .item(&outflow(
+            "Sitter",
+            1_000,
+            sitter,
+            &json!({"type": "recurring", "every": 1, "unit": "weeks", "anchor_on": "2026-09-24"}),
+        ))
+        .await;
+    for on in [
+        "2026-09-24",
+        "2026-10-08",
+        "2026-10-15",
+        "2026-10-22",
+        "2026-10-29",
+        "2026-11-05",
+    ] {
+        world.spend(checking, on, 1_000, sitter).await;
+    }
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    let unpaid: Vec<String> = paid_days(&forecast, "Sitter")
+        .into_iter()
+        .filter(|(_, paid)| paid.is_null())
+        .map(|(on, _)| on)
+        .collect();
+    assert_eq!(unpaid, ["2026-11-05"], "the last, by oldest first");
+    assert_eq!(line(&forecast, "Sitter")["unpaid"], usd(1_000));
+}
+
+/// Eight bills of 750.00 and history that starts on 1 November: October's have no evidence, so the
+/// surplus doesn't fall by 6,000.00 until December. One caution says how much, and November's, due
+/// after history starts, are as ever.
+#[tokio::test]
+async fn bills_before_the_first_transaction_are_one_caution_and_no_hold() {
+    let world = super::world().await;
+    let checking = world.funded("Checking", 1_000_000).await;
+    world.floor(0).await;
+    let bills = world.expense("Bills").await;
+    for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+        world
+            .item(&outflow(name, 75_000, bills, &monthly("2026-10-20")))
+            .await;
+    }
+    world.manual(checking, "2026-11-01", -1).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    let said = caution(&forecast, "bill_history_missing");
+    assert_eq!(said["starts_on"], "2026-11-01");
+    assert_eq!(said["occurrences"], 8);
+    assert_eq!(said["amount"], usd(600_000));
+    assert_eq!(line(&forecast, "A")["unpaid"], usd(0));
+    assert_eq!(forecast["surplus"], usd(400_000), "only 20 November's");
+    assert!(kinds(&forecast, "cautions").len() == 1);
+}
+
+/// October's uncategorized payment pays nothing yet, so a caution looks at October and says file it.
+/// Filed, it pays the bill and both cautions go.
+#[tokio::test]
+async fn an_unfiled_payment_last_month_is_said_until_it_is_filed() {
+    let (world, checking) = holding().await;
+    let rent = world.expense("Rent").await;
+    world
+        .item(&outflow("Rent", 1_000, rent, &one_off_on("2026-10-20")))
+        .await;
+    let paid = world.manual(checking, "2026-10-20", -1_000).await;
+
+    let unfiled = world.forecast_at(ONE_MONTH).await;
+    let said = caution(&unfiled, "last_month_loose_ends");
+    assert_eq!(said["uncategorized_count"], 1);
+    assert_eq!(said["uncategorized_total"], usd(1_000));
+
+    world
+        .admin_send(
+            Method::PATCH,
+            &format!("/api/v1/transactions/{}", paid.as_str().unwrap()),
+            &json!({"splits": [{"category": rent, "minor_units": -1_000, "goal": null}]}),
+        )
+        .await;
+    let filed = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(filed["status"], "firm");
+    assert_eq!(line(&filed, "Rent")["unpaid"], usd(0));
+}
+
+/// A settled bill's money is no budget's, through the store: rent of 2,000.00 paid in two parts and
+/// settled leaves a budget of 500.00 whole.
+#[tokio::test]
+async fn a_settled_bill_paid_in_two_parts_keeps_the_budget_whole() {
+    let (world, checking) = holding().await;
+    let home = world.expense("Home").await;
+    let rent = world
+        .item(&outflow("Rent", 200_000, home, &one_off_on("2026-11-05")))
+        .await;
+    world
+        .item(&with(
+            outflow("Upkeep", 50_000, home, &monthly("2026-11-20")),
+            "spending",
+            json!("budget"),
+        ))
+        .await;
+    world.spend(checking, "2026-11-05", 100_000, home).await;
+    world.spend(checking, "2026-11-06", 100_000, home).await;
+
+    world.settle(&rent, "2026-11", "paid").await;
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(line(&forecast, "Upkeep")["counted"], usd(50_000));
+    assert_eq!(forecast["surplus"], usd(950_000));
 }
 
 /// On the first of a month, all of last month is behind: 1 October paid on its day, and 1 November,

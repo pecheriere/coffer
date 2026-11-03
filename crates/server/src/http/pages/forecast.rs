@@ -1,16 +1,18 @@
-//! The read-only forecast page (spec §8.9, R14): what `GET /api/v1/forecast`
-//! answers on the household's defaults, in words. It calls the same service and
-//! computes nothing, so the two cannot differ, and it has no form of its own.
+//! The forecast page (spec §8.9, R14): what `GET /api/v1/forecast` answers on the
+//! household's defaults, in words. It calls the same service and computes nothing, so
+//! the two cannot differ. Its only forms settle a bill a caution asks about.
 
+mod settle;
 mod words;
 
 use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use coffer_domain::forecast::{CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::{Currency, Money};
+use coffer_domain::policy::{Action, authorize};
 use maud::{Markup, html};
 
 use super::account::viewer;
@@ -24,7 +26,10 @@ use crate::ledger::forecast::ForecastOptions;
 use words::{Names, blocker_sentence, caution_sentence, month_name, months, settled_sentence};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/forecast", get(forecast_page))
+    Router::new().route("/forecast", get(forecast_page)).route(
+        "/forecast/items/{id}/settlements/{month}",
+        post(settle::settle),
+    )
 }
 
 async fn forecast_page(
@@ -45,7 +50,11 @@ async fn forecast_page(
         current: Some(Nav::Forecast),
         narrow: false,
     };
-    Ok(page(&frame, "Forecast", &content(&forecast, &names)).into_response())
+    // None for a role that couldn't settle, which sees the words and no buttons.
+    let csrf = authorize(&actor, Action::WriteHousehold)
+        .is_ok()
+        .then_some(viewer.csrf.as_str());
+    Ok(page(&frame, "Forecast", &content(&forecast, &names, csrf)).into_response())
 }
 
 fn refused(err: LedgerError) -> PageError {
@@ -79,14 +88,14 @@ async fn names<'a>(state: &AppState, actor: &Actor, forecast: &'a Forecast) -> N
     names
 }
 
-fn content(forecast: &Forecast, names: &Names<'_>) -> Markup {
+fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup {
     html! {
         h1 { "Forecast" }
         p {
             "From " (day(forecast.as_of)) " up to " (day(forecast.end_exclusive)) ", "
             (months(forecast.horizon_months)) ", on the household's settings."
         }
-        (answer(forecast, names))
+        (answer(forecast, names, csrf))
         // A row without a surplus has a blocker leaving something out of its sums,
         // and a sum that looks whole is what a blocker exists to prevent.
         @for totals in forecast.totals.iter().filter(|totals| totals.surplus.is_some()) {
@@ -96,7 +105,7 @@ fn content(forecast: &Forecast, names: &Names<'_>) -> Markup {
 }
 
 /// The answer, how far to trust it and why, all together.
-fn answer(forecast: &Forecast, names: &Names<'_>) -> Markup {
+fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup {
     let blocked = !forecast.blockers.is_empty();
     html! {
         section.card id="answer" {
@@ -114,7 +123,12 @@ fn answer(forecast: &Forecast, names: &Names<'_>) -> Markup {
                 h3 { (if blocked { "Also worth knowing" } else { "Why it isn't firm" }) }
                 ul.reasons id="reasons" {
                     @for caution in &forecast.cautions {
-                        li { (caution_sentence(caution, forecast.as_of, names)) }
+                        li {
+                            (caution_sentence(caution, forecast.as_of, names))
+                            @if let Some(csrf) = csrf {
+                                (settle::forms(caution, forecast.as_of, names, csrf))
+                            }
+                        }
                     }
                 }
             }

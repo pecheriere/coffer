@@ -42,11 +42,16 @@ pub struct ForecastInput {
     /// Actual spending per category in `as_of`'s month, up to `as_of` and no later
     /// than its account's balance date, since a balance does not show what is newer.
     pub category_spent: Vec<CategorySpent>,
-    /// The same spending, one row per transaction and category, from the first day the look-back
-    /// reaches ([`bills_looked_at_from`](super::bills_looked_at_from)): what can pay a bill.
+    /// The same spending, one row per transaction and category, from
+    /// [`payments_read_from`](super::payments_read_from): what can pay a bill.
     pub spent_transactions: Vec<SpentTransaction>,
     /// Spending in `as_of`'s month that is not settled yet.
     pub loose_ends: Vec<LooseEnds>,
+    /// The same for last month, where a bill's payment may be waiting to be filed.
+    pub last_month_loose_ends: Vec<LooseEnds>,
+    /// The first posted transaction on a counted account. Before it, coffer has no evidence of
+    /// whether a bill was paid.
+    pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
     /// Links between counted accounts with a leg its provider took back and a leg the look-back
@@ -385,9 +390,12 @@ pub struct OccurrencePayment {
     pub on: Date,
     pub amount: Money,
     /// Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated
-    /// before `as_of`.
+    /// before `as_of`, unless `before_history`.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub paid_by: Option<PaidBy>,
+    /// Dated before the first transaction on a counted account, so there is no evidence either
+    /// way: it takes no payment and isn't treated as unpaid.
+    pub before_history: bool,
 }
 
 /// The transaction matched to an occurrence. If it is wrong, settling the occurrence's month
@@ -397,8 +405,11 @@ pub struct OccurrencePayment {
 pub struct PaidBy {
     pub transaction: TransactionId,
     pub posted_on: Date,
-    /// What it spent in the item's category, a positive magnitude.
+    /// What it spent in the item's category, a positive magnitude, after any refund of it.
     pub amount: Money,
+    /// `amount` less the occurrence's: negative when it paid less than planned. Whatever it is,
+    /// the occurrence counts as paid.
+    pub difference: Money,
 }
 
 /// One item's occurrences in one month that a person settled: what would have counted, had
@@ -528,8 +539,13 @@ pub enum Caution {
     AsOfNotToday { today: Date },
     /// Recurring bills and one-offs dated earlier this month that no transaction paid, summed
     /// per category. They count as still needed; if one was paid under another category or at
-    /// another amount, the number shows less to invest, which is the safe direction.
-    BillNotSeen { category: CategoryId, amount: Money },
+    /// another amount, the number shows less to invest, which is the safe direction. `items` are
+    /// the items they belong to, in input order.
+    BillNotSeen {
+        category: CategoryId,
+        amount: Money,
+        items: Vec<LineSource>,
+    },
     /// A bill or one-off dated last month that no transaction paid and nobody settled. It counts
     /// as still needed until one does, or until a person settles that month.
     BillUnpaidLastMonth {
@@ -537,10 +553,28 @@ pub enum Caution {
         on: Date,
         amount: Money,
     },
+    /// Bills or one-offs dated before the first transaction on a counted account (`starts_on`,
+    /// null with none yet). Coffer can't tell whether they were paid, so they aren't treated as
+    /// unpaid: `occurrences` of them, `amount` in all, are in none of the totals.
+    BillHistoryMissing {
+        #[cfg_attr(feature = "openapi", schema(required))]
+        starts_on: Option<Date>,
+        currency: Currency,
+        occurrences: u32,
+        amount: Money,
+    },
+    /// Last month has money that can't pay a bill until a person files it, and a bill from last
+    /// month is unpaid: an uncategorized transaction or a possible duplicate may be its payment.
+    LastMonthLooseEnds {
+        currency: Currency,
+        uncategorized_count: u32,
+        uncategorized_total: Money,
+        possible_duplicates: u32,
+    },
     /// A transaction is close to this bill's amount, but its category also has a budget that
     /// could have spent it, so it isn't taken as the payment. The bill counts as still needed,
-    /// and the transaction stays with the budget. Settling the month as `paid` says it was the
-    /// payment, and takes it off the budget.
+    /// and at most the bill's amount of it stays with the budget. Settling the month as `paid`
+    /// says it was the payment, and takes it off the budget.
     BillPaymentUnclear {
         item: LineSource,
         on: Date,

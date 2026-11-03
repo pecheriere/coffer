@@ -656,8 +656,10 @@ async fn page_is_never_cached_or_sent_as_a_referrer() {
 }
 
 #[tokio::test]
-async fn page_offers_no_write_action() {
+async fn with_nothing_to_settle_the_page_offers_no_write_action() {
     let Golden { world, .. } = golden().await;
+    let water = id_of(&world.forecast().await, "Water");
+    world.settle(&water, "2026-11", "paid").await;
 
     let body = page(&world).await.body;
 
@@ -667,6 +669,67 @@ async fn page_offers_no_write_action() {
     assert_eq!(body.matches("<input").count(), 1, "only its token");
     let posted = signed_in(&world).await.post_form(PAGE, &[]).await;
     assert_eq!(posted.status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// The buttons beside a caution settle what it asks about, as the API would: the caution goes, and
+/// the page says what was settled.
+#[tokio::test]
+async fn a_bill_the_page_asks_about_can_be_settled_from_it() {
+    let Golden { world, .. } = golden().await;
+    let water = id_of(&world.forecast().await, "Water");
+    let mut browser = signed_in(&world).await;
+    let reply = browser.get(PAGE).await;
+    let action = format!(
+        "/forecast/items/{}/settlements/2026-11",
+        water.as_str().unwrap()
+    );
+    assert!(reply.body.contains(&action), "the form is there");
+    let token = reply
+        .body
+        .split(&format!("action=\"{action}\""))
+        .nth(1)
+        .and_then(|form| form.split("value=\"").nth(1))
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_owned();
+
+    let refused = browser
+        .post_form(&action, &[("csrf", "wrong"), ("kind", "paid")])
+        .await;
+    assert_ne!(refused.status, StatusCode::SEE_OTHER, "a forged form fails");
+    assert_eq!(world.forecast().await["status"], "provisional");
+
+    let posted = browser
+        .post_form(&action, &[("csrf", token.as_str()), ("kind", "paid")])
+        .await;
+    assert_eq!(posted.status, StatusCode::SEE_OTHER);
+
+    assert_eq!(world.forecast().await["status"], "firm");
+    assert!(words(&world).await.contains("isn't counted, marked paid"));
+}
+
+/// The sentence says how, for a person and for an agent.
+#[tokio::test]
+async fn a_bill_unpaid_from_last_month_says_how_to_settle_it() {
+    let (world, _) = crate::forecast::settled::holding().await;
+    let home = world.expense("Home").await;
+    let item = world
+        .item(&outflow(
+            "Boiler",
+            1_000,
+            home,
+            &json!({"type": "one_off", "on": "2026-10-20"}),
+        ))
+        .await;
+
+    let said = words(&world).await;
+
+    assert!(said.contains("Boiler was due on 20 October 2026"));
+    assert!(said.contains(&format!(
+        "PUT /api/v1/plan-items/{}/settlements/2026-10",
+        item.as_str().unwrap()
+    )));
+    assert!(said.contains("Mark Boiler paid"));
 }
 
 #[tokio::test]

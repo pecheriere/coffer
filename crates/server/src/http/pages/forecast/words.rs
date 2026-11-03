@@ -51,7 +51,7 @@ impl<'a> Names<'a> {
 
     /// What a planned item is called. An imagined item has no stored name, and this page
     /// never shows one.
-    fn item(&self, source: LineSource) -> Option<&str> {
+    pub(super) fn item(&self, source: LineSource) -> Option<&str> {
         match source {
             LineSource::PlannedItem { id } => self.items.get(&id).map(String::as_str),
             LineSource::Hypothetical { .. } => None,
@@ -202,15 +202,35 @@ fn connection_sentence(label: &str, status: FeedStatus) -> String {
 
 /// Bills and one-offs in a category, dated earlier this month, that no transaction paid. One
 /// amount can sum several of them.
-fn bill_sentence(category: Option<&str>, amount: Money) -> String {
+fn bill_sentence(items: &[&str], category: Option<&str>, amount: Money) -> String {
+    let who = if items.is_empty() {
+        "Bills or one-offs".to_owned()
+    } else {
+        listed(items)
+    };
     format!(
-        "Bills or one-offs in {} dated earlier this month come to {} that no payment of about \
-         that amount has been seen for, so that much still counts as needed. If they were paid \
-         under another category or at another amount, there is more to invest than this shows. \
-         If one was paid some other way, such as from an account that isn't the household's, \
-         settle that bill for the month.",
+        "{who} in {} dated earlier this month come to {} that no payment of about that amount has \
+         been seen for, so that much still counts as needed. If they were paid under another \
+         category or at another amount, there is more to invest than this shows. If one was paid \
+         some other way, such as from an account that isn't the household's, settle that bill for \
+         the month.",
         category.unwrap_or("a category"),
         magnitude(amount),
+    )
+}
+
+/// How to settle `item`'s month, for whoever reads this: a person with the form beside it, or an
+/// agent with the API.
+fn how_to_settle(item: LineSource, on: Date) -> String {
+    let LineSource::PlannedItem { id } = item else {
+        return String::new();
+    };
+    let month = on.strftime("%Y-%m");
+    format!(
+        " To settle it for {}, a member uses the buttons here, and an agent sends PUT \
+         /api/v1/plan-items/{id}/settlements/{month} with {{\"kind\": \"paid\"}} or \
+         {{\"kind\": \"skipped\"}}.",
+        on.strftime("%B %Y"),
     )
 }
 
@@ -305,10 +325,12 @@ fn unpaid_last_month_sentence(
 ) -> String {
     format!(
         "{} was due on {} and no payment of about {} has been seen, so it still counts as \
-         needed. If it was paid or won't be, settle it for that month.",
+         needed. If a transaction for it has no category or is marked a possible duplicate, file \
+         it and this goes.{}",
         names.item(item).unwrap_or("A bill"),
         day(on),
         magnitude(amount),
+        how_to_settle(item, on),
     )
 }
 
@@ -322,12 +344,52 @@ fn unclear_payment_sentence(
 ) -> String {
     format!(
         "{} was due on {} for {}. A transaction of {} in its category may have paid it, but it \
-         could also be spending on a budget there, so the bill still counts as needed. If it was \
-         the payment, settle the bill for that month.",
+         could also be spending on a budget there, so the bill still counts as needed.{}",
         names.item(item).unwrap_or("A bill"),
         day(on),
         magnitude(amount),
         magnitude(spent),
+        how_to_settle(item, on),
+    )
+}
+
+/// Bills from before coffer's first transaction: nothing says whether they were paid.
+fn history_sentence(starts_on: Option<Date>, occurrences: u32, amount: Money) -> String {
+    let history = starts_on.map_or_else(
+        || "coffer has no transactions on counted accounts yet".to_owned(),
+        |first| format!("transactions on counted accounts start on {}", day(first)),
+    );
+    let bills = if occurrences == 1 {
+        "1 bill or one-off".to_owned()
+    } else {
+        format!("{occurrences} bills or one-offs")
+    };
+    format!(
+        "{}{}, so coffer can't tell whether {bills} due before then, {} in all, were paid. \
+         They aren't counted as needed. If one is still to be paid, there is less to invest than \
+         this shows.",
+        history.get(..1).unwrap_or_default().to_uppercase(),
+        history.get(1..).unwrap_or_default(),
+        magnitude(amount),
+    )
+}
+
+/// Last month's money that can't pay a bill until it is filed.
+fn last_month_loose_sentence(count: u32, total: Money, duplicates: u32) -> String {
+    let uncategorized = (count > 0).then(|| {
+        format!(
+            "{} with no category, {} in all",
+            transactions(count),
+            magnitude(total)
+        )
+    });
+    let flagged =
+        (duplicates > 0).then(|| format!("{} that may be duplicated", transactions(duplicates)));
+    let found: Vec<String> = uncategorized.into_iter().chain(flagged).collect();
+    format!(
+        "Last month has {}. One may be the payment of a bill from last month, which counts as \
+         unpaid until the transaction is filed or the duplicate cleared.",
+        found.join(" and "),
     )
 }
 
@@ -391,9 +453,30 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             connection_sentence(label, *status)
         }
         Caution::AsOfNotToday { today } => not_today_sentence(*today, as_of),
-        Caution::BillNotSeen { category, amount } => {
-            bill_sentence(names.category(*category), *amount)
+        Caution::BillNotSeen {
+            category,
+            amount,
+            items,
+        } => {
+            let named: Vec<&str> = items.iter().filter_map(|item| names.item(*item)).collect();
+            bill_sentence(&named, names.category(*category), *amount)
         }
+        Caution::BillHistoryMissing {
+            starts_on,
+            occurrences,
+            amount,
+            ..
+        } => history_sentence(*starts_on, *occurrences, *amount),
+        Caution::LastMonthLooseEnds {
+            uncategorized_count,
+            uncategorized_total,
+            possible_duplicates,
+            ..
+        } => last_month_loose_sentence(
+            *uncategorized_count,
+            *uncategorized_total,
+            *possible_duplicates,
+        ),
         Caution::BillUnpaidLastMonth { item, on, amount } => {
             unpaid_last_month_sentence(names, *item, *on, *amount)
         }

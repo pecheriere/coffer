@@ -30,7 +30,7 @@ use super::types::{
 };
 use crate::ids::CategoryId;
 use crate::money::Currency;
-use crate::plan::{PlanDirection, PlanSchedule, PlanSpending};
+use crate::plan::{PlanDirection, PlanSchedule, PlanSpending, SettlementKind};
 
 pub(super) type PoolKey = (CategoryId, Currency);
 
@@ -52,13 +52,21 @@ pub(super) struct ItemAdjustment {
     pub(super) payments: Vec<OccurrencePayment>,
 }
 
+#[derive(Default)]
+pub(super) struct NotSeen {
+    pub(super) amount: i128,
+    pub(super) items: Vec<LineSource>,
+}
+
 pub(super) struct Reduction {
     /// One per item, in input order.
     pub(super) by_item: Vec<ItemAdjustment>,
-    /// The gaps dated this month, per category and currency.
-    pub(super) not_seen: BTreeMap<PoolKey, i128>,
+    /// The gaps dated this month, per category and currency, and the items they belong to.
+    pub(super) not_seen: BTreeMap<PoolKey, NotSeen>,
     /// What to say of a single occurrence: unpaid from last month, or unclear.
     pub(super) bill_cautions: Vec<Caution>,
+    /// The currencies with a bill from last month unpaid.
+    pub(super) last_month_unpaid_currencies: BTreeSet<Currency>,
     /// The currencies where more spending found this month could change the number:
     /// a budget still to reduce, or a gap it might close.
     pub(super) spending_sensitive_currencies: BTreeSet<Currency>,
@@ -136,15 +144,26 @@ pub(super) fn reduce(
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs. One dated
             // `as_of` may be what today's spending paid, so it can take a transaction, but it
-            // has not passed, so it owes no gap.
-            let dates = item.schedule.occurrences(looked_at_from, through_as_of);
-            bills.extend(dates.into_iter().map(|on| Bill {
+            // has not passed, so it owes no gap. One settled as paid later this month was paid,
+            // so it has a claim on what was spent too.
+            let bill = |on| Bill {
                 on,
                 index,
                 key,
                 amount,
                 settled: settlement_of(item, on),
-            }));
+                before_history: on < input.as_of
+                    && input.earliest_transaction.is_none_or(|first| on < first),
+            };
+            let dates = item.schedule.occurrences(looked_at_from, through_as_of);
+            bills.extend(dates.into_iter().map(bill));
+            let later = item.schedule.occurrences(through_as_of, reducible_until);
+            bills.extend(
+                later
+                    .into_iter()
+                    .map(bill)
+                    .filter(|one| one.settled == Some(SettlementKind::Paid)),
+            );
         }
     }
     bills.sort_by_key(|bill| (bill.on, bill.index));
@@ -171,12 +190,27 @@ pub(super) fn reduce(
             *pool -= amount;
         }
     }
+    for (key, &charged) in &matching.settled_charges {
+        if let Some(pool) = pools.get_mut(key) {
+            *pool -= charged;
+        }
+    }
 
     let Outcome {
         not_seen,
-        bill_cautions,
+        mut bill_cautions,
+        last_month_unpaid_currencies,
+        missing_history,
         mut spending_sensitive_currencies,
     } = outcome;
+    for (currency, (occurrences, amount)) in missing_history {
+        bill_cautions.push(Caution::BillHistoryMissing {
+            starts_on: input.earliest_transaction,
+            currency,
+            occurrences,
+            amount: money(amount, currency)?,
+        });
+    }
     spending_sensitive_currencies.extend(month_budgets.iter().map(|one| one.key.1));
     reduce_budgets(month_budgets, pools, &mut by_item);
 
@@ -184,6 +218,7 @@ pub(super) fn reduce(
         by_item,
         not_seen,
         bill_cautions,
+        last_month_unpaid_currencies,
         spending_sensitive_currencies,
     })
 }
@@ -191,8 +226,11 @@ pub(super) fn reduce(
 /// What the occurrences add up to, across items.
 #[derive(Default)]
 struct Outcome {
-    not_seen: BTreeMap<PoolKey, i128>,
+    not_seen: BTreeMap<PoolKey, NotSeen>,
     bill_cautions: Vec<Caution>,
+    last_month_unpaid_currencies: BTreeSet<Currency>,
+    /// How many occurrences before the first transaction, and how much, per currency.
+    missing_history: BTreeMap<Currency, (u32, i128)>,
     spending_sensitive_currencies: BTreeSet<Currency>,
 }
 
@@ -210,10 +248,11 @@ fn record(
     let row_at = |at: usize| input.spent_transactions.get(at);
     let paid_by = if let Seen::Paid(at, spent) = seen {
         row_at(at).map(|row| {
-            money(spent, currency).map(|amount| PaidBy {
+            Ok(PaidBy {
                 transaction: row.transaction,
                 posted_on: row.posted_on,
-                amount,
+                amount: money(spent, currency)?,
+                difference: money(spent - bill.amount, currency)?,
             })
         })
     } else {
@@ -225,7 +264,14 @@ fn record(
         on: bill.on,
         amount,
         paid_by,
+        before_history: bill.before_history,
     });
+    if bill.before_history {
+        let (occurrences, total) = outcome.missing_history.entry(currency).or_default();
+        *occurrences = occurrences.saturating_add(1);
+        *total += bill.amount;
+        return Ok(());
+    }
     if matches!(seen, Seen::Paid(..)) || bill.on >= input.as_of {
         return Ok(());
     }
@@ -233,13 +279,18 @@ fn record(
     adjustment.unpaid += bill.amount;
     outcome.spending_sensitive_currencies.insert(currency);
     if bill.on < input.as_of.first_of_month() {
+        outcome.last_month_unpaid_currencies.insert(currency);
         outcome.bill_cautions.push(Caution::BillUnpaidLastMonth {
             item: item.source,
             on: bill.on,
             amount,
         });
     } else {
-        *outcome.not_seen.entry(bill.key).or_default() += bill.amount;
+        let gap = outcome.not_seen.entry(bill.key).or_default();
+        gap.amount += bill.amount;
+        if !gap.items.contains(&item.source) {
+            gap.items.push(item.source);
+        }
     }
     if let Seen::Unclear(at, spent) = seen
         && let Some(row) = row_at(at)

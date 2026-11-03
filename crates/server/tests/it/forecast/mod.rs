@@ -371,6 +371,12 @@ impl World {
             .clone()
     }
 
+    /// A transaction long before anything a test looks at, so that coffer has history to tell
+    /// an unpaid bill from one it has no evidence for (spec §8.9 R9b).
+    pub(crate) async fn with_history(&self, account: AccountId) {
+        self.manual(account, "2026-01-02", -1).await;
+    }
+
     /// The forecast with this query string, which must answer 200.
     async fn forecast_at(&self, query: &str) -> Value {
         let (status, text) = self
