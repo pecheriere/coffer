@@ -9,11 +9,13 @@ use super::{
     GoalMonth, MonthActual, MonthNotHousehold, MonthUncategorized, NotHouseholdRow, PlanReport,
     PlanReportInput, PlanRow, ReportItem, plan_vs_actual, report_window,
 };
+use crate::fx::RateBook;
 use crate::ids::{CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
 use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, PlanSpending};
 use crate::transactions::CategoryKind;
 
+mod rate_mismatch;
 mod rollover;
 mod settled;
 
@@ -49,6 +51,8 @@ fn input(months: u8) -> PlanReportInput {
         uncategorized: Vec::new(),
         not_household: Vec::new(),
         moved: Vec::new(),
+        cross_currency_links: Vec::new(),
+        rates: RateBook::default(),
     }
 }
 

@@ -400,7 +400,7 @@ confirm.
   days, nearest first. A guess to check, and it changes nothing.
 - `POST /api/v1/transfer-links` (`write` on both accounts) links `{"outflow": "<id>", "inflow":
   "<id>"}`. Answers 201 with `difference`, what arrived less what left (`null` across
-  currencies), and `one_movement`. Amounts may differ, as for a fee, and currencies too.
+  currencies, where `rate_check` compares them), and `one_movement`. Amounts may differ, as for a fee, and currencies too.
   Accepts an `Idempotency-Key`. A transaction already in a link is a 409 `conflict`.
 - `GET /api/v1/transfer-links/{transfer_link_id}` reads one, with what each leg says now. Each
   transaction names its own in `transfer_link`.
@@ -413,7 +413,8 @@ income, whatever it is filed as. It is out of `actual`, reduces no budget, pays 
 towards no goal, and `moved_between_counted_accounts` in plan versus actual says how much. Each leg
 keeps its category, which counts again if the link goes. Only the smaller leg's amount moved: a fee
 stays what its leg is filed as, and a link of -1,250.00 to +12.50 still spends 1,237.50. Across
-currencies a link doesn't read an exchange rate, so all of each leg moved: check those before you link. Net worth and the forecast's cash
+currencies all of each leg moved, whatever the rate, so check those before you link; see
+[Across currencies](#across-currencies). Net worth and the forecast's cash
 read balances, so a link changes neither. `spending_newer_than_balance` drops what moved only when
 both legs are posted and newer than their balances.
 
@@ -437,6 +438,22 @@ look. A record attaching again restores it; otherwise remove the link, or merge 
 the leg (use the leg as the target). A merge discarding a leg's link needs
 `discard_duplicate_state` and `write` on the other account. An un-merge leaves the link on the
 transaction it was on. A manual leg can't be deleted until its link is removed.
+
+**Across currencies.** A link between legs in two currencies is checked against the exchange rate
+for the later of their two posted days, carried forward as usual and including a rate an admin
+entered. The link's `rate_check` is `null` for one currency, and otherwise one of:
+
+- `agrees`: the legs are within 5% of each other after conversion, which leaves room for a bank's
+  spread and fees. `rate_on` is the date of the rate used.
+- `mismatch`: they differ by more, as -1,250.00 USD linked to +12.50 EUR does. It names both legs'
+  amounts, `expected_inflow` (what the outflow comes to in the inflow's currency), `rate_on` (the
+  date of the older rate used) and `manual_rate`. Ask a member whether the amounts were mistyped or
+  the legs aren't one transfer, then fix the transaction or remove the link. The same appears as the
+  caution `transfer_link_rate_mismatch` in the forecast and the plan versus actual report when the
+  link is between counted accounts. It changes no amount: all of each leg still moved.
+- `not_checked`: no usable rate (none held for that day, or the latest is over a week older), so
+  nothing is said either way. It raises no caution
+  and doesn't make the forecast provisional. Say so rather than calling the link fine.
 
 ### Rules
 

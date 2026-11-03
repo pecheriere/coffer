@@ -14,7 +14,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual; `fx`, exchange rates held
-  exactly and conversion through the euro; `net_worth`, the daily values, the
+  exactly and conversion through the euro; `transfer_rate`, the check of a transfer link's legs in
+  two currencies against a rate, which changes no amount; `net_worth`, the daily values, the
   periods and the report). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
@@ -169,7 +170,7 @@ a throwaway server and seed. What holds it together:
 ## Conventions
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
-- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`. A `Clock` hands out whole milliseconds, what the store keeps, so a save never answers with a time a later read shows differently; don't read back to round.
 - A day is the household's day, from `household_time::HouseholdTime`, read when it is
   asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
   can change it while the server runs (spec §8.7). A writer whose change depends on the

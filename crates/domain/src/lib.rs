@@ -16,3 +16,4 @@ pub mod rules;
 pub mod sync;
 pub mod time;
 pub mod transactions;
+pub mod transfer_rate;

@@ -121,5 +121,7 @@ fn input(
         uncategorized: data.uncategorized,
         not_household: data.not_household,
         moved: data.moved,
+        cross_currency_links: data.cross_currency_links,
+        rates: data.rates,
     }
 }
