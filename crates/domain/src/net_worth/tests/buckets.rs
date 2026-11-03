@@ -703,6 +703,7 @@ fn moving_an_account_changes_its_whole_history() {
         [LiquidityLine {
             liquidity: LiquidityClass::ShortTermLiability,
             amount: Some(money(-30_000, "USD")),
+            manual_rate: false,
         }]
     );
 }

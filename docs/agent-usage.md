@@ -41,9 +41,9 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates`. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
 | `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
-| `admin` | Everything in `write`, plus household administration, such as changing the forecast settings. Only admins can create `admin` tokens. |
+| `admin` | Everything in `write`, plus household administration, such as changing the forecast settings or entering an exchange rate by hand. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
 disabled the token loses power at the next request. Tokens can never create,
@@ -92,7 +92,7 @@ token's access.
   whole household's. Each of its `buckets` is made the same way, from what the token
   sees at `balances`: a token holding one of a child's two accounts gets a bucket of
   one, unmarked, and a bucket none of whose accounts it sees isn't there.
-  `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` need `all`
+  `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates` need `all`
   at `balances`: which rates are stored depends on the currencies in use.
 - The forecast, a what-if and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
@@ -476,8 +476,14 @@ to do about each. In short:
   is missing, never a partial sum), `blockers` and `cautions`. **Never report a
   `provisional` number without its cautions.**
 - `GET /api/v1/fx/coverage` and `GET /api/v1/fx/rates` show the exchange rates
-  held (units of a currency per euro, from the ECB). They need `all` at
-  `balances`.
+  held (units of a currency per euro, from the ECB or, marked `manual`, entered by an
+  admin). They need `all` at `balances`.
+- `PUT /api/v1/fx/manual-rates/{currency}/{on}` enters a rate by hand for a currency
+  the ECB doesn't publish: `admin`, and `all` at `balances` for a token with grants.
+  A fetch never overwrites it, on its own day it wins, and a later published rate takes
+  over. Totals built from one are marked `manual_rate` and listed in the report's `manual_rates`,
+  which is for information: `status` stays `firm` until `rate_stale` applies. A rate over 1.5
+  times from a published one nearby, or close to its inverse, is 422 `unusual_rate` unless `confirm_unusual: true`.
 - The display currency is `display_currency` in `PATCH
   /api/v1/household/settings`: `admin`, and `all` at `balances` for a token with
   grants. It starts unset, and until it is there is no total.

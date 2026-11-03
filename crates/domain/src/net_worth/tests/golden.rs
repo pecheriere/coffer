@@ -126,10 +126,12 @@ fn golden_week_of_net_worth() {
             LiquidityLine {
                 liquidity: LiquidityClass::Cash,
                 amount: Some(money(661_720, "USD")),
+                manual_rate: false,
             },
             LiquidityLine {
                 liquidity: LiquidityClass::ShortTermLiability,
                 amount: Some(money(-30_000, "USD")),
+                manual_rate: false,
             },
         ]
     );

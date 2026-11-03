@@ -9,6 +9,7 @@
 )]
 
 mod answers;
+mod manual_rates;
 mod page;
 mod settings;
 mod table;

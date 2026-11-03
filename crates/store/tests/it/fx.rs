@@ -10,7 +10,7 @@
 
 use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClass};
 use coffer_domain::fx::{
-    FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, RateObservation,
+    FxCoverage, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateObservation,
 };
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
@@ -32,6 +32,14 @@ fn obs(on: Date, rate: &str) -> RateObservation {
     RateObservation {
         on,
         rate: rate.parse::<FxRate>().unwrap(),
+    }
+}
+
+fn published(on: Date, rate: &str) -> HeldRate {
+    HeldRate {
+        on,
+        rate: rate.parse::<FxRate>().unwrap(),
+        manual: false,
     }
 }
 
@@ -78,7 +86,7 @@ async fn rates_roundtrip_exactly() {
             .fx_rates(cur(code), date(2026, 10, 1), date(2026, 10, 31))
             .await
             .unwrap();
-        assert_eq!(rates, vec![obs(date(2026, 10, 30), text)]);
+        assert_eq!(rates, vec![published(date(2026, 10, 30), text)]);
     }
 }
 
@@ -137,7 +145,7 @@ async fn a_correction_returns_its_date() {
     let changed = upsert(&store, "USD", &[obs(day, "1.1180")], at(3_600)).await;
     assert_eq!(changed, Some(day));
     let rates = store.fx_rates(cur("USD"), day, day).await.unwrap();
-    assert_eq!(rates, vec![obs(day, "1.118")]);
+    assert_eq!(rates, vec![published(day, "1.118")]);
 }
 
 #[tokio::test]
