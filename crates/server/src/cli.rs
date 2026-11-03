@@ -264,7 +264,6 @@ async fn execute(
                 Arc::new(SystemClock),
                 config.default_timezone,
             );
-            let today = time.today().await?;
             let through = time.runs_through();
             // In short transactions under the write lock like any writer's, so
             // other writes get their turn and none of them is lost. The count is what
@@ -277,10 +276,13 @@ async fn execute(
                 out.flush()?;
                 store.rebuild_net_worth(through).await?
             };
-            writeln!(
-                out,
-                "net worth rebuilt through {today}: {rows} rows written"
-            )?;
+            // Asked of the table, as the day is decided in the rebuild's own transactions.
+            let Some(last) = store.net_worth_state().await?.filled_through else {
+                return Err(CliError::Failed(
+                    "the net worth table holds no day after its rebuild".to_owned(),
+                ));
+            };
+            writeln!(out, "net worth rebuilt through {last}: {rows} rows written")?;
             Ok(ExitCode::SUCCESS)
         }
     }

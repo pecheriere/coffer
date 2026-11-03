@@ -2,14 +2,18 @@
 
 use std::sync::Arc;
 
+use axum::http::{Method, StatusCode};
 use coffer_domain::ids::AccountId;
+use coffer_domain::money::Currency;
 use coffer_server::fx::FxService;
 use coffer_server::household_time::HouseholdTime;
 use jiff::SignedDuration;
 use jiff::civil::Date;
 use serde_json::{Value, json};
 
-use super::{AUCKLAND, AUCKLAND_DAY, LOS_ANGELES, LOS_ANGELES_DAY, set_zone, unbuilt_at, world_at};
+use super::{
+    AUCKLAND, AUCKLAND_DAY, LOS_ANGELES, LOS_ANGELES_DAY, SETTINGS, set_zone, unbuilt_at, world_at,
+};
 use crate::net_worth::World;
 
 fn day(text: &str) -> Date {
@@ -78,7 +82,7 @@ async fn moving_today_back_leaves_no_day_to_come_and_no_gap() {
     );
     let (_, text) = world
         .send(
-            axum::http::Method::GET,
+            Method::GET,
             &format!("/api/v1/accounts/{account}/balances"),
             &world.admin,
             None,
@@ -262,6 +266,65 @@ async fn a_runner_started_before_a_change_writes_no_day_to_come() {
     );
 }
 
+/// One patch changing both: every row left is in the new currency and none is past the new
+/// today, and the change is one audit entry naming both.
+#[tokio::test]
+async fn a_display_currency_and_a_zone_in_one_patch() {
+    let world = world_at(AUCKLAND, AUCKLAND_DAY).await;
+    let account = world.holding("Checking", "USD").await;
+    world.balance(account, "2026-10-29", 100).await;
+    world.rates("USD", &[("2026-10-29", "1.25")]).await;
+
+    let answer = world
+        .admin_send(
+            Method::PATCH,
+            SETTINGS,
+            &json!({"display_currency": "EUR", "timezone": LOS_ANGELES}),
+        )
+        .await;
+
+    assert_eq!(answer["display_currency"], "EUR");
+    assert_eq!(answer["timezone_setting"], LOS_ANGELES);
+    assert_eq!(through(&world).await, Some(day(LOS_ANGELES_DAY)));
+    let rows = world.rows().await;
+    assert_eq!(rows.len(), 3, "the 29th to the 31st");
+    let euro = Currency::parse("EUR").unwrap();
+    assert!(rows.iter().all(|row| row.display == Some(euro)));
+    assert!(rows.iter().all(|row| row.display_minor == Some(80)));
+    let events = world.settings_events().await;
+    let [event] = events.as_slice() else {
+        panic!("expected one event");
+    };
+    let fields: Vec<String> = event
+        .changes
+        .iter()
+        .map(|(field, _)| field.to_string())
+        .collect();
+    assert_eq!(fields, ["display_currency", "timezone"]);
+}
+
+/// A refused half refuses the whole patch, the other half and the table included.
+#[tokio::test]
+async fn a_patch_with_an_unknown_zone_changes_no_currency() {
+    let world = world_at(AUCKLAND, AUCKLAND_DAY).await;
+
+    let (status, _) = world
+        .send(
+            Method::PATCH,
+            SETTINGS,
+            &world.admin,
+            Some(&json!({"display_currency": "EUR", "timezone": "Mars/Olympus"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, text) = world.send(Method::GET, SETTINGS, &world.admin, None).await;
+    let settings: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(settings["display_currency"], Value::Null);
+    assert_eq!(settings["timezone_setting"], Value::Null);
+    assert_eq!(world.settings_events().await.len(), 0);
+}
+
 /// A balance dated a day that is now still to come is out of the report until it comes,
 /// and nothing fails meanwhile.
 #[tokio::test]
@@ -277,14 +340,9 @@ async fn reports_answer_with_a_balance_on_a_day_still_to_come() {
     assert_eq!(report["to"], LOS_ANGELES_DAY);
     assert_eq!(report["through"], LOS_ANGELES_DAY);
     let (status, text) = world
-        .send(
-            axum::http::Method::GET,
-            "/api/v1/forecast",
-            &world.admin,
-            None,
-        )
+        .send(Method::GET, "/api/v1/forecast", &world.admin, None)
         .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     let forecast: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(forecast["as_of"], LOS_ANGELES_DAY);
     let accounts = forecast["accounts"].as_array().unwrap();

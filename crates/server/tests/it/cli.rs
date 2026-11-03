@@ -452,6 +452,44 @@ async fn rebuild_net_worth_uses_the_zone_chosen_in_the_settings() {
     assert!(filled(&store, &env).await < east);
 }
 
+/// A change of zone can land while the command waits for another rebuild. What it prints is
+/// the day it rebuilt to, in the zone that then applied.
+#[tokio::test]
+async fn rebuild_net_worth_names_the_day_it_rebuilt_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = env(&dir);
+    let (store, _account, _first) = populated_database(&dir).await;
+    env.insert("COFFER_TIMEZONE", "Pacific/Kiritimati".to_owned());
+    let held = store.hold_net_worth_rebuild_for_tests().unwrap().unwrap();
+    let west = IanaZone::parse("Pacific/Pago_Pago").unwrap();
+
+    let (done, ()) = tokio::join!(run(&["rebuild-net-worth"], &env), async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let mut tx = store.begin().await.unwrap();
+        tx.set_household_zone(Some(&west), date(2099, 1, 1))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(held);
+    });
+
+    assert_eq!(done.code, ExitCode::SUCCESS);
+    let last = store
+        .net_worth_state()
+        .await
+        .unwrap()
+        .filled_through
+        .unwrap();
+    let in_west = SystemClock.now().to_zoned(west.zone().clone()).date();
+    assert_eq!(last, in_west, "the zone at the time it wrote");
+    assert!(
+        done.out
+            .contains(&format!("net worth rebuilt through {last}:")),
+        "{}",
+        done.out
+    );
+}
+
 #[tokio::test]
 async fn rebuild_net_worth_never_creates_a_database() {
     let dir = tempfile::tempdir().unwrap();
