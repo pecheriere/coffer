@@ -266,28 +266,75 @@ fn a_refund_of_about_the_payment_undoes_it() {
     }
 }
 
-/// A refund of 250 after a rent of 2,000 is something else coming back: the rent stays paid, and
-/// the refund only lowers what the category spent, so the budget has 300 - 250 of it.
+/// One rent of 2,000 paid, and a refund of `refund` after it.
+fn rent_refunded(refund: i64, newer: Option<i64>) -> Forecast {
+    let home = CategoryId::new();
+    let mut rows = vec![paid_on(home, usd(2_000), date(2026, 11, 5))];
+    rows.extend(newer.map(|minor| paid_on(home, usd(minor), date(2026, 11, 6))));
+    rows.push(paid_on(home, usd(-refund), date(2026, 11, 8)));
+    run_as_given(&ForecastInput {
+        items: vec![one_off("Rent", usd(2_000), date(2026, 11, 5), home)],
+        spent_transactions: rows,
+        ..one_month()
+    })
+}
+
+/// 250 back is something else coming back: the rent stays paid, and a caution names the 250 in case
+/// it wasn't. Its transaction is the refund's, whichever that is.
 #[test]
-fn a_refund_outside_the_tolerance_unpays_nothing() {
+fn a_refund_under_a_quarter_of_the_charge_leaves_it_paid_and_is_said() {
+    let forecast = rent_refunded(250, None);
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(0));
+    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
+    let [Caution::RefundBesidePaidBill { amount, .. }] = forecast.cautions.as_slice() else {
+        panic!("one caution, about the refund");
+    };
+    assert_eq!(*amount, usd(250));
+}
+
+/// 1,000 or 1,500 back says the rent wasn't paid, and it holds all 2,000.
+#[test]
+fn a_refund_of_a_quarter_or_more_of_the_charge_holds_all_of_it() {
+    for refund in [500, 1_000, 1_500, 2_200] {
+        let forecast = rent_refunded(refund, None);
+        assert_eq!(line(&forecast, "Rent").unpaid, usd(2_000));
+        assert_eq!(forecast.surplus, Some(usd(998_000)));
+    }
+}
+
+/// 1,500 back is too much to be about a newer charge of 30, which stands, so it lands on the rent.
+#[test]
+fn a_refund_passes_over_a_newer_charge_it_is_too_large_for() {
+    let forecast = rent_refunded(1_500, Some(30));
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(2_000));
+}
+
+/// More than 110% of every charge undoes none: the bill stays paid, and it is said.
+#[test]
+fn a_refund_larger_than_any_charge_undoes_none_and_is_said() {
+    let forecast = rent_refunded(2_201, None);
+    assert_eq!(line(&forecast, "Rent").unpaid, usd(0));
+    assert!(matches!(
+        forecast.cautions.as_slice(),
+        [Caution::RefundBesidePaidBill { .. }]
+    ));
+}
+
+/// A refund beside no paid bill has nothing to say.
+#[test]
+fn a_refund_beside_no_paid_bill_says_nothing() {
     let home = CategoryId::new();
     let forecast = run_as_given(&ForecastInput {
-        items: vec![
-            one_off("Rent", usd(2_000), date(2026, 11, 5), home),
-            budget(monthly("Upkeep", usd(500), date(2026, 11, 20), home)),
-        ],
-        category_spent: vec![super::spent(home, 2_050)],
-        spent_transactions: vec![
-            paid_on(home, usd(2_000), date(2026, 11, 5)),
-            paid_on(home, usd(300), date(2026, 11, 6)),
-            paid_on(home, usd(-250), date(2026, 11, 8)),
-        ],
+        items: vec![budget(monthly(
+            "Upkeep",
+            usd(500),
+            date(2026, 11, 20),
+            home,
+        ))],
+        spent_transactions: vec![paid_on(home, usd(-10), date(2026, 11, 8))],
         ..one_month()
     });
-    let rent = line(&forecast, "Rent");
-    assert_eq!(rent.unpaid, usd(0));
-    assert_eq!(rent.payments[0].paid_by.unwrap().amount, usd(2_000));
-    assert_eq!(line(&forecast, "Upkeep").reduced_by, usd(50), "300 - 250");
+    assert_eq!(forecast.cautions, []);
 }
 
 /// 1,800 pays a bill of 2,000, and the line shows the 200 it didn't cover.
@@ -467,17 +514,77 @@ fn a_bill_before_the_first_transaction_is_not_treated_as_unpaid() {
     );
 }
 
-/// With no transactions at all, nothing can say a bill wasn't paid either, but today's still counts.
+/// With no transactions, nothing says whether last month's bill was paid, but this month's is held
+/// as it is for any household, with a caution and a way to settle it: 1,000,000 - 1,000.
 #[test]
-fn with_no_transactions_nothing_is_treated_as_unpaid() {
+fn with_no_transactions_only_last_months_bills_are_let_off() {
     let home = CategoryId::new();
     let forecast = run_as_given(&ForecastInput {
-        items: vec![one_off("Tyres", usd(1_000), date(2026, 11, 5), home)],
+        items: vec![
+            one_off("Last month", usd(5_000), date(2026, 10, 20), home),
+            one_off("This month", usd(1_000), date(2026, 11, 5), home),
+        ],
         earliest_transaction: None,
         ..one_month()
     });
-    assert_eq!(forecast.surplus, Some(usd(1_000_000)));
-    assert_eq!(forecast.status, ForecastStatus::Provisional);
+    assert_eq!(line(&forecast, "This month").unpaid, usd(1_000));
+    assert_eq!(line(&forecast, "Last month").unpaid, usd(0));
+    assert_eq!(forecast.surplus, Some(usd(999_000)));
+    assert_eq!(
+        forecast.cautions,
+        [
+            super::not_seen(&forecast, home, usd(1_000)),
+            Caution::BillHistoryMissing {
+                starts_on: None,
+                currency: super::currency("USD"),
+                occurrences: 1,
+                amount: usd(5_000),
+            },
+        ]
+    );
+}
+
+/// History that starts on the 10th doesn't let off a bill of the 5th this month.
+#[test]
+fn history_that_starts_this_month_lets_off_no_bill_this_month() {
+    let home = CategoryId::new();
+    let forecast = run_as_given(&ForecastInput {
+        items: vec![one_off("Tyres", usd(1_000), date(2026, 11, 5), home)],
+        earliest_transaction: Some(date(2026, 11, 10)),
+        ..one_month()
+    });
+    assert_eq!(line(&forecast, "Tyres").unpaid, usd(1_000));
+}
+
+/// October's bill, settled as paid, in two parts: paid in November, those parts are no budget's, so
+/// it needs all 500. Paid in October, November's 200 is the budget's own, so it needs 300.
+#[test]
+fn a_bill_settled_last_month_keeps_parts_paid_since_off_the_budget() {
+    for (first, second, spent, counted) in [
+        (date(2026, 11, 2), date(2026, 11, 3), 2_000, 500),
+        (date(2026, 10, 2), date(2026, 10, 3), 200, 300),
+    ] {
+        let home = CategoryId::new();
+        let mut item = one_off("Rent", usd(2_000), date(2026, 10, 5), home);
+        item.settled.insert(month("2026-10"), SettlementKind::Paid);
+        let mut rows = vec![
+            paid_on(home, usd(1_000), first),
+            paid_on(home, usd(1_000), second),
+        ];
+        if spent == 200 {
+            rows.push(paid_on(home, usd(200), date(2026, 11, 2)));
+        }
+        let forecast = run_as_given(&ForecastInput {
+            items: vec![
+                item,
+                budget(monthly("Upkeep", usd(500), date(2026, 11, 20), home)),
+            ],
+            category_spent: vec![super::spent(home, spent)],
+            spent_transactions: rows,
+            ..one_month()
+        });
+        assert_eq!(line(&forecast, "Upkeep").counted, usd(counted));
+    }
 }
 
 /// A bill unpaid from last month, with an uncategorized transaction last month: it may be the payment,

@@ -59,7 +59,7 @@ pub struct ForecastData {
     pub loose_ends: Vec<LooseEndsRow>,
     /// The same for the month before `as_of`'s.
     pub last_month_loose_ends: Vec<LooseEndsRow>,
-    /// The first posted transaction on a counted account, up to `as_of`.
+    /// The first posted transaction on any of the household's accounts, up to `as_of`.
     pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
@@ -291,12 +291,14 @@ const LOOSE_ENDS: &str = loose_ends!("");
 /// [`LOOSE_ENDS`] from the start of last month, up to the bound start of this one.
 const LAST_MONTH_LOOSE_ENDS: &str = loose_ends!(" AND t.posted_on < ?3");
 
-/// Before this day coffer has no evidence of whether a bill was paid (spec §8.9 R9b).
+/// Before this day coffer has no evidence of whether last month's bill was paid (spec §8.9 R9b).
+/// Any account of the household's, whatever its state, so that closing or switching one can't
+/// move the day forward and drop a bill that really was missed.
 const EARLIEST_TRANSACTION: &str = concat!(
     "SELECT MIN(t.posted_on) AS earliest FROM transactions t \
      JOIN accounts a ON a.id = t.account_id \
      WHERE t.pending = 0 AND t.posted_on <= ?1 AND ",
-    counted_cash!("a")
+    the_households!()
 );
 
 /// Spending linked to each goal: `expense` splits only, since money moved to savings

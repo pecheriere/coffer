@@ -365,6 +365,49 @@ async fn bills_before_the_first_transaction_are_one_caution_and_no_hold() {
     );
 }
 
+/// A rent really missed on 20 October reads unpaid. Closing the old account on 3 November and
+/// starting a new one that day can't move the first day forward and drop it.
+#[tokio::test]
+async fn closing_an_account_does_not_let_off_a_missed_bill() {
+    let world = super::world().await;
+    let old = world.funded("Old", 0).await;
+    world.manual(old, "2026-10-01", -1).await;
+    world.floor(0).await;
+    let rent = world.expense("Rent").await;
+    world
+        .item(&outflow("Rent", 200_000, rent, &one_off_on("2026-10-20")))
+        .await;
+    let new = world.funded("New", 1_000_000).await;
+    world.manual(new, "2026-11-03", -1).await;
+    world.close(old).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(line(&forecast, "Rent")["unpaid"], usd(200_000));
+    assert_eq!(forecast["surplus"], usd(800_000));
+    assert_eq!(
+        caution(&forecast, "bill_unpaid_last_month")["amount"],
+        usd(200_000)
+    );
+}
+
+/// A household with only balances still answers for this month's bill.
+#[tokio::test]
+async fn a_balance_only_household_holds_this_months_bill() {
+    let world = super::world().await;
+    world.funded("Checking", 1_000_000).await;
+    world.floor(0).await;
+    let tyres = world.expense("Tyres").await;
+    world
+        .item(&outflow("Tyres", 100_000, tyres, &one_off_on("2026-11-05")))
+        .await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(forecast["surplus"], usd(900_000));
+    assert_eq!(kinds(&forecast, "cautions"), ["bill_not_seen"]);
+}
+
 /// October's uncategorized payment pays nothing yet, so a caution looks at October and says file it.
 /// Filed, it pays the bill and both cautions go.
 #[tokio::test]

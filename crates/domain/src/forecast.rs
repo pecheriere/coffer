@@ -20,7 +20,7 @@ mod types;
 
 pub use bill_matching::{
     BILL_AMOUNT_TOLERANCE_PERCENT, BILL_EARLY_PAYMENT_DAYS, BILL_LOOK_BACK_MONTHS,
-    bills_looked_at_from, payments_read_from,
+    REFUND_UNDOES_FROM_PERCENT, REFUND_UNDOES_TO_PERCENT, bills_looked_at_from, payments_read_from,
 };
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,

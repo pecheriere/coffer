@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Span;
 use jiff::civil::Date;
 
-use super::bill_matching::{Bill, Seen, bills_looked_at_from, match_bills};
+use super::bill_matching::{Bill, Matching, Seen, bills_looked_at_from, match_bills};
 use super::money;
 use super::settled::settlement_of;
 use super::types::{
@@ -152,7 +152,9 @@ pub(super) fn reduce(
                 key,
                 amount,
                 settled: settlement_of(item, on),
-                before_history: on < input.as_of
+                // Last month's only: this month's is what a balance-only household still has to
+                // answer for, with a caution and a way to settle it.
+                before_history: on < month_start
                     && input.earliest_transaction.is_none_or(|first| on < first),
             };
             let dates = item.schedule.occurrences(looked_at_from, through_as_of);
@@ -203,6 +205,7 @@ pub(super) fn reduce(
         missing_history,
         mut spending_sensitive_currencies,
     } = outcome;
+    bill_cautions.extend(refund_cautions(input, &bills, &matching)?);
     for (currency, (occurrences, amount)) in missing_history {
         bill_cautions.push(Caution::BillHistoryMissing {
             starts_on: input.earliest_transaction,
@@ -221,6 +224,33 @@ pub(super) fn reduce(
         last_month_unpaid_currencies,
         spending_sensitive_currencies,
     })
+}
+
+/// What to say of refunds that undid no charge, beside a bill paid in their category.
+fn refund_cautions(
+    input: &ForecastInput,
+    bills: &[Bill],
+    matching: &Matching,
+) -> Result<Vec<Caution>, ForecastError> {
+    let paid_keys: BTreeSet<PoolKey> = bills
+        .iter()
+        .zip(&matching.seen)
+        .filter(|(_, seen)| matches!(seen, Seen::Paid(..)))
+        .map(|(bill, _)| bill.key)
+        .collect();
+    matching
+        .uncounted_refunds
+        .iter()
+        .filter_map(|&at| input.spent_transactions.get(at))
+        .filter(|row| paid_keys.contains(&(row.category, row.currency)))
+        .map(|row| {
+            Ok(Caution::RefundBesidePaidBill {
+                category: row.category,
+                transaction: row.transaction,
+                amount: money(-i128::from(row.spent_minor), row.currency)?,
+            })
+        })
+        .collect()
 }
 
 /// What the occurrences add up to, across items.

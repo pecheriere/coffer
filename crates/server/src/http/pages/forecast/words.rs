@@ -225,17 +225,16 @@ fn bill_sentence(
     )
 }
 
-/// How to settle `item`'s month, for whoever reads this: a person with the form beside it, or an
-/// agent with the API.
+/// How to settle `item`'s month, whoever reads this: it covers all of that month's occurrences.
 fn how_to_settle(item: LineSource, on: Date) -> String {
     let LineSource::PlannedItem { id } = item else {
         return String::new();
     };
     let month = on.strftime("%Y-%m");
     format!(
-        " To settle it for {}, a member uses the buttons here, and an agent sends PUT \
-         /api/v1/plan-items/{id}/settlements/{month} with {{\"kind\": \"paid\"}} or \
-         {{\"kind\": \"skipped\"}}.",
+        " Settling covers all of {}. A member does it with the buttons on this page, and an agent \
+         with write access sends PUT /api/v1/plan-items/{id}/settlements/{month} with \
+         {{\"kind\": \"paid\"}} or {{\"kind\": \"skipped\"}}.",
         on.strftime("%B %Y"),
     )
 }
@@ -359,24 +358,41 @@ fn unclear_payment_sentence(
     )
 }
 
-/// Bills from before coffer's first transaction: nothing says whether they were paid.
+/// Last month's bills from before coffer's first transaction: nothing says whether they were paid.
 fn history_sentence(starts_on: Option<Date>, occurrences: u32, amount: Money) -> String {
-    let history = starts_on.map_or_else(
-        || "coffer has no transactions on counted accounts yet".to_owned(),
-        |first| format!("transactions on counted accounts start on {}", day(first)),
-    );
     let bills = if occurrences == 1 {
         "1 bill or one-off".to_owned()
     } else {
         format!("{occurrences} bills or one-offs")
     };
+    let why = starts_on.map_or_else(
+        || {
+            format!(
+                "Coffer has no transactions yet, so it can't tell whether {bills} due last month"
+            )
+        },
+        |first| {
+            format!(
+                "Transactions start on {}, so coffer can't tell whether {bills} due before then",
+                day(first),
+            )
+        },
+    );
     format!(
-        "{}{}, so coffer can't tell whether {bills} due before then, {} in all, were paid. \
-         They aren't counted as needed. If one is still to be paid, there is less to invest than \
-         this shows.",
-        history.get(..1).unwrap_or_default().to_uppercase(),
-        history.get(1..).unwrap_or_default(),
+        "{why}, {} in all, were paid. They aren't counted as needed. If one is still to be paid, \
+         there is less to invest than this shows.",
         magnitude(amount),
+    )
+}
+
+/// A refund that says nothing of the bill paid beside it.
+fn refund_sentence(category: Option<&str>, amount: Money) -> String {
+    format!(
+        "A refund of {} in {} doesn't look like a bill's payment coming back, so the bill there \
+         still counts as paid. If it was part of that payment, there is less to invest than this \
+         shows.",
+        magnitude(amount),
+        category.unwrap_or("a category"),
     )
 }
 
@@ -424,6 +440,14 @@ fn positive_liability_sentence(account: &str, balance: Money) -> String {
         "{account} is a card or loan, but shows {} in hand rather than owed. It may have been \
          entered with the wrong sign, and it counts as it stands.",
         magnitude(balance),
+    )
+}
+
+/// A goal past its date. `goal` starts the sentence.
+fn overdue_sentence(goal: &str, due_on: Date) -> String {
+    format!(
+        "{goal} was due on {} and still has money to find.",
+        day(due_on)
     )
 }
 
@@ -500,6 +524,9 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             amount,
             ..
         } => history_sentence(*starts_on, *occurrences, *amount),
+        Caution::RefundBesidePaidBill {
+            category, amount, ..
+        } => refund_sentence(names.category(*category), *amount),
         Caution::LastMonthLooseEnds {
             uncategorized_count: count,
             uncategorized_total: total,
@@ -535,13 +562,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             &names.one_off(*one_off),
             names.category(*category),
         ),
-        Caution::GoalOverdue { goal, due_on } => {
-            format!(
-                "{} was due on {} and still has money to find.",
-                names.goal(*goal),
-                day(*due_on)
-            )
-        }
+        Caution::GoalOverdue { goal, due_on } => overdue_sentence(&names.goal(*goal), *due_on),
         Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
         Caution::TransferLegRemoved { .. } => TRANSFER_LEG_REMOVED.to_owned(),
         Caution::ItemHintNotCounted {

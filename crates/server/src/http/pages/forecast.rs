@@ -1,6 +1,6 @@
 //! The forecast page (spec §8.9, R14): what `GET /api/v1/forecast` answers on the
 //! household's defaults, in words. It calls the same service and computes nothing, so
-//! the two cannot differ. Its only forms settle a bill a caution asks about.
+//! the two cannot differ. Its only forms settle a bill a caution asks about, and undo that.
 
 mod settle;
 mod words;
@@ -26,10 +26,16 @@ use crate::ledger::forecast::ForecastOptions;
 use words::{Names, blocker_sentence, caution_sentence, month_name, months, settled_sentence};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/forecast", get(forecast_page)).route(
-        "/forecast/items/{id}/settlements/{month}",
-        post(settle::settle),
-    )
+    Router::new()
+        .route("/forecast", get(forecast_page))
+        .route(
+            "/forecast/items/{id}/settlements/{month}",
+            post(settle::settle),
+        )
+        .route(
+            "/forecast/items/{id}/settlements/{month}/undo",
+            post(settle::undo),
+        )
 }
 
 async fn forecast_page(
@@ -136,7 +142,12 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup 
                 h3 { "Settled, so not counted" }
                 ul.reasons id="settled" {
                     @for line in &forecast.settled {
-                        li { (settled_sentence(line)) }
+                        li {
+                            (settled_sentence(line))
+                            @if let Some(csrf) = csrf {
+                                (settle::undo_form(line, csrf))
+                            }
+                        }
                     }
                 }
             }
@@ -301,5 +312,55 @@ fn months_table(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use coffer_domain::forecast::{Caution, Forecast, ForecastStatus, LineSource};
+    use coffer_domain::ids::{CategoryId, PlannedItemId};
+    use coffer_domain::money::{Currency, Money};
+    use jiff::civil::date;
+
+    use super::{Names, content};
+
+    /// Should a role ever read this page without the right to write, it sees the words and no
+    /// button. No session has such a role today, so this is the only way to reach it.
+    #[test]
+    fn without_the_right_to_write_there_are_no_buttons() {
+        let usd = Money {
+            minor_units: 100,
+            currency: Currency::parse("USD").unwrap(),
+        };
+        let forecast = Forecast {
+            as_of: date(2026, 11, 15),
+            end_exclusive: date(2026, 12, 15),
+            horizon_months: 1,
+            include_income: false,
+            floor: None,
+            stale_after_days: 7,
+            status: ForecastStatus::Provisional,
+            surplus: None,
+            totals: Vec::new(),
+            accounts: Vec::new(),
+            items: Vec::new(),
+            months: Vec::new(),
+            blockers: Vec::new(),
+            cautions: vec![Caution::BillNotSeen {
+                category: CategoryId::new(),
+                amount: usd,
+                items: vec![LineSource::PlannedItem {
+                    id: PlannedItemId::new(),
+                }],
+            }],
+            settled: Vec::new(),
+        };
+        let names = Names::of_accounts(&[]);
+
+        let reading = content(&forecast, &names, None).into_string();
+        assert!(reading.contains("dated earlier this month"));
+        assert!(!reading.contains("<form"));
+        let writing = content(&forecast, &names, Some("token")).into_string();
+        assert!(writing.contains("paid for all of November 2026"));
     }
 }

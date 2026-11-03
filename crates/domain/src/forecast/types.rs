@@ -49,8 +49,9 @@ pub struct ForecastInput {
     pub loose_ends: Vec<LooseEnds>,
     /// The same for last month, where a bill's payment may be waiting to be filed.
     pub last_month_loose_ends: Vec<LooseEnds>,
-    /// The first posted transaction on a counted account. Before it, coffer has no evidence of
-    /// whether a bill was paid.
+    /// The first posted transaction on any of the household's accounts, whatever their state, so
+    /// that closing or switching one can't move it forward. Before it, coffer has no evidence of
+    /// whether last month's bill was paid.
     pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
@@ -393,7 +394,7 @@ pub struct OccurrencePayment {
     /// before `as_of`, unless `before_history`.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub paid_by: Option<PaidBy>,
-    /// Dated before the first transaction on a counted account, so there is no evidence either
+    /// Dated last month, before the household's first transaction, so there is no evidence either
     /// way: it takes no payment and isn't treated as unpaid.
     pub before_history: bool,
 }
@@ -553,14 +554,23 @@ pub enum Caution {
         on: Date,
         amount: Money,
     },
-    /// Bills or one-offs dated before the first transaction on a counted account (`starts_on`,
+    /// Last month's bills or one-offs dated before the household's first transaction (`starts_on`,
     /// null with none yet). Coffer can't tell whether they were paid, so they aren't treated as
-    /// unpaid: `occurrences` of them, `amount` in all, are in none of the totals.
+    /// unpaid: `occurrences` of them, `amount` in all, are in none of the totals. This month's
+    /// always count.
     BillHistoryMissing {
         #[cfg_attr(feature = "openapi", schema(required))]
         starts_on: Option<Date>,
         currency: Currency,
         occurrences: u32,
+        amount: Money,
+    },
+    /// A refund in a category where a bill is paid, too small or large to count against a charge
+    /// there, so the bill stays paid. If it was part of that payment, the surplus reads high by up
+    /// to `amount`.
+    RefundBesidePaidBill {
+        category: CategoryId,
+        transaction: TransactionId,
         amount: Money,
     },
     /// Last month has money that can't pay a bill until a person files it, and a bill from last

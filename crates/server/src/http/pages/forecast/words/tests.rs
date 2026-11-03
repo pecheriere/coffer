@@ -35,6 +35,11 @@ fn cautions() -> Vec<Caution> {
         occurrences: 8,
         amount: usd(600_000),
     });
+    all.push(Caution::RefundBesidePaidBill {
+        category: CategoryId::new(),
+        transaction: TransactionId::new(),
+        amount: usd(25_000),
+    });
     all.push(Caution::LastMonthLooseEnds {
         currency: Currency::parse("USD").unwrap(),
         uncategorized_count: 2,
@@ -447,8 +452,21 @@ fn missing_history_says_when_it_starts_and_how_much() {
         },
         &Names::of_accounts(&[]),
     );
-    assert!(sentence.contains("start on 7 November 2026"));
+    assert!(sentence.starts_with("Transactions start on 7 November 2026"));
     assert!(sentence.contains("8 bills or one-offs due before then, 6,000.00 USD in all"));
+
+    let without = said(
+        &Caution::BillHistoryMissing {
+            starts_on: None,
+            currency: Currency::parse("USD").unwrap(),
+            occurrences: 1,
+            amount: usd(1_000),
+        },
+        &Names::of_accounts(&[]),
+    );
+    assert!(without.contains("no transactions yet"));
+    assert!(without.contains("1 bill or one-off due last month"));
+    assert!(!without.contains("before then"), "nothing to refer to");
 }
 
 /// With no names at all, each sentence still reads as one: nothing like "The goal A

@@ -372,9 +372,9 @@ async fn a_settled_item_is_shown_in_plain_words() {
     );
 }
 
-/// It stays read-only: nothing on the page acts on a settlement.
+/// All a settled item has to press is its undo.
 #[tokio::test]
-async fn a_settled_item_has_nothing_to_press() {
+async fn a_settled_item_can_only_be_undone() {
     let Golden { world, .. } = golden().await;
     let water = id_of(&world.forecast().await, "Water");
     world.settle(&water, "2026-11", "skipped").await;
@@ -383,8 +383,9 @@ async fn a_settled_item_has_nothing_to_press() {
     let main = &reply.body[reply.body.find("<main").unwrap()..];
 
     assert!(text_of(main).contains("marked skipped"));
-    assert!(!main.contains("<form"), "no form");
-    assert!(!main.contains("<button"), "no button");
+    assert_eq!(main.matches("<form").count(), 1, "the undo");
+    assert_eq!(main.matches("<button").count(), 1, "the undo");
+    assert!(main.contains("Undo Water for November 2026"));
 }
 
 /// A settled item's name is the household's text, so it stays text.
@@ -657,9 +658,7 @@ async fn page_is_never_cached_or_sent_as_a_referrer() {
 
 #[tokio::test]
 async fn with_nothing_to_settle_the_page_offers_no_write_action() {
-    let Golden { world, .. } = golden().await;
-    let water = id_of(&world.forecast().await, "Water");
-    world.settle(&water, "2026-11", "paid").await;
+    let (world, _) = crate::forecast::settled::holding().await;
 
     let body = page(&world).await.body;
 
@@ -708,6 +707,61 @@ async fn a_bill_the_page_asks_about_can_be_settled_from_it() {
     assert!(words(&world).await.contains("isn't counted, marked paid"));
 }
 
+/// A settlement is the whole month, so the button says so, and undoing it puts all of it back. A
+/// member who isn't an admin has them too.
+#[tokio::test]
+async fn settling_says_all_of_the_month_and_can_be_undone_by_a_member() {
+    let Golden { world, .. } = golden().await;
+    let invite = world
+        .server
+        .identity
+        .create_invite(&world.alice, Role::Member, None)
+        .await
+        .unwrap();
+    let mut bob = Browser::new(&world.server);
+    let mut key = world.server.authenticator();
+    bob.enroll(&mut key, &invite, "bob", "Bob").await;
+    let water = id_of(&world.forecast().await, "Water");
+    let settle = format!(
+        "/forecast/items/{}/settlements/2026-11",
+        water.as_str().unwrap()
+    );
+    let token = |body: &str, action: &str| {
+        body.split(&format!("action=\"{action}\""))
+            .nth(1)
+            .and_then(|form| form.split("value=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .to_owned()
+    };
+
+    let before = bob.get(PAGE).await;
+    assert!(
+        before
+            .body
+            .contains("Mark Water paid for all of November 2026")
+    );
+    assert!(before.body.contains("Skip Water for all of November 2026"));
+    let csrf = token(&before.body, &settle);
+    let posted = bob
+        .post_form(&settle, &[("csrf", csrf.as_str()), ("kind", "paid")])
+        .await;
+    assert_eq!(posted.status, StatusCode::SEE_OTHER);
+    assert_eq!(world.forecast().await["status"], "firm");
+
+    let undo = format!("{settle}/undo");
+    let settled = bob.get(PAGE).await;
+    assert!(settled.body.contains("Undo Water for November 2026"));
+    let csrf = token(&settled.body, &undo);
+    let forged = bob.post_form(&undo, &[("csrf", "wrong")]).await;
+    assert_ne!(forged.status, StatusCode::SEE_OTHER, "a forged form fails");
+    let undone = bob.post_form(&undo, &[("csrf", csrf.as_str())]).await;
+    assert_eq!(undone.status, StatusCode::SEE_OTHER);
+    let forecast = world.forecast().await;
+    assert_eq!(forecast["status"], "provisional");
+    assert_eq!(forecast["settled"], json!([]));
+}
+
 /// The sentence says how, for a person and for an agent.
 #[tokio::test]
 async fn a_bill_unpaid_from_last_month_says_how_to_settle_it() {
@@ -729,7 +783,8 @@ async fn a_bill_unpaid_from_last_month_says_how_to_settle_it() {
         "PUT /api/v1/plan-items/{}/settlements/2026-10",
         item.as_str().unwrap()
     )));
-    assert!(said.contains("Mark Boiler paid"));
+    assert!(said.contains("Mark Boiler paid for all of October 2026"));
+    assert!(said.contains("Settling covers all of October 2026"));
 }
 
 #[tokio::test]

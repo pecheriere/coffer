@@ -8192,7 +8192,7 @@
           },
           {
             "type": "object",
-            "description": "Bills or one-offs dated before the first transaction on a counted account (`starts_on`,\nnull with none yet). Coffer can't tell whether they were paid, so they aren't treated as\nunpaid: `occurrences` of them, `amount` in all, are in none of the totals.",
+            "description": "Last month's bills or one-offs dated before the household's first transaction (`starts_on`,\nnull with none yet). Coffer can't tell whether they were paid, so they aren't treated as\nunpaid: `occurrences` of them, `amount` in all, are in none of the totals. This month's\nalways count.",
             "required": [
               "starts_on",
               "currency",
@@ -8224,6 +8224,33 @@
                   "null"
                 ],
                 "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A refund in a category where a bill is paid, too small or large to count against a charge\nthere, so the bill stays paid. If it was part of that payment, the surplus reads high by up\nto `amount`.",
+            "required": [
+              "category",
+              "transaction",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "category": {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "refund_beside_paid_bill"
+                ]
+              },
+              "transaction": {
+                "$ref": "#/components/schemas/TransactionId"
               }
             }
           },
@@ -10762,7 +10789,7 @@
           },
           "before_history": {
             "type": "boolean",
-            "description": "Dated before the first transaction on a counted account, so there is no evidence either\nway: it takes no payment and isn't treated as unpaid."
+            "description": "Dated last month, before the household's first transaction, so there is no evidence either\nway: it takes no payment and isn't treated as unpaid."
           },
           "on": {
             "type": "string",

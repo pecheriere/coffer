@@ -363,13 +363,15 @@ fn check_payments(forecast: &Forecast) -> Result<(), String> {
     Ok(())
 }
 
-/// `item`'s unsettled occurrences from the look-back to `as_of`, but for those before history.
+/// `item`'s unsettled occurrences from the look-back to `as_of`, but for last month's before history.
 fn evidenced(input: &ForecastInput, item: &ItemInput) -> Result<i128, String> {
-    let from = bills_looked_at_from(input.as_of);
-    let from = input
-        .earliest_transaction
-        .map_or(input.as_of, |first| first.max(from));
-    dated(item, from.min(input.as_of), input.as_of)
+    let month_start = input.as_of.first_of_month();
+    let from = input.earliest_transaction.map_or(month_start, |first| {
+        first
+            .max(bills_looked_at_from(input.as_of))
+            .min(month_start)
+    });
+    dated(item, from, input.as_of)
 }
 
 /// What a category's lines owe is its bills before `as_of` less those paid, and this month's part
@@ -723,6 +725,7 @@ proptest! {
                     Caution::BillNotSeen { .. }
                         | Caution::BillPaymentUnclear { .. }
                         | Caution::BillHistoryMissing { .. }
+                        | Caution::RefundBesidePaidBill { .. }
                         | Caution::CashDipsBelowFloor { .. }
                 ),
                 "settling adds no caution of its own"

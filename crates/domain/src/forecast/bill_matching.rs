@@ -28,6 +28,13 @@ pub const BILL_AMOUNT_TOLERANCE_PERCENT: i128 = 10;
 /// weekend, but last month's second payment isn't next month's first.
 pub const BILL_EARLY_PAYMENT_DAYS: i64 = 7;
 
+/// A refund counts against a charge from this percentage of it: 250 back on a rent of 2,000 is
+/// something else coming back, and 1,000 back says the rent wasn't paid.
+pub const REFUND_UNDOES_FROM_PERCENT: i128 = 25;
+
+/// And up to this one: 1,500 back isn't about a charge of 30, however new that is.
+pub const REFUND_UNDOES_TO_PERCENT: i128 = 110;
+
 /// The first day whose bills a forecast from `as_of` still looks at, and whose transactions it
 /// reads to pay them.
 #[must_use]
@@ -79,6 +86,8 @@ pub(super) struct Matching {
     /// What occurrences settled as paid in `as_of`'s month take from their pool, where no
     /// transaction fits them: the money was spent somehow, and may be in the pool.
     pub(super) settled_charges: BTreeMap<PoolKey, i128>,
+    /// The refunds that undid no charge.
+    pub(super) uncounted_refunds: Vec<usize>,
 }
 
 /// Whether `paid` is within the tolerance of `planned`, a positive amount.
@@ -131,14 +140,22 @@ impl Payment<'_> {
     }
 }
 
-/// The outflows in date order, each less the refund that undid it: a refund within the tolerance of
-/// a charge, on or before its own day and the newest such. A charge of 2,000 and a refund of 250
-/// aren't that, so the refund only lowers what its category spent, which a budget's pool reads.
-fn after_refunds(rows: &[SpentTransaction], order: &[usize]) -> Vec<i128> {
+/// Whether a refund of `refunded` counts against a charge of `charge`.
+fn undoes(refunded: i128, charge: i128) -> bool {
+    (charge * REFUND_UNDOES_FROM_PERCENT..=charge * REFUND_UNDOES_TO_PERCENT)
+        .contains(&(refunded * 100))
+}
+
+/// What each outflow can still pay, and the refunds that left all of them standing. A refund undoes
+/// the newest charge it is the right size for, in its category and currency and on or before its
+/// own day, and that charge then pays nothing, the safe direction. Any other refund only lowers what
+/// its category spent, which a budget's pool reads.
+fn after_refunds(rows: &[SpentTransaction], order: &[usize]) -> (Vec<i128>, Vec<usize>) {
     let mut left: Vec<i128> = rows
         .iter()
         .map(|row| i128::from(row.spent_minor).max(0))
         .collect();
+    let mut uncounted = Vec::new();
     for &refund_at in order {
         let Some(refund) = rows.get(refund_at).filter(|row| row.spent_minor < 0) else {
             continue;
@@ -151,14 +168,15 @@ fn after_refunds(rows: &[SpentTransaction], order: &[usize]) -> Vec<i128> {
                     amount > 0
                         && key_of(row) == key_of(refund)
                         && row.posted_on <= refund.posted_on
-                        && close_enough(refunded, amount)
+                        && undoes(refunded, amount)
                 })
         });
-        if let Some(amount) = undone.and_then(|at| left.get_mut(at)) {
-            *amount -= refunded.min(*amount);
+        match undone.and_then(|at| left.get_mut(at)) {
+            Some(amount) => *amount = 0,
+            None => uncounted.push(refund_at),
         }
     }
-    left
+    (left, uncounted)
 }
 
 /// What a category's budgets plan for a calendar month.
@@ -200,7 +218,7 @@ pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
     let rows = &input.spent_transactions;
     let mut order: Vec<usize> = (0..rows.len()).collect();
     order.sort_by_key(|&at| rows.get(at).map(|row| (row.posted_on, row.transaction)));
-    let left = after_refunds(rows, &order);
+    let (left, uncounted_refunds) = after_refunds(rows, &order);
     let payments: Vec<Payment<'_>> = order
         .into_iter()
         .filter_map(|at| {
@@ -218,6 +236,7 @@ pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
         seen: vec![Seen::Nothing; bills.len()],
         taken: BTreeMap::new(),
         settled_charges: BTreeMap::new(),
+        uncounted_refunds,
     };
     for &payment in &payments {
         let oldest = bills
@@ -254,6 +273,13 @@ fn point_at_the_rest(
 ) {
     let month_start = input.as_of.first_of_month();
     let mut pointed_at = BTreeSet::new();
+    // What last month's category spent that paid nothing: a settled bill may be why.
+    let mut last_month_free: BTreeMap<PoolKey, i128> = BTreeMap::new();
+    for payment in payments.iter().filter(|payment| {
+        payment.row.posted_on < month_start && !matching.taken.contains_key(&payment.at)
+    }) {
+        *last_month_free.entry(key_of(payment.row)).or_default() += payment.amount;
+    }
     for (position, bill) in bills.iter().enumerate() {
         let open = match bill.settled {
             Some(SettlementKind::Paid) => true,
@@ -278,11 +304,17 @@ fn point_at_the_rest(
                     .insert(payment.at, payment.amount.min(bill.amount));
             }
             // Paid some way nothing fits, such as in two parts: any of the category's money may
-            // be how, so that much of it is no budget's.
+            // be how, so that much of it is no budget's. For last month's bill, that is what
+            // last month's money didn't cover.
             (None, Some(_)) => {
-                if bill.on >= month_start {
-                    *matching.settled_charges.entry(bill.key).or_default() += bill.amount;
+                let mut charge = bill.amount;
+                if bill.on < month_start {
+                    let free = last_month_free.entry(bill.key).or_default();
+                    let covered = charge.min(*free);
+                    *free -= covered;
+                    charge -= covered;
                 }
+                *matching.settled_charges.entry(bill.key).or_default() += charge;
             }
             // It stays with the budget, but no more than the bill: were it the payment, what is
             // over isn't the budget's either, and the need would read below the truth.
