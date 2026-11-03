@@ -80,8 +80,8 @@ token's access.
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
   named in an error (a batch names the failing operation by index only) or
-  in another transaction's `duplicate_candidates`. A planned item hinted at one
-  answers likewise, and a split linked to such a goal reads `goal: null`.
+  in another transaction's `duplicate_candidates` or `transfer_link`. A planned item
+  hinted at one answers likewise, and a split linked to such a goal reads `goal: null`.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
   same for every token. A patch naming `display_currency` also needs `all` at
@@ -322,6 +322,8 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   - `uncategorized=true`: only transactions without splits
     (`uncategorized=false` does not filter).
   - `pending`: `true` or `false`.
+  - `unmatched_transfer=true`: only transactions filed in a `transfer` category with no
+    [transfer link](#transfer-links), which is what is left to match.
   - `flag`: `possible_duplicate`, `source_removed` or `split_mismatch`.
   - `min_amount` and `max_amount` (both inclusive): the signed amount in
     minor units, so `max_amount=-1` is every outflow.
@@ -371,17 +373,62 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   `{"duplicate": "<transaction id>"}` into this transaction: the
   duplicate's source records move here and it is deleted. Use the
   transaction holding the notes, splits and review as the target; a
-  duplicate with user state of its own is a 409 `merge_conflict` unless
-  `discard_duplicate_state` is `true`.
+  duplicate with user state of its own, a transfer link included, is a 409
+  `merge_conflict` unless `discard_duplicate_state` is `true`.
 - `POST /api/v1/transactions/{transaction_id}/dismiss-duplicate`
   (`write`) clears `possible_duplicate` when the candidates are distinct
   purchases.
 - `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
   source record back into a transaction of its own.
 
+### Transfer links
+
+A transfer between two accounts arrives as two unrelated transactions. A link says they are
+one movement of money. Coffer never links anything by itself: it suggests, and you or a member
+confirm.
+
+- `GET /api/v1/transactions?unmatched_transfer=true` lists what is filed as a `transfer` with
+  no link. Outflows you recognize as transfers may also be uncategorized.
+- `GET /api/v1/transactions/{transaction_id}/transfer-candidates` suggests the other leg: the
+  same amount the other way, in the same currency, on another account you can read, within 5
+  days, nearest first. A guess to check, and it changes nothing.
+- `POST /api/v1/transfer-links` (`write` on both accounts) links `{"outflow": "<id>", "inflow":
+  "<id>"}`. Answers 201 with `difference`, what arrived less what left (`null` across
+  currencies), and `within_household`. Amounts may differ, as for a fee, and currencies too.
+  Accepts an `Idempotency-Key`. A transaction already in a link is a 409 `conflict`.
+- `GET /api/v1/transfer-links/{transfer_link_id}` reads one, with what each leg says now. Each
+  transaction names its own in `transfer_link`.
+- `DELETE /api/v1/transfer-links/{transfer_link_id}` (`write` on both accounts) ends one. Both
+  transactions stay, and count again as what they are filed as.
+
+**What it changes.** Between two of the household's accounts, the two legs are one movement:
+neither spending nor income, whatever they are filed as. They are out of `actual`, reduce no
+budget, pay no bill, count towards no goal and raise no `uncategorized_spending`, and
+`moved_within_household` in plan versus actual says what left and what arrived. Each leg keeps
+its category, which counts again if the link goes. Net worth and the forecast's cash read
+balances, so a link changes neither, and `spending_newer_than_balance` stands, since a link
+doesn't say which balances have moved. A fee inside a link is in no `actual`: file it apart if
+it should be.
+
+**A link out of the household** (`within_household: false`) records the movement and changes no
+number: see the next section. It follows `belongs_to`, so saying a fund is the household's
+turns its links into movements inside.
+
+**What a leg may hold.** One split at most, since part of a split transaction may be spending,
+so one with more is refused, and a leg can't take more until its link is removed. A goal only
+on money leaving the household: money moved inside it is still the household's. A leg can be on
+a closed account.
+
+**When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it,
+and a provider's record vanishing leaves the leg with its link, flagged `source_removed`, for
+you to look at: merge the posted form into it (use the leg as the target), or remove the link.
+A merge discarding a leg's link needs `discard_duplicate_state` and `write` on the other
+account. An un-merge leaves the link on the transaction it was on. A manual leg can't be deleted
+until its link is removed.
+
 ### Money to and from accounts that aren't the household's
 
-Nothing can check these rules until coffer has transfer links, so they are yours to
+Coffer doesn't check these rules, and a transfer link doesn't either, so they are yours to
 follow. A contribution means money from one of the household's accounts to one whose
 `belongs_to` isn't `household`.
 
@@ -396,6 +443,9 @@ follow. A contribution means money from one of the household's accounts to one w
   one receiving it. Hinted at the receiving account, it still counts, with the caution
   `item_hint_not_counted`, whose `effect` is `still_needed`. A `transfer` category on a
   planned item is refused (422).
+- **A link records it and changes nothing.** You may link the charge to the deposit in the
+  fund. That answers `within_household: false`, it stays spending, and the number is the same
+  either way, in a `transfer` category too: a link doesn't correct the category.
 - **Money coming back**, such as a 529 paying a tuition bill into checking, is a refund
   in the `expense` category it paid for, or `income`, on the household's side.
 - **Transactions inside such an account** sync and match as usual and can be

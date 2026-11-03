@@ -38,9 +38,10 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
-  transactions and their splits, merging, un-merging and dismissing possible duplicates; `unseen.rs` holds what a token with grants
-  doesn't get of a transaction it can read: duplicate candidates in accounts it
-  can't read and goal links it can't see); `fx` (the `RateProvider` interface,
+  transactions and their splits, merging, un-merging and dismissing possible duplicates, `transfer_links` (two
+  transactions that are one movement of money); `unseen.rs` holds what a token with grants
+  doesn't get of a transaction it can read: duplicate candidates and transfer links with a side in
+  accounts it can't read and goal links it can't see); `fx` (the `RateProvider` interface,
   the ECB's data API over `egress`, and the two jobs `serve` starts: fetching the
   rates a household needs and filling the daily table forward); `tasks`
   (supervision shared by the sync scheduler and these jobs: a panic is logged and the task restarts);

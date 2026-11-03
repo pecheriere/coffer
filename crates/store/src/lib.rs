@@ -27,6 +27,7 @@ mod sources;
 mod sync_runs;
 mod token_grants;
 mod transactions;
+mod transfer_links;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -68,6 +69,7 @@ pub use transactions::{
     AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
     TransactionFilter, TransactionRecord, UserFieldChanges,
 };
+pub use transfer_links::{NewTransferLink, TransferLinkRecord, TransferLinkSide};
 
 /// How long a writer waits for the write lock before it fails. A sync
 /// applies each provider account in one transaction (spec: an interrupted

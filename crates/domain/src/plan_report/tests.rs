@@ -48,6 +48,7 @@ fn input(months: u8) -> PlanReportInput {
         actuals: Vec::new(),
         uncategorized: Vec::new(),
         not_household: Vec::new(),
+        moved: Vec::new(),
     }
 }
 

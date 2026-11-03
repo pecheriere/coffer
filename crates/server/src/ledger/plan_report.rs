@@ -125,5 +125,6 @@ fn input(
         actuals: data.actuals,
         uncategorized: data.uncategorized,
         not_household: data.not_household,
+        moved: data.moved,
     }
 }

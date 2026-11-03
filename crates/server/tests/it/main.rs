@@ -40,3 +40,4 @@ mod simplefin;
 mod sync_engine;
 mod transactions_api;
 mod transactions_core;
+mod transfer_links;

@@ -7,7 +7,9 @@ use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
-use coffer_domain::plan_report::{GoalMonth, MonthActual, MonthNotHousehold, MonthUncategorized};
+use coffer_domain::plan_report::{
+    GoalMonth, MonthActual, MonthMoved, MonthNotHousehold, MonthUncategorized,
+};
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteConnection};
@@ -76,6 +78,8 @@ pub struct PlanReportData {
     pub uncategorized: Vec<MonthUncategorized>,
     /// Per month and currency, ordered by them.
     pub not_household: Vec<MonthNotHousehold>,
+    /// Per month and currency, ordered by them.
+    pub moved: Vec<MonthMoved>,
 }
 
 /// What in `as_of`'s month, in one currency, could yet change a category's spending.
@@ -132,6 +136,22 @@ macro_rules! the_households {
     };
 }
 
+/// The transaction `t` is one leg of a transfer link between two of the household's accounts,
+/// so it is one movement of money and neither spending nor income, whatever it is filed as
+/// (spec §8.12 T5). Read at the time, as whose money an account is always is (§8.11 B6), so a
+/// link out of the household says nothing here and changes no number (§8.11 B9).
+macro_rules! moved_within_household {
+    () => {
+        "EXISTS (SELECT 1 FROM transfer_links lk \
+         JOIN transactions lo ON lo.id = lk.outflow_id \
+         JOIN accounts ao ON ao.id = lo.account_id \
+         JOIN transactions li ON li.id = lk.inflow_id \
+         JOIN accounts ai ON ai.id = li.account_id \
+         WHERE (lk.outflow_id = t.id OR lk.inflow_id = t.id) \
+         AND ao.belongs_to = 'household' AND ai.belongs_to = 'household')"
+    };
+}
+
 /// Transactions in `t` the balance of an account in the forecast already shows, in
 /// the window from the bound month start to the bound `as_of`. The inner join leaves
 /// out an account with no balance. A closed account is left out too, though a closed
@@ -180,13 +200,16 @@ macro_rules! left_out_of_category {
 
 /// Money counted against a goal (R10a): a charge the provider removed or revised away
 /// from its splits, or that may be another charge again, doesn't count. An inflow on such
-/// a transaction keeps counting, since leaving a refund out would lower the need.
+/// a transaction keeps counting, since leaving a refund out would lower the need. A leg of a
+/// transfer inside the household counts neither way: the money is still the household's.
 macro_rules! counts_against_goal {
     () => {
         concat!(
-            "(s.minor_units > 0 OR (",
+            "(NOT ",
+            moved_within_household!(),
+            " AND (s.minor_units > 0 OR (",
             splits_hold!(),
-            " AND t.flag_possible_duplicate = 0))"
+            " AND t.flag_possible_duplicate = 0)))"
         )
     };
 }
@@ -198,15 +221,21 @@ const CATEGORY_SPENT: &str = concat!(
     shown_this_month!(),
     " AND s.transaction_id = t.id AND s.goal_id IS NULL AND c.kind = 'expense' \
      AND NOT ",
+    moved_within_household!(),
+    " AND NOT ",
     left_out_of_category!(),
     " GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
 );
 
-/// An outflow with no splits at all, in `t`.
+/// An outflow with no splits at all and no link saying where it went, in `t`.
 macro_rules! uncategorized {
     () => {
-        "FILTER (WHERE t.amount_minor < 0 AND NOT EXISTS \
-         (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id))"
+        concat!(
+            "FILTER (WHERE t.amount_minor < 0 AND NOT EXISTS \
+             (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id) AND NOT ",
+            moved_within_household!(),
+            ")"
+        )
     };
 }
 
@@ -324,7 +353,9 @@ const REPORT_ACTUALS: &str = concat!(
      JOIN transactions t ON t.id = s.transaction_id \
      JOIN accounts a ON a.id = t.account_id \
      WHERE s.goal_id IS NULL AND t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 \
-     AND ",
+     AND NOT ",
+    moved_within_household!(),
+    " AND ",
     the_households!(),
     " GROUP BY month, s.category_id, c.kind, t.currency \
      ORDER BY month, s.category_id, t.currency"
@@ -342,6 +373,18 @@ const REPORT_NOT_HOUSEHOLD: &str = concat!(
      WHERE s.goal_id IS NULL AND t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 \
      AND c.kind IN ('expense', 'income') AND NOT ",
     the_households!(),
+    " GROUP BY month, t.currency ORDER BY month, t.currency"
+);
+
+/// The legs [`REPORT_ACTUALS`] and [`REPORT_UNCATEGORIZED`] leave out for being one movement, by
+/// month: every posted one, whatever it is filed as.
+const REPORT_MOVED: &str = concat!(
+    "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, \
+     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.amount_minor < 0), 0) AS out_minor, \
+     COALESCE(SUM(t.amount_minor) FILTER (WHERE t.amount_minor > 0), 0) AS in_minor \
+     FROM transactions t \
+     WHERE t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 AND ",
+    moved_within_household!(),
     " GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
@@ -455,6 +498,15 @@ fn month_not_household_from_row(row: &SqliteRow) -> Result<MonthNotHousehold, St
         month: parsed(row, "month")?,
         currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
         net_minor: summed(row, "net_minor")?,
+    })
+}
+
+fn month_moved_from_row(row: &SqliteRow) -> Result<MonthMoved, StoreError> {
+    Ok(MonthMoved {
+        month: parsed(row, "month")?,
+        currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
+        out_minor: summed(row, "out_minor")?,
+        in_minor: summed(row, "in_minor")?,
     })
 }
 
@@ -662,6 +714,15 @@ impl Store {
             .iter()
             .map(month_not_household_from_row)
             .collect::<Result<_, _>>()?;
+        let moved = sqlx::query(REPORT_MOVED)
+            .bind(&from)
+            .bind(&to_exclusive)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(month_moved_from_row)
+            .collect::<Result<_, _>>()?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(PlanReportData {
             items,
@@ -670,6 +731,7 @@ impl Store {
             goal_spent,
             uncategorized,
             not_household,
+            moved,
         })
     }
 }

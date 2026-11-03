@@ -13,6 +13,9 @@
 //! - A split linked to a goal counts on the goal's line and never in its category.
 //! - Categorized money on an account that isn't the household's is never in `actual`
 //!   (spec §8.11 B10), and `not_the_households` says how much, per month and currency.
+//! - Both legs of a transfer link between two of the household's accounts are out of `actual`,
+//!   `uncategorized` and a goal's `spent_against`, whatever they are filed as (spec §8.12 T5), and
+//!   `moved_within_household` says how much, per month and currency.
 //!
 //! An occurrence a person settled (R9a) stays in `planned`, since it is what was planned, and
 //! the row's `settled` says how much of it is. It takes no share of a rollover's spending,
@@ -51,6 +54,8 @@ pub struct PlanReportInput {
     pub uncategorized: Vec<MonthUncategorized>,
     /// Per month and currency, as far back as [`report_window`] says, ordered by them.
     pub not_household: Vec<MonthNotHousehold>,
+    /// Per month and currency, as far back as [`report_window`] says, ordered by them.
+    pub moved: Vec<MonthMoved>,
 }
 
 /// A planned item as a report reads it.
@@ -119,6 +124,18 @@ pub struct MonthNotHousehold {
     pub net_minor: i64,
 }
 
+/// Posted legs of transfer links between two of the household's accounts, in one month and
+/// currency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonthMoved {
+    pub month: CalendarMonth,
+    pub currency: Currency,
+    /// Positive.
+    pub out_minor: i64,
+    /// Positive.
+    pub in_minor: i64,
+}
+
 /// The answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -132,6 +149,10 @@ pub struct PlanReport {
     /// Categorized money on accounts that aren't the household's. Never in `actual`. Ordered
     /// by month and currency, the reported months only.
     pub not_the_households: Vec<NotHouseholdRow>,
+    /// Money a transfer link says only moved between the household's accounts. Never in
+    /// `actual` or `uncategorized`, whatever its legs are filed as. Ordered by month and
+    /// currency, the reported months only.
+    pub moved_within_household: Vec<MovedRow>,
     /// The occurrences a person settled, ordered by month and item: they stay in `planned`,
     /// and this is why a row's `difference` may be no surprise.
     pub settled: Vec<SettledRow>,
@@ -202,6 +223,18 @@ pub struct NotHouseholdRow {
     pub month: CalendarMonth,
     /// Net, negative for money out: a grant is negative, money coming in positive.
     pub net: Money,
+}
+
+/// What moved between the household's accounts in one month and currency, by the legs posted
+/// in it. A leg posted in another month, or a fee between them, shows as the two sides differing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct MovedRow {
+    pub month: CalendarMonth,
+    /// Positive: what left an account.
+    pub money_out: Money,
+    /// Positive: what reached one.
+    pub money_in: Money,
 }
 
 /// One item's occurrences in one month that a person settled.
@@ -319,6 +352,22 @@ pub fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastErr
                 month: row.month,
                 net: Money {
                     minor_units: row.net_minor,
+                    currency: row.currency,
+                },
+            })
+            .collect(),
+        moved_within_household: input
+            .moved
+            .iter()
+            .filter(|row| reported.contains(&row.month))
+            .map(|row| MovedRow {
+                month: row.month,
+                money_out: Money {
+                    minor_units: row.out_minor,
+                    currency: row.currency,
+                },
+                money_in: Money {
+                    minor_units: row.in_minor,
                     currency: row.currency,
                 },
             })

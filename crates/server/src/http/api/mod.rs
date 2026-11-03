@@ -18,6 +18,7 @@ mod provider_accounts;
 mod reports;
 mod router;
 mod transactions;
+mod transfer_links;
 
 use axum::Router;
 use axum::extract::Request;
@@ -62,6 +63,9 @@ fn routes() -> ApiRouter {
             transactions::update,
             transactions::delete
         ))
+        .op(routes!(transfer_links::create))
+        .op(routes!(transfer_links::get, transfer_links::remove))
+        .op(routes!(transfer_links::candidates))
         .op(routes!(plan_items::list, plan_items::create))
         .op(routes!(
             plan_items::get,

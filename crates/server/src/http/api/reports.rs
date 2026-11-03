@@ -36,7 +36,11 @@ use crate::ledger::plan_report::PlanReportQuery;
                    goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, \
                    and a removed, revised or possibly duplicate charge there is in that line's \
                    `left_out`. Outflows with no splits are never spending: `uncategorized` lists \
-                   them, without invested and illiquid accounts.\n\n\
+                   them, without invested and illiquid accounts. Both legs of a transfer link \
+                   between two of the household's accounts are out of all of these, whatever they \
+                   are filed as: `moved_within_household` says what left and what arrived, per \
+                   month and currency, so a fee shows as the two differing. A link out of the \
+                   household changes nothing.\n\n\
                    An occurrence a person settled (`settlePlanItem`) stays in `planned`, since it \
                    is what was planned: a row's `settled` says how much of `planned` it is, and \
                    the list `settled` says which item, for which month, and whether `paid` or \
