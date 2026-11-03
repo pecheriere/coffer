@@ -2,7 +2,10 @@
 //! later read shows: nobody comparing the two sees a change that never happened.
 
 use axum::http::{Method, StatusCode};
-use coffer_domain::time::{Clock as _, SystemClock};
+use std::sync::Arc;
+
+use coffer_domain::time::SystemClock;
+use coffer_server::household_time::HouseholdTime;
 use coffer_server::testkit::TestServer;
 use serde_json::{Value, json};
 
@@ -55,7 +58,15 @@ async fn a_settlement_answers_with_the_time_a_later_read_shows() {
         .await;
     let id = item["id"].as_str().unwrap();
 
-    let this_month = SystemClock.now().strftime("%Y-%m").to_string();
+    let time = HouseholdTime::new(
+        world.server.store.clone(),
+        Arc::new(SystemClock),
+        world.server.config.default_timezone.clone(),
+    );
+    let this_month = time
+        .today_in(time.default_zone())
+        .strftime("%Y-%m")
+        .to_string();
 
     let (status, settled) = world
         .call(
