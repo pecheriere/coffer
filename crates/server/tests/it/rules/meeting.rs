@@ -74,7 +74,7 @@ async fn a_duplicate_only_a_rule_filled_merges_without_asking_and_is_recorded() 
     world.sync(&two, vec![pending("b", -1300, "SHOP")]).await;
     let duplicate = world.holding(&two, "b").await;
     assert_ne!(duplicate, target, "two transactions to merge");
-    assert_eq!(!world.stored(duplicate).await.splits.len(), 0);
+    assert_ne!(world.stored(duplicate).await.splits.len(), 0);
 
     let (status, merged) = world
         .call(
