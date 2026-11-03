@@ -558,10 +558,54 @@ async fn a_link_across_currencies_that_disagrees_gets_a_caution_and_moves_the_sa
         })
     );
     assert_eq!(
-        line(&with_a_rate, "Groceries"),
-        line(&without_a_rate, "Groceries"),
+        without_cautions(with_a_rate),
+        without_cautions(without_a_rate),
         "a rate changes no number"
     );
+}
+
+/// The whole answer but its cautions.
+fn without_cautions(mut forecast: Value) -> Value {
+    forecast.as_object_mut().unwrap().remove("cautions");
+    forecast
+}
+
+/// Pending amounts are in no count, so two of them have nothing to caution about; once one posts,
+/// the link is asked about.
+#[tokio::test]
+async fn a_link_of_two_pending_legs_has_no_caution_until_one_posts() {
+    let world = world().await;
+    world.enter_usd_rate("2026-11-05", "1.1172").await;
+    let link = world.dollars_to_euros(1_250).await;
+    let legs = [
+        link["outflow"]["transaction"].clone(),
+        link["inflow"]["transaction"].clone(),
+    ];
+    for leg in &legs {
+        world
+            .server
+            .store
+            .execute_unchecked_for_tests(
+                "UPDATE transactions SET pending = 1 WHERE id = ?",
+                leg.as_str().unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let both_pending = world.forecast_at(ONE_MONTH).await;
+    assert!(!kinds(&both_pending, "cautions").contains(&"transfer_link_rate_mismatch".into()));
+
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE transactions SET pending = 0 WHERE id = ?",
+            legs[0].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+    let one_posted = world.forecast_at(ONE_MONTH).await;
+    assert!(kinds(&one_posted, "cautions").contains(&"transfer_link_rate_mismatch".into()));
 }
 
 /// A bank's spread isn't worth a caution.

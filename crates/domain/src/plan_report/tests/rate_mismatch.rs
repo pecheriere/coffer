@@ -14,10 +14,14 @@ fn two_dollars_to_the_euro() -> RateBook {
     let mut rates = RateBook::default();
     rates.insert(
         usd(),
-        RateHistory::new(vec![RateObservation {
-            on: date(2025, 1, 1),
-            rate: "2".parse().unwrap(),
-        }]),
+        RateHistory::new(
+            [date(2025, 12, 19), date(2025, 12, 30)]
+                .map(|on| RateObservation {
+                    on,
+                    rate: "2".parse().unwrap(),
+                })
+                .to_vec(),
+        ),
     );
     rates
 }
@@ -48,7 +52,7 @@ fn asked(links: Vec<CrossCurrencyLink>) -> PlanReportInput {
 
 #[test]
 fn a_link_that_disagrees_in_a_reported_month_is_named_with_its_legs_and_rate() {
-    let bad = link(date(2026, 1, 9), date(2026, 1, 10), 1_250);
+    let bad = link(date(2026, 1, 2), date(2026, 1, 3), 1_250);
     let answer = report(&asked(vec![bad]));
 
     let [
@@ -74,14 +78,14 @@ fn a_link_that_disagrees_in_a_reported_month_is_named_with_its_legs_and_rate() {
             currency: eur()
         }
     );
-    assert_eq!(*rate_on, date(2025, 1, 1));
+    assert_eq!(*rate_on, date(2025, 12, 30));
     assert!(!manual_rate);
 }
 
 #[test]
 fn a_link_that_agrees_or_cannot_be_checked_says_nothing() {
-    let fine = link(date(2026, 1, 9), date(2026, 1, 10), 5_000);
-    let mut unchecked = asked(vec![link(date(2026, 1, 9), date(2026, 1, 10), 1_250)]);
+    let fine = link(date(2026, 1, 2), date(2026, 1, 3), 5_000);
+    let mut unchecked = asked(vec![link(date(2026, 1, 2), date(2026, 1, 3), 1_250)]);
     unchecked.rates = RateBook::default();
 
     assert_eq!(report(&asked(vec![fine])).cautions, []);

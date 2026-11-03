@@ -5,7 +5,7 @@
 use jiff::civil::Date;
 use serde::Serialize;
 
-use crate::fx::{Conversion, RateBook, convert};
+use crate::fx::{Conversion, RATE_STALE_AFTER_DAYS, RateBook, convert};
 use crate::ids::TransferLinkId;
 use crate::money::Money;
 
@@ -60,18 +60,24 @@ pub struct RateMismatch {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RateCheck {
-    /// The legs are within the tolerance of each other.
-    Agrees,
+    /// The legs are within the tolerance of each other. `rate_on` is the date of the older
+    /// rate used.
+    Agrees { rate_on: Date },
     /// The legs differ by more than the tolerance.
     Mismatch(RateMismatch),
-    /// No rate is held for one of the currencies on or before the day, or the converted
-    /// amount is too large, so nothing is said either way.
+    /// No usable rate: none is held for one of the currencies on or before the day, the one
+    /// held is more than [`RATE_STALE_AFTER_DAYS`] older than the day, the converted amount
+    /// is too large, or the legs no longer are one out and one in. Nothing is said either way.
     NotChecked,
 }
 
 /// Compares the legs of `link` at the rates for the day they posted.
 #[must_use]
 pub fn check_rate(link: &CrossCurrencyLink, rates: &RateBook) -> RateCheck {
+    // A provider's revision can leave two legs of one sign, which is no movement to compare.
+    if link.outflow.minor_units >= 0 || link.inflow.minor_units <= 0 {
+        return RateCheck::NotChecked;
+    }
     let converted = convert(
         link.outflow.minor_units,
         link.outflow.currency,
@@ -91,10 +97,17 @@ pub fn check_rate(link: &CrossCurrencyLink, rates: &RateBook) -> RateCheck {
             return RateCheck::NotChecked;
         }
     };
+    // A rate carried forward over a long gap says little about the day.
+    let stale = rate_on
+        .until(link.rate_day())
+        .is_ok_and(|span| span.get_days() > RATE_STALE_AFTER_DAYS);
+    if stale {
+        return RateCheck::NotChecked;
+    }
     let expected = i128::from(expected).abs();
     let gap = (i128::from(link.inflow.minor_units) - expected).abs();
     if gap <= ROUNDING_ALLOWANCE_MINOR || gap * 100 <= expected * RATE_TOLERANCE_PERCENT {
-        return RateCheck::Agrees;
+        return RateCheck::Agrees { rate_on };
     }
     // A converted amount is a magnitude that fit in `i64`.
     let Ok(expected_minor) = i64::try_from(expected) else {
@@ -132,7 +145,7 @@ pub fn mismatches<'a>(
                 link: link.link,
                 mismatch,
             }),
-            RateCheck::Agrees | RateCheck::NotChecked => None,
+            RateCheck::Agrees { .. } | RateCheck::NotChecked => None,
         })
         .collect()
 }

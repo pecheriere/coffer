@@ -438,14 +438,15 @@ for the later of their two posted days, carried forward as usual and including a
 entered. The link's `rate_check` is `null` for one currency, and otherwise one of:
 
 - `agrees`: the legs are within 5% of each other after conversion, which leaves room for a bank's
-  spread and fees.
+  spread and fees. `rate_on` is the date of the rate used.
 - `mismatch`: they differ by more, as -1,250.00 USD linked to +12.50 EUR does. It names both legs'
   amounts, `expected_inflow` (what the outflow comes to in the inflow's currency), `rate_on` (the
   date of the older rate used) and `manual_rate`. Ask a member whether the amounts were mistyped or
   the legs aren't one transfer, then fix the transaction or remove the link. The same appears as the
   caution `transfer_link_rate_mismatch` in the forecast and the plan versus actual report when the
   link is between counted accounts. It changes no amount: all of each leg still moved.
-- `not_checked`: no rate is held for that day, so nothing is said either way. It raises no caution
+- `not_checked`: no usable rate (none held for that day, or the latest is over a week older), so
+  nothing is said either way. It raises no caution
   and doesn't make the forecast provisional. Say so rather than calling the link fine.
 
 ### Money to and from accounts that aren't the household's

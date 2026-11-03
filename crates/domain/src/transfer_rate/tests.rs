@@ -56,7 +56,7 @@ fn hundred_dollars(arrived: i64) -> CrossCurrencyLink {
 }
 
 fn agrees(link: &CrossCurrencyLink, rates: &RateBook) -> bool {
-    check_rate(link, rates) == RateCheck::Agrees
+    matches!(check_rate(link, rates), RateCheck::Agrees { .. })
 }
 
 #[test]
@@ -149,6 +149,73 @@ fn a_rate_an_admin_entered_is_used_and_named() {
         other => panic!("expected a mismatch, got {other:?}"),
     }
     assert!(agrees(&hundred_dollars(5_000), &rates));
+}
+
+#[test]
+fn an_agreement_names_the_rate_date() {
+    assert_eq!(
+        check_rate(&hundred_dollars(5_000), &two_to_one()),
+        RateCheck::Agrees { rate_on: DAY }
+    );
+}
+
+#[test]
+fn a_rate_a_week_old_is_used_and_an_older_one_is_not() {
+    let week = book("USD", &[(date(2026, 10, 23), "2")]);
+    assert!(matches!(
+        check_rate(&hundred_dollars(1_250), &week),
+        RateCheck::Mismatch(_)
+    ));
+    let older = book("USD", &[(date(2026, 10, 22), "2")]);
+    assert_eq!(
+        check_rate(&hundred_dollars(1_250), &older),
+        RateCheck::NotChecked
+    );
+}
+
+#[test]
+fn legs_that_are_no_longer_one_out_and_one_in_are_not_checked() {
+    let rates = two_to_one();
+    let flipped = CrossCurrencyLink {
+        outflow: money(10_000, "USD"),
+        ..hundred_dollars(1_250)
+    };
+    assert_eq!(check_rate(&flipped, &rates), RateCheck::NotChecked);
+    let both_out = CrossCurrencyLink {
+        inflow: money(-1_250, "EUR"),
+        ..hundred_dollars(1_250)
+    };
+    assert_eq!(check_rate(&both_out, &rates), RateCheck::NotChecked);
+}
+
+/// Currencies with no and three minor digits: 17,568 JPY is 100.00 EUR at 175.68, and 42.000
+/// BHD at 0.42, so 5% either way is 39.900 to 44.100.
+#[test]
+fn yen_to_dinars_are_compared_in_their_own_minor_units() {
+    let mut rates = book("JPY", &[(DAY, "175.68")]);
+    rates.insert(
+        currency("BHD"),
+        RateHistory::new(vec![RateObservation {
+            on: DAY,
+            rate: "0.42".parse().unwrap(),
+        }]),
+    );
+    let link = |arrived| CrossCurrencyLink {
+        link: TransferLinkId::new(),
+        outflow: money(-17_568, "JPY"),
+        inflow: money(arrived, "BHD"),
+        outflow_on: DAY,
+        inflow_on: DAY,
+    };
+    for arrived in [42_000, 39_900, 44_100] {
+        assert!(agrees(&link(arrived), &rates), "{arrived}");
+    }
+    for arrived in [39_899, 44_101] {
+        assert!(
+            matches!(check_rate(&link(arrived), &rates), RateCheck::Mismatch(_)),
+            "{arrived}"
+        );
+    }
 }
 
 #[test]

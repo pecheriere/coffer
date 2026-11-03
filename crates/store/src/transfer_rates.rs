@@ -19,7 +19,8 @@ use crate::transfer_links::{
 use crate::{Store, StoreError, StoreTx};
 
 /// The links still standing between accounts that are `$counted`, in two currencies, with a
-/// leg posted from `?1` and `$until` `?2`.
+/// leg posted from `?1` and `$until` `?2`, and at least one leg posted: pending amounts
+/// are in no count, so there is nothing to caution about.
 macro_rules! cross_currency_links {
     ($counted:ident, $until:literal) => {
         concat!(
@@ -31,7 +32,7 @@ macro_rules! cross_currency_links {
             link_stands!(),
             " AND ",
             $counted!(),
-            " AND ((lo.posted_on >= ?1 AND lo.posted_on ",
+            " AND (lo.pending = 0 OR li.pending = 0) AND ((lo.posted_on >= ?1 AND lo.posted_on ",
             $until,
             " ?2) OR (li.posted_on >= ?1 AND li.posted_on ",
             $until,

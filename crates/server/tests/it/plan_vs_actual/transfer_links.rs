@@ -577,8 +577,13 @@ async fn a_link_across_currencies_that_disagrees_is_named_beside_the_rows() {
             "manual_rate": true,
         }])
     );
+    let amounts = |mut report: Value| {
+        report.as_object_mut().unwrap().remove("cautions");
+        report
+    };
     assert_eq!(
-        report["moved_between_counted_accounts"], without_a_rate["moved_between_counted_accounts"],
+        amounts(report),
+        amounts(without_a_rate),
         "a rate changes no amount"
     );
 }

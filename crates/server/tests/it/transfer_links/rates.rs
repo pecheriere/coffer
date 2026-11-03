@@ -70,7 +70,10 @@ async fn a_spread_inside_five_percent_agrees() {
     // 1,117.20 USD is exactly 1,000.00 EUR; 1,030.00 is 3% more.
     let link = world.dollars_to_euros(111_720, 103_000).await;
 
-    assert_eq!(link["rate_check"], json!({"status": "agrees"}));
+    assert_eq!(
+        link["rate_check"],
+        json!({"status": "agrees", "rate_on": "2026-10-05"})
+    );
 }
 
 /// With no rate on or before the day, nothing is said either way, and reading the link again

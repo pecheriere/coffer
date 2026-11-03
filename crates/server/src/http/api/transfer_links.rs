@@ -66,7 +66,7 @@ pub struct TransferLinkPath {
                    including a rate an admin entered. `rate_check` says `mismatch` when the \
                    legs differ by more than 5% after conversion, with both amounts, what the \
                    outflow comes to in the inflow's currency and the date of the rate; `agrees`; \
-                   or `not_checked` when no rate is held for that day. A mismatch is also the \
+                   or `not_checked` when no usable rate is held for that day (none, or one over a week older). A mismatch is also the \
                    caution `transfer_link_rate_mismatch` in the forecast and the report. It \
                    changes no amount.\n\n\
                    A transaction is in one link at most. One with more than one split is refused, \

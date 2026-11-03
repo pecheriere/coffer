@@ -112,9 +112,14 @@ pub struct TransferLinkView {
     pub created_by: AttributionView,
 }
 
-/// The two currencies of a link's legs, whose rates its check reads.
-fn leg_currencies(outflow: &TransactionRecord, inflow: &TransactionRecord) -> [Currency; 2] {
-    [outflow.currency, inflow.currency]
+/// The currencies whose rates a link's check reads: both when the legs differ, and none for
+/// legs in one currency, which have nothing to compare.
+fn leg_currencies(outflow: &TransactionRecord, inflow: &TransactionRecord) -> Vec<Currency> {
+    if outflow.currency == inflow.currency {
+        Vec::new()
+    } else {
+        vec![outflow.currency, inflow.currency]
+    }
 }
 
 /// The day a link's legs are compared at: the later one posted.

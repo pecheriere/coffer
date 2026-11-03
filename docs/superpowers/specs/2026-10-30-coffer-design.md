@@ -1556,16 +1556,18 @@ disagreement is cautioned:
   minor unit of the inflow's currency (`ROUNDING_ALLOWANCE_MINOR`), which converting a few cents can
   round by alone. A bank's spread and a fee are usually inside 5%. The comparison is in `i128`: exactly
   5% is not a difference, one minor unit past it is, and no `i64` amount overflows.
-- *Where.* The link's API view carries `rate_check`: `null` for one currency, otherwise `agrees`,
+- *Where.* The link's API view carries `rate_check`: `null` for one currency, otherwise `agrees` (with `rate_on`),
   `mismatch` (both legs' amounts, `expected_inflow`, the date `rate_on` of the older rate used and
   `manual_rate`) or `not_checked`. A mismatch on a link that is one movement (T5) is also the caution
   `transfer_link_rate_mismatch`, naming the same, in the report for a link with a leg in a reported month
   (`cautions`, a list new to the report) and in the forecast for one with a leg in `as_of`'s month up to
-  `as_of`, where it makes the number `provisional` as any caution does. A link that is not one movement
-  moved nothing, so it only shows its `rate_check`.
-- *No rate.* With no rate on or before the day for either currency, or a converted amount too large to
-  hold, the link is `not_checked`: a quieter note on the link only, raising no caution and not making
-  the forecast provisional, since the forecast never needed a rate. Rates are read when asked, so it
+  `as_of`, as any caution is listed there. Two counted currencies already make the forecast
+  `unavailable` (`MixedCurrencies`), so the caution never changes its status. A link needs a posted leg
+  to be asked about, since pending amounts are in no count. A link that is not one movement moved
+  nothing, so it only shows its `rate_check`.
+- *No rate.* With no rate on or before the day for either currency, one more than seven days
+  (`RATE_STALE_AFTER_DAYS`) older than the day, whose carrying forward says little, a converted amount
+  too large to hold, or legs a provider's revision left of one sign, the link is `not_checked`: a quieter note on the link only, raising no caution, since the forecast never needed a rate. Rates are read when asked, so it
   changes when one is fetched or entered.
 - *Access.* A link is read, and so its check, only with `transactions` on both accounts (T3); the
   forecast and the report need `all`. A token that doesn't see both sides is told nothing about it.
