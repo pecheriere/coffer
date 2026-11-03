@@ -35,6 +35,7 @@ use super::connections::plaid_budget::PlaidBudget;
 use super::provider::ProviderRegistry;
 use crate::auth::AccessResolver;
 use crate::config::Config;
+use crate::household_time::HouseholdTime;
 use crate::ledger::transactions::AttributionView;
 use crate::vault::CredentialVault;
 
@@ -111,6 +112,8 @@ pub struct SyncService {
     /// The only source of account access.
     pub(super) access: Arc<AccessResolver>,
     pub(super) config: Config,
+    /// The household's zone and day.
+    pub(super) time: HouseholdTime,
     /// See [`FETCH_DEADLINE`].
     pub(super) fetch_deadline: Duration,
     /// Wakes the scheduler's worker when a run is queued.
@@ -144,6 +147,11 @@ impl SyncService {
         config: Config,
     ) -> Self {
         Self {
+            time: HouseholdTime::new(
+                store.clone(),
+                Arc::clone(&clock),
+                config.default_timezone.clone(),
+            ),
             store,
             clock,
             vault,
@@ -273,25 +281,17 @@ impl SyncService {
             .iter()
             .map(|account| (account.last_seen_at, account.last_applied_at))
             .collect();
-        let today = self.today();
-        match self.fetch(&connection, &accounts, today).await {
-            Ok((result, mode)) => {
-                self.apply(run, &connection, result, mode, today, started_at)
-                    .await
-            }
+        // Only the window asked for. What is written is dated in the zone its own
+        // transaction sees, since one can change during a fetch.
+        let zone = self.time.zone().await?;
+        let today = self.time.today_in(&zone);
+        match self.fetch(&connection, &accounts, &zone, today).await {
+            Ok((result, mode)) => self.apply(run, &connection, result, mode, started_at).await,
             Err(failure) => {
                 self.record_failure(run, &connection, failure, started_at)
                     .await
             }
         }
-    }
-
-    /// The household's current day.
-    pub(super) fn today(&self) -> Date {
-        self.clock
-            .now()
-            .to_zoned(self.config.timezone.clone())
-            .date()
     }
 }
 

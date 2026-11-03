@@ -22,11 +22,13 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   planned items and their settlements, the household settings (with the
   display currency), exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
-  a snapshot, a rate or the display currency changes it in its own transaction,
+  a snapshot, a rate, the display currency or a time zone that puts today before its
+  last day changes it in its own transaction,
   or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
   transaction that gathers a forecast's or a report's data.
-- `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
+- `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`
+  (the household's zone and day, read from its settings at each asking); `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
@@ -50,7 +52,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
-  and the `ProviderRegistry`, the one place providers are registered; the
+  and the `ProviderRegistry`, the one place providers are registered; `dating`, which
+  keeps a record reported again on its day after a change of zone; the
   `SimpleFin` provider and `sync::plaid` (`client.rs`, Plaid's API over
   `egress`; `provider.rs`, the `Provider` implementation; `kinds.rs`, what
   Plaid says an account is); connections, sync requests and their rate limits,
@@ -75,6 +78,7 @@ cargo run -p coffer-server -- openapi > docs/api/openapi.json  # regenerate the 
 
 cargo fmt
 scripts/gate.sh                                         # the full gate
+scripts/staging.sh up                                   # the staging stack (below)
 ```
 
 While iterating, test only the crate you change with
@@ -99,6 +103,32 @@ fails the other's build and checks. A shared build directory makes builds wait
 for each other and can hand one worktree a binary built from another's source.
 A read-only reviewer may share a worktree if it does not build. Remove a
 worktree when its branch has merged.
+
+## Staging
+
+`scripts/staging.sh` runs the real image, built from the checkout, with made-up data
+and mock providers, one stack per machine (`staging/`, how to use it in
+`CONTRIBUTING.md`). Use it to try something in the running product instead of writing
+a throwaway server and seed. What holds it together:
+
+- **The seed goes through the public pages and API** (`staging/seed/`), never a
+  committed database, so it keeps working as migrations change. Everything in it is
+  made up. Its amounts stay fixed whichever day it is seeded on, so a test can compare
+  them with fixed answers; `staging/seed/household.mjs` says how, and a change there
+  must keep it true.
+- **Each server is a copy of a read-only template**, seeded once for the image,
+  migrations, seed and day. Nothing clock-related is added to the image: the seed dates
+  everything from the template's day.
+- **The mocks stand behind the real egress settings:** `COFFER_EGRESS_RELAY` and a CA
+  of the stack's own, on a Docker network with no route out. A scenario is named by the
+  request, a SimpleFin setup token or an ECB currency, never set as a mode, so tests
+  running side by side don't disturb each other.
+- **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
+  `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
+  localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost
+  (`auth/staging_fixture.rs`). That is an accident guard, not a security boundary: with a
+  localhost URL, a script holding the key signs in from anywhere that can reach the server, so
+  keep the seed where only this machine can. No staging flag or backdoor belongs in the image.
 
 ## CI and supply chain
 
@@ -126,6 +156,10 @@ worktree when its branch has merged.
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- A day is the household's day, from `household_time::HouseholdTime`, read when it is
+  asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
+  can change it while the server runs (spec §8.7). A writer whose change depends on the
+  day asks with `today_seen_by`, under the write lock.
 - Every mutation goes through a `StoreTx` together with its audit entry. The one
   exception is fetched exchange rates and the daily net worth rows (spec §8.10 N10): public
   reference data and derived values, written in the transaction of whatever changes

@@ -349,10 +349,14 @@ How to read it:
   conversion between two currencies neither of which is the euro goes through
   the euro and reports the older of its two dates.
 - `through` is the last day the daily values hold. A job fills in each new day
-  shortly after midnight in the household's time zone (`COFFER_TIMEZONE`), so
+  shortly after midnight in the household's time zone (`timezone` in the household
+  settings), so
   the first minute of a day can be answered only up to yesterday, with the
   caution `to_date_not_yet_filled`. No day after `through` or after today is a
-  point. It is `null` during the blocker `rebuilding`, when no day can be answered.
+  point. It is `null` during the blocker `rebuilding`, when no day can be answered. A
+  change of zone that makes today earlier than `through` cuts the table back to end today,
+  from that change on, and a balance dated a day that is now still to come counts from
+  that day on.
 - `first_on` is an account's first day with a value. **A jump in the total on
   that day is the account arriving, not money**, and a history that starts late
   is not a household that was poor. `closed_on` is the day an account closed:

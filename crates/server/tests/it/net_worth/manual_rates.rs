@@ -1,11 +1,14 @@
 //! Exchange rates an admin enters (spec §8.10 N16): what they unblock, how they are marked,
 //! who may enter one, and what happens beside a fetch.
 
+use std::collections::BTreeSet;
+
 use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
 use coffer_domain::identity::Scope;
 use coffer_domain::policy::AccountLevel::{Balances, Write};
 use coffer_domain::time::Clock as _;
+use coffer_server::http::api::openapi::document;
 use coffer_store::{AuditEvent, AuditFilter, PageRequest};
 use serde_json::{Value, json};
 
@@ -692,4 +695,74 @@ async fn neither_a_rate_near_one_nor_an_ordinary_move_asks_for_confirming() {
     for event in world.rate_events().await {
         assert_eq!(event.changes.iter().count(), 1, "not recorded as confirmed");
     }
+}
+
+/// The keys of `answered` are the keys the document lists for `name`, and every required one:
+/// what the staging tests' closed schemas hold each answer to.
+fn assert_answers_as_documented(name: &str, answered: &Value) {
+    let doc = serde_json::to_value(document()).unwrap();
+    let schema = &doc["components"]["schemas"][name];
+    let listed: BTreeSet<&String> = schema["properties"].as_object().unwrap().keys().collect();
+    let keys: BTreeSet<&String> = answered.as_object().unwrap().keys().collect();
+    assert_eq!(keys, listed, "{name}");
+    for required in schema["required"].as_array().unwrap() {
+        assert!(
+            keys.iter().any(|key| *key == required),
+            "{name}: {required}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn each_answer_is_what_the_document_says_and_each_status_is_listed() {
+    let world = world().await;
+    world.household_with_xaf().await;
+    let (_, entered) = world
+        .send(
+            Method::PUT,
+            &rate_uri("XAF", "2026-10-26"),
+            &world.admin,
+            Some(&json!({"rate": "655.957"})),
+        )
+        .await;
+    assert_answers_as_documented("ManualRate", &parsed(&entered));
+    let (_, list) = world
+        .send(Method::GET, "/api/v1/fx/manual-rates", &world.admin, None)
+        .await;
+    assert_answers_as_documented("ManualRateList", &parsed(&list));
+    let (_, coverage) = world
+        .send(Method::GET, "/api/v1/fx/coverage", &world.admin, None)
+        .await;
+    let coverage = parsed(&coverage);
+    assert_answers_as_documented("FxCoverageList", &coverage);
+    assert_answers_as_documented("ManualCoverage", &coverage["manual"][0]);
+    let (_, rates) = world
+        .send(
+            Method::GET,
+            "/api/v1/fx/rates?currency=XAF&from=2026-10-26&to=2026-10-26",
+            &world.admin,
+            None,
+        )
+        .await;
+    assert_answers_as_documented("HeldRate", &parsed(&rates)["items"][0]);
+    let report = world.report(DAY_REPORT).await;
+    assert_answers_as_documented("ManualRateUse", &report["manual_rates"][0]);
+
+    let doc = serde_json::to_value(document()).unwrap();
+    let path = &doc["paths"]["/api/v1/fx/manual-rates/{currency}/{on}"];
+    for (method, statuses) in [
+        ("put", ["200", "400", "403", "404", "422"]),
+        ("delete", ["204", "400", "403", "404", "422"]),
+    ] {
+        for status in statuses {
+            assert!(
+                path[method]["responses"].get(status).is_some(),
+                "{method} {status}"
+            );
+        }
+    }
+    let codes = doc["components"]["schemas"]["ProblemCode"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(codes.iter().any(|code| code == "unusual_rate"));
 }

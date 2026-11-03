@@ -19,7 +19,7 @@ not read it. The container image and how to run it are described in
 | `COFFER_INVITE_TTL_MINUTES` | `30` | 1 to 1440. Lifetime of setup, invite and re-enroll links. |
 | `COFFER_SESSION_IDLE_HOURS` | `168` | 1 to 8760. A session ends after this long without use. |
 | `COFFER_SESSION_ABSOLUTE_DAYS` | `30` | 1 to 365. A session ends this long after sign-in regardless of use. |
-| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It also decides the days of net worth: which day a balance's value starts on, when each new day is filled (shortly after midnight in this zone), the day an account closed and what "today" is for a report. It stays an environment variable, not a household setting: change it and restart the server. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
+| `COFFER_TIMEZONE` | `UTC` | An IANA time zone name, such as `America/Los_Angeles`. The household's time zone until an admin chooses one on the household page or through `PATCH /api/v1/household/settings`, and again after they clear it; a choice applies at once, with no restart, and days already recorded stay as they are (spec §8.7). The zone in force decides this: provider timestamps become calendar days in it, and it decides which day is today for sync windows and balance dates, for the forecast's default `as_of` and its current month, and for the plan-versus-actual report's current month. It also decides the days of net worth: which day a balance's value starts on, when each new day is filled (shortly after midnight in this zone), the day an account closed and what "today" is for a report. A change of the variable itself needs a restart, and matters only while no zone is chosen. The time zone database is built into the binary, so no `/usr/share/zoneinfo` is needed (a system copy is preferred when present). |
 | `COFFER_SYNC_INTERVAL_HOURS` | `6` | 1 to 24. How often each provider connection syncs on schedule; a provider's own minimum interval can lengthen it. |
 | `COFFER_SIMPLEFIN_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Comma-separated DNS host names (exact match, no wildcards, IP addresses, ports or schemes). The only hosts a SimpleFin setup token's claim URL, and the access URL it yields, may name; a token for any other host is refused before anything is sent. |
 | `COFFER_PLAID_CLIENT_ID` | unset | Plaid client id. Set it together with `COFFER_PLAID_SECRET_FILE` to offer Plaid connections, or set neither; one without the other, or an empty value, is refused. With neither set, the other `COFFER_PLAID_*` variables are ignored and the web UI offers no Plaid. |
@@ -281,11 +281,19 @@ issued this way, by `serve` at startup or by `bootstrap-link`, revokes the
 earlier unused setup links, so only the newest works: a restart of `serve`
 invalidates a link printed before it. Both stop once an admin exists.
 
+`serve` refuses to start, with exit code 1, on the data of the staging stack (see
+`CONTRIBUTING.md`) unless `COFFER_PUBLIC_URL` is on localhost, since anyone can sign in as
+its admin. This guards against an accident and is not a security boundary: with a localhost
+URL the data is safe only if nothing else can reach the server, and `serve` warns when it
+listens on any address that isn't loopback. A key of that data is also refused when a passkey
+is added, unless on localhost.
+
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.
 
 `rebuild-net-worth` recomputes the whole daily table from the balances, the
-rates and the display currency, with today taken from `COFFER_TIMEZONE`. It is
+rates and the display currency, with today taken from the household's zone: the one
+chosen in its settings, else `COFFER_TIMEZONE`. It is
 safe while the server runs: it works in short transactions, so other writes take
 turns with it, and reports say `rebuilding` until it ends if the table takes more
 than one. One rebuild runs at a time, so it first waits for one the server has

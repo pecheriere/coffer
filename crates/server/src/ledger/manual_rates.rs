@@ -82,14 +82,15 @@ impl Ledger {
         if currency.as_str() == "EUR" {
             return Err(LedgerError::Invalid(NOT_THE_EURO));
         }
-        if on > self.today() {
-            return Err(LedgerError::Invalid(NOT_IN_THE_FUTURE));
-        }
         if on < MIN_VALUE_DATE {
             return Err(LedgerError::Invalid(NOT_BEFORE_THE_TABLE));
         }
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
+        // Under the write lock, so a change of zone can't land between asking and writing.
+        if on > self.time.today_seen_by(&mut tx).await? {
+            return Err(LedgerError::Invalid(NOT_IN_THE_FUTURE));
+        }
         if tx.display_currency().await? == Some(currency) {
             return Err(LedgerError::Invalid(NOT_THE_DISPLAY_CURRENCY));
         }

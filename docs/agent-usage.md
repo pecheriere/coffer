@@ -521,7 +521,9 @@ account stays bound. coffer syncs every connection on a schedule
 
 A balance's date may honestly be old: it can be the day the balance last changed.
 A date within 31 days of the household's today is believed, and one later than today
-is dated today. For an older one on a bound account: with no balance yet, or a latest
+is dated today. One exception, for a change of time zone: the latest amount, reported on an
+earlier day that already holds a balance and at most 2 days before the latest, changes
+nothing. For an older one on a bound account: with no balance yet, or a latest
 balance before the reported day, the amount is taken and dated 31 days back, so the
 balance can be older than its date says, and the audit entry gives `reported_on`. The
 amount the account already holds changes nothing. Anything else is refused, the

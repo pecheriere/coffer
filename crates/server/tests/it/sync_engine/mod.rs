@@ -77,7 +77,7 @@ impl World {
         self.server
             .clock
             .now()
-            .to_zoned(self.server.config.timezone.clone())
+            .to_zoned(self.server.config.default_timezone.clone())
             .date()
     }
 
@@ -201,6 +201,7 @@ fn txn(provider_id: &str, posted_on: Date, value: &str) -> ProviderTransaction {
         memo: None,
         pending: false,
         replaces_provider_id: None,
+        instants: None,
     }
 }
 

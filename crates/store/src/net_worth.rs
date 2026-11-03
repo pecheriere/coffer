@@ -35,6 +35,7 @@ mod reads;
 mod runner;
 
 pub use reads::NetWorthData;
+pub use runner::RunsThrough;
 
 /// Rows per `INSERT`: eleven binds each stay far below `SQLite`'s limit.
 const BATCH_ROWS: usize = 500;
@@ -369,9 +370,9 @@ impl StoreTx {
 
     /// Add the rows of the days after `filled_through`, up to `through` or as many days
     /// as fit in one transaction's rows, and move `filled_through` to the last of them.
-    /// It never moves back, so a changed time zone can't lose a day, and while a rebuild
-    /// is needed it does nothing. Answers the rows written. [`crate::Store::fill_net_worth`]
-    /// repeats it up to `through`.
+    /// It never moves back, so a `COFFER_TIMEZONE` changed at a restart can't lose a day,
+    /// and while a rebuild is needed it does nothing. Answers the rows written.
+    /// [`crate::Store::fill_net_worth`] repeats it up to `through`.
     ///
     /// # Errors
     ///
@@ -586,6 +587,34 @@ impl StoreTx {
         } else {
             self.ask_for_net_worth_rebuild().await
         }
+    }
+
+    /// The household's zone changed, and its day is now `today`. A table ending on or
+    /// before that is right, and the daily job fills any day it lacks. One past it holds
+    /// a day still to come, so those rows go and it ends today, in this transaction. No
+    /// rebuild is needed, as a row depends only on balances and rates of its own day and
+    /// before, so the rows kept are already right. The days removed come back one at a time
+    /// as they arrive, from the same snapshots: no gap and no day twice. A rebuild under
+    /// way goes on with the accounts it has left, up to this day. So nothing can read a day
+    /// to come, from this commit on, and a report that could answer still can.
+    pub(crate) async fn refresh_after_zone_change(
+        &mut self,
+        today: Date,
+    ) -> Result<(), StoreError> {
+        let state = self.net_worth_state().await?;
+        if state.filled_through.is_some_and(|filled| filled > today) {
+            sqlx::query("DELETE FROM account_daily_values WHERE on_date > ?")
+                .bind(today.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+            sqlx::query("UPDATE net_worth_state SET filled_through = ?")
+                .bind(today.to_string())
+                .execute(&mut *self.tx)
+                .await
+                .map_err(StoreError::from_sqlx)?;
+        }
+        Ok(())
     }
 
     /// The display currency changed, so every row has to. In this one transaction

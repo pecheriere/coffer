@@ -1,6 +1,6 @@
 //! Household settings: the theme everyone sees unless they choose their
-//! own, the display currency and the exchange rates entered by hand. Admin-only;
-//! a denial renders as a 403 page.
+//! own, the display currency, the time zone and the exchange rates entered by hand.
+//! Admin-only; a denial renders as a 403 page.
 
 mod manual_rates;
 
@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use coffer_domain::identity::ThemeName;
 use coffer_domain::money::Currency;
 use coffer_domain::policy::{Action, authorize};
+use coffer_domain::time::IanaZone;
 use maud::html;
 use serde::Deserialize;
 
@@ -22,15 +23,18 @@ use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::ledger::settings::ForecastSettingsPatch;
+use crate::ledger::transactions::Patch;
 use crate::themes::THEMES;
 
 const HOUSEHOLD: &str = "/admin/household";
 const DISPLAY_CURRENCY: &str = "/admin/household/display-currency";
+const TIME_ZONE: &str = "/admin/household/timezone";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(HOUSEHOLD, get(household).post(set_theme))
         .route(DISPLAY_CURRENCY, post(set_display_currency))
+        .route(TIME_ZONE, post(set_time_zone))
         .merge(manual_rates::routes())
 }
 
@@ -60,7 +64,11 @@ async fn household(
         .manual_rates(&actor, rates_from)
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
-    let today = state.ledger.today();
+    let today = state
+        .ledger
+        .today()
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
     let viewer = viewer(&state, &session).await;
     let look = session.look(&state).await;
     let current = state.appearance.household_theme().await;
@@ -107,6 +115,36 @@ async fn household(
                     }
                 }
                 button.btn.btn-primary type="submit" { "Save display currency" }
+            }
+        }
+        section.card {
+            h2 { "Time zone" }
+            p {
+                "Which day counts as today and which month is the current one, everywhere "
+                "in coffer. A change applies at once, with no restart."
+            }
+            p {
+                "Days already recorded stay as they are: transactions, balances and kept "
+                "days keep the date they were given, because it was right at the time and "
+                "moving it could move money between months. Only new days use the new zone."
+            }
+            form method="post" action=(TIME_ZONE) {
+                (csrf_field(&viewer.csrf))
+                label.field {
+                    "Time zone"
+                    select.input name="timezone" {
+                        option value="" selected[settings.timezone_setting.is_none()] {
+                            "Server default (" (state.ledger.default_zone_name()) ")"
+                        }
+                        @for name in IanaZone::all_names() {
+                            option value=(name)
+                                selected[settings.timezone_setting.as_deref() == Some(name.as_str())] {
+                                (name)
+                            }
+                        }
+                    }
+                }
+                button.btn.btn-primary type="submit" { "Save time zone" }
             }
         }
         (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
@@ -173,6 +211,46 @@ async fn set_display_currency(
             &actor,
             ForecastSettingsPatch {
                 display_currency: Some(currency),
+                ..ForecastSettingsPatch::default()
+            },
+        )
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
+    Ok(Redirect::to(HOUSEHOLD))
+}
+
+/// Unknown fields are refused: a forged form fails whole.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimeZoneForm {
+    #[serde(default)]
+    csrf: String,
+    #[serde(default)]
+    timezone: String,
+}
+
+/// Sets the time zone through the service the API uses, so it's audited the same; the
+/// empty choice returns to the server's default. The policy is checked before the form
+/// is even read, so a member is refused whatever they send.
+async fn set_time_zone(
+    State(state): State<AppState>,
+    session: PageSession,
+    form: Result<PageForm<TimeZoneForm>, PageError>,
+) -> Result<Redirect, PageError> {
+    authorize(&session.actor(), Action::ManageHousehold).map_err(AuthError::from)?;
+    let PageForm(form) = form?;
+    let actor = session.verify(&state, &form.csrf)?;
+    let timezone = if form.timezone.is_empty() {
+        Patch::Clear
+    } else {
+        Patch::Set(form.timezone)
+    };
+    state
+        .ledger
+        .update_forecast_settings(
+            &actor,
+            ForecastSettingsPatch {
+                timezone,
                 ..ForecastSettingsPatch::default()
             },
         )

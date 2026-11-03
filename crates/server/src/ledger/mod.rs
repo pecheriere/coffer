@@ -35,6 +35,7 @@ use jiff::tz::TimeZone;
 
 use crate::auth::{AccessResolver, AuthError, denied_message};
 use crate::config::FxProviderKind;
+use crate::household_time::HouseholdTime;
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::{Problem, ProblemCode};
 
@@ -43,8 +44,8 @@ pub struct Ledger {
     store: Store,
     clock: Arc<dyn Clock>,
     access: Arc<AccessResolver>,
-    /// The household's zone, which decides what day it is (spec §8.7).
-    timezone: TimeZone,
+    /// The household's zone and day (spec §8.7).
+    time: HouseholdTime,
     /// Whether this server fetches rates at all, which is why one may be missing.
     rate_provider_configured: bool,
 }
@@ -66,17 +67,27 @@ impl Ledger {
         fx_provider: FxProviderKind,
     ) -> Self {
         Self {
+            time: HouseholdTime::new(store.clone(), Arc::clone(&clock), timezone),
             store,
             clock,
             access,
-            timezone,
             rate_provider_configured: fx_provider != FxProviderKind::Off,
         }
     }
 
-    /// The household's day.
-    pub(crate) fn today(&self) -> Date {
-        self.clock.now().to_zoned(self.timezone.clone()).date()
+    /// The household's day, as it is now.
+    pub(crate) async fn today(&self) -> Result<Date, LedgerError> {
+        Ok(self.time.today().await?)
+    }
+
+    /// The name of the zone that applies while the settings choose none.
+    pub(crate) fn default_zone_name(&self) -> &str {
+        self.time.default_name()
+    }
+
+    /// The household's zone, as it is now.
+    pub(crate) async fn timezone(&self) -> Result<TimeZone, LedgerError> {
+        Ok(self.time.zone().await?)
     }
 
     /// Whether `actor` may use `account` at `level`, decided before a
