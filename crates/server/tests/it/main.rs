@@ -24,6 +24,7 @@ mod household_settings;
 mod household_zone;
 mod identity;
 mod matching;
+mod mcp;
 mod net_worth;
 mod openapi;
 mod pages;

@@ -39,6 +39,7 @@ use coffer_store::Member;
 use serde::de::DeserializeOwned;
 
 use super::AppState;
+use super::api;
 use super::browser_reports;
 use super::extract::session_cookie_value;
 use super::problem::{Problem, ProblemCode, set_retry_after};
@@ -134,7 +135,8 @@ pub(super) async fn require_same_origin(
         .is_some_and(|origin| origin == expected);
     // An unmatched path reaches the fallback (404): nothing to protect.
     let routed = request.extensions().get::<MatchedPath>().is_some();
-    let bearer_api = request.uri().path().starts_with("/api/");
+    let bearer_api =
+        request.uri().path().starts_with("/api/") || request.uri().path() == api::mcp::PATH;
     // Uses no session, may hear from a browser that sends no `Origin`, and
     // applies an origin rule of its own.
     let report = request.uri().path() == browser_reports::PATH;
@@ -275,10 +277,10 @@ fn error_page(response: &Response, in_api: bool) -> Option<ErrorPage> {
     })
 }
 
-/// Whether `uri` is under `/api`, where errors are problems, not pages.
+/// Whether `uri` is under `/api`, or is `/mcp`, where errors are problems, not pages.
 pub(super) fn in_api(uri: &Uri) -> bool {
     let path = uri.path();
-    path == "/api" || path.starts_with("/api/")
+    path == "/api" || path.starts_with("/api/") || path == api::mcp::PATH
 }
 
 /// The member behind a session cookie, if it is live.

@@ -17,6 +17,9 @@ use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{FilterFn, filter_fn};
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::appearance::Appearance;
 use crate::auth::{AccessResolver, AgentTokens, AuthError, Identity, Sessions};
@@ -471,13 +474,7 @@ async fn backup(store: &Store, dest: &Path) -> Result<(), CliError> {
 ///
 /// [`CliError::Config`] when `RUST_LOG` is not a valid filter.
 fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
-    let filter = match env("RUST_LOG").filter(|spec| !spec.is_empty()) {
-        Some(spec) => EnvFilter::try_new(spec).map_err(|_| ConfigError::Invalid {
-            var: "RUST_LOG",
-            reason: "not a valid tracing filter, such as info,coffer_server=debug",
-        })?,
-        None => EnvFilter::new("info"),
-    };
+    let filter = log_filter(env("RUST_LOG").as_deref())?;
     if tracing::dispatcher::has_been_set() {
         tracing::debug!(
             "an installed tracing subscriber is kept; RUST_LOG and COFFER_LOG_FORMAT are not applied"
@@ -489,11 +486,39 @@ fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_writer(std::io::stderr);
     let installed = if env("COFFER_LOG_FORMAT").as_deref() == Some("json") {
-        builder.json().try_init()
+        builder
+            .json()
+            .finish()
+            .with(without_mcp_library())
+            .try_init()
     } else {
-        builder.try_init()
+        builder.finish().with(without_mcp_library()).try_init()
     };
     installed.map_err(|error| CliError::Failed(error.to_string()))
+}
+
+/// The filter for `spec`, the value of `RUST_LOG`.
+fn log_filter(spec: Option<&str>) -> Result<EnvFilter, CliError> {
+    match spec.filter(|spec| !spec.is_empty()) {
+        Some(spec) => EnvFilter::try_new(spec).map_err(|_| {
+            ConfigError::Invalid {
+                var: "RUST_LOG",
+                reason: "not a valid tracing filter, such as info,coffer_server=debug",
+            }
+            .into()
+        }),
+        None => Ok(EnvFilter::new("info")),
+    }
+}
+
+/// Keeps the MCP library silent whatever `RUST_LOG` asks for: at `debug` it logs every tool
+/// call's arguments and answer, and at `info` a line per request with what the client says
+/// of itself. coffer logs what an MCP request did itself, without any of that.
+fn without_mcp_library() -> FilterFn<impl Fn(&tracing::Metadata<'_>) -> bool> {
+    filter_fn(|metadata| {
+        let target = metadata.target();
+        target != "rmcp" && !target.starts_with("rmcp::")
+    })
 }
 
 async fn serve(config: Config) -> Result<(), CliError> {
@@ -590,5 +615,48 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    /// What the MCP library logs holds a tool call's arguments and answers.
+    #[test]
+    fn no_log_filter_lets_the_mcp_library_speak() {
+        for spec in [
+            None,
+            Some("trace"),
+            Some("debug,rmcp=trace"),
+            Some("info,rmcp::service=trace"),
+        ] {
+            let filter = log_filter(spec).unwrap();
+            let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let writer = {
+                let lines = std::sync::Arc::clone(&lines);
+                move || LineWriter(std::sync::Arc::clone(&lines))
+            };
+            let subscriber = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(writer)
+                .finish()
+                .with(without_mcp_library());
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::error!(target: "rmcp::service", "from the library");
+                tracing::error!(target: "coffer_server::http", "from coffer");
+            });
+            let lines = String::from_utf8(lines.lock().unwrap().clone()).unwrap();
+            assert!(!lines.contains("from the library"), "{spec:?}");
+            assert!(lines.contains("from coffer"), "{spec:?}");
+        }
+    }
+
+    struct LineWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LineWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 }

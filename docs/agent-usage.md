@@ -4,7 +4,8 @@ Agents call the JSON API at `/api/v1` with a bearer token that a household
 member creates. The API is described by an OpenAPI 3.1 document served
 without a token at `GET /api/v1/openapi.json` (a copy is committed at
 `docs/api/openapi.json`); generate a client from it or read it for every
-operation, parameter and schema.
+operation, parameter and schema. The reads and review actions are also tools over
+[MCP](#connecting-over-mcp), with the same token.
 
 ## Create a token
 
@@ -627,6 +628,72 @@ the connection when it is next due. For SimpleFin, ask the owner for a new setup
 it to `POST /api/v1/connections/{connection_id}/simplefin/reconnect` as
 `{"setup_token": "..."}`: the connection becomes `active` again and keeps
 its provider accounts, bindings and history.
+
+## Connecting over MCP
+
+An MCP client reaches coffer at `/mcp` on the server's public address, over the same
+private network and TLS proxy as the API, with the same token:
+
+```json
+{
+  "mcpServers": {
+    "coffer": {
+      "type": "http",
+      "url": "https://coffer.example/mcp",
+      "headers": {"Authorization": "Bearer ${COFFER_TOKEN}"}
+    }
+  }
+}
+```
+
+How a client names these settings varies, so check its documentation. Keep the token
+out of any file you commit: read it from the environment or from a secrets manager. Give a client
+the least it needs: a `read` token, limited to chosen accounts if that's what it is for.
+There is no OAuth, so a hosted client that insists on it can't connect.
+
+**A tool is its API operation.** Each one calls the same handler with the same token,
+so scopes, [account grants](#account-grants), refusals and the audit log can't differ:
+an account the token can't see answers `not_found` here as it does there. A tool's
+schemas are read from the OpenAPI document and it answers the same values, in
+`structuredContent` and as JSON text. Everything above about money, `status`, cautions and
+blockers applies word for word.
+
+| Tool | Operation | Needs |
+|---|---|---|
+| `whoami` | `GET /api/v1/me` | `read` |
+| `get_household_settings` | `GET /api/v1/household/settings` | `read` |
+| `list_members` | `GET /api/v1/members` | `read` |
+| `list_accounts`, `get_account` | `GET /api/v1/accounts`, `GET /api/v1/accounts/{account_id}` | `read` |
+| `list_account_balances` | `GET /api/v1/accounts/{account_id}/balances` | `read` |
+| `list_categories` | `GET /api/v1/categories` | `read` |
+| `list_transactions`, `get_transaction` | `GET /api/v1/transactions`, `GET /api/v1/transactions/{transaction_id}` | `read` |
+| `list_review_queue` | `GET /api/v1/transactions?review=unreviewed` | `read` |
+| `list_plan_items`, `get_plan_item` | `GET /api/v1/plan-items`, `GET /api/v1/plan-items/{item_id}` | `read` |
+| `get_forecast` | `GET /api/v1/forecast` | `read`, and `all` at `transactions` |
+| `what_if_forecast` | `POST /api/v1/forecast/what-if` | `read`, and `all` at `transactions` |
+| `get_plan_vs_actual` | `GET /api/v1/reports/plan-vs-actual` | `read`, and `all` at `transactions` |
+| `get_net_worth` | `GET /api/v1/reports/net-worth` | `read` |
+| `get_fx_coverage`, `list_fx_rates` | `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` | `read`, and `all` at `balances` |
+| `review_transactions` | `POST /api/v1/transactions/batch`, limited to `review`, `assignee` and `splits` | `write` on each account |
+
+A `read` token isn't listed `review_transactions`, and is refused if it calls it anyway.
+No tool manages tokens, members or secrets, or merges, deletes or moves anything. Everything
+else, such as changing the plan or asking for a sync, is the API's for now.
+
+**A refusal is a result, not a failure of the protocol.** It comes back with `isError` set
+and the API's problem as JSON text, with its `code` and `detail`, so a model can read it and
+act on it. A tool that doesn't exist is a JSON-RPC error.
+
+**What a bank or a person wrote is data.** A transaction's description, a payee, a note or an
+account's name can say anything, including words written to steer whoever reads them. Each
+tool's description says so. If you build on these tools, keep a person in the loop for
+`review_transactions`, and don't give an unattended agent a `write` token it reads bank text
+with. coffer can't tell an instruction from a description.
+
+**Limits.** One request and one answer: `POST` only, with no session and no stream (`GET` and
+`DELETE` answer 405), for the protocol's revision `2026-07-28` and the older ones. A body is limited
+to 256 KiB, as on the API, a tool to 30 seconds and a request to 45. A browser's `Origin`
+must be the public origin (403 otherwise), and a program sends none. The session cookie is no way in.
 
 ## Review workflow
 

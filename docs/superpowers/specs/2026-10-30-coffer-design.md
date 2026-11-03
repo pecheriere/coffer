@@ -476,6 +476,26 @@ what-if, reports, plan items CRUD, sync trigger, set manual balance). Tool
 descriptions should teach the agent the domain (sign conventions, liquidity
 classes, what the forecast means). Read-only tokens see only read tools.
 
+Decisions made while building it (issue 74). Where they differ from the above, they govern:
+
+- **An endpoint of the server, not a second process,** at the same address.
+- **No second authorization path.** A tool calls the handler of its API operation with the
+  arguments read into the handler's own types, so scopes, grants, refusals and audit
+  identity are the API's. It holds no business logic. The tool list hides a writing tool
+  from a token whose scope can't write; the handler is what refuses.
+- **A tool's schemas come from the OpenAPI document,** with what they refer to moved under their
+  own `$defs`, and it answers the same values. Its description is what a model must know, then
+  the operation's own, then that bank text and labels are data and never instructions.
+- **First tools: reads, and review.** `whoami`, settings, members, accounts and balances,
+  categories, transactions, the review queue, the plan, forecast, what-if, plan versus actual, net
+  worth, FX coverage and rates, and `review_transactions`, the batch limited to `review`,
+  `assignee` and `splits`. Plan changes, the sync trigger and setting a balance stay on the API
+  for now, and nothing manages tokens, members or secrets.
+- **Each request stands alone:** no session, stream or `GET`, as the protocol's revision
+  `2026-07-28` has it, for older revisions too. An `Origin` that is present must be the public
+  origin. Limits and logging are in the threat model.
+- **A refusal is a tool result** with `isError` and the API's problem, not a protocol error.
+
 ### 6.13 Operations
 
 - Single binary with subcommands: `serve`, plus admin CLI for bootstrap link,
@@ -779,7 +799,7 @@ today in any case.
 ### 8.8 Deferred
 
 Rules (a §2 goal), transfer links, a starter category set and unbinding a
-provider account move to a later plan (FX: §8.10), as does MCP (§6.12). Household settings
+provider account move to a later plan (FX: §8.10), as did MCP (§6.12, since built). Household settings
 arrive in plan 3, the time zone later (§8.7).
 
 ### 8.9 Plan and forecast
@@ -1067,7 +1087,7 @@ number.
 to past months, so a plan edit rewrites past months' "planned". "Normalized into
 months" means occurrences bucketed where they fall, not amortized.
 
-**R22. Not in this plan:** MCP (§6.12), rules, transfer links, a starter category
+**R22. Not in this plan:** MCP (§6.12, since built), rules, transfer links, a starter category
 set, FX and unbinding a provider account (§8.5, §8.8).
 
 ### 8.10 Net worth and FX
