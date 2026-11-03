@@ -26,6 +26,7 @@ use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{AccountRecord, NetWorthData};
 use jiff::ToSpan as _;
 use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -121,6 +122,23 @@ fn missing_reason(known: Option<&FxCoverage>, provider_on: bool) -> Option<RateM
     }
 }
 
+/// One visible account as a report takes it, its closing in the household's day.
+fn report_account(record: &AccountRecord, zone: &TimeZone) -> ReportAccount {
+    ReportAccount {
+        id: record.id,
+        name: record.name.as_str().to_owned(),
+        currency: record.currency,
+        liquidity: record.liquidity,
+        include_in_net_worth: record.include_in_net_worth,
+        closed_on: record.closed_at.map(|at| at.to_zoned(zone.clone()).date()),
+        belongs_to: record.belongs_to,
+        beneficiary: record
+            .beneficiary
+            .as_ref()
+            .map(|label| label.as_str().to_owned()),
+    }
+}
+
 impl Ledger {
     /// What the accounts `actor` sees at `balances` come to, period by period. Which of
     /// them it can't see says nothing, and the answer doesn't say there are any.
@@ -135,6 +153,20 @@ impl Ledger {
         actor: &Actor,
         query: NetWorthQuery,
     ) -> Result<NetWorthReport, LedgerError> {
+        self.net_worth_by_day(actor, |_| query).await
+    }
+
+    /// [`Self::net_worth`] for a query that depends on what day it is, such as a range
+    /// counted back from today, so the query and the report use one day.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::net_worth`].
+    pub async fn net_worth_by_day(
+        &self,
+        actor: &Actor,
+        query_for: impl FnOnce(Date) -> NetWorthQuery,
+    ) -> Result<NetWorthReport, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let scope = self
             .access
@@ -142,7 +174,10 @@ impl Ledger {
             .await?
             .scope(AccountLevel::Balances);
 
-        let today = self.today();
+        // One zone for the whole report, whatever changes while it is gathered.
+        let zone = self.timezone().await?;
+        let today = self.time.today_in(&zone);
+        let query = query_for(today);
         let to = query.to.unwrap_or(today);
         validate_as_of(to).map_err(plan_items::invalid)?;
         // No day after today is answered, so that is where a default year ends.
@@ -182,29 +217,10 @@ impl Ledger {
             accounts: data
                 .accounts
                 .iter()
-                .map(|record| self.report_account(record))
+                .map(|record| report_account(record, &zone))
                 .collect(),
         };
         net_worth_report(&input).map_err(refused)
-    }
-
-    /// One visible account as a report takes it, its closing in the household's day.
-    fn report_account(&self, record: &AccountRecord) -> ReportAccount {
-        ReportAccount {
-            id: record.id,
-            name: record.name.as_str().to_owned(),
-            currency: record.currency,
-            liquidity: record.liquidity,
-            include_in_net_worth: record.include_in_net_worth,
-            closed_on: record
-                .closed_at
-                .map(|at| at.to_zoned(self.timezone.clone()).date()),
-            belongs_to: record.belongs_to,
-            beneficiary: record
-                .beneficiary
-                .as_ref()
-                .map(|label| label.as_str().to_owned()),
-        }
     }
 
     /// Why rates may be missing, per currency of a visible account or the display

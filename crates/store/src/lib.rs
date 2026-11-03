@@ -52,11 +52,12 @@ pub use forecast::{
     CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
     PlanReportData,
 };
+pub use household::HouseholdSettingsRecord;
 pub use idempotency::{IdempotencyOwner, Reservation};
 pub use invites::{Invite, InviteKind, NewInvite};
 pub use kept_balances::{BroughtIn, KeptBalance};
 pub use members::{Member, NewMember};
-pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch};
+pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch, RunsThrough};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};

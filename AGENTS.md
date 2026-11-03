@@ -22,11 +22,13 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   planned items and their settlements, the household settings (with the
   display currency), exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
-  a snapshot, a rate or the display currency changes it in its own transaction,
+  a snapshot, a rate, the display currency or a time zone that puts today before its
+  last day changes it in its own transaction,
   or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
   transaction that gathers a forecast's or a report's data.
-- `coffer-server` (`crates/server`): `config` and `secrets`; `auth` (passkey
+- `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`
+  (the household's zone and day, read from its settings at each asking); `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
   extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
@@ -49,7 +51,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `HTTPS_PROXY` or an operator's relay, no redirects, time and size caps); `vault` (provider
   credentials sealed with XChaCha20-Poly1305 under a key derived from the
   server key, bound to their connection id); `sync` (the provider interface
-  and the `ProviderRegistry`, the one place providers are registered; the
+  and the `ProviderRegistry`, the one place providers are registered; `dating`, which
+  keeps a record reported again on its day after a change of zone; the
   `SimpleFin` provider and `sync::plaid` (`client.rs`, Plaid's API over
   `egress`; `provider.rs`, the `Provider` implementation; `kinds.rs`, what
   Plaid says an account is); connections, sync requests and their rate limits,
@@ -152,6 +155,10 @@ a throwaway server and seed. What holds it together:
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
 - Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- A day is the household's day, from `household_time::HouseholdTime`, read when it is
+  asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
+  can change it while the server runs (spec §8.7). A writer whose change depends on the
+  day asks with `today_seen_by`, under the write lock.
 - Every mutation goes through a `StoreTx` together with its audit entry. The one
   exception is exchange rates and the daily net worth rows (spec §8.10 N10): public
   reference data and derived values, written in the transaction of whatever changes

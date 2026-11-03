@@ -5,6 +5,7 @@
 pub mod apply;
 mod bounded;
 pub mod connections;
+pub mod dating;
 pub mod engine;
 pub mod plaid;
 pub mod provider;

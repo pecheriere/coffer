@@ -13,6 +13,7 @@ use axum::http::StatusCode;
 use coffer_domain::accounts::AccountKind;
 use coffer_domain::ids::CategoryId;
 use coffer_domain::sync::SyncRunStatus;
+use coffer_domain::time::IanaZone;
 use coffer_domain::transactions::{CategoryKind, SplitInput};
 use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
 use coffer_server::ledger::transactions::TransactionPatch;
@@ -20,6 +21,7 @@ use coffer_store::{AuditFilter, ConnectionStatus, PageRequest};
 use jiff::civil::date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+use serde_json::Value;
 use serde_json::json;
 
 async fn category(world: &World) -> CategoryId {
@@ -123,6 +125,157 @@ async fn posted_date_uses_household_timezone() {
     let transactions = world.transactions(account).await;
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].posted_on, date(2026, 10, 30));
+}
+
+/// Chooses `zone` as the household's, leaving the daily table alone.
+async fn choose_zone(world: &World, zone: Option<&str>) {
+    let zone = zone.map(|name| IanaZone::parse(name).unwrap());
+    let mut tx = world.server.store.begin().await.unwrap();
+    tx.set_household_zone(zone.as_ref(), date(2099, 1, 1))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// 2026-10-31T06:30Z: 2026-10-30 in Los Angeles, 2026-10-31 in Auckland.
+const LATE_EVENING: i64 = 1_793_428_200;
+/// A day later.
+const NEXT_EVENING: i64 = LATE_EVENING + 86_400;
+
+fn record(id: &str, posted: i64) -> Value {
+    json!({"id": id, "posted": posted, "amount": "-5.00", "description": "PARKING METER"})
+}
+
+/// The overlap of a sync's window reports the same record again, and the new zone puts its
+/// instant on another day. That is not a change, and must not move the money.
+#[tokio::test]
+async fn a_record_reported_again_keeps_its_day_after_a_change_of_zone() {
+    let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
+    let connection = world.seeded().await;
+    world
+        .script
+        .bridge_reply(Reply::ok(&account_set(&json!([record(
+            "TRN-OLD",
+            LATE_EVENING
+        )]))));
+    world.sync(connection).await;
+    let account = world.bind("ACT-0001", AccountKind::Checking).await;
+    assert_eq!(
+        world.transactions(account).await[0].posted_on,
+        date(2026, 10, 30)
+    );
+
+    // Three changes over it: the record stays where the first zone put it.
+    for zone in [Some("Pacific/Auckland"), Some("Asia/Tokyo"), None] {
+        choose_zone(&world, zone).await;
+        world
+            .script
+            .bridge_reply(Reply::ok(&account_set(&json!([record(
+                "TRN-OLD",
+                LATE_EVENING
+            )]))));
+        world.sync(connection).await;
+        let kept = world.transactions(account).await;
+        assert_eq!(kept.len(), 1, "{zone:?}");
+        assert_eq!(kept[0].posted_on, date(2026, 10, 30), "{zone:?}");
+    }
+}
+
+/// A record that isn't known takes the zone of its day; once dated it is kept in that zone.
+#[tokio::test]
+async fn a_new_record_uses_the_new_zone_and_keeps_it() {
+    let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
+    let connection = world.seeded().await;
+    choose_zone(&world, Some("Pacific/Auckland")).await;
+    world
+        .script
+        .bridge_reply(Reply::ok(&account_set(&json!([record(
+            "TRN-NEW",
+            LATE_EVENING
+        )]))));
+    world.sync(connection).await;
+    let account = world.bind("ACT-0001", AccountKind::Checking).await;
+    assert_eq!(
+        world.transactions(account).await[0].posted_on,
+        date(2026, 10, 31)
+    );
+
+    choose_zone(&world, None).await;
+    world
+        .script
+        .bridge_reply(Reply::ok(&account_set(&json!([record(
+            "TRN-NEW",
+            LATE_EVENING
+        )]))));
+    world.sync(connection).await;
+
+    assert_eq!(
+        world.transactions(account).await[0].posted_on,
+        date(2026, 10, 31)
+    );
+}
+
+/// A provider moving a record's instant is a real change, and takes the zone now in force.
+#[tokio::test]
+async fn a_record_whose_instant_moved_takes_the_new_zone() {
+    let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
+    let connection = world.seeded().await;
+    world
+        .script
+        .bridge_reply(Reply::ok(&account_set(&json!([record(
+            "TRN-MOVED",
+            LATE_EVENING
+        )]))));
+    world.sync(connection).await;
+    let account = world.bind("ACT-0001", AccountKind::Checking).await;
+
+    choose_zone(&world, Some("Pacific/Auckland")).await;
+    world
+        .script
+        .bridge_reply(Reply::ok(&account_set(&json!([record(
+            "TRN-MOVED",
+            NEXT_EVENING
+        )]))));
+    world.sync(connection).await;
+
+    assert_eq!(
+        world.transactions(account).await[0].posted_on,
+        date(2026, 11, 1)
+    );
+}
+
+/// A pending record that posts after a change of zone: its posting is new and takes the new
+/// zone, and the day it was transacted hasn't moved.
+#[tokio::test]
+async fn a_pending_record_that_posts_keeps_the_day_it_was_transacted() {
+    let world = world_with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
+    let connection = world.seeded().await;
+    let pending = json!([{
+        "id": "TRN-P", "posted": 0, "transacted_at": LATE_EVENING, "pending": true,
+        "amount": "-5.00", "description": "PARKING METER",
+    }]);
+    let posted = json!([{
+        "id": "TRN-P", "posted": NEXT_EVENING, "transacted_at": LATE_EVENING,
+        "amount": "-5.00", "description": "PARKING METER",
+    }]);
+    world.script.bridge_reply(Reply::ok(&account_set(&pending)));
+    world.sync(connection).await;
+    let account = world.bind("ACT-0001", AccountKind::Checking).await;
+    choose_zone(&world, Some("Pacific/Auckland")).await;
+
+    for _ in 0..2 {
+        world.script.bridge_reply(Reply::ok(&account_set(&posted)));
+        world.sync(connection).await;
+
+        let transaction = world.transactions(account).await.remove(0);
+        assert!(!transaction.pending);
+        assert_eq!(transaction.posted_on, date(2026, 11, 1), "in Auckland");
+        assert_eq!(
+            transaction.transacted_on,
+            Some(date(2026, 10, 30)),
+            "in Los Angeles"
+        );
+    }
 }
 
 /// Each instant has a different day in UTC, so counting either end in UTC moves

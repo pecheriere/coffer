@@ -324,8 +324,8 @@
   the figures from a stored copy. `/net-worth` also shows the buckets a member can see.
   The count stays at two: `/connections` holds no such figures, but its bind forms now
   hold a beneficiary label, so it stays in that table with its rejections withheld, as
-  the accepted risks below describe. `/admin/household` gains one form, for the
-  display currency: admins only (checked before the form is read), the
+  the accepted risks below describe. `/admin/household` gains two forms, for the
+  display currency and the time zone: admins only (checked before the form is read), the
   anti-forgery token and the `Origin` rule like every page form, and the same
   service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries
@@ -661,6 +661,14 @@
   nothing in the answer contradicts it. The docs say so first and tell an agent to
   check `access.all` in `GET /api/v1/me` and not to report such a sum as the
   household's. Marking it would reveal that other accounts exist.
+- **A provider can leave a day's balance alone by repeating the latest amount** on a day
+  that holds one, within 2 days of the latest, and can replace its own balance dated past
+  today. Neither reaches further back or touches a member's balance (spec §8.7).
+- **A change of time zone takes `admin` whatever the token's account grants:** it shows no
+  amount and says nothing of what is hidden, though it decides the day of new records on
+  accounts the token can't see. The name is checked against the copy of the database in
+  the binary before anything looks for a file by it. It holds the write lock only to remove
+  the at most two days a change can leave past today, however large the table.
 - **A back-dated balance adds history for good.** A manual balance may be dated as
   far back as 1970, and the daily values then hold a row for every day since for that
   account. Only a `write` token can set one, and it is audited. It costs disk and

@@ -140,7 +140,7 @@ fn service(server: &TestServer, provider: Option<Arc<dyn RateProvider>>) -> FxSe
     FxService::new(
         server.store.clone(),
         server.clock.clone(),
-        server.config.timezone.clone(),
+        server.config.default_timezone.clone(),
         provider,
     )
 }

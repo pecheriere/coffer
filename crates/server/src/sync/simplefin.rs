@@ -33,6 +33,7 @@ use zeroize::Zeroizing;
 
 use super::apply::Coverage;
 use super::bounded::bounded;
+use super::dating::RecordInstants;
 use super::provider::{
     Capabilities, ConnectInput, FetchMode, FetchRequest, FetchResult, Provider,
     ProviderAccountData, ProviderError, ProviderFuture, ProviderKind, ProviderTransaction,
@@ -517,22 +518,24 @@ fn convert_account(
 /// engine then dates it).
 fn transaction(raw: &RawTransaction, request: &FetchRequest<'_>) -> Option<ProviderTransaction> {
     let amount = DecimalAmount::parse(&raw.amount).ok()?;
-    let transacted_on = match raw.transacted_at {
-        Some(at) if at != 0 => Some(day(at, request.timezone)?),
+    let transacted = match raw.transacted_at {
+        Some(at) if at != 0 => Some(Timestamp::from_second(at).ok()?),
         _ => None,
     };
-    let posted_on = if raw.posted == 0 {
+    let posted = if raw.posted == 0 {
         None
     } else {
-        Some(day(raw.posted, request.timezone)?)
+        Some(Timestamp::from_second(raw.posted).ok()?)
     };
-    let pending = posted_on.is_none() || raw.pending == Some(true);
-    let date = if pending {
-        transacted_on.or(posted_on)
-    } else {
-        Some(posted_on?)
+    let pending = posted.is_none() || raw.pending == Some(true);
+    let instants = RecordInstants {
+        posted,
+        transacted,
+        pending,
     };
+    let (date, transacted_on) = instants.days_in(request.timezone);
     Some(ProviderTransaction {
+        instants: Some(instants),
         provider_id: raw.id.clone(),
         posted_on: date,
         transacted_on,
