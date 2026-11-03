@@ -146,3 +146,61 @@ jobs:
             echo "$platform"
             scripts/check-backtrace-lines.sh "$IMAGE_DIR/$platform/coffer"
           done
+
+  e2e:
+    # The built image against mock providers, its API and its pages. Pull requests only:
+    # the release workflow reuses this file and needs no staging stack. After docker-build,
+    # so its cache already holds this commit's image and this job compiles nothing.
+    if: github.event_name == 'pull_request'
+    needs: docker-build
+    # Named, so that a move of ubuntu-latest can't break what install-deps installs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Load the image docker-build made
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: coffer:ci
+          provenance: false
+          cache-from: type=gha,scope=docker-build
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+      - name: Install what the browser needs
+        working-directory: staging/e2e
+        run: |
+          npm ci
+          npx playwright install-deps chromium
+      - name: Run the end-to-end tests
+        run: scripts/staging.sh test
+        env:
+          COFFER_STAGING_IMAGE: coffer:ci
+      - name: Keep what the failing tests saw
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-results
+          path: staging/e2e/test-results
+          retention-days: 7
+      # A seed or health check that fails leaves no test results. All of this is made up.
+      - name: Show what the containers said
+        if: failure()
+        run: |
+          docker ps --all
+          for name in $(docker ps --all --filter name=coffer-staging --format '{{.Names}}'); do
+            echo "--- $name"
+            docker logs "$name" 2>&1
+          done
+      - name: Remove the stack
+        if: always()
+        run: scripts/staging.sh down
+        env:
+          COFFER_STAGING_IMAGE: coffer:ci
