@@ -4,7 +4,8 @@ use coffer_domain::forecast::{
     Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
 };
 use coffer_domain::ids::{
-    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransferLinkId,
+    AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransactionId,
+    TransferLinkId,
 };
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::CalendarMonth;
@@ -31,15 +32,47 @@ const ON: Date = date(2026, 11, 7);
 
 /// One of every caution, and of every reason inside one, so that each is read.
 fn cautions() -> Vec<Caution> {
+    let item = LineSource::PlannedItem {
+        id: PlannedItemId::new(),
+    };
+    let mut all = cautions_other_than_a_bills();
+    all.push(Caution::BillHistoryMissing {
+        starts_on: Some(ON),
+        currency: Currency::parse("USD").unwrap(),
+        occurrences: 8,
+        amount: usd(600_000),
+    });
+    all.push(Caution::RefundBesidePaidBill {
+        category: CategoryId::new(),
+        transaction: TransactionId::new(),
+        amount: usd(25_000),
+    });
+    all.push(Caution::LastMonthLooseEnds {
+        currency: Currency::parse("USD").unwrap(),
+        uncategorized_count: 2,
+        uncategorized_total: usd(5_000),
+        possible_duplicates: 1,
+    });
+    all.push(Caution::BillUnpaidLastMonth {
+        item,
+        on: ON,
+        amount: usd(12_000),
+    });
+    all.push(Caution::BillPaymentUnclear {
+        item,
+        on: ON,
+        amount: usd(12_000),
+        transaction: TransactionId::new(),
+        transaction_amount: usd(11_000),
+    });
+    all
+}
+
+/// What a provider's feed or connection can say.
+fn feed_cautions() -> Vec<Caution> {
     let account = AccountId::new();
     let provider_account = ProviderAccountId::new();
     let connection = ConnectionId::new();
-    let category = CategoryId::new();
-    let currency = Currency::parse("USD").unwrap();
-    let goal = LineSource::PlannedItem {
-        id: PlannedItemId::new(),
-    };
-    let one_off = LineSource::Hypothetical { index: 0 };
     let feed = |reason| Caution::AccountFeedProblem {
         account,
         provider_account,
@@ -51,11 +84,6 @@ fn cautions() -> Vec<Caution> {
         status,
     };
     vec![
-        Caution::BalanceStale {
-            account,
-            on: ON,
-            age_days: 8,
-        },
         Caution::UnboundProviderAccount {
             provider_account,
             connection,
@@ -69,10 +97,29 @@ fn cautions() -> Vec<Caution> {
         feed(FeedProblemReason::CurrencyDiffers),
         connection_alert(FeedStatus::Error),
         connection_alert(FeedStatus::ReauthRequired),
+    ]
+}
+
+fn cautions_other_than_a_bills() -> Vec<Caution> {
+    let account = AccountId::new();
+    let category = CategoryId::new();
+    let currency = Currency::parse("USD").unwrap();
+    let goal = LineSource::PlannedItem {
+        id: PlannedItemId::new(),
+    };
+    let one_off = LineSource::Hypothetical { index: 0 };
+    let mut all = feed_cautions();
+    all.extend([
+        Caution::BalanceStale {
+            account,
+            on: ON,
+            age_days: 8,
+        },
         Caution::AsOfNotToday { today: ON },
         Caution::BillNotSeen {
             category,
             amount: usd(12_000),
+            items: Vec::new(),
         },
         Caution::ClosedLiabilityOwing {
             account,
@@ -130,7 +177,8 @@ fn cautions() -> Vec<Caution> {
             currency,
             projected_cash: usd(-100),
         },
-    ]
+    ]);
+    all
 }
 
 fn blockers() -> Vec<Blocker> {
@@ -230,6 +278,7 @@ fn an_unseen_bill_says_to_settle_one_paid_from_a_held_account() {
         &Caution::BillNotSeen {
             category,
             amount: usd(1),
+            items: Vec::new(),
         },
         &names,
     );
@@ -340,7 +389,7 @@ fn a_window_not_starting_today_gives_both_days() {
     );
     assert!(sentence.contains("starts on 15 November 2026"));
     assert!(sentence.contains("not today, 7 November 2026"));
-    assert!(sentence.contains("Anything due before November 2026"));
+    assert!(sentence.contains("Anything due before October 2026"));
     assert!(sentence.contains("income expected on or before 15 November 2026"));
     assert!(sentence.contains("any what-if item dated before it"));
 }
@@ -355,12 +404,93 @@ fn an_unseen_bill_reads_right_for_several_items() {
         &Caution::BillNotSeen {
             category,
             amount: usd(12_000),
+            items: Vec::new(),
         },
         &names,
     );
     assert!(sentence.contains("Bills or one-offs in Home"));
-    assert!(sentence.contains("120.00 USD more than that category's spending"));
+    assert!(sentence.contains("come to 120.00 USD that no payment"));
     assert!(!sentence.contains("of it"), "no single bill is implied");
+}
+
+#[test]
+fn a_bill_from_last_month_is_named_with_its_day_and_amount() {
+    let id = PlannedItemId::new();
+    let item = LineSource::PlannedItem { id };
+    let mut names = Names::of_accounts(&[]);
+    names.items.insert(id, "Rent".to_owned());
+    let unpaid = said(
+        &Caution::BillUnpaidLastMonth {
+            item,
+            on: ON,
+            amount: usd(12_000),
+        },
+        &names,
+    );
+    assert!(unpaid.starts_with("Rent was due on 7 November 2026"));
+    assert!(unpaid.contains("about 120.00 USD"));
+    assert!(unpaid.contains(&format!(
+        "PUT /api/v1/plan-items/{id}/settlements/2026-11 with {{\"kind\": \"paid\"}}"
+    )));
+    assert!(unpaid.contains("file it"));
+
+    let unclear = said(
+        &Caution::BillPaymentUnclear {
+            item,
+            on: ON,
+            amount: usd(12_000),
+            transaction: TransactionId::new(),
+            transaction_amount: usd(11_000),
+        },
+        &names,
+    );
+    assert!(unclear.contains("A transaction of 110.00 USD"));
+    assert!(unclear.contains("the bill still counts as needed"));
+}
+
+#[test]
+fn a_bill_not_seen_names_its_items() {
+    let id = PlannedItemId::new();
+    let category = CategoryId::new();
+    let mut names = Names::of_accounts(&[]);
+    names.items.insert(id, "Rent".to_owned());
+    let sentence = said(
+        &Caution::BillNotSeen {
+            category,
+            amount: usd(12_000),
+            items: vec![LineSource::PlannedItem { id }],
+        },
+        &names,
+    );
+    assert!(sentence.starts_with("Rent in a category dated earlier this month"));
+}
+
+#[test]
+fn missing_history_says_when_it_starts_and_how_much() {
+    let sentence = said(
+        &Caution::BillHistoryMissing {
+            starts_on: Some(ON),
+            currency: Currency::parse("USD").unwrap(),
+            occurrences: 8,
+            amount: usd(600_000),
+        },
+        &Names::of_accounts(&[]),
+    );
+    assert!(sentence.starts_with("Transactions start on 7 November 2026"));
+    assert!(sentence.contains("8 bills or one-offs due before then, 6,000.00 USD in all"));
+
+    let without = said(
+        &Caution::BillHistoryMissing {
+            starts_on: None,
+            currency: Currency::parse("USD").unwrap(),
+            occurrences: 1,
+            amount: usd(1_000),
+        },
+        &Names::of_accounts(&[]),
+    );
+    assert!(without.contains("no transactions yet"));
+    assert!(without.contains("1 bill or one-off due last month"));
+    assert!(!without.contains("before then"), "nothing to refer to");
 }
 
 /// With no names at all, each sentence still reads as one: nothing like "The goal A
@@ -429,6 +559,7 @@ fn missing_names_read_well() {
             Caution::BillNotSeen {
                 category,
                 amount: usd(1),
+                items: Vec::new(),
             },
             "Bills or one-offs in a category",
         ),

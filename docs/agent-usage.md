@@ -820,7 +820,7 @@ A `read` token isn't listed `review_transactions`, and is refused if it calls it
 `categorized_by` and `assigned_by`, as on the API. No tool manages tokens, members or secrets,
 or merges, deletes or moves anything, and none creates, changes, runs or deletes a rule: a rule
 fills every empty transaction it matches, so an injected instruction could reach far through
-one. Everything else, such as changing the plan or asking for a sync, is the API's for now.
+one. Everything else, such as changing the plan, settling a month or asking for a sync, is the API's for now.
 
 **A refusal is a result, not a failure of the protocol.** It comes back with `isError` set
 and the API's problem as JSON text, with its `code` and `detail`, so a model can read it and

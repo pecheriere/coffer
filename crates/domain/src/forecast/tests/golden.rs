@@ -29,8 +29,8 @@ use super::{
 };
 use crate::accounts::LiquidityClass;
 use crate::forecast::{
-    AccountInput, BalanceInput, CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput,
-    MonthItem, NotCountedReason,
+    AccountInput, BalanceInput, CategorySpent, ForecastInput, ForecastStatus, ItemInput, MonthItem,
+    NotCountedReason,
 };
 use crate::ids::CategoryId;
 use crate::plan::{CalendarMonth, IntervalUnit, SettlementKind};
@@ -127,10 +127,11 @@ fn golden_three_month_forecast() {
     assert_eq!(forecast.blockers, [], "nothing blocks");
     assert_eq!(
         forecast.cautions,
-        [Caution::BillNotSeen {
-            category: line(&forecast, "Water").category.unwrap(),
-            amount: usd(12_000),
-        }],
+        [super::not_seen(
+            &forecast,
+            line(&forecast, "Water").category.unwrap(),
+            usd(12_000)
+        )],
         "November's water bill has not been seen"
     );
 

@@ -564,6 +564,45 @@ async fn a_link_across_currencies_that_disagrees_gets_a_caution_and_moves_the_sa
     );
 }
 
+/// A leg that moved pays no bill, even at the bill's exact amount, so a slipped decimal point leaves
+/// the bill owing with both cautions up: the rate check beside the bill's. Settling the bill clears
+/// its own and not the link's.
+#[tokio::test]
+async fn a_link_that_disagrees_pays_no_bill_and_both_cautions_stand() {
+    let world = world().await;
+    world.dollars_to_euros(1_250).await;
+    let before = world.forecast_at(ONE_MONTH).await;
+    let food: CategoryId = line(&before, "Groceries")["category"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let bill = world
+        .item(&outflow("Box", 125_000, food, &monthly("2026-11-03")))
+        .await;
+    let without_a_rate = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&without_a_rate, "Box")["unpaid"], usd(125_000));
+
+    world.enter_usd_rate("2026-11-05", "1.1172").await;
+
+    let with_a_rate = world.forecast_at(ONE_MONTH).await;
+    let said = kinds(&with_a_rate, "cautions");
+    assert!(said.contains(&"bill_not_seen".to_owned()));
+    assert!(said.contains(&"transfer_link_rate_mismatch".to_owned()));
+    assert_eq!(
+        without_cautions(with_a_rate),
+        without_cautions(without_a_rate),
+        "a rate changes no number"
+    );
+
+    world.settle(&bill, "2026-11", "paid").await;
+
+    let settled = world.forecast_at(ONE_MONTH).await;
+    let said = kinds(&settled, "cautions");
+    assert!(!said.contains(&"bill_not_seen".to_owned()));
+    assert!(said.contains(&"transfer_link_rate_mismatch".to_owned()));
+}
+
 /// The whole answer but its cautions.
 fn without_cautions(mut forecast: Value) -> Value {
     forecast.as_object_mut().unwrap().remove("cautions");

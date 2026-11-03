@@ -120,10 +120,7 @@ fn uncategorized_spending_warns_with_an_unpaid_bill() {
     assert_eq!(
         forecast.cautions,
         [
-            Caution::BillNotSeen {
-                category: home,
-                amount: usd(10_000),
-            },
+            super::not_seen(&forecast, home, usd(10_000)),
             Caution::UncategorizedSpending {
                 currency: currency("USD"),
                 count: 3,

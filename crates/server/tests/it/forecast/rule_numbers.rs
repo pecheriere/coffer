@@ -152,6 +152,82 @@ async fn an_income_rule_leaves_the_caution_up() {
     assert_eq!(world.forecast_at(ONE_MONTH).await, before);
 }
 
+/// A rule's filing is as good as a person's: the charge pays the bill it fits, all of it leaves the
+/// budget's pool, and undoing the rule puts the bill back to owing.
+#[tokio::test]
+async fn a_rule_filing_a_payment_pays_the_bill_and_undoing_it_owes_again() {
+    let world = world().await;
+    let (checking, food) = world.budgeted().await;
+    world
+        .item(&outflow("Box", 30_000, food, &monthly("2026-11-03")))
+        .await;
+    let id = world.unfiled(checking, -30_000).await;
+    let text = world.description_of(&id).await;
+
+    let before = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&before, "Box")["unpaid"], usd(30_000));
+
+    let (rule, _) = world.rule_run(&text, food).await;
+
+    let after = world.forecast_at(ONE_MONTH).await;
+    let bill = line(&after, "Box");
+    assert_eq!(bill["unpaid"], usd(0));
+    assert_eq!(bill["payments"][0]["paid_by"]["transaction"], json!(id));
+    assert_eq!(line(&after, "Groceries")["reduced_by"], usd(0));
+
+    world.rule_undone(&rule).await;
+    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+}
+
+/// Money coming in that a rule files under an `expense` category is a refund, so one the size of a
+/// charge undoes it and the bill owes again: the safe direction, if the rule was too broad.
+#[tokio::test]
+async fn a_rule_filing_money_in_as_a_refund_can_unpay_a_bill() {
+    let world = world().await;
+    let (checking, food) = world.budgeted().await;
+    world
+        .item(&outflow("Box", 30_000, food, &monthly("2026-11-03")))
+        .await;
+    world
+        .spend_linked(checking, "2026-11-05", 30_000, food, &Value::Null)
+        .await;
+    let id = world.unfiled(checking, 30_000).await;
+    let text = world.description_of(&id).await;
+
+    let before = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&before, "Box")["unpaid"], usd(0));
+
+    let (rule, answer) = world.rule_run(&text, food).await;
+    assert_eq!(answer["categorized"], 1);
+    assert_eq!(
+        line(&world.forecast_at(ONE_MONTH).await, "Box")["unpaid"],
+        usd(30_000)
+    );
+
+    world.rule_undone(&rule).await;
+    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+}
+
+/// An `income` rule is refused on money going out, so that money pays no bill either.
+#[tokio::test]
+async fn an_income_rule_refused_on_an_outflow_pays_no_bill() {
+    let world = world().await;
+    let (checking, food) = world.budgeted().await;
+    world
+        .item(&outflow("Box", 30_000, food, &monthly("2026-11-03")))
+        .await;
+    let id = world.unfiled(checking, -30_000).await;
+    let text = world.description_of(&id).await;
+    let pay = world.category("Pay", "income").await;
+
+    let (_, answer) = world.rule_run(&text, pay).await;
+
+    assert_eq!(answer["left_alone"]["income_on_outflow"], 1);
+    let after = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&after, "Box")["unpaid"], usd(30_000));
+    assert!(kinds(&after, "cautions").contains(&"uncategorized_spending".to_owned()));
+}
+
 #[tokio::test]
 async fn no_rule_changes_a_number_on_one_movement() {
     let world = world().await;

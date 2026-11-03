@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use coffer_domain::forecast::{
     AccountInput, BalanceInput, CategorySpent, FeedAlert, FeedProblem, FeedProblemReason,
     FeedStatus, Forecast, ForecastInput, ItemInput, LineSource, LooseEnds, NewerSpending,
-    UnboundAccount, compute_forecast,
+    SpentTransaction, UnboundAccount, compute_forecast,
 };
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
@@ -22,8 +22,8 @@ use coffer_domain::plan::{
 };
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
-    CategoryGroupRecord, ConnectionHealth, ConnectionStatus, ForecastData, PlannedItemRecord,
-    ProviderAccountRecord, StoreError,
+    CategoryGroupRecord, ConnectionHealth, ConnectionStatus, ForecastData, LooseEndsRow,
+    PlannedItemRecord, ProviderAccountRecord, SpentTransactionRow, StoreError,
 };
 use jiff::civil::Date;
 use serde::Deserialize;
@@ -263,7 +263,10 @@ fn input(
         goals_linked_both_sides,
         goal_spending_accounts,
         category_spent,
+        spent_transactions,
         loose_ends,
+        last_month_loose_ends,
+        earliest_transaction,
         newer_spending,
         links_with_leg_removed,
         cross_currency_links,
@@ -328,15 +331,10 @@ fn input(
                 spent_minor: row.spent_minor,
             })
             .collect(),
-        loose_ends: loose_ends
-            .into_iter()
-            .map(|row| LooseEnds {
-                currency: row.currency,
-                uncategorized_count: row.uncategorized_count,
-                uncategorized_minor: row.uncategorized_minor,
-                possible_duplicates: row.possible_duplicates,
-            })
-            .collect(),
+        spent_transactions: spent_transactions.iter().map(spent_transaction).collect(),
+        loose_ends: loose_ends.iter().map(loose).collect(),
+        last_month_loose_ends: last_month_loose_ends.iter().map(loose).collect(),
+        earliest_transaction,
         newer_spending: newer_spending
             .into_iter()
             .map(|row| NewerSpending {
@@ -350,6 +348,26 @@ fn input(
         rates,
         unbound,
         feeds,
+    }
+}
+
+fn loose(row: &LooseEndsRow) -> LooseEnds {
+    LooseEnds {
+        currency: row.currency,
+        uncategorized_count: row.uncategorized_count,
+        uncategorized_minor: row.uncategorized_minor,
+        possible_duplicates: row.possible_duplicates,
+    }
+}
+
+fn spent_transaction(row: &SpentTransactionRow) -> SpentTransaction {
+    SpentTransaction {
+        transaction: row.transaction,
+        category: row.category,
+        currency: row.currency,
+        posted_on: row.posted_on,
+        spent_minor: row.spent_minor,
+        possible_duplicate: row.possible_duplicate,
     }
 }
 

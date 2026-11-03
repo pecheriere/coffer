@@ -14,15 +14,21 @@ use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_
 use crate::transfer_rate::mismatches;
 use reduction::{ItemAdjustment, Reduction};
 
+mod bill_matching;
 mod reduction;
 mod settled;
 mod types;
 
+pub use bill_matching::{
+    BILL_AMOUNT_TOLERANCE_PERCENT, BILL_EARLY_PAYMENT_DAYS, BILL_LOOK_BACK_MONTHS,
+    REFUND_UNDOES_FROM_PERCENT, REFUND_UNDOES_TO_PERCENT, bills_looked_at_from, payments_read_from,
+};
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
     ForecastStatus, GoalLine, HintEffect, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
-    MonthCurrency, MonthItem, NewerSpending, NotCountedReason, SettledLine, UnboundAccount,
+    MonthCurrency, MonthItem, NewerSpending, NotCountedReason, OccurrencePayment, PaidBy,
+    SettledLine, SpentTransaction, UnboundAccount,
 };
 
 /// Computes the forecast for `input`, which the caller has validated.
@@ -57,7 +63,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         .collect();
     let mut items = Vec::new();
     let mut month_counts = vec![0; buckets.len()];
-    for (item, &adjustment) in input.items.iter().zip(&reduction.by_item) {
+    for (item, adjustment) in input.items.iter().zip(&reduction.by_item) {
         let line = match item.schedule {
             PlanSchedule::Goal {
                 completed: true, ..
@@ -312,7 +318,7 @@ fn account_line(account: &AccountInput, book: &mut Book) -> AccountLine {
 /// `month_counts` is a buffer, so a daily item costs no allocation per date.
 fn dated_line(
     item: &ItemInput,
-    adjustment: ItemAdjustment,
+    adjustment: &ItemAdjustment,
     include_income: bool,
     window: &Window<'_>,
     month_counts: &mut [i128],
@@ -332,8 +338,14 @@ fn dated_line(
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
     let gross = amount * i128::from(occurrences);
-    let ItemAdjustment { reduced_by, unpaid } = adjustment;
-    if gross == 0 && unpaid == 0 {
+    let ItemAdjustment {
+        reduced_by,
+        unpaid,
+        ref payments,
+    } = *adjustment;
+    // Paid and past, so listed for what paid it, and nowhere else: not even its currency is in use.
+    let only_shown = gross == 0 && unpaid == 0;
+    if only_shown && payments.is_empty() {
         return Ok(None);
     }
     // Listed, and nowhere else: not even its currency is in use.
@@ -342,7 +354,7 @@ fn dated_line(
             .account_hint
             .is_some_and(|hint| !window.counted.contains(&hint));
 
-    if !uncounted_inflow {
+    if !uncounted_inflow && !only_shown {
         month_counts.fill(0);
         let mut bucket = 0;
         for &on in &dates {
@@ -400,6 +412,7 @@ fn dated_line(
         unpaid: money(unpaid, currency)?,
         counted: money(counted, currency)?,
         goal: None,
+        payments: payments.clone(),
     }))
 }
 
@@ -465,6 +478,7 @@ fn goal_line(
             due_on,
             due_in_horizon: (window.as_of..window.end_exclusive).contains(&due_on),
         }),
+        payments: Vec::new(),
     }))
 }
 
@@ -669,12 +683,14 @@ fn cautions(
             })
             .map(|item| Caution::GoalLinkedBothSides { goal: item.source }),
     );
-    for (&(category, currency), &amount) in &reduction.not_seen {
+    for (&(category, currency), gap) in &reduction.not_seen {
         cautions.push(Caution::BillNotSeen {
             category,
-            amount: money(amount, currency)?,
+            amount: money(gap.amount, currency)?,
+            items: gap.items.clone(),
         });
     }
+    cautions.extend(reduction.bill_cautions.iter().cloned());
     if let Some(SafetyFloor::MonthsOfOutflows { months }) = input.floor {
         for (&currency, tally) in &book.tallies {
             if tally.floor == 0 {
@@ -760,7 +776,9 @@ fn item_cautions(
     counted: &BTreeSet<AccountId>,
     cautions: &mut Vec<Caution>,
 ) {
-    let in_the_number = line.direction == PlanDirection::Outflow || input.include_income;
+    let only_shown = line.gross.minor_units == 0 && line.unpaid.minor_units == 0;
+    let in_the_number =
+        !only_shown && (line.direction == PlanDirection::Outflow || input.include_income);
     if let Some(account) = line.account_hint
         && in_the_number
         && !counted.contains(&account)
@@ -807,15 +825,15 @@ fn item_cautions(
 
 /// This month's unsettled spending only matters where it could still change the
 /// number. Uncategorized money is more spending, which only helps a budget or closes
-/// a gap. A duplicate is spending that never happened, which also opens a gap where
-/// spending paid an earlier bill or one-off.
+/// a gap. A duplicate is spending that never happened, which pays no bill, but can shrink a
+/// budget.
 fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &mut Vec<Caution>) {
     let mut possible_duplicates = 0_u32;
     for loose in &input.loose_ends {
         let more_spending_matters = reduction
             .spending_sensitive_currencies
             .contains(&loose.currency);
-        if more_spending_matters || reduction.paid_currencies.contains(&loose.currency) {
+        if more_spending_matters {
             possible_duplicates = possible_duplicates.saturating_add(loose.possible_duplicates);
         }
         if more_spending_matters && loose.uncategorized_count > 0 {
@@ -834,6 +852,25 @@ fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &m
             count: possible_duplicates,
         });
     }
+    cautions.extend(
+        input
+            .last_month_loose_ends
+            .iter()
+            .filter(|loose| {
+                reduction
+                    .last_month_unpaid_currencies
+                    .contains(&loose.currency)
+            })
+            .map(|loose| Caution::LastMonthLooseEnds {
+                currency: loose.currency,
+                uncategorized_count: loose.uncategorized_count,
+                uncategorized_total: Money {
+                    minor_units: loose.uncategorized_minor,
+                    currency: loose.currency,
+                },
+                possible_duplicates: loose.possible_duplicates,
+            }),
+    );
     cautions.extend(
         input
             .links_with_leg_removed

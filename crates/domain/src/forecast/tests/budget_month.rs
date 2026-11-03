@@ -6,7 +6,7 @@ use jiff::civil::{Date, date};
 
 use super::{
     AS_OF, budget, cash, currency, eur, every, fixed_floor, has_line, household, hypothetical,
-    line, monthly, one_off, run, spent, usd,
+    line, monthly, one_off, paid_on, run, spent, usd,
 };
 use crate::forecast::{
     AccountInput, BalanceInput, Blocker, CategorySpent, Forecast, ForecastInput, ForecastStatus,
@@ -304,6 +304,10 @@ fn a_bills_share_comes_off_before_a_budget_earlier_this_month() {
             budget(monthly("Upkeep", usd(20_000), date(2026, 1, 5), home)),
         ],
         category_spent: vec![spent(home, 205_000)],
+        spent_transactions: vec![
+            paid_on(home, usd(200_000), date(2026, 11, 1)),
+            paid_on(home, usd(5_000), date(2026, 11, 2)),
+        ],
         ..household()
     });
     let upkeep = line(&forecast, "Upkeep");
@@ -408,19 +412,29 @@ fn spending_on_as_of_does_not_reduce_that_days_bill() {
 
 #[test]
 fn spending_beyond_a_bill_on_as_of_reduces_a_budget() {
-    let forecast = run(&rent_due_today(205_000));
+    let input = rent_due_today(205_000);
+    let home = input.category_spent[0].category;
+    let forecast = run(&ForecastInput {
+        spent_transactions: vec![
+            paid_on(home, usd(200_000), AS_OF),
+            paid_on(home, usd(5_000), AS_OF),
+        ],
+        ..input
+    });
     assert_eq!(line(&forecast, "Upkeep").reduced_by, usd(5_000), "the rest");
 }
 
-/// The data cannot tell what it was for, and it may be the rent: the safe direction.
+/// 150,000 doesn't fit the rent, so it is spending on the budget, all 20,000 of this month's,
+/// and the rent still counts in full.
 #[test]
-fn spending_short_of_a_bill_on_as_of_reduces_no_budget() {
+fn spending_that_fits_no_bill_on_as_of_reduces_a_budget() {
     let forecast = run(&rent_due_today(150_000));
     assert_eq!(
         line(&forecast, "Upkeep").reduced_by,
-        usd(0),
-        "all to the rent"
+        usd(20_000),
+        "all of it"
     );
+    assert_eq!(line(&forecast, "Rent").counted, usd(600_000), "in full");
 }
 
 #[test]

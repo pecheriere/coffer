@@ -73,7 +73,7 @@ impl Fed {
     async fn rent_paid(&self) {
         let housing = self.world.expense("Housing").await;
         self.world
-            .item(&outflow("Rent", 200_000, housing, &monthly("2026-01-01")))
+            .item(&outflow("Rent", 200_000, housing, &monthly("2026-11-01")))
             .await;
         self.report(vec![charge("rent", "2026-11-01", "-2000.00")], Vec::new())
             .await;
@@ -171,7 +171,7 @@ async fn a_revised_split_charge_no_longer_reduces_a_budget() {
     let fun = fed.world.expense("Fun").await;
     fed.world
         .item(&with(
-            outflow("Groceries", 100_000, food, &monthly("2026-01-28")),
+            outflow("Groceries", 100_000, food, &monthly("2026-11-28")),
             "spending",
             json!("budget"),
         ))
@@ -330,10 +330,11 @@ async fn a_bill_past_its_date_stays_unpaid_with_the_caution() {
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
     world.balance(checking, "2026-11-10", 5_000_000).await;
+    world.with_history(checking).await;
     world.floor(0).await;
     let power = world.expense("Power").await;
     world
-        .item(&outflow("Power", 200_000, power, &monthly("2026-01-12")))
+        .item(&outflow("Power", 200_000, power, &monthly("2026-11-12")))
         .await;
     world.spend(checking, "2026-11-13", 200_000, power).await;
 
@@ -375,9 +376,9 @@ async fn a_goal_purchase_on_a_closed_card_without_a_balance_changes_nothing() {
     assert_eq!(forecast["surplus"], usd(4_000_000));
 }
 
-/// A rent paid by a charge of 200,000, reversed by +2000.00 split housing +150,000 and
-/// fun +50,000. Housing has spent 50,000, so 150,000 of November's rent is unpaid, on top
-/// of December's: 5,000,000 - 350,000.
+/// A rent paid by a charge of 200,000, reversed by +2000.00 split housing +190,000 and
+/// fun +10,000. Housing's refund is within the tolerance of the charge, which pays no rent, so
+/// November's is unpaid, on top of December's: 5,000,000 - 400,000.
 async fn rent_reversed(fed: &Fed) -> CategoryId {
     fed.linked_checking().await;
     fed.rent_paid().await;
@@ -392,15 +393,15 @@ async fn rent_reversed(fed: &Fed) -> CategoryId {
     fed.categorize(
         &back,
         &json!([
-            {"category": housing, "minor_units": 150_000},
-            {"category": fun, "minor_units": 50_000},
+            {"category": housing, "minor_units": 190_000},
+            {"category": fun, "minor_units": 10_000},
         ]),
     )
     .await;
     let before = fed.world.forecast_at("?horizon_months=1").await;
     assert_eq!(
         before["surplus"],
-        usd(4_650_000),
+        usd(4_600_000),
         "before the provider acts"
     );
     housing
@@ -416,9 +417,9 @@ async fn a_revised_refund_keeps_counting() {
         .await;
 
     let forecast = fed.world.forecast_at("?horizon_months=1").await;
-    assert_eq!(forecast["surplus"], usd(4_650_000));
+    assert_eq!(forecast["surplus"], usd(4_600_000));
     assert_eq!(forecast["status"], "provisional");
-    assert_eq!(caution(&forecast, "bill_not_seen")["amount"], usd(150_000));
+    assert_eq!(caution(&forecast, "bill_not_seen")["amount"], usd(200_000));
 }
 
 /// Whether a refund the provider took back was real is unknown. Counting it holds more,
@@ -431,7 +432,7 @@ async fn a_removed_refund_keeps_counting() {
     fed.report(Vec::new(), vec!["back".into()]).await;
 
     let forecast = fed.world.forecast_at("?horizon_months=1").await;
-    assert_eq!(forecast["surplus"], usd(4_650_000));
+    assert_eq!(forecast["surplus"], usd(4_600_000));
     assert_eq!(forecast["status"], "provisional");
 }
 

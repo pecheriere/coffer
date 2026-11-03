@@ -67,6 +67,7 @@ async fn on_the_10th() -> (World, AccountId) {
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
     world.balance(checking, BEFORE_THE_CHARGE, 300_000).await;
+    world.with_history(checking).await;
     world.floor(0).await;
     (world, checking)
 }
@@ -76,7 +77,7 @@ async fn on_the_10th() -> (World, AccountId) {
 /// window, since the shortest ends on the 10th.
 async fn contribution_bill(world: &World, checking: AccountId, end_on: Option<&str>) -> CategoryId {
     let category = world.expense("College").await;
-    let mut schedule = monthly("2026-01-05");
+    let mut schedule = monthly("2026-11-05");
     if let Some(end_on) = end_on {
         schedule["end_on"] = json!(end_on);
     }
@@ -116,7 +117,7 @@ async fn a_held_cash_account_stays_out() {
     let food = world.expense("Food").await;
     world
         .item(&with(
-            outflow("Groceries", 60_000, food, &monthly("2026-01-28")),
+            outflow("Groceries", 60_000, food, &monthly("2026-11-28")),
             "spending",
             json!("budget"),
         ))
@@ -337,7 +338,7 @@ async fn a_planned_transfer_is_refused() {
                 "College fund contribution",
                 50_000,
                 moved,
-                &monthly("2026-01-05"),
+                &monthly("2026-11-05"),
             )),
         )
         .await;
@@ -382,7 +383,7 @@ async fn a_bill_paid_from_a_bucket_stays_unpaid_until_settled() {
     let (world, _) = holding().await;
     let tuition = world.expense("Tuition").await;
     let bill = world
-        .item(&outflow("Term", 200_000, tuition, &monthly("2026-01-01")))
+        .item(&outflow("Term", 200_000, tuition, &monthly("2026-11-01")))
         .await;
     let held = world.held_savings("Held savings").await;
     world.balance(held, BALANCE_ON, 500_000).await;

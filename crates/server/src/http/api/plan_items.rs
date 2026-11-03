@@ -243,8 +243,8 @@ pub(super) async fn delete(
     tag = tags::PLAN,
     description = "Records that a recurring bill's or a one-off's occurrences in this month were \
                    `paid` some way the forecast can't see, or are `skipped`. In a forecast they \
-                   count as nothing: no gross, no gap, no `bill_not_seen`, no share of the \
-                   category's spending. It never changes the item. The forecast lists them in \
+                   count as nothing: no gross, no gap, no `bill_not_seen`, and `paid` keeps what it \
+                   was paid with off the category's budgets. It never changes the item. The forecast lists them in \
                    `settled`; plan versus actual keeps them in `planned` and says they are settled. \
                    The month must be in the years 1970 to 2200, at most 12 months from today's \
                    either way, and hold an occurrence of the item. A budget, a goal and income can't \

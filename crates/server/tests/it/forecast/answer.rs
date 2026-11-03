@@ -56,7 +56,7 @@ pub(crate) async fn golden() -> Golden {
         .await;
     world
         .item(&with(
-            outflow("Groceries", 60_000, food, &monthly("2026-01-28")),
+            outflow("Groceries", 60_000, food, &monthly("2026-11-28")),
             "spending",
             json!("budget"),
         ))
@@ -97,12 +97,13 @@ pub(crate) async fn golden() -> Golden {
             "category": pay,
             "amount": usd(800_000),
             "direction": "inflow",
-            "schedule": monthly("2026-01-25"),
+            "schedule": monthly("2026-11-25"),
         }))
         .await;
 
     world.floor(1_000_000).await;
     // All of it on or before the balance date, so the balances already show it.
+    world.spend(checking, "2026-10-01", 200_000, housing).await;
     world.spend(checking, "2026-11-01", 200_000, housing).await;
     world.spend(checking, "2026-11-05", 40_000, food).await;
     world
@@ -414,7 +415,7 @@ async fn actuals_ignore_pending_excluded_accounts_and_goal_links() {
         .await;
     world
         .item(&with(
-            outflow("Groceries", 60_000, food, &monthly("2026-01-28")),
+            outflow("Groceries", 60_000, food, &monthly("2026-11-28")),
             "spending",
             json!("budget"),
         ))
@@ -511,7 +512,7 @@ async fn a_stored_budget_is_reduced_and_a_stored_bill_is_not() {
     let world = world().await;
     let checking = world.funded("Checking", 1_000_000).await;
     let (bills, food) = (world.expense("Bills").await, world.expense("Food").await);
-    let schedule = monthly("2026-01-28");
+    let schedule = monthly("2026-11-28");
     world
         .item(&outflow("Power", 60_000, bills, &schedule))
         .await;

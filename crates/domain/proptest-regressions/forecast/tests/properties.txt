@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 8be0314e35feb8dd8d49b2cdffb5dae078a8e3d530195aca48c245363e70d4c0 # shrinks to input = ForecastInput { today: 2026-11-15, as_of: 2026-11-15, horizon_months: 1, include_income: false, floor: None, stale_after_days: 7, accounts: [], items: [], category_spent: [CategorySpent { category: CategoryId(01a19dc5-22f8-71f9-9da3-86117d046d7d), currency: Currency { code: "USD", exponent: 2 }, spent_minor: -1 }], loose_ends: [], newer_spending: [], unbound: [], feeds: [] }
+cc 9c694600ac6c0e8e81595ab0763683c661f30752e2f50a6ce72a0baed045db1a # settled a month before the history beside a budget with spending

@@ -32,7 +32,7 @@ What exists and what comes next:
 - **0.3.0:** a spending plan (recurring bills and budgets, one-offs and
   sinking-fund goals, goal links on splits), settling a bill for one month, the
   household's safety floor, a cash forecast with a what-if, plan versus actual with
-  rollovers, and a read-only forecast page; net worth per day, week or month in a
+  rollovers, and a forecast page that can settle a bill; net worth per day, week or month in a
   display currency, converted at the European Central Bank's daily rates (fetched
   only when the household holds more than one currency), with a read-only net worth
   page and chart; balances kept for provider accounts that aren't bound yet; server

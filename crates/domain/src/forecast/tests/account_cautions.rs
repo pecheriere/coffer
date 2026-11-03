@@ -4,7 +4,7 @@
 use jiff::civil::date;
 
 use super::{AS_OF, assert_provisional, cash, days_before, household};
-use super::{one_off, run, usd, usd_totals};
+use super::{line, one_off, run, usd, usd_totals};
 use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::forecast::{
     AccountInput, BalanceInput, Caution, FeedAlert, FeedProblem, FeedProblemReason, FeedStatus,
@@ -383,9 +383,9 @@ fn as_of_other_than_today_is_a_caution() {
     assert_eq!(
         forecast.surplus,
         Some(usd(999_000)),
-        "bills before as_of fall outside the window"
+        "last month's was paid, by the fixture, so only the one after as_of counts"
     );
-    assert_eq!(forecast.items.len(), 1, "only the bill after as_of");
+    assert_eq!(line(&forecast, "Before").counted, usd(0), "paid");
 }
 
 #[test]

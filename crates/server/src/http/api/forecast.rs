@@ -23,7 +23,7 @@ pub struct ForecastQuery {
     /// The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to
     /// 2200: by default the household's today. A balance is the latest on or before
     /// it. Any other day than today raises the caution `as_of_not_today`, since what
-    /// falls due before that day's month is left out, as is planned income dated on or
+    /// falls due before the month before that day's is left out, as is planned income dated on or
     /// before that day and any hypothetical item dated before it. Planned income counts
     /// only from the day after it, today or not, since a balance of that day may already
     /// hold that day's money.
@@ -58,8 +58,9 @@ pub struct ForecastQuery {
                    money is negative, and a negative `surplus` is a shortfall. Amounts are \
                    integer minor units.\n\n\
                    A bill or one-off a person settled for a month (`settlePlanItem`) counts as \
-                   nothing in that month: no gross, no gap, no caution, no share of its category's \
-                   spending. `settled` lists it with its amount, so no number silently differs, \
+                   nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps \
+                   what it was paid with off its category's budgets, never so far that settling \
+                   raises the need. `settled` lists it with its amount, so no number silently differs, \
                    and it doesn't make the status `provisional` of itself, since a person \
                    decided.\n\n\
                    Every number traces to its lines: `accounts` says which balances counted, \

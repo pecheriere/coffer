@@ -2300,13 +2300,13 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution, no share of its category's spending. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
             "name": "as_of",
             "in": "query",
-            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since what\nfalls due before that day's month is left out, as is planned income dated on or\nbefore that day and any hypothetical item dated before it. Planned income counts\nonly from the day after it, today or not, since a balance of that day may already\nhold that day's money.",
+            "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today. A balance is the latest on or before\nit. Any other day than today raises the caution `as_of_not_today`, since what\nfalls due before the month before that day's is left out, as is planned income dated on or\nbefore that day and any hypothetical item dated before it. Planned income counts\nonly from the day after it, today or not, since a balance of that day may already\nhold that day's money.",
             "required": false,
             "schema": {
               "type": "string",
@@ -4110,7 +4110,7 @@
           "plan"
         ],
         "summary": "Settles a planned item for one month.",
-        "description": "Records that a recurring bill's or a one-off's occurrences in this month were `paid` some way the forecast can't see, or are `skipped`. In a forecast they count as nothing: no gross, no gap, no `bill_not_seen`, no share of the category's spending. It never changes the item. The forecast lists them in `settled`; plan versus actual keeps them in `planned` and says they are settled. The month must be in the years 1970 to 2200, at most 12 months from today's either way, and hold an occurrence of the item. A budget, a goal and income can't be settled. Sending what the month already says writes nothing and answers with it, who and when included. Another `kind` replaces it. Needs `write`; a token with account grants also needs `all` at `write`, decided before anything is looked up.",
+        "description": "Records that a recurring bill's or a one-off's occurrences in this month were `paid` some way the forecast can't see, or are `skipped`. In a forecast they count as nothing: no gross, no gap, no `bill_not_seen`, and `paid` keeps what it was paid with off the category's budgets. It never changes the item. The forecast lists them in `settled`; plan versus actual keeps them in `planned` and says they are settled. The month must be in the years 1970 to 2200, at most 12 months from today's either way, and hold an occurrence of the item. A budget, a goal and income can't be settled. Sending what the month already says writes nothing and answers with it, who and when included. Another `kind` replaces it. Needs `write`; a token with account grants also needs `all` at `write`, decided before anything is looked up.",
         "operationId": "settlePlanItem",
         "parameters": [
           {
@@ -9019,7 +9019,7 @@
           },
           {
             "type": "object",
-            "description": "The window does not start today. What falls due before its month is left out, as is\nplanned income dated on or before `as_of` and any hypothetical item dated before it.",
+            "description": "The window does not start today. What falls due before last month, as seen from\n`as_of`, is left out, as is\nplanned income dated on or before `as_of` and any hypothetical item dated before it.",
             "required": [
               "today",
               "kind"
@@ -9039,9 +9039,105 @@
           },
           {
             "type": "object",
-            "description": "Recurring bills and one-offs dated earlier this month exceed the category's\nspending so far. The gap counts as still needed; if it was paid under another\ncategory, the number shows less to invest, which is the safe direction. The\ncategory's spending is taken to pay these before any budget, since the data\ncannot tell which it was for, so money spent on a budget can hide a gap.",
+            "description": "Recurring bills and one-offs dated earlier this month that no transaction paid, summed\nper category. They count as still needed; if one was paid under another category or at\nanother amount, the number shows less to invest, which is the safe direction. `items` are\nthe items they belong to, in input order.",
             "required": [
               "category",
+              "amount",
+              "items",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "category": {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LineSource"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_not_seen"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A bill or one-off dated last month that no transaction paid and nobody settled. It counts\nas still needed until one does, or until a person settles that month.",
+            "required": [
+              "item",
+              "on",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "item": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_unpaid_last_month"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Last month's bills or one-offs dated before the household's first transaction (`starts_on`,\nnull with none yet). Coffer can't tell whether they were paid, so they aren't treated as\nunpaid: `occurrences` of them, `amount` in all, are in none of the totals. This month's\nalways count.",
+            "required": [
+              "starts_on",
+              "currency",
+              "occurrences",
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_history_missing"
+                ]
+              },
+              "occurrences": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "starts_on": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A refund in a category where a bill is paid, too small or large to count against a charge\nthere, so the bill stays paid. If it was part of that payment, the surplus reads high by up\nto `amount`.",
+            "required": [
+              "category",
+              "transaction",
               "amount",
               "kind"
             ],
@@ -9055,8 +9151,82 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "bill_not_seen"
+                  "refund_beside_paid_bill"
                 ]
+              },
+              "transaction": {
+                "$ref": "#/components/schemas/TransactionId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Last month has money that can't pay a bill until a person files it, and a bill from last\nmonth is unpaid: an uncategorized transaction or a possible duplicate may be its payment.",
+            "required": [
+              "currency",
+              "uncategorized_count",
+              "uncategorized_total",
+              "possible_duplicates",
+              "kind"
+            ],
+            "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "last_month_loose_ends"
+                ]
+              },
+              "possible_duplicates": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "uncategorized_count": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "uncategorized_total": {
+                "$ref": "#/components/schemas/Money"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A transaction is close to this bill's amount, but its category also has a budget that\ncould have spent it, so it isn't taken as the payment. The bill counts as still needed,\nand at most the bill's amount of it stays with the budget. Settling the month as `paid`\nsays it was the payment, and takes it off the budget.",
+            "required": [
+              "item",
+              "on",
+              "amount",
+              "transaction",
+              "transaction_amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Money"
+              },
+              "item": {
+                "$ref": "#/components/schemas/LineSource"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill_payment_unclear"
+                ]
+              },
+              "on": {
+                "type": "string",
+                "format": "date"
+              },
+              "transaction": {
+                "$ref": "#/components/schemas/TransactionId"
+              },
+              "transaction_amount": {
+                "$ref": "#/components/schemas/Money"
               }
             }
           },
@@ -9323,7 +9493,7 @@
           },
           {
             "type": "object",
-            "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction or hide an unpaid bill or one-off.",
+            "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction. One pays no bill until a person says it isn't a duplicate.",
             "required": [
               "count",
               "kind"
@@ -9690,7 +9860,7 @@
             "items": {
               "$ref": "#/components/schemas/ItemLine"
             },
-            "description": "Every item that adds to the window, in input order."
+            "description": "Every item that adds to the window or has a payment to show, in input order."
           },
           "months": {
             "type": "array",
@@ -10218,7 +10388,8 @@
           "reduced_by",
           "unpaid",
           "counted",
-          "goal"
+          "goal",
+          "payments"
         ],
         "properties": {
           "account_hint": {
@@ -10268,7 +10439,7 @@
           },
           "gross": {
             "$ref": "#/components/schemas/Money",
-            "description": "The whole amount of `occurrences`, before any reduction. 0 only with `unpaid`."
+            "description": "The whole amount of `occurrences`, before any reduction. 0 only with `unpaid` or\n`payments`."
           },
           "item_type": {
             "$ref": "#/components/schemas/PlanItemType"
@@ -10289,6 +10460,13 @@
             "description": "How many times it falls in the window, and for a stored budget earlier in `as_of`'s\nmonth too: 0 for a goal. An inflow counts only from the day after `as_of`.",
             "minimum": 0
           },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OccurrencePayment"
+            },
+            "description": "For a stored recurring bill or one-off: each occurrence from the start of last month up\nto and including `as_of`, by date, and what paid it. A settled one isn't here but in\n`settled`. Empty for anything else."
+          },
           "reduced_by": {
             "$ref": "#/components/schemas/Money",
             "description": "What this month's actual spending takes off `gross`."
@@ -10298,7 +10476,7 @@
           },
           "unpaid": {
             "$ref": "#/components/schemas/Money",
-            "description": "What a recurring bill or one-off dated earlier this month, before the window,\nstill needs: the part its category's spending does not cover."
+            "description": "What a recurring bill or one-off dated before the window still needs, back through last\nmonth: the occurrences no transaction paid."
           }
         }
       },
@@ -11546,6 +11724,40 @@
           }
         }
       },
+      "OccurrencePayment": {
+        "type": "object",
+        "description": "One occurrence of a bill, and the transaction that paid it.",
+        "required": [
+          "on",
+          "amount",
+          "paid_by",
+          "before_history"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "before_history": {
+            "type": "boolean",
+            "description": "Dated last month, before the household's first transaction, so there is no evidence either\nway: it takes no payment and isn't treated as unpaid."
+          },
+          "on": {
+            "type": "string",
+            "format": "date"
+          },
+          "paid_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaidBy",
+                "description": "Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated\nbefore `as_of`, unless `before_history`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "OpenApiDocument": {
         "type": "object",
         "description": "An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0).",
@@ -11600,6 +11812,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "PaidBy": {
+        "type": "object",
+        "description": "The transaction matched to an occurrence. If it is wrong, settling the occurrence's month\nsends it to the next one, and filing it in another category takes it away.",
+        "required": [
+          "transaction",
+          "posted_on",
+          "amount",
+          "difference"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it spent in the item's category, a positive magnitude, after any refund of it."
+          },
+          "difference": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`amount` less the occurrence's: negative when it paid less than planned. Whatever it is,\nthe occurrence counts as paid."
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionId"
+          }
+        }
       },
       "PlanDirection": {
         "type": "string",
@@ -13146,7 +13385,7 @@
       },
       "SettledLine": {
         "type": "object",
-        "description": "One item's occurrences in one month that a person settled: what would have counted, had\nthey not, as a bill's whole amount or a gap, and taken a share of its category's spending.\nA month the window doesn't reach isn't listed, since it changes nothing here.",
+        "description": "One item's occurrences in one month that a person settled: what would have counted, had\nthey not, as a bill's whole amount or a gap, and taken a share of its category's spending.\nA month before last month or past the window isn't listed, since it changes nothing here.",
         "required": [
           "source",
           "name",
@@ -13187,7 +13426,7 @@
           "occurrences": {
             "type": "integer",
             "format": "int32",
-            "description": "How many of the month's occurrences the window looks at. In `as_of`'s month that\nis those before `as_of` too.",
+            "description": "How many of the month's occurrences the forecast looks at, back to the first of last\nmonth and so before `as_of` too.",
             "minimum": 0
           },
           "source": {

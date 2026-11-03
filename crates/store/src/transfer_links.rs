@@ -158,7 +158,7 @@ macro_rules! after_moved {
 }
 pub(crate) use after_moved;
 
-/// The links one movement but for a leg its provider took back, with a leg in `as_of`'s month:
+/// The links one movement but for a leg its provider took back, with a leg the look-back reaches:
 /// their money counts again as it is filed, and a person should look (spec §8.12 T7).
 const LINKS_WITH_LEG_REMOVED: &str = concat!(
     "SELECT lk.id AS link FROM ",
@@ -173,11 +173,11 @@ const LINKS_WITH_LEG_REMOVED: &str = concat!(
 pub(crate) async fn links_with_leg_removed(
     conn: &mut SqliteConnection,
     as_of: &str,
-    month_start: &str,
+    looked_at_from: &str,
 ) -> Result<Vec<TransferLinkId>, StoreError> {
     sqlx::query(LINKS_WITH_LEG_REMOVED)
         .bind(as_of)
-        .bind(month_start)
+        .bind(looked_at_from)
         .fetch_all(&mut *conn)
         .await
         .map_err(StoreError::from_sqlx)?
