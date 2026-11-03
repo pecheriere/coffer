@@ -128,6 +128,12 @@ a throwaway server and seed. What holds it together:
   API response checked against `docs/api/openapi.json`. Logic and edge cases stay in
   `crates/*/tests/it/`. Packages keep to the rules below: exact versions at least 7 days
   old, a committed lockfile, `npm ci` and no install scripts.
+- **The tests' browser is pinned by hash too:** `staging/e2e/browser.lock.json` holds the
+  sha256 of the headless Chromium archive for each platform, checked before it is unpacked
+  (`support/install-browser.mjs`), never `playwright install`. When Playwright moves, a
+  Dependabot bump fails the e2e job until someone runs
+  `node support/install-browser.mjs --update` in `staging/e2e`, which refuses a browser younger
+  than 7 days, reviews the versions and commits the file.
 - **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
   `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
   localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost

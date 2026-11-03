@@ -3,7 +3,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
-import { Api, PageSession } from '../../seed/client.mjs';
+import { PageSession } from '../../seed/client.mjs';
 
 const execFile = promisify(execFileCallback);
 const root = new URL('../../../', import.meta.url);
@@ -21,15 +21,29 @@ export class Server {
     this.port = port;
     this.day = day;
     this.base = `http://localhost:${port}`;
-    this.seeded = JSON.parse(
-      readFileSync(new URL(`staging/.state/templates/${day}/fixture.json`, root), 'utf8'),
-    );
-    this.admin = new Api(this.base, this.seeded.adminToken);
+    this.seeded =
+      day &&
+      JSON.parse(
+        readFileSync(new URL(`staging/.state/templates/${day}/fixture.json`, root), 'utf8'),
+      );
   }
 
+  // With no day, the server holds nothing: no template, and no admin yet.
   static async start(port, day) {
-    await execFile(STAGING, ['start', String(port), day], { timeout: 60_000 });
+    const command = day ? ['start', String(port), day] : ['start-empty', String(port)];
+    await execFile(STAGING, command, { timeout: 60_000 });
     return new Server(port, day);
+  }
+
+  // The first admin's setup link, as an operator gets it.
+  async setupLink() {
+    const { stdout } = await execFile('docker', [
+      'exec',
+      `coffer-staging-${this.port}`,
+      '/coffer',
+      'bootstrap-link',
+    ], { timeout: 30_000 });
+    return stdout.trim();
   }
 
   // A session signed in with a member's passkey.
