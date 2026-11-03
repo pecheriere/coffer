@@ -104,7 +104,7 @@ fn is_json(headers: &HeaderMap) -> bool {
 }
 
 /// Deserializes the JSON `bytes` into `T`, trailing content refused.
-fn parse_json<T: DeserializeOwned + ToSchema>(bytes: &[u8]) -> Result<T, Problem> {
+pub(super) fn parse_json<T: DeserializeOwned + ToSchema>(bytes: &[u8]) -> Result<T, Problem> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     match serde_path_to_error::deserialize::<_, T>(&mut deserializer) {
         Ok(value) => match deserializer.end() {
@@ -167,7 +167,10 @@ fn schema_names<T: ToSchema>() -> Vec<String> {
 
 /// `path` with every name `documented` does not accept shown as `?`, so a
 /// log line never carries a name the client made up.
-fn loggable_path(path: &serde_path_to_error::Path, documented: impl Fn(&str) -> bool) -> String {
+pub(super) fn loggable_path(
+    path: &serde_path_to_error::Path,
+    documented: impl Fn(&str) -> bool,
+) -> String {
     let mut out = String::new();
     for segment in path {
         let name = match segment {
@@ -271,7 +274,7 @@ fn parse<T: DeserializeOwned + IntoParams>(
 }
 
 /// The names of `T`'s documented parameters.
-fn documented<T: IntoParams>(location: &ParameterIn) -> Vec<String> {
+pub(super) fn documented<T: IntoParams>(location: &ParameterIn) -> Vec<String> {
     T::into_params(|| Some(location.clone()))
         .into_iter()
         .map(|parameter| parameter.name)
@@ -279,7 +282,7 @@ fn documented<T: IntoParams>(location: &ParameterIn) -> Vec<String> {
 }
 
 /// The detail naming `name`, if it is documented.
-fn named(documented: &[String], name: &str) -> Option<String> {
+pub(super) fn named(documented: &[String], name: &str) -> Option<String> {
     documented
         .iter()
         .any(|known| known == name)

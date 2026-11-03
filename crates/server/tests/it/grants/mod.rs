@@ -16,6 +16,7 @@ mod fx_channels;
 mod hidden_accounts;
 mod hidden_connections;
 mod management;
+mod mcp_channels;
 mod net_worth_channels;
 mod plan_channels;
 mod proptests;

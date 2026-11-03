@@ -530,3 +530,72 @@ async fn a_refund_that_moved_leaves_nothing_left_out() {
     assert_eq!(line["goals"][0]["spent_against"], usd(0));
     assert_eq!(line["goals"][0]["left_out"], usd(0));
 }
+
+impl World {
+    /// -1,250.00 USD out of a new checking account and +12.50 EUR into a euro one, on `on`,
+    /// linked; returns the link.
+    async fn dollars_to_euros(&self, on: &str) -> Value {
+        let checking = self.checking().await;
+        let euros = self.holding_in("Euros", "checking", "EUR").await;
+        let out = self.manual(checking, on, -125_000).await;
+        let into = self.manual(euros, on, 1_250).await;
+        self.linked(&out, &into).await
+    }
+
+    async fn enter_usd_rate(&self, on: &str, rate: &str) {
+        self.admin_send(
+            Method::PUT,
+            &format!("/api/v1/fx/manual-rates/USD/{on}"),
+            &json!({"rate": rate}),
+        )
+        .await;
+    }
+}
+
+/// The report still takes all of both legs out of `actual` and says so in
+/// `moved_between_counted_accounts`, but with the day's rate held it also names the link and
+/// both legs.
+#[tokio::test]
+async fn a_link_across_currencies_that_disagrees_is_named_beside_the_rows() {
+    let world = world().await;
+    let link = world.dollars_to_euros("2026-10-05").await;
+    let without_a_rate = world.october().await;
+    assert!(is_empty(&without_a_rate, "cautions"), "no rate, no word");
+
+    world.enter_usd_rate("2026-10-05", "1.1172").await;
+
+    let report = world.october().await;
+    assert_eq!(
+        report["cautions"],
+        json!([{
+            "kind": "transfer_link_rate_mismatch",
+            "link": link["id"],
+            "outflow": usd(-125_000),
+            "inflow": {"minor_units": 1_250, "currency": "EUR"},
+            "expected_inflow": {"minor_units": 111_887, "currency": "EUR"},
+            "rate_on": "2026-10-05",
+            "manual_rate": true,
+        }])
+    );
+    let amounts = |mut report: Value| {
+        report.as_object_mut().unwrap().remove("cautions");
+        report
+    };
+    assert_eq!(
+        amounts(report),
+        amounts(without_a_rate),
+        "a rate changes no amount"
+    );
+}
+
+/// A report names the links of the months it reports, not those it reads for an average.
+#[tokio::test]
+async fn a_link_from_an_averaged_month_is_not_named() {
+    let world = world().await;
+    world.enter_usd_rate("2026-09-20", "1.1172").await;
+    world.dollars_to_euros("2026-09-20").await;
+
+    let report = world.report("from=2026-10&months=1&average_months=2").await;
+
+    assert!(is_empty(&report, "cautions"));
+}

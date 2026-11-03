@@ -29,7 +29,7 @@ not read it. The container image and how to run it are described in
 | `HTTPS_PROXY` | unset | Egress proxy for every outbound https request (`https_proxy` is read when `HTTPS_PROXY` is unset; an empty value counts as unset): `http://` or `https://` with a host, optional port and optional `user:password@`, nothing after the host but an optional `/`. coffer sends `CONNECT <host>:443` and never resolves target hosts itself, so the proxy enforces the public-address rule; the proxy's own address may be private. Its credentials never appear in logs or errors. `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` are ignored. |
 | `COFFER_FX_PROVIDER` | `ecb` | Where exchange rates come from: `ecb`, the European Central Bank's public data API, or `none`, which asks nobody, so reports say rates are missing. Anything else is refused. See [Outbound network](#outbound-network). |
 | `COFFER_EGRESS_RELAY` | unset | One IP address, IPv4 or IPv6, of an SNI-forwarding relay you control: no port, no host name, no brackets, no zone. Addresses nothing can connect to are refused (`0.0.0.0/8`, `::`, link-local `fe80::/10`, multicast and broadcast), and so is an empty value; private and loopback addresses are accepted. Every outbound connection goes to this address, on port 443, and coffer resolves nothing; see [Outbound network](#outbound-network). Setting it together with `HTTPS_PROXY` or `https_proxy` is refused. |
-| `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). |
+| `RUST_LOG` | `info` | A `tracing` filter, for example `info,coffer_server=debug`. An empty value counts as unset; a malformed one stops `serve` at startup (exit code 2). The MCP library is never logged, whatever it says, since it would log tool calls' answers. |
 | `COFFER_LOG_FORMAT` | text | `json` switches to JSON lines. Logs go to stderr. |
 
 ## File permissions
@@ -49,7 +49,8 @@ are `Secure`. Requirements for the proxy:
 
 - Serve exactly the origin in `COFFER_PUBLIC_URL`.
 - Forward the `Origin` header unchanged. coffer rejects any state-changing
-  request outside `/api/` whose `Origin` differs from the public origin.
+  request outside `/api/` whose `Origin` differs from the public origin, and any
+  request to `/mcp` with one that does.
 - Do not log request paths under `/setup/` or `/invite/`: they carry
   single-use secrets in the URL. coffer itself never logs request paths.
 - Add the client's address as the last entry of `X-Forwarded-For`, as Caddy,
@@ -173,8 +174,8 @@ often do not support popups. Tell them to open coffer in a normal browser.
   It needs no credentials and reveals nothing else.
 - `POST /browser-reports` takes [browser reports](#browser-reports). It needs
   no credentials and always answers an empty `204`.
-- `/api/v1/*` is the JSON API (see `agent-usage.md`); everything else is the
-  web UI.
+- `/api/v1/*` is the JSON API and `POST /mcp` its tools for MCP clients (see
+  `agent-usage.md`); everything else is the web UI.
 
 ## Browser reports
 

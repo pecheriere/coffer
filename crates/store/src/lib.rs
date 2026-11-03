@@ -29,6 +29,7 @@ mod sync_runs;
 mod token_grants;
 mod transactions;
 mod transfer_links;
+mod transfer_rates;
 
 use std::path::Path;
 use std::sync::Arc;

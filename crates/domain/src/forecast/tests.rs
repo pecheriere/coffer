@@ -12,6 +12,7 @@ use super::{
     bills_looked_at_from, compute_forecast,
 };
 use crate::accounts::{BelongsTo, LiquidityClass};
+use crate::fx::RateBook;
 use crate::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -78,6 +79,8 @@ fn household() -> ForecastInput {
         earliest_transaction: Some(date(2020, 1, 1)),
         newer_spending: Vec::new(),
         links_with_leg_removed: Vec::new(),
+        cross_currency_links: Vec::new(),
+        rates: RateBook::default(),
         unbound: Vec::new(),
         feeds: Vec::new(),
     }

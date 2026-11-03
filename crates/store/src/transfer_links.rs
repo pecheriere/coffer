@@ -158,6 +158,34 @@ macro_rules! after_moved {
 }
 pub(crate) use after_moved;
 
+/// The links one movement but for a leg its provider took back, with a leg the look-back reaches:
+/// their money counts again as it is filed, and a person should look (spec §8.12 T7).
+const LINKS_WITH_LEG_REMOVED: &str = concat!(
+    "SELECT lk.id AS link FROM ",
+    link_legs!(),
+    " WHERE (lo.flag_source_removed = 1 OR li.flag_source_removed = 1) AND ",
+    both_counted!(),
+    " AND ((lo.posted_on >= ?2 AND lo.posted_on <= ?1) \
+     OR (li.posted_on >= ?2 AND li.posted_on <= ?1)) ORDER BY lk.id"
+);
+
+/// See [`LINKS_WITH_LEG_REMOVED`].
+pub(crate) async fn links_with_leg_removed(
+    conn: &mut SqliteConnection,
+    as_of: &str,
+    looked_at_from: &str,
+) -> Result<Vec<TransferLinkId>, StoreError> {
+    sqlx::query(LINKS_WITH_LEG_REMOVED)
+        .bind(as_of)
+        .bind(looked_at_from)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(|row| parsed(row, "link"))
+        .collect()
+}
+
 /// A stored link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferLinkRecord {

@@ -38,9 +38,11 @@ What exists and what comes next:
   page and chart; balances kept for provider accounts that aren't bound yet; server
   panics and browser errors reported in the log; and sturdier syncing.
 - **Unreleased:** accounts that aren't the household's (529, custodial, donor-advised),
-  reported in buckets beside net worth and left out of the forecast, and a suggested
-  kind when binding a provider account.
-- **Next:** a forecast across currencies and an MCP server for agents. See the
+  reported in buckets beside net worth and left out of the forecast, a suggested
+  kind when binding a provider account, rules that file and assign transactions nobody has
+  filled yet, and an MCP endpoint giving agents the forecast, what-if, plan, net worth and
+  review queue as tools under their token's own access.
+- **Next:** a forecast across currencies and more MCP tools. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 
 Configuration is in [docs/configuration.md](docs/configuration.md); to run

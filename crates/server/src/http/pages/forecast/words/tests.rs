@@ -21,6 +21,13 @@ fn usd(minor_units: i64) -> Money {
     }
 }
 
+fn eur(minor_units: i64) -> Money {
+    Money {
+        minor_units,
+        currency: Currency::parse("EUR").unwrap(),
+    }
+}
+
 const ON: Date = date(2026, 11, 7);
 
 /// One of every caution, and of every reason inside one, so that each is read.
@@ -61,16 +68,11 @@ fn cautions() -> Vec<Caution> {
     all
 }
 
-fn cautions_other_than_a_bills() -> Vec<Caution> {
+/// What a provider's feed or connection can say.
+fn feed_cautions() -> Vec<Caution> {
     let account = AccountId::new();
     let provider_account = ProviderAccountId::new();
     let connection = ConnectionId::new();
-    let category = CategoryId::new();
-    let currency = Currency::parse("USD").unwrap();
-    let goal = LineSource::PlannedItem {
-        id: PlannedItemId::new(),
-    };
-    let one_off = LineSource::Hypothetical { index: 0 };
     let feed = |reason| Caution::AccountFeedProblem {
         account,
         provider_account,
@@ -82,11 +84,6 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
         status,
     };
     vec![
-        Caution::BalanceStale {
-            account,
-            on: ON,
-            age_days: 8,
-        },
         Caution::UnboundProviderAccount {
             provider_account,
             connection,
@@ -100,6 +97,24 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
         feed(FeedProblemReason::CurrencyDiffers),
         connection_alert(FeedStatus::Error),
         connection_alert(FeedStatus::ReauthRequired),
+    ]
+}
+
+fn cautions_other_than_a_bills() -> Vec<Caution> {
+    let account = AccountId::new();
+    let category = CategoryId::new();
+    let currency = Currency::parse("USD").unwrap();
+    let goal = LineSource::PlannedItem {
+        id: PlannedItemId::new(),
+    };
+    let one_off = LineSource::Hypothetical { index: 0 };
+    let mut all = feed_cautions();
+    all.extend([
+        Caution::BalanceStale {
+            account,
+            on: ON,
+            age_days: 8,
+        },
         Caution::AsOfNotToday { today: ON },
         Caution::BillNotSeen {
             category,
@@ -128,6 +143,14 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
         Caution::TransferLegRemoved {
             link: TransferLinkId::new(),
         },
+        Caution::TransferLinkRateMismatch {
+            link: TransferLinkId::new(),
+            outflow: usd(-125_000),
+            inflow: eur(1_250),
+            expected_inflow: eur(111_900),
+            rate_on: ON,
+            manual_rate: false,
+        },
         Caution::ItemHintNotCounted {
             item: goal,
             account,
@@ -154,7 +177,8 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
             currency,
             projected_cash: usd(-100),
         },
-    ]
+    ]);
+    all
 }
 
 fn blockers() -> Vec<Blocker> {
@@ -503,6 +527,17 @@ fn missing_names_read_well() {
                 link: TransferLinkId::new(),
             },
             "A bank took back one side of a linked transfer",
+        ),
+        (
+            Caution::TransferLinkRateMismatch {
+                link: TransferLinkId::new(),
+                outflow: usd(-125_000),
+                inflow: eur(1_250),
+                expected_inflow: eur(111_900),
+                rate_on: ON,
+                manual_rate: false,
+            },
+            "A linked transfer took 1,250.00 USD out and brought 12.50 EUR in, but 1,250.00 USD would be about 1,119.00 EUR",
         ),
         (
             Caution::ItemHintNotCounted {

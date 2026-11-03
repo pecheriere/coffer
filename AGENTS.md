@@ -14,7 +14,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual; `fx`, exchange rates held
-  exactly and conversion through the euro; `net_worth`, the daily values, the
+  exactly and conversion through the euro; `transfer_rate`, the check of a transfer link's legs in
+  two currencies against a rate, which changes no amount; `net_worth`, the daily values, the
   periods and the report). No I/O.
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
@@ -30,7 +31,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 - `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`
   (the household's zone and day, read from its settings at each asking); `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
-  extractors, problem bodies, idempotency keys, `api/` JSON v1, `health`,
+  extractors, problem bodies, idempotency keys, `api/` JSON v1 and, in `api/mcp/`, its tools over
+  MCP at `/mcp` (`tools.rs`, one row per tool, each calling its operation's handler; `schema.rs`,
+  a tool's schemas read from the OpenAPI document), `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, and whose `net_worth.rs` is the read-only net worth page
@@ -167,7 +170,7 @@ a throwaway server and seed. What holds it together:
 ## Conventions
 
 - Ids are UUIDv7 newtypes from `coffer_domain::ids`.
-- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`.
+- Time comes from a `Clock`; never call `Timestamp::now()` outside `SystemClock`. A `Clock` hands out whole milliseconds, what the store keeps, so a save never answers with a time a later read shows differently; don't read back to round.
 - A day is the household's day, from `household_time::HouseholdTime`, read when it is
   asked for. Never keep the zone or read `Config::default_timezone` for one: an admin
   can change it while the server runs (spec §8.7). A writer whose change depends on the
@@ -205,6 +208,10 @@ a throwaway server and seed. What holds it together:
   `IntoParams`; no `serde_json::Value` in any of them. Extract with
   `TypedJson`, `TypedQuery` and `TypedPath` (`http/api/extract.rs`), whose
   rejections never echo input. Errors are `Problem`s with a `ProblemCode`.
+- An MCP tool holds no rule of its own: it reads its arguments into the types its API handler
+  takes, calls that handler and answers what it answers, and `tests/it/mcp/parity.rs` fails until a
+  new one has a row comparing the two. No tool manages tokens, members or secrets. The MCP library
+  (`rmcp`) stays silent in every log (`without_mcp_library` in `cli.rs`): it logs answers.
 - After any API change, regenerate the snapshot with
   `cargo run -p coffer-server -- openapi > docs/api/openapi.json`; a test
   compares it with the generated document and CI lints it with Spectral

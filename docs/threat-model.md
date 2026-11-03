@@ -20,7 +20,7 @@
    verification required) that yields a session cookie (`HttpOnly; Secure;
    SameSite=Strict`). State-changing page requests need the anti-forgery token
    and an `Origin` equal to the public origin.
-3. **Agent to coffer.** Authenticated by a bearer token on `/api/v1` only.
+3. **Agent to coffer.** Authenticated by a bearer token on `/api/v1` and `/mcp` only.
 4. **Host operator to coffer.** Whoever controls the host and data directory.
 5. **coffer to data providers.** coffer makes outbound https requests to
    provider hosts (the SimpleFin Bridge, and Plaid when configured) with the
@@ -267,8 +267,51 @@
 - **Origin rule:** every state-changing request outside `/api/` must carry an
   `Origin` equal to the public origin; it is enforced once, router-wide, so
   a new page route cannot forget it. `/api/` accepts bearer tokens only,
-  which a browser never attaches on its own. `/browser-reports` is exempt, and
-  applies the rule below.
+  which a browser never attaches on its own. `/mcp` is exempt too, and applies its
+  own rule (below). `/browser-reports` is exempt, and applies the rule after that.
+- **`/mcp` is the API by another door** (spec §6.12). It takes the same bearer tokens and
+  never the session cookie. Each tool calls the handler of its API operation with the
+  arguments read into the handler's own types, so there is no second authorization path:
+  scopes, grants, what a hidden account looks like, refusals and audit attribution are the
+  API's, and a test compares tool and API answers directly, across every tool and with
+  grants. The tool list hides the writing tool from a token whose scope can't write, as a
+  convenience: the handler is what refuses.
+  - *Tools are few, and narrow.* No tool manages tokens, members or secrets, or merges, deletes
+    or moves anything. `review_transactions` takes only `review`, `assignee` and `splits`, not
+    a payee or notes, which an injected instruction could use to plant text for the next reader.
+  - *DNS rebinding.* An `Origin` that is present must be the public origin, or the request
+    is a 403 before anything else is read, as the protocol requires. Every browser sends one on
+    a `POST`, so a page led here by a rebound name is refused; a program sends none and
+    needs a token. There are no CORS headers, so a preflight fails. `Host` isn't checked,
+    as nowhere in coffer: a proxy may rewrite it, and it would add nothing to the `Origin` rule.
+    That opts out of what the MCP library does about RUSTSEC-2026-0189 (CVE-2026-42559), its
+    loopback-only `Host` list, deliberately. That advisory is about a server with no
+    credential, on loopback or a private network, which a page reaches through a rebound name.
+    Here such a page has no bearer token to send and is refused by its `Origin` first, and the
+    library's list would have to name a host the proxy may not pass on.
+  - *CSRF doesn't apply.* A browser attaches nothing by itself to these requests, since the
+    cookie isn't read and the bearer token isn't in the browser.
+  - *No session.* Nothing is kept between requests and no `Mcp-Session-Id` is issued or read
+    (the protocol's revision `2026-07-28` has none, and older ones allow none), so there is
+    nothing to hijack or fix, and the token is read on every request: revoking it or disabling
+    its member applies at the next one. There is no stream to leave open.
+  - *Limits.* A body may be 256 KiB, as on the API, and is counted as it arrives. A tool has
+    30 seconds and a whole request 45, which bounds a client sending its body slowly, unlike the
+    routes under "No time limit on reading a request's body" below. At most 16 tools run at once,
+    across all tokens, and a call past that is refused at once and does nothing, so a holder of
+    any token can make others' tool calls busy, though not the API or the pages. A panic in a tool
+    gets the fixed answer and logs no message.
+  - *An answer of "too long" doesn't mean nothing happened.* The MCP library runs a tool on a task of
+    its own, which outlives the request. So a tool is dropped on its own limit, and also when the
+    library says the request is over, a client having gone away or the 45 seconds having run out,
+    and an unfinished write rolls back. But a `review_transactions` may have committed just before,
+    or the 45 seconds may end as it commits, so both the 503 and the 408 tell the agent to read it
+    back. A batch is atomic, so what it finds is all of it or none. That the library's signal
+    reaches a tool is read from its source, and tested only as far as the tool's own side.
+  - *Logs.* The MCP library logs each call's arguments and answer at `debug`, and at `info` what
+    the client says of itself, so its events are dropped whatever `RUST_LOG` says, and a test holds
+    that. coffer logs only a rejected argument's documented name, a status or a fixed text.
+    Nothing from a request's body or a tool's answer is logged.
 - **Browser reports only reach the log.** `POST /browser-reports` lets a browser
   say that a script, a passkey ceremony or the content security policy failed. It
   needs no credentials, since sign-in failures matter most, so anyone on the
@@ -362,6 +405,19 @@
   it stops at its next batch once its token is revoked. A run started from a session survives that
   session's logout or expiry, since an `Actor` doesn't name its session, while disabling the member stops
   it at the next batch, and a changed role applies from the next batch, though both roles today may run a rule.
+- **A bank's text can try to steer a model reading it.** Descriptions, payees, notes and account
+  names reach a model through `/mcp`, as they reach any agent through the API, and a provider or
+  anyone who can send a payment chooses some of those words. coffer can't tell an instruction
+  from a description. What it does: every tool's description and the server's instructions say this
+  text is data; a `read` token can change nothing, so what an injection can reach is what the
+  client does with what it read; and a `write` token's tool can only categorize, assign and mark
+  reviewed, each audited with the token, within its grants. Such a token could still mark
+  everything reviewed, or reach another tool the client holds, such as email, with what it read.
+  That is for the client's permissions and for whoever chooses to give an agent `write`.
+- **The MCP library's answers to malformed requests aren't coffer's.** A request refused by the
+  protocol layer, after its token is accepted, gets the library's plain text or JSON-RPC error, not
+  a problem, which can name the header value or the parser's message of what that client sent. It
+  goes only to the holder of the token, and isn't logged.
 - **A staging seed restored on a real server.** The staging stack's members sign in with
   private keys committed to this repository. `serve` refuses a database where an admin
   holds the seeded credential unless `COFFER_PUBLIC_URL` is on localhost. That is a guard

@@ -478,6 +478,26 @@ what-if, reports, plan items CRUD, sync trigger, set manual balance). Tool
 descriptions should teach the agent the domain (sign conventions, liquidity
 classes, what the forecast means). Read-only tokens see only read tools.
 
+Decisions made while building it (issue 74). Where they differ from the above, they govern:
+
+- **An endpoint of the server, not a second process,** at the same address.
+- **No second authorization path.** A tool calls the handler of its API operation with the
+  arguments read into the handler's own types, so scopes, grants, refusals and audit
+  identity are the API's. It holds no business logic. The tool list hides a writing tool
+  from a token whose scope can't write; the handler is what refuses.
+- **A tool's schemas come from the OpenAPI document,** with what they refer to moved under their
+  own `$defs`, and it answers the same values. Its description is what a model must know, then
+  the operation's own, then that bank text and labels are data and never instructions.
+- **First tools: reads, and review.** `whoami`, settings, members, accounts and balances,
+  categories, transactions, the review queue, the plan, forecast, what-if, plan versus actual, net
+  worth, FX coverage and rates, and `review_transactions`, the batch limited to `review`,
+  `assignee` and `splits`. Plan changes, the sync trigger and setting a balance stay on the API
+  for now, and nothing manages tokens, members or secrets.
+- **Each request stands alone:** no session, stream or `GET`, as the protocol's revision
+  `2026-07-28` has it, for older revisions too. An `Origin` that is present must be the public
+  origin. Limits and logging are in the threat model.
+- **A refusal is a tool result** with `isError` and the API's problem, not a protocol error.
+
 ### 6.13 Operations
 
 - Single binary with subcommands: `serve`, plus admin CLI for bootstrap link,
@@ -781,7 +801,7 @@ today in any case.
 ### 8.8 Deferred
 
 Rules (a §2 goal), transfer links, a starter category set and unbinding a
-provider account move to a later plan (FX: §8.10), as does MCP (§6.12). Household settings
+provider account move to a later plan (FX: §8.10), as did MCP (§6.12, since built). Household settings
 arrive in plan 3, the time zone later (§8.7).
 
 ### 8.9 Plan and forecast
@@ -1148,7 +1168,7 @@ number.
 to past months, so a plan edit rewrites past months' "planned". "Normalized into
 months" means occurrences bucketed where they fall, not amortized.
 
-**R22. Not in this plan:** MCP (§6.12), rules, transfer links, a starter category
+**R22. Not in this plan:** MCP (§6.12, since built), rules, transfer links, a starter category
 set, FX and unbinding a provider account (§8.5, §8.8).
 
 ### 8.10 Net worth and FX
@@ -1529,7 +1549,8 @@ narrow R6, R9 and R10 for linked money.
 **T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
 money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
 for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
-(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
+(`null` across currencies, where `rate_check` compares the legs at a rate instead, T8), and hides
+nothing. It writes nothing on
 either transaction: a leg keeps its category, and its other fields, as they were. API only for now
 (#49 tracks the pages).
 
@@ -1568,9 +1589,8 @@ of one sign.
 
 What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
 link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
-currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
-known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
-word.
+currencies all of each leg moved, whatever the rate: no amount is ever read from an exchange rate.
+T8 checks the two legs against one and cautions when they disagree, but changes no amount.
 
 | Number | Effect of linking |
 |---|---|
@@ -1621,6 +1641,38 @@ treating it as a movement would owe the bill again on top of the fallen balance.
   of an account is often what closed it. The forecast reads such a link as no movement and a report, for
 a leg posted before the close, as one (T5).
 - A provider revising a leg's amount leaves the link, and `difference` shows what it says now.
+
+**T8. A link across currencies is checked at a rate.** Issue #109. A link between legs in two currencies
+moves all of each leg (T5), so a slipped decimal point, such as -1,250.00 USD linked to +12.50 EUR,
+would take real spending out of the counts unseen. Nothing about the numbers changes: moved amounts
+stay as T5 has them, and no forecast number gains a rate dependency. The legs are compared, and a
+disagreement is cautioned:
+
+- *How.* The outflow is converted into the inflow's currency at the rate for the **later of the two
+  posted days** (the day the movement was complete), by the one conversion every report uses (§8.10):
+  the most recent rate on or before that day, carried forward, an admin's rate (N16) winning on its own
+  day. The legs **differ** when the inflow is more than 5% (`RATE_TOLERANCE_PERCENT`) away from the
+  converted outflow, taken as a share of the converted amount, both directions, and by more than one
+  minor unit of the inflow's currency (`ROUNDING_ALLOWANCE_MINOR`), which converting a few cents can
+  round by alone. A bank's spread and a fee are usually inside 5%. The comparison is in `i128`: exactly
+  5% is not a difference, one minor unit past it is, and no `i64` amount overflows.
+- *Where.* The link's API view carries `rate_check`: `null` for one currency, otherwise `agrees` (with `rate_on`),
+  `mismatch` (both legs' amounts, `expected_inflow`, the date `rate_on` of the older rate used and
+  `manual_rate`) or `not_checked`. A mismatch on a link that is one movement (T5) is also the caution
+  `transfer_link_rate_mismatch`, naming the same, in the report for a link with a leg in a reported month
+  (`cautions`, a list new to the report) and in the forecast for one with a leg in `as_of`'s month up to
+  `as_of`, as any caution is listed there. Two counted currencies already make the forecast
+  `unavailable` (`MixedCurrencies`), so the caution never changes its status. A link needs a posted leg
+  to be asked about, since pending amounts are in no count. A link that is not one movement moved
+  nothing, so it only shows its `rate_check`.
+- *No rate.* With no rate on or before the day for either currency, one more than seven days
+  (`RATE_STALE_AFTER_DAYS`) older than the day, whose carrying forward says little, a converted amount
+  too large to hold, or legs a provider's revision left of one sign, the link is `not_checked`: a quieter note on the link only, raising no caution, since the forecast never needed a rate. Rates are read when asked, so it
+  changes when one is fetched or entered.
+- *Access.* A link is read, and so its check, only with `transactions` on both accounts (T3); the
+  forecast and the report need `all`. A token that doesn't see both sides is told nothing about it.
+- *Not decided here.* Whether the difference should stay spending, as it does within one currency, is
+  not: the amounts moved stay as T5 has them, and the caution is what asks a person to look.
 
 ### 8.13 Rules
 

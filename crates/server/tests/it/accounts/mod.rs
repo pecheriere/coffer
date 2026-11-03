@@ -9,6 +9,7 @@
 mod belonging;
 mod idempotency;
 mod management;
+mod real_clock;
 mod refusals;
 
 use axum::body::Body;
@@ -31,7 +32,11 @@ struct World {
 
 /// Admin "alice", signed in with a passkey.
 async fn world() -> World {
-    let server = TestServer::new().await;
+    world_on(TestServer::new().await).await
+}
+
+/// [`world`] over `server`.
+async fn world_on(server: TestServer) -> World {
     let link = server.identity.bootstrap_link().await.unwrap().unwrap();
     let member = server.authenticator().enroll(&link, "alice", "Alice").await;
     World {

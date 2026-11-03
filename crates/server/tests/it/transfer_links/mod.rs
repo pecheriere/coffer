@@ -10,6 +10,7 @@ mod access;
 mod candidates;
 mod legs;
 mod links;
+mod rates;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
