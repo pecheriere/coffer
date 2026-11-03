@@ -49,7 +49,7 @@ refuse_another_checkout() {
   running=$(docker ps --filter label=com.docker.compose.project=coffer-staging \
     --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1)
   if [ -n "$running" ] && [ "$running" != "$root/staging" ]; then
-    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker compose -p coffer-staging down'"
+    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker ps -aq --filter label=coffer.staging | xargs docker rm -f -v; docker compose -p coffer-staging down'"
   fi
 }
 
