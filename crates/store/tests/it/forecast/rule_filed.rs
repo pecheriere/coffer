@@ -100,5 +100,5 @@ async fn what_no_rule_filed_money_in_another_kind_or_month_is_not() {
         .filed(world.account, date(2026, 11, 16), -600, transfer, true)
         .await;
 
-    assert!(world.rule_filed_transfers().await.is_empty());
+    assert_eq!(world.rule_filed_transfers().await, Vec::new());
 }
