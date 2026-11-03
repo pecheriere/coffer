@@ -282,8 +282,11 @@ earlier unused setup links, so only the newest works: a restart of `serve`
 invalidates a link printed before it. Both stop once an admin exists.
 
 `serve` refuses to start, with exit code 1, on the data of the staging stack (see
-`CONTRIBUTING.md`) unless `COFFER_PUBLIC_URL` is on localhost, since anyone can sign in
-as its admin.
+`CONTRIBUTING.md`) unless `COFFER_PUBLIC_URL` is on localhost, since anyone can sign in as
+its admin. This guards against an accident and is not a security boundary: with a localhost
+URL the data is safe only if nothing else can reach the server, and `serve` warns when it
+listens on any address that isn't loopback. A key of that data is also refused when a passkey
+is added, unless on localhost.
 
 Exit codes: 0 success, 1 the command failed, 2 bad usage or configuration.
 `serve` shuts down gracefully on SIGTERM or ctrl-c.

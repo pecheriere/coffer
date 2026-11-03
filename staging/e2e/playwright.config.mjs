@@ -8,6 +8,7 @@ days();
 
 export default defineConfig({
   globalSetup: './support/global-setup.mjs',
+  globalTeardown: './support/global-teardown.mjs',
   outputDir: './test-results',
   forbidOnly: true,
   fullyParallel: true,

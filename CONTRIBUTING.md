@@ -68,7 +68,9 @@ a brokerage, a home, a mortgage, a car loan, a card from a SimpleFin connection,
 account, bills, a budget, a goal, and accounts held for others. A second SimpleFin account
 is left unbound. The members are `alex`, an admin, and `sam`, each with a passkey whose
 private key is in `staging/fixtures/passkeys.json`. Those keys are made up and public, so
-`coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost.
+`coffer serve` refuses that data unless `COFFER_PUBLIC_URL` is on localhost. That only guards
+against an accident: anyone who can reach such a server can sign in as its admin with a script,
+so never publish its port or put it behind a proxy. The stack binds `127.0.0.1` for this reason.
 
 ### End-to-end tests
 
@@ -79,10 +81,13 @@ scripts/staging.sh test --project=ui          # the pages only
 ```
 
 CI's `e2e` job runs them on every pull request, on the image `docker-build` made, and keeps
-what a failing test saw as an artifact. They need Node 24 or later on the machine, and run from `staging/e2e/` in
+what a failing test saw as an artifact. They need Node 24 or later on the machine, with npm
+11.10 or later, the first to read `min-release-age` in `staging/e2e/.npmrc`, and run from
+`staging/e2e/` in
 [Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
 install scripts. Each test gets its own server on a new copy of the template, and every
-API response is checked against `docs/api/openapi.json`, whichever test made it. They cover
+API response is checked against `docs/api/openapi.json`, whichever test made it, a field the
+document doesn't name included. One run goes at a time in a checkout. They cover
 what the in-process tests in `crates/*/tests/it/` can't, the built image, the real
 configuration and the egress rules, and logic and edge cases stay there. A server that
 panics or logs a mock credential fails the test using it.
