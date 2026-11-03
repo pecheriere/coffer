@@ -10,6 +10,7 @@ pub mod extract;
 mod forecast;
 mod fx;
 mod household;
+pub(super) mod mcp;
 mod me;
 mod members;
 pub mod openapi;

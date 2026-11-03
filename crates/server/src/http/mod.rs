@@ -5,7 +5,8 @@
 //! outside `/api/` must carry an `Origin` equal to the public origin. It is
 //! enforced here, once, over the whole router, so a new cookie-authenticated
 //! route cannot forget it. `/api/` routes take bearer tokens only, which a
-//! browser never attaches on its own, so they are exempt. So is
+//! browser never attaches on its own, so they are exempt. So are `/mcp`, which
+//! takes the same tokens and has the origin rule its protocol asks for, and
 //! `browser_reports`, which uses no session and has an origin rule of its own.
 
 pub mod api;
@@ -75,6 +76,7 @@ pub fn router_with_test_routes(state: AppState, extra: Router<AppState>) -> Rout
 fn routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(api::router())
+        .merge(api::mcp::router(state))
         .merge(health::router())
         .merge(browser_reports::routes(state))
         .merge(pages::router(&state.config))

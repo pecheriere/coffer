@@ -9,7 +9,7 @@ use super::openapi;
 use crate::http::AppState;
 
 /// The largest request body any `/api/v1` operation accepts.
-const BODY_LIMIT: usize = 256 * 1024;
+pub(super) const BODY_LIMIT: usize = 256 * 1024;
 
 /// API routes and their OpenAPI operations, built together.
 pub struct ApiRouter(OpenApiRouter<AppState>);
