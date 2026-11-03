@@ -98,7 +98,7 @@ async fn reason_in_production(vars: &[(&str, &str)]) -> Value {
     let today = state
         .clock
         .now()
-        .to_zoned(state.config.timezone.clone())
+        .to_zoned(state.config.default_timezone.clone())
         .date();
     state
         .ledger

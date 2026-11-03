@@ -11,14 +11,50 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 use std::time::Duration;
 
+use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::tz::TimeZone;
 
 use super::{ROWS_PER_TRANSACTION, RebuildBatch};
-use crate::{Store, StoreError};
+use crate::household::fetch_household_zone;
+use crate::{Store, StoreError, StoreTx};
 
 /// The wait after each transaction. A writer waiting for the lock sleeps up to 100 ms
 /// between tries, so a shorter gap could pass unnoticed time after time.
 pub(super) const PAUSE_BETWEEN_BATCHES: Duration = Duration::from_millis(150);
+
+/// The day a runner writes up to, worked out inside each of its transactions.
+#[derive(Debug, Clone)]
+pub enum RunsThrough {
+    /// This day.
+    Day(Date),
+    /// The household's day at `at`, in the zone the transaction sees: the one chosen in the
+    /// settings, else `default_zone`. A runner can start before a change of zone commits and
+    /// write after it, and a day worked out earlier would then be one still to come.
+    HouseholdDay {
+        at: Timestamp,
+        default_zone: TimeZone,
+    },
+}
+
+impl From<Date> for RunsThrough {
+    fn from(day: Date) -> Self {
+        Self::Day(day)
+    }
+}
+
+impl RunsThrough {
+    async fn day(&self, tx: &mut StoreTx) -> Result<Date, StoreError> {
+        match self {
+            Self::Day(day) => Ok(*day),
+            Self::HouseholdDay { at, default_zone } => {
+                let chosen = fetch_household_zone(&mut *tx.tx).await?;
+                let zone = chosen.as_ref().map_or(default_zone, |zone| zone.zone());
+                Ok(at.to_zoned(zone.clone()).date())
+            }
+        }
+    }
+}
 
 /// Being the one running a rebuild, until dropped.
 #[derive(Debug)]
@@ -55,14 +91,18 @@ impl Store {
     ///
     /// Backend failures, including a stored row that no longer parses. What committed
     /// stays, and [`Self::finish_net_worth_rebuild`] goes on from there.
-    pub async fn rebuild_net_worth(&self, through: Date) -> Result<u64, StoreError> {
+    pub async fn rebuild_net_worth(
+        &self,
+        through: impl Into<RunsThrough>,
+    ) -> Result<u64, StoreError> {
+        let through = through.into();
         let _claim = loop {
             if let Some(claim) = RebuildClaim::take(&self.rebuild_claim)? {
                 break claim;
             }
             tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
         };
-        self.start_over_and_run(through).await
+        self.start_over_and_run(&through).await
     }
 
     /// As [`Self::rebuild_net_worth`], but answers `None` at once if a rebuild is running,
@@ -71,18 +111,22 @@ impl Store {
     /// # Errors
     ///
     /// As [`Self::rebuild_net_worth`].
-    pub async fn try_rebuild_net_worth(&self, through: Date) -> Result<Option<u64>, StoreError> {
+    pub async fn try_rebuild_net_worth(
+        &self,
+        through: impl Into<RunsThrough>,
+    ) -> Result<Option<u64>, StoreError> {
         let Some(_claim) = RebuildClaim::take(&self.rebuild_claim)? else {
             return Ok(None);
         };
-        self.start_over_and_run(through).await.map(Some)
+        self.start_over_and_run(&through.into()).await.map(Some)
     }
 
     /// The whole table, for a caller holding the claim.
-    async fn start_over_and_run(&self, through: Date) -> Result<u64, StoreError> {
+    async fn start_over_and_run(&self, through: &RunsThrough) -> Result<u64, StoreError> {
         let mut tx = self.begin().await?;
         tx.ask_for_net_worth_rebuild().await?;
-        let first = tx.rebuild_batch(through, ROWS_PER_TRANSACTION).await?;
+        let day = through.day(&mut tx).await?;
+        let first = tx.rebuild_batch(day, ROWS_PER_TRANSACTION).await?;
         tx.commit().await?;
         if first.finished {
             return Ok(first.written);
@@ -99,18 +143,22 @@ impl Store {
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
-    pub async fn finish_net_worth_rebuild(&self, through: Date) -> Result<Option<u64>, StoreError> {
+    pub async fn finish_net_worth_rebuild(
+        &self,
+        through: impl Into<RunsThrough>,
+    ) -> Result<Option<u64>, StoreError> {
         let Some(_claim) = RebuildClaim::take(&self.rebuild_claim)? else {
             return Ok(None);
         };
-        self.run_batches(through).await.map(Some)
+        self.run_batches(&through.into()).await.map(Some)
     }
 
-    async fn run_batches(&self, through: Date) -> Result<u64, StoreError> {
+    async fn run_batches(&self, through: &RunsThrough) -> Result<u64, StoreError> {
         let mut written = 0;
         loop {
             let mut tx = self.begin().await?;
-            let batch: RebuildBatch = tx.rebuild_batch(through, ROWS_PER_TRANSACTION).await?;
+            let day = through.day(&mut tx).await?;
+            let batch: RebuildBatch = tx.rebuild_batch(day, ROWS_PER_TRANSACTION).await?;
             tx.commit().await?;
             written += batch.written;
             if batch.finished {
@@ -129,14 +177,16 @@ impl Store {
     ///
     /// Backend failures, including a stored row that no longer parses. The days committed
     /// stay, and the next call goes on from there.
-    pub async fn fill_net_worth(&self, through: Date) -> Result<u64, StoreError> {
+    pub async fn fill_net_worth(&self, through: impl Into<RunsThrough>) -> Result<u64, StoreError> {
+        let through = through.into();
         let mut written = 0;
         loop {
             let mut tx = self.begin().await?;
-            written += tx.fill_net_worth(through).await?;
+            let last = through.day(&mut tx).await?;
+            written += tx.fill_net_worth(last).await?;
             let state = tx.net_worth_state().await?;
             tx.commit().await?;
-            if state.current_through().is_none_or(|day| day >= through) {
+            if state.current_through().is_none_or(|day| day >= last) {
                 return Ok(written);
             }
             tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;

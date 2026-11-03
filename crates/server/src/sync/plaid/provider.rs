@@ -489,6 +489,7 @@ fn failed_account(
 /// negative.
 fn transaction(record: PlaidTransaction) -> ProviderTransaction {
     ProviderTransaction {
+        instants: None,
         provider_id: record.transaction_id,
         posted_on: Some(record.date),
         transacted_on: record.authorized_date,

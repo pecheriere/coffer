@@ -21,6 +21,7 @@ mod fx_job;
 mod grants;
 mod healthcheck;
 mod household_settings;
+mod household_zone;
 mod identity;
 mod matching;
 mod net_worth;

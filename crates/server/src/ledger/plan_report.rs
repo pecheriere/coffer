@@ -67,6 +67,7 @@ impl Ledger {
         if !(1..=MAX_AVERAGE_MONTHS).contains(&average_months) {
             return Err(LedgerError::Invalid(AVERAGE_MONTHS_OUT_OF_RANGE));
         }
+        let today = self.today().await?;
         let (start, end_exclusive) = report_window(query.from, months, average_months)
             .map_err(|_| LedgerError::Invalid(TOO_LARGE))?;
         let data = self
@@ -77,14 +78,8 @@ impl Ledger {
                 StoreError::SumTooLarge => LedgerError::Invalid(TOO_LARGE),
                 other => other.into(),
             })?;
-        plan_vs_actual(&input(
-            query.from,
-            months,
-            average_months,
-            self.today(),
-            data,
-        ))
-        .map_err(|_| LedgerError::Invalid(TOO_LARGE))
+        plan_vs_actual(&input(query.from, months, average_months, today, data))
+            .map_err(|_| LedgerError::Invalid(TOO_LARGE))
     }
 }
 

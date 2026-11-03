@@ -507,6 +507,8 @@ mod tests {
             connection,
             provider_account: ProviderAccountId::new(),
             provider_txn_id: "p".into(),
+            dated_in: None,
+            transacted_in: None,
             transaction: None,
             fields: ImportedFields {
                 posted_on: date(2026, 10, 10),

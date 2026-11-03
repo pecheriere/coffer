@@ -1,11 +1,14 @@
 //! Checking a provider account's data and converting its records.
 
 use coffer_domain::money::Currency;
+use coffer_domain::time::IanaZone;
 use coffer_store::{AccountRecord, ProviderAccountRecord, StoreTx};
 use jiff::civil::Date;
 
+use crate::household_time::HouseholdTime;
 use crate::sync::SyncError;
 use crate::sync::apply::NormalizedTransaction;
+use crate::sync::dating::RecordDating;
 use crate::sync::provider::{ProviderAccountData, ProviderTransaction, sanitize_provider_message};
 
 const ACCOUNT_ERROR: &str = "the provider reported an error for this account";
@@ -83,9 +86,16 @@ pub(super) fn convert(
     mut unusable: Vec<Option<String>>,
     currency: Currency,
     today: Date,
+    time: &HouseholdTime,
+    chosen: Option<&IanaZone>,
 ) -> Converted {
+    let zone = time.applying(chosen);
     let mut transactions = Vec::with_capacity(records.len());
-    for record in records {
+    for mut record in records {
+        // In the zone as this transaction sees it, which is the one saved with the record.
+        if let Some(instants) = record.instants {
+            (record.posted_on, record.transacted_on) = instants.days_in(&zone);
+        }
         if record.posted_on.is_none() && !record.pending {
             unusable.push(Some(record.provider_id));
             continue;
@@ -106,6 +116,11 @@ pub(super) fn convert(
             memo: record.memo,
             pending: record.pending,
             replaces_provider_id: record.replaces_provider_id,
+            dating: record.instants.map(|instants| RecordDating {
+                instants,
+                chosen: chosen.cloned(),
+                default_zone: time.default_zone().clone(),
+            }),
         });
     }
     Converted {
