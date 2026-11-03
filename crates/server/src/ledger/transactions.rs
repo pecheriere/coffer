@@ -8,7 +8,7 @@ use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{
     AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, PlannedItemId, ProviderAccountId,
-    SourceRecordId, SplitId, TransactionId,
+    SourceRecordId, SplitId, TransactionId, TransferLinkId,
 };
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::PlanItemType;
@@ -26,6 +26,7 @@ use jiff::civil::Date;
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
+use super::transfer_links::{check_splits_on_leg, refuse_deleting_leg};
 use super::unseen::{hide_unseen_in_tx, keep_unseen_links, splits_as_shown};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
@@ -121,7 +122,7 @@ pub struct AttributionView {
 }
 
 impl AttributionView {
-    fn new(attribution: &Attribution) -> Self {
+    pub(super) fn new(attribution: &Attribution) -> Self {
         Self {
             member: attribution.member,
             agent: attribution.agent,
@@ -172,6 +173,14 @@ impl SourceView {
     }
 }
 
+/// The transfer link a transaction is one leg of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TransferLinkRef {
+    pub id: TransferLinkId,
+    /// The other leg.
+    pub other_transaction: TransactionId,
+}
+
 /// A transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct TransactionView {
@@ -206,6 +215,10 @@ pub struct TransactionView {
     /// The transactions it may duplicate while flagged
     /// `possible_duplicate`.
     pub duplicate_candidates: Vec<TransactionId>,
+    /// The transfer link it is one leg of; `null` for none, and for one with a side the token
+    /// can't read, so that nothing says that side exists.
+    #[schema(required)]
+    pub transfer_link: Option<TransferLinkRef>,
     /// Who marked it reviewed; `null` while unreviewed.
     #[schema(required)]
     pub reviewed_by: Option<AttributionView>,
@@ -249,6 +262,10 @@ impl TransactionView {
             origin: record.origin,
             sources: record.sources.iter().map(SourceView::new).collect(),
             duplicate_candidates: record.duplicate_candidates.clone(),
+            transfer_link: record.transfer_link.map(|side| TransferLinkRef {
+                id: side.id,
+                other_transaction: side.other,
+            }),
             reviewed_by: record.reviewed.as_ref().map(AttributionView::new),
             categorized_by: record.categorized.as_ref().map(AttributionView::new),
             created_at: record.created_at,
@@ -282,6 +299,8 @@ pub struct TransactionQueryInput {
     pub categories: Vec<CategoryId>,
     /// Only uncategorized transactions; `false` does not filter.
     pub uncategorized: bool,
+    /// Only those filed in a `transfer` category with no link; `false` does not filter.
+    pub unmatched_transfer: bool,
     pub pending: Option<bool>,
     pub flag: Option<TransactionFlag>,
     /// A signed amount of at least this many minor units.
@@ -537,6 +556,9 @@ async fn apply_patch(
         if splits != shown {
             check_categories(tx, &splits).await?;
             check_goals(tx, access, current.currency, &splits).await?;
+            if let Some(side) = &current.transfer_link {
+                check_splits_on_leg(tx, access, side, &splits).await?;
+            }
             let splits = keep_unseen_links(tx, &before, &shown, splits).await?;
             audited = audited.change("splits", splits_value(&before)?, splits_value(&splits)?);
             if current.flags.contains(&TransactionFlag::SplitMismatch) {
@@ -722,6 +744,9 @@ impl Ledger {
         if current.origin != TransactionOrigin::Manual {
             return Err(LedgerError::Conflict(ProblemCode::Conflict, NOT_MANUAL));
         }
+        if let Some(side) = &current.transfer_link {
+            return Err(refuse_deleting_leg(&mut tx, &access, side).await);
+        }
         tx.delete_transaction(id).await?;
         let changes = AuditChanges::new()
             .unset("account", current.account)
@@ -812,6 +837,7 @@ impl Ledger {
             assignee: query.assignee,
             categories: query.categories,
             uncategorized: query.uncategorized,
+            unmatched_transfer: query.unmatched_transfer,
             pending: query.pending,
             flag: query.flag,
             min_minor: query.min_minor,

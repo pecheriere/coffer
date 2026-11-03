@@ -265,6 +265,7 @@ fn input(
         category_spent,
         loose_ends,
         newer_spending,
+        links_with_leg_removed,
         provider_accounts,
         connections,
         ..
@@ -342,6 +343,7 @@ fn input(
                 pending_minor: row.pending_minor,
             })
             .collect(),
+        links_with_leg_removed,
         unbound,
         feeds,
     }

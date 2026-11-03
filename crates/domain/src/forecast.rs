@@ -833,6 +833,12 @@ fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &m
             count: possible_duplicates,
         });
     }
+    cautions.extend(
+        input
+            .links_with_leg_removed
+            .iter()
+            .map(|&link| Caution::TransferLegRemoved { link }),
+    );
 }
 
 #[cfg(test)]
