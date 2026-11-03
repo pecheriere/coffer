@@ -155,15 +155,19 @@ fn every_migration() -> Migrator {
     sqlx::migrate!("./migrations")
 }
 
-fn before_belonging() -> Migrator {
+fn migrations_up_to(last: i64) -> Migrator {
     let mut upto = every_migration();
     upto.migrations = Cow::Owned(
         upto.iter()
-            .filter(|migration| migration.version < 22)
+            .filter(|migration| migration.version <= last)
             .cloned()
             .collect(),
     );
     upto
+}
+
+fn before_belonging() -> Migrator {
+    migrations_up_to(21)
 }
 
 /// A database at `0021`, populated, connected with foreign keys on.
@@ -375,11 +379,9 @@ async fn migration_keeps_the_shape_of_the_schema() {
     let foreign = strings(&pool, keys).await;
     let found = strings(&pool, indexes).await;
 
-    every_migration().run(&pool).await.unwrap();
+    migrations_up_to(22).run(&pool).await.unwrap();
 
     assert_eq!(strings(&pool, schema).await, others);
-    let mut fed = fed;
-    fed.push("old_balance_refused INTEGER 1 0 0".to_owned());
     assert_eq!(strings(&pool, &columns("provider_accounts")).await, fed);
     let mut grown = held;
     grown.extend(
@@ -750,8 +752,8 @@ async fn changing_belonging_writes_no_daily_row() {
     })
     .await
     .unwrap();
-    tx.rebuild_net_worth(date(2026, 10, 3)).await.unwrap();
     tx.commit().await.unwrap();
+    store.rebuild_net_worth(date(2026, 10, 3)).await.unwrap();
     let pool = connect(&path).await;
     let columns = columns_of(&pool, "account_daily_values").await;
     let before = dump(&pool, "account_daily_values", &columns).await;

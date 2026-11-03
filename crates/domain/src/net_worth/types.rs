@@ -142,7 +142,8 @@ pub struct NetWorthReport {
     /// The last day of the range as asked: it can be later than the last point, which is
     /// never after today or `through`.
     pub to: Date,
-    /// The last day with values: no later date is answered.
+    /// The last day with values: no later date is answered. `null` while the values are
+    /// being rebuilt.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub through: Option<Date>,
     /// How far to trust the numbers: `firm`, `provisional` or `unavailable`.
