@@ -57,6 +57,8 @@ pub struct ForecastInput {
     pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpending>,
+    /// What rules filed under a `transfer` category with no link in `as_of`'s month. Only reported.
+    pub rule_filed_transfers: Vec<RuleFiledTransfers>,
     /// Links between counted accounts with a leg its provider took back and a leg the look-back
     /// reaches.
     pub links_with_leg_removed: Vec<TransferLinkId>,
@@ -196,6 +198,20 @@ pub struct NewerSpending {
     pub pending_minor: i64,
 }
 
+/// Money out that rules filed under a `transfer` category in `as_of`'s month, in one currency,
+/// with no transfer link. A too-broad rule can hide a real expense this way, so it is worth a
+/// look; it is only reported, and changes no number and no status, since a sweep rule is
+/// legitimate. A person's own filing under `transfer` isn't counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RuleFiledTransfers {
+    pub currency: Currency,
+    /// The transactions.
+    pub count: u32,
+    /// What was filed under `transfer` on them, a positive amount.
+    pub amount: Money,
+}
+
 /// A provider account bound to no account, whose money the forecast cannot see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnboundAccount {
@@ -267,6 +283,10 @@ pub struct Forecast {
     pub months: Vec<MonthBucket>,
     pub blockers: Vec<Blocker>,
     pub cautions: Vec<Caution>,
+    /// What rules filed as `transfer` with no link in `as_of`'s month, one row per currency
+    /// with any, sorted by currency. Informational: it never changes `status` or a number.
+    /// `GET /transactions?unmatched_transfer=true&rule=<rule>` lists them.
+    pub rule_filed_transfers: Vec<RuleFiledTransfers>,
     /// What a person settled, and so what counts as nothing above: in input order, then
     /// by month. Settling raises no caution of its own, since a person decided.
     pub settled: Vec<SettledLine>,

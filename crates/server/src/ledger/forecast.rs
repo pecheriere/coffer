@@ -268,6 +268,7 @@ fn input(
         last_month_loose_ends,
         earliest_transaction,
         newer_spending,
+        rule_filed_transfers,
         links_with_leg_removed,
         cross_currency_links,
         rates,
@@ -343,6 +344,7 @@ fn input(
                 pending_minor: row.pending_minor,
             })
             .collect(),
+        rule_filed_transfers,
         links_with_leg_removed,
         cross_currency_links,
         rates,

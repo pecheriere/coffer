@@ -9807,6 +9807,7 @@
           "months",
           "blockers",
           "cautions",
+          "rule_filed_transfers",
           "settled",
           "settled_budgets"
         ],
@@ -9869,6 +9870,13 @@
               "$ref": "#/components/schemas/MonthBucket"
             },
             "description": "One bucket per calendar month the window touches."
+          },
+          "rule_filed_transfers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleFiledTransfers"
+            },
+            "description": "What rules filed as `transfer` with no link in `as_of`'s month, one row per currency\nwith any, sorted by currency. Informational: it never changes `status` or a number.\n`GET /transactions?unmatched_transfer=true&rule=<rule>` lists them."
           },
           "settled": {
             "type": "array",
@@ -12955,6 +12963,30 @@
             "format": "int32",
             "description": "How many transactions it would change, listed or not.",
             "minimum": 0
+          }
+        }
+      },
+      "RuleFiledTransfers": {
+        "type": "object",
+        "description": "Money out that rules filed under a `transfer` category in `as_of`'s month, in one currency,\nwith no transfer link. A too-broad rule can hide a real expense this way, so it is worth a\nlook; it is only reported, and changes no number and no status, since a sweep rule is\nlegitimate. A person's own filing under `transfer` isn't counted.",
+        "required": [
+          "currency",
+          "count",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What was filed under `transfer` on them, a positive amount."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The transactions.",
+            "minimum": 0
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
           }
         }
       },

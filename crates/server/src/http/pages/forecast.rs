@@ -24,8 +24,8 @@ use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
-    Names, blocker_sentence, caution_sentence, month_name, months, settled_budget_sentence,
-    settled_sentence,
+    Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
+    settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -140,6 +140,9 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup 
                         }
                     }
                 }
+            }
+            @for filed in &forecast.rule_filed_transfers {
+                p.fine { (rule_filed_transfers_sentence(filed)) }
             }
             @if !forecast.settled.is_empty() {
                 h3 { "Settled, so not counted" }
@@ -327,7 +330,9 @@ fn months_table(
 
 #[cfg(test)]
 mod tests {
-    use coffer_domain::forecast::{Caution, Forecast, ForecastStatus, LineSource};
+    use coffer_domain::forecast::{
+        Caution, Forecast, ForecastStatus, LineSource, RuleFiledTransfers,
+    };
     use coffer_domain::ids::{CategoryId, PlannedItemId};
     use coffer_domain::money::{Currency, Money};
     use jiff::civil::date;
@@ -363,6 +368,7 @@ mod tests {
                     id: PlannedItemId::new(),
                 }],
             }],
+            rule_filed_transfers: Vec::new(),
             settled: Vec::new(),
             settled_budgets: Vec::new(),
         };
@@ -373,5 +379,50 @@ mod tests {
         assert!(!reading.contains("<form"));
         let writing = content(&forecast, &names, Some("token")).into_string();
         assert!(writing.contains("paid for all of November 2026"));
+    }
+
+    /// A note with no number behind it: it shows when rules filed a transfer with no link, and
+    /// says nothing otherwise.
+    #[test]
+    fn the_note_on_rule_filed_transfers_shows_only_when_there_are_some() {
+        let usd = Money {
+            minor_units: 4_500,
+            currency: Currency::parse("USD").unwrap(),
+        };
+        let mut forecast = Forecast {
+            as_of: date(2026, 11, 15),
+            end_exclusive: date(2026, 12, 15),
+            horizon_months: 1,
+            include_income: false,
+            floor: None,
+            stale_after_days: 7,
+            status: ForecastStatus::Firm,
+            surplus: None,
+            totals: Vec::new(),
+            accounts: Vec::new(),
+            items: Vec::new(),
+            months: Vec::new(),
+            blockers: Vec::new(),
+            cautions: Vec::new(),
+            rule_filed_transfers: Vec::new(),
+            settled: Vec::new(),
+            settled_budgets: Vec::new(),
+        };
+        let names = Names::of_accounts(&[]);
+        assert!(
+            !content(&forecast, &names, None)
+                .into_string()
+                .contains("as transfers")
+        );
+
+        forecast.rule_filed_transfers = vec![RuleFiledTransfers {
+            currency: usd.currency,
+            count: 1,
+            amount: usd,
+        }];
+        let reading = content(&forecast, &names, None).into_string();
+        assert!(
+            reading.contains("Rules filed 1 transaction (45.00 USD) as transfers with no link")
+        );
     }
 }

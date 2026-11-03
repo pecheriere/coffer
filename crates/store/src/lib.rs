@@ -21,6 +21,7 @@ mod net_worth;
 mod passkeys;
 mod planned_items;
 mod provider_accounts;
+mod rule_filed_transfers;
 mod rules;
 mod sessions;
 mod settlements;

@@ -29,7 +29,7 @@ pub use types::{
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,
     ForecastStatus, GoalLine, HintEffect, ItemInput, ItemLine, LineSource, LooseEnds, MonthBucket,
     MonthCurrency, MonthItem, NewerSpending, NotCountedReason, OccurrencePayment, PaidBy,
-    SettledBudget, SettledLine, SpentTransaction, UnboundAccount,
+    RuleFiledTransfers, SettledBudget, SettledLine, SpentTransaction, UnboundAccount,
 };
 
 /// Computes the forecast for `input`, which the caller has validated.
@@ -118,9 +118,22 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         months,
         blockers,
         cautions,
+        rule_filed_transfers: reported_rule_filed_transfers(input),
         settled: settled::settled_lines(input, end_exclusive)?,
         settled_budgets: settled_budgets::settled_budgets(input, &reduction)?,
     })
+}
+
+/// The currencies with a transfer a rule filed with no link, sorted by currency.
+fn reported_rule_filed_transfers(input: &ForecastInput) -> Vec<RuleFiledTransfers> {
+    let mut rows: Vec<RuleFiledTransfers> = input
+        .rule_filed_transfers
+        .iter()
+        .filter(|row| row.count > 0)
+        .copied()
+        .collect();
+    rows.sort_by_key(|row| row.currency);
+    rows
 }
 
 /// `date` plus `months`, clamped to the month's end, and to the calendar's.

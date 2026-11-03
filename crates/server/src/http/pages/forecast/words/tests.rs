@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use coffer_domain::forecast::{
-    Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
+    Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource, RuleFiledTransfers,
 };
 use coffer_domain::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, ProviderAccountId, TransactionId,
@@ -11,7 +11,10 @@ use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::CalendarMonth;
 use jiff::civil::{Date, date};
 
-use super::{Names, blocker_sentence, caution_sentence, newer_spending_sentence};
+use super::{
+    Names, blocker_sentence, caution_sentence, newer_spending_sentence,
+    rule_filed_transfers_sentence,
+};
 use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
 
 fn usd(minor_units: i64) -> Money {
@@ -364,6 +367,17 @@ fn uncategorized_spending_says_how_many_and_how_much() {
     );
     assert!(sentence.contains("3 transactions with no category"));
     assert!(sentence.contains("1,234.56 USD in all"));
+}
+
+#[test]
+fn rule_filed_transfers_say_how_many_and_how_much() {
+    let sentence = rule_filed_transfers_sentence(&RuleFiledTransfers {
+        currency: Currency::parse("USD").unwrap(),
+        count: 2,
+        amount: usd(45_000),
+    });
+    assert!(sentence.contains("Rules filed 2 transactions (450.00 USD)"));
+    assert!(sentence.contains("a real expense may be hiding"));
 }
 
 #[test]

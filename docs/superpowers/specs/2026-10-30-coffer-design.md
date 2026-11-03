@@ -1757,6 +1757,15 @@ A `transfer` category on a transaction with no link clears an outflow from `unca
 always does, so a broad rule filing under one hides real spending from that caution. It is allowed, since
 filing a sweep to savings is what such a rule is for, and a link can't exist yet on arrival. That is why a dry run exists; the agent docs say so.
 
+Issue #121: the forecast also reports `rule_filed_transfers`, per currency a `count` and an `amount` of
+money out filed under a `transfer` category by a rule (`categorized_by_rule` set, so a person's filing
+since isn't counted) on a transaction in no link, posted from the start of `as_of`'s month to `as_of`,
+on any account (§8.12 T2's `unmatched_transfer` list, narrowed by the month, the direction and
+`rule`). It is informational: no caution, no change to `status` or a number, since a sweep rule is
+legitimate and would otherwise nag for good. The forecast page says it in a plain sentence, and
+says nothing when there is none. It reads the forecast's own data and needs no grant beyond `all` at
+`transactions`.
+
 **U9. Trying and running.** `GET .../dry-run` writes nothing, lists up to `limit` changes (default 50, at
 most 200) and counts them all, with why matches are left alone. Since `read` may ask for one, it reads at
 most the oldest 20,000 open transactions, and `complete: false` says it stopped. `POST .../apply` reads a page of 500 open

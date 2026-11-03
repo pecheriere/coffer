@@ -8,6 +8,7 @@
 
 mod goals;
 mod reads;
+mod rule_filed;
 
 use coffer_domain::accounts::{AccountKind, AccountName, BalanceSource, BelongsTo, LiquidityClass};
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
@@ -182,6 +183,35 @@ impl World {
         currency: &str,
         splits: &[SplitInput],
     ) {
+        let by = Attribution {
+            member: None,
+            agent: None,
+            system: Some("test".into()),
+            rule: None,
+            at: at(0),
+        };
+        self.split_filed_in(account, on, currency, splits, by).await;
+    }
+
+    /// A USD transaction split as `splits` say, filed by `by`.
+    async fn split_filed(
+        &self,
+        account: AccountId,
+        on: Date,
+        splits: &[SplitInput],
+        by: Attribution,
+    ) {
+        self.split_filed_in(account, on, "USD", splits, by).await;
+    }
+
+    async fn split_filed_in(
+        &self,
+        account: AccountId,
+        on: Date,
+        currency: &str,
+        splits: &[SplitInput],
+        by: Attribution,
+    ) {
         let mut tx = self.store.begin().await.unwrap();
         let record = tx
             .insert_transaction(NewTransaction {
@@ -200,19 +230,7 @@ impl World {
             })
             .await
             .unwrap();
-        tx.replace_splits(
-            record.id,
-            splits,
-            Attribution {
-                member: None,
-                agent: None,
-                system: Some("test".into()),
-                rule: None,
-                at: at(0),
-            },
-        )
-        .await
-        .unwrap();
+        tx.replace_splits(record.id, splits, by).await.unwrap();
         tx.commit().await.unwrap();
     }
 

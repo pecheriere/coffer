@@ -31,6 +31,7 @@ mod item_cautions;
 mod newer_spending;
 mod properties;
 mod reduction;
+mod rule_filed_transfers;
 mod settled;
 mod settled_budgets;
 mod settling_need;
@@ -79,6 +80,7 @@ fn household() -> ForecastInput {
         last_month_loose_ends: Vec::new(),
         earliest_transaction: Some(date(2020, 1, 1)),
         newer_spending: Vec::new(),
+        rule_filed_transfers: Vec::new(),
         links_with_leg_removed: Vec::new(),
         cross_currency_links: Vec::new(),
         rates: RateBook::default(),
