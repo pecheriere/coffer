@@ -16,6 +16,7 @@ pub mod rules;
 pub mod settings;
 pub mod settlements;
 pub mod transactions;
+pub mod transfer_links;
 mod unseen;
 
 use std::sync::Arc;

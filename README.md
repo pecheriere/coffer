@@ -40,7 +40,7 @@ What exists and what comes next:
 - **Unreleased:** accounts that aren't the household's (529, custodial, donor-advised),
   reported in buckets beside net worth and left out of the forecast, and a suggested
   kind when binding a provider account.
-- **Next:** rules, transfer links, a forecast across currencies, entering a rate by
+- **Next:** transfer links, a forecast across currencies, entering a rate by
   hand, and an MCP server for agents. See the
   [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
 

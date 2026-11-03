@@ -66,7 +66,7 @@ async fn a_rule_must_say_what_it_looks_for_and_what_it_sets() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{detail}");
         assert_eq!(answer, detail);
     }
-    assert!(world.events("rule.create").await.is_empty());
+    assert_eq!(world.events("rule.create").await.len(), 0);
 }
 
 #[tokio::test]
@@ -142,7 +142,7 @@ async fn a_patch_keeps_a_rule_setting_something_and_changing_nothing_writes_noth
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(world.events("rule.update").await.is_empty());
+    assert_eq!(world.events("rule.update").await.len(), 0);
 }
 
 #[tokio::test]

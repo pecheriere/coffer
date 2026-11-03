@@ -45,10 +45,10 @@ async fn a_new_transaction_is_filed_and_assigned_and_says_by_which_rule() {
             reason: "system:rules".into()
         }
     );
-    assert_eq!(after(event, "category"), text(groceries));
-    assert_eq!(after(event, "category_rule"), text(&rule));
-    assert_eq!(after(event, "assignee"), text(bob));
-    assert_eq!(after(event, "assignee_rule"), text(&rule));
+    assert_eq!(after(event, "category"), Some(text(&groceries)));
+    assert_eq!(after(event, "category_rule"), Some(text(&rule)));
+    assert_eq!(after(event, "assignee"), Some(text(&bob)));
+    assert_eq!(after(event, "assignee_rule"), Some(text(&rule)));
 }
 
 #[tokio::test]
@@ -128,9 +128,9 @@ async fn a_rule_that_is_off_or_does_not_match_does_nothing() {
     let id = world.arrive(&feed, "a", -1200, "CORNER SHOP").await;
 
     let stored = world.stored(id).await;
-    assert!(stored.splits.is_empty());
+    assert_eq!(stored.splits.len(), 0);
     assert_eq!(stored.categorized, None);
-    assert!(world.events("transaction.rule_applied").await.is_empty());
+    assert_eq!(world.events("transaction.rule_applied").await.len(), 0);
 }
 
 #[tokio::test]
@@ -173,8 +173,9 @@ async fn only_first_arrival_runs_rules_not_a_record_seen_again() {
         .sync(&feed, vec![record("a", -1300, "SHOP AGAIN")])
         .await;
 
-    assert!(
-        world.stored(id).await.splits.is_empty(),
+    assert_eq!(
+        world.stored(id).await.splits.len(),
+        0,
         "history changes only when someone runs the rule"
     );
 }
@@ -211,7 +212,7 @@ async fn posting_keeps_what_a_rule_chose_and_its_name_and_runs_no_rule() {
     world
         .sync(&feed, vec![record("b", -700, "PENDING SHOP")])
         .await;
-    assert!(world.stored(other).await.splits.is_empty());
+    assert_eq!(world.stored(other).await.splits.len(), 0);
     assert_eq!(world.dry_run(&rule).await["would_change"], 1);
 }
 
@@ -278,6 +279,6 @@ async fn a_zero_amount_arrives_assigned_but_not_filed() {
         .stored(world.arrive(&feed, "a", 0, "SHOP").await)
         .await;
 
-    assert!(stored.splits.is_empty());
+    assert_eq!(stored.splits.len(), 0);
     assert_eq!(stored.assignee, Some(bob));
 }

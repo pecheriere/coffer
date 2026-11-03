@@ -153,7 +153,11 @@ async fn a_rule_on_a_hidden_account_is_missing() {
         .iter()
         .map(|rule| rule["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, [shared.clone()], "one for every account shows");
+    assert_eq!(
+        ids,
+        std::slice::from_ref(&shared),
+        "one for every account shows"
+    );
     assert!(!list.to_string().contains("PRIVATE"));
     for (method, uri) in [
         (Method::GET, format!("/api/v1/rules/{hidden}")),
@@ -266,7 +270,7 @@ async fn a_run_by_a_narrow_token_touches_only_its_account() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(answer["changed"], 1);
     assert_eq!(world.stored(my_id).await.splits.len(), 1);
-    assert!(world.stored(their_id).await.splits.is_empty());
+    assert_eq!(world.stored(their_id).await.splits.len(), 0);
 
     let (status, _) = world
         .call(
@@ -281,7 +285,7 @@ async fn a_run_by_a_narrow_token_touches_only_its_account() {
         StatusCode::FORBIDDEN,
         "a rule for every account is out of reach"
     );
-    assert!(world.stored(their_id).await.splits.is_empty());
+    assert_eq!(world.stored(their_id).await.splits.len(), 0);
 }
 
 #[tokio::test]
@@ -297,4 +301,36 @@ async fn the_audit_of_a_run_stays_behind_the_audit_log_s_own_grant() {
         .await;
 
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_new_rule_s_place_says_nothing_of_rules_a_token_cannot_see() {
+    let world = world().await;
+    let mine = world.account("Mine").await;
+    let theirs = world.account("Theirs").await;
+    let category = world.category("Groceries").await;
+    world
+        .rule(json!({
+            "match_kind": "contains", "pattern": "P", "category": category,
+            "account": theirs.id, "position": 9000,
+        }))
+        .await;
+    let narrow = world
+        .token(Scope::Write, vec![on(mine.id, AccountLevel::Write)])
+        .await;
+
+    let (status, rule) = world
+        .call(
+            Method::POST,
+            "/api/v1/rules",
+            &narrow,
+            Some(json!({
+                "match_kind": "contains", "pattern": "S", "category": category,
+                "account": mine.id,
+            })),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(rule["position"], 0);
 }

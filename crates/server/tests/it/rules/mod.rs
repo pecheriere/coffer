@@ -421,6 +421,6 @@ fn after(event: &AuditEvent, field: &str) -> Option<coffer_domain::audit::AuditV
         .map(|(_, change)| change.after.clone())
 }
 
-fn text(value: impl ToString) -> Option<coffer_domain::audit::AuditValue> {
-    Some(coffer_domain::audit::AuditValue::Text(value.to_string()))
+fn text(value: &impl ToString) -> coffer_domain::audit::AuditValue {
+    coffer_domain::audit::AuditValue::Text(value.to_string())
 }

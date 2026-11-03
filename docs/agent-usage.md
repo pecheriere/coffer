@@ -42,7 +42,7 @@ session, never with another token.
 | Scope | Allows |
 |---|---|
 | `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
-| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
+| `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, rules, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration, such as changing the forecast settings or entering an exchange rate by hand. Only admins can create `admin` tokens. |
 
 A token never exceeds its member's role: if the member is demoted or
@@ -80,8 +80,8 @@ token's access.
 - A hidden account, its transactions and its provider accounts answer
   exactly like ones that do not exist: 404 `not_found`, never listed, never
   named in an error (a batch names the failing operation by index only) or
-  in another transaction's `duplicate_candidates`. A planned item hinted at one
-  answers likewise, and a split linked to such a goal reads `goal: null`.
+  in another transaction's `duplicate_candidates` or `transfer_link`. A planned item
+  hinted at one answers likewise, and a split linked to such a goal reads `goal: null`.
 - `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
   `all` at `transactions`, the same as no floor set. The other settings read the
   same for every token. A patch naming `display_currency` also needs `all` at
@@ -125,6 +125,10 @@ token's access.
   still shows the problem. Using
   an existing category on a split needs only `write` on the transaction's
   account.
+- A rule for one account needs `transactions` on it to read and `write` on it to change
+  or run. A rule for every account can be read with `transactions` on any account, and
+  changed or run only with `all` at `write`. One you can't read answers 404. A dry run
+  covers only transactions you can read, in its list and in its counts.
 
 ## First call
 
@@ -278,8 +282,9 @@ A transaction has a signed `amount` (`{"minor_units": -1234, "currency":
 `payee`, `notes`, `review` (`unreviewed` or `reviewed`), `assignee` (a
 member id or `null`) and `splits` (`[{id, category, amount, goal}]`, empty when
 uncategorized; `goal` is the id of the goal the split counts towards, or
-`null`, as it also is for a goal the token can't see). `reviewed_by` and `categorized_by` say who reviewed and who
-last changed the splits (`{member, agent, system, at}`); `origin` is
+`null`, as it also is for a goal the token can't see). `reviewed_by`, `categorized_by` and `assigned_by` say who reviewed, who
+last changed the splits and who last set or cleared the assignee (`{member, agent, system, rule, at}`,
+with `rule` the [rule](#rules) that chose the value, if one did); `origin` is
 `manual` or `imported`.
 
 An imported transaction lists the provider records it came from in
@@ -322,6 +327,8 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   - `uncategorized=true`: only transactions without splits
     (`uncategorized=false` does not filter).
   - `pending`: `true` or `false`.
+  - `unmatched_transfer=true`: only transactions filed in a `transfer` category with no
+    [transfer link](#transfer-links), which is what is left to match.
   - `flag`: `possible_duplicate`, `source_removed` or `split_mismatch`.
   - `min_amount` and `max_amount` (both inclusive): the signed amount in
     minor units, so `max_amount=-1` is every outflow.
@@ -371,17 +378,117 @@ opposite of `amount`: an `amount_raw` of `"12.30"` beside an `amount` of
   `{"duplicate": "<transaction id>"}` into this transaction: the
   duplicate's source records move here and it is deleted. Use the
   transaction holding the notes, splits and review as the target; a
-  duplicate with user state of its own is a 409 `merge_conflict` unless
-  `discard_duplicate_state` is `true`.
+  duplicate with user state of its own, a transfer link included, is a 409
+  `merge_conflict` unless `discard_duplicate_state` is `true`.
 - `POST /api/v1/transactions/{transaction_id}/dismiss-duplicate`
   (`write`) clears `possible_duplicate` when the candidates are distinct
   purchases.
 - `POST /api/v1/transactions/{transaction_id}/unmerge` (`write`) moves one
   source record back into a transaction of its own.
 
+### Transfer links
+
+A transfer between two accounts arrives as two unrelated transactions. A link says they are
+one movement of money. Coffer never links anything by itself: it suggests, and you or a member
+confirm.
+
+- `GET /api/v1/transactions?unmatched_transfer=true` lists what is filed as a `transfer` with
+  no link. Outflows you recognize as transfers may also be uncategorized.
+- `GET /api/v1/transactions/{transaction_id}/transfer-candidates` suggests the other leg: the
+  same amount the other way, in the same currency, on another account you can read, within 5
+  days, nearest first. A guess to check, and it changes nothing.
+- `POST /api/v1/transfer-links` (`write` on both accounts) links `{"outflow": "<id>", "inflow":
+  "<id>"}`. Answers 201 with `difference`, what arrived less what left (`null` across
+  currencies), and `one_movement`. Amounts may differ, as for a fee, and currencies too.
+  Accepts an `Idempotency-Key`. A transaction already in a link is a 409 `conflict`.
+- `GET /api/v1/transfer-links/{transfer_link_id}` reads one, with what each leg says now. Each
+  transaction names its own in `transfer_link`.
+- `DELETE /api/v1/transfer-links/{transfer_link_id}` (`write` on both accounts) ends one. Both
+  transactions stay, and count again as what they are filed as.
+
+**What it changes.** When both accounts are in counted cash (open, switched into the forecast,
+`cash` or `short_term_liability`), `one_movement` is `true`: what moved is neither spending nor
+income, whatever it is filed as. It is out of `actual`, reduces no budget, pays no bill and counts
+towards no goal, and `moved_between_counted_accounts` in plan versus actual says how much. Each leg
+keeps its category, which counts again if the link goes. Only the smaller leg's amount moved: a fee
+stays what its leg is filed as, and a link of -1,250.00 to +12.50 still spends 1,237.50. Across
+currencies a link doesn't read an exchange rate, so all of each leg moved: check those before you link. Net worth and the forecast's cash
+read balances, so a link changes neither. `spending_newer_than_balance` drops what moved only when
+both legs are posted and newer than their balances.
+
+**Any other link** (`one_movement: false`), to a brokerage, a loan, a closed account or an account
+that isn't the household's, records the movement and changes no number: that money left counted
+cash, so an auto-invest stays spending and keeps paying its bill. An uncategorized leg stays on
+`uncategorized` until you file it. Flags and classes are read at the time, so changing `belongs_to`,
+a class or `include_in_forecast` changes what its links mean, history included. Closing an account
+doesn't change the past: reports still count it for a leg posted before it closed
+(`one_movement_in_reports`), while the forecast reads it as it is now.
+
+**What a leg may hold.** One split at most, since part of a split transaction may be spending,
+so one with more is refused, and a leg can't take more until its link is removed. A goal only
+on a link with `one_movement_in_reports: false`: money moved between counted accounts is still cash. A leg can
+be on a closed account.
+
+**When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it. A
+provider's record vanishing leaves the leg with its link, flagged `source_removed`, and the link
+stops counting: the money counts as filed again, and the caution `transfer_leg_removed` asks you to
+look. A record attaching again restores it; otherwise remove the link, or merge the posted form into
+the leg (use the leg as the target). A merge discarding a leg's link needs
+`discard_duplicate_state` and `write` on the other account. An un-merge leaves the link on the
+transaction it was on. A manual leg can't be deleted until its link is removed.
+
+### Rules
+
+A rule files or assigns a transaction nobody has filled yet. It looks for plain text in
+the description, ignoring case (nothing in it is a wildcard), optionally only on one
+account and one range of signed amounts, and sets a category, an assignee or both.
+
+- `GET /api/v1/rules` lists the rules in the order they run. `GET`, `PATCH` and `DELETE`
+  `/api/v1/rules/{rule_id}` read, change and delete one.
+- `POST /api/v1/rules` (accepts an `Idempotency-Key`) takes `match_kind` (`contains` or
+  `starts_with`), `pattern`, and optionally `account`, `amount`
+  (`{currency, min_minor, max_minor}`, either end `null`; negative is money out, so
+  `{"currency": "USD", "max_minor": -1}` is any spending in dollars), `category`,
+  `assignee`, `position` (lower first; by default after the last) and `enabled`.
+- `GET /api/v1/rules/{rule_id}/dry-run?limit=50` shows what running it would change now,
+  and writes nothing: `changes` (up to `limit`), `would_change`, `would_categorize`,
+  `would_assign`, and `left_alone`, which counts what it matches but won't fill, and why.
+- `POST /api/v1/rules/{rule_id}/apply` does it and answers the same counts. It is safe to
+  repeat, and if the call is cut short what it did stays, so calling again carries on.
+
+Rules run on their own only when a transaction first arrives from a sync. Nothing already
+held changes until someone runs one. **Try one first:** create it with `enabled: false`,
+read the dry run, then `PATCH` it on or run it. Tell the owner what it will do, especially
+with a `transfer` category, which takes money out of `uncategorized_spending`: a broad
+pattern there hides real spending.
+
+What a rule never does:
+
+- **Overwrite.** It fills only what nobody has set. Someone clearing a category or an
+  assignee has set it, and it stays clear. For each field the first rule that matches
+  wins, and a rule run by hand leaves a field to an earlier one that would win
+  (`earlier_rule`), so run that one.
+- **Review.** A rule never marks anything reviewed, and leaves a reviewed transaction alone
+  (`reviewed`), so reviewing is still yours to do with the owner.
+- **Divide or link.** A transaction with several splits is left alone whole (`split`). A
+  transfer leg takes only a `transfer` category, though it can be assigned (`transfer_leg`).
+  A rule's split has no goal, and a transaction with a goal link already has a split.
+
+To see what a rule did, read `categorized_by.rule` and `assigned_by.rule` on the
+transaction, or the audit log (`transaction.rule_applied`, and `rule.apply` with a count
+for each batch of a run). To undo it, `PATCH` the transaction like any other edit, which
+also clears `rule` and stays. Changing or deleting a rule leaves what it did in place.
+
+A rule whose category gets archived (`category_archived`) or whose member gets disabled
+(`assignee_disabled`) stops doing that part, and a later rule may fill it. A posted record
+keeps what a rule chose for its pending form, even under a new description, and runs no
+rule: one that didn't match while pending shows up in a dry run. What only a rule chose
+doesn't count as someone's work, so a pending record its bank takes back goes with it, and
+a duplicate only a rule filled merges without `discard_duplicate_state`.
+
 ### Money to and from accounts that aren't the household's
 
-Nothing can check these rules until coffer has transfer links, so they are yours to
+Coffer doesn't check these rules, and a transfer link doesn't either, so they are yours to
 follow. A contribution means money from one of the household's accounts to one whose
 `belongs_to` isn't `household`.
 
@@ -396,6 +503,9 @@ follow. A contribution means money from one of the household's accounts to one w
   one receiving it. Hinted at the receiving account, it still counts, with the caution
   `item_hint_not_counted`, whose `effect` is `still_needed`. A `transfer` category on a
   planned item is refused (422).
+- **A link records it and changes nothing.** You may link the charge to the deposit in the
+  fund. That answers `one_movement: false`, it stays spending, and the number is the same
+  either way, in a `transfer` category too: a link doesn't correct the category.
 - **Money coming back**, such as a 529 paying a tuition bill into checking, is a refund
   in the `expense` category it paid for, or `income`, on the household's side.
 - **Transactions inside such an account** sync and match as usual and can be

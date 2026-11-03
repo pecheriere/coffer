@@ -167,8 +167,9 @@ Entities (names indicative; the builder chooses exact schema):
   kind: `expense` | `income` | `transfer`. Ships with no categories (an
   optional, generic starter set may be offered via an API call; the builder
   decides).
-- **Rule** — ordered; conditions on description/payee (contains, equals,
-  regex), account, amount range, direction; actions: set category, set payee.
+- **Rule** — ordered; conditions on the description (contains or starts with,
+  no regular expressions), account, amount range; actions: set category, set
+  assignee (§8.13).
 - **PlannedItem** — see §6.7.
 - **FxRate** — date, base, quote, rate (exact decimal), source.
 - **AuditEvent** — see §6.6.
@@ -263,8 +264,9 @@ coffer uses:
 - **Errors:** SimpleFin per-account errors and connection failures are stored
   on the Connection and exposed via API; sync never partially commits one
   account's data.
-- **Rules** run on newly imported, uncategorized transactions only. Applied
-  rules are attributed in the audit log as `system:rule:<id>`.
+- **Rules** run on newly created imported transactions, filling only what
+  nobody has set, and are attributed in the audit log as `system:rules`, naming
+  the rule behind each field (§8.13).
 
 ### 6.3 Authentication
 
@@ -344,7 +346,7 @@ component plus the queries it scopes, not a sweep through every handler.
 
 Every mutation writes an AuditEvent in the same database transaction:
 timestamp, actor member (or `system` with a reason such as
-`system:sync`/`system:rule:<id>`), agent token (nullable), action, entity type
+`system:sync`/`system:rules`), agent token (nullable), action, entity type
 and id, and a before/after JSON diff of changed fields. Credentials never
 appear in it. Readable via API (filter by entity, actor, agent, time).
 Transaction responses include who last changed the categorization and who
@@ -834,8 +836,9 @@ floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
 allowed. A floor of some months of outflows that comes to 0 keeps the number, with
 a caution.
 
-**R6. Plan versus actual** is defined by category (§6.9) and needs no transfer
-links: actuals are categorized splits, and `transfer` is a category kind.
+**R6. Plan versus actual** is defined by category (§6.9): actuals are categorized
+splits, and `transfer` is a category kind. A transfer link takes a movement between counted
+accounts out of them whatever it is filed as (§8.12 T5).
 Uncategorized money is never spending and is reported separately, without
 invested and illiquid accounts.
 
@@ -1377,9 +1380,8 @@ plan versus actual, pays a planned bill as R9 says, and lowers the surplus, and 
 the bucket rises, which is what happened. A `transfer` category means money moved within the
 household, which this isn't: there it is in no `actual` (R6), though the forecast's cash still
 falls and an unpaid bill keeps counting, the safe direction. R17 already refuses a `transfer`
-category on a planned item. Nothing can check this until transfer links exist (#72), so it is a
-rule for members and agents, in the docs. Those links must read a link out of the household as an
-outflow.
+category on a planned item. Nothing checks this, so it is a rule for members and agents, in the
+docs. A transfer link out of the household reads as an outflow, changing no number (§8.12 T5).
 
 Money coming back, such as a 529 paying a household's tuition bill into checking, is a refund in
 the `expense` category it paid for, or `income`, on the household's side.
@@ -1438,5 +1440,192 @@ without write access to every account is refused before any lookup, so a real id
 a state it is already in, or for a bound account or a removed connection, is a 409, which also
 answers a page or form older than the change.
 
-**B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
+**B13. Not in this plan:** target allocation (#3), holdings (#42), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.
+
+### 8.12 Transfer links
+
+Decisions made for issue #72. Where they differ from an earlier section, they govern; T5 and T6
+narrow R6, R9 and R10 for linked money.
+
+**T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
+money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
+for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
+(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
+either transaction: a leg keeps its category, and its other fields, as they were. API only for now
+(#49 tracks the pages).
+
+**T2. Never linked by itself.** As with duplicates (§8.4) and suggested kinds (B12), coffer guesses
+and a member or agent confirms. `transfer-candidates` suggests the same amount the other way, same
+currency, another account the actor can read, within 5 days, in no link and with at most one split,
+nearest first. `GET /transactions?unmatched_transfer=true` lists what is filed in a `transfer`
+category with no link. Neither writes anything.
+
+**T3. Access.** Creating or removing a link needs `write` on both accounts, and reading one
+`transactions` on both. A token with one side hidden gets the answer a missing transaction or link
+gets, and a transaction it can read shows `transfer_link: null`. A refusal such a token gets because
+of the link (a split, a goal, a delete, a merge) doesn't word it as a link, and one refused for a goal
+it isn't shown doesn't word it as a goal, as R3 has it.
+Audited as `transfer_link.create` and `transfer_link.remove`, with the agent as usual, and undone by
+removing it or making it again. Nothing in the policy changes.
+
+**T4. What a leg holds.** At most one split, so a link is refused on a split transaction and a leg
+can't become one. Part of a split may be spending, and a report can't say which part, so a rule of
+counting the rest would be a guess. Remove the link to split it. A goal is refused on a link that is one
+movement in a report (T5), either way round, since money moved between counted accounts is still cash (R8). Any
+other link keeps its goal, as a contribution out of counted cash may lower one's need (B10). R8's
+refusal of a goal on a `transfer` category stands.
+
+**T5. What it does to a report.** A link is *one movement* when both accounts are in counted cash,
+the definition the forecast's actuals use (R10): open, `include_in_forecast`, and `cash` or
+`short_term_liability`. Only then did the money stay in the cash the forecast adds up. It is one
+definition in the store, behind every number here. Flags and classes are read at the time as every
+count is (B6), so switching one changes what its links mean, history included. Closing an account
+doesn't: a report says what happened, so it counts a closed account for a leg posted before
+`closed_at`, up to the UTC date of `closed_at` plus one day, and January and the last sweep before closing keep
+their meaning. The forecast reads the current state, in which a closed account isn't counted, so
+`one_movement` and `one_movement_in_reports` can differ on such a link. A link also
+stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs
+of one sign.
+
+What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
+link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
+currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
+known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
+word.
+
+| Number | Effect of linking |
+|---|---|
+| `actual`, `rolling_average`, `rollovers` | What moved leaves, in any category. |
+| `uncategorized` | What moved of an uncategorized outflow leaves. Any other link stays on the list until it is filed, since B9 makes it real spending, and a `transfer` category clears it as it does any outflow. |
+| a goal's `spent_against` | What moved of a charge leaves, into the line's `left_out`; of a refund, it just isn't counted. Only an account changing after the link can put one there (T4). |
+| `moved_between_counted_accounts` (new) | Says what left and what arrived per month and currency, from posted legs, so the money is still visible (R6). |
+
+Any other link, to a brokerage, a loan, a closed account, or across or outside the household's money,
+records the movement and changes no other number: B9's contribution stays `actual` and pays its bill,
+a monthly auto-invest stays paid, B10's money inside stays in `not_the_households`, and one in a
+`transfer` category stays out of `actual` as it was, since a link doesn't correct a category.
+`one_movement` says which. Pending legs are in none of this, as in R10.
+
+**T6. What it does to the forecast.** For one movement, read at the time:
+
+| Number | Effect of linking |
+|---|---|
+| A budget's `reduced_by`, a bill's `unpaid` | What moved no longer reduces or pays. The other side is counted cash, so nothing left it, and the need is really still there: without the link the surplus was overstated by that much, and with it the surplus falls by that. |
+| `uncategorized_spending` | What moved isn't in it. |
+| `possible_duplicates` | Unchanged: a leg may still be a duplicate. |
+| Goal need, `goal_linked_both_sides` | What moved doesn't lower the need or count as a side. |
+| Cash, net worth | Unchanged: they read balances. |
+| `spending_newer_than_balance` | When both legs are newer than their own balances in one currency, what moved leaves, since then counted cash is right as it stands. With the inflow shown or still pending, it stays: a pending deposit may already be in its balance, and then cash is overstated. That can ask when nothing is wrong, the safe direction. |
+
+A link to any other account changes none of these. Its money left counted cash, so
+counting it as spent is what makes the number right: a bill paid by an auto-invest stays paid, where
+treating it as a movement would owe the bill again on top of the fallen balance.
+
+**T7. A leg over time.** Only a person ends a link. A link is user state (§8.4):
+
+- Pending to posted is one transaction, so nothing changes.
+- A provider's record vanishing doesn't delete a leg, which holds a person's say-so. It stays with its
+  link, flagged `source_removed`, and the link stops counting: real spending comes back rather than
+  disappears. The flagged leg follows R10a, so a withdrawn charge is in `left_out`, and the other leg
+  counts as it is filed. Between counted accounts with a leg in `as_of`'s month, the caution
+  `transfer_leg_removed` names the link and makes the forecast `provisional`. A pending record taken
+  back is in no `spending_newer_than_balance`, link or not. A record attaching again clears the flag
+  and the link counts again.
+- A merge: the target keeps its link. A duplicate holding one is refused with `merge_conflict` unless
+  `discard_duplicate_state` is sent, like its notes, and the end of the link is audited; that also
+  needs `write` on the other leg's account. To keep a link, merge into the leg. A target flagged
+  `source_removed` holds a record again, so a merge clears that flag too.
+- An un-merge leaves the link on the transaction that holds it; the new one starts with none.
+- A manual leg can't be deleted until its link is removed: 409, and the reference refuses it should
+  anything else try.
+- A closed account may hold a leg, and links can still be made and removed on it: the last sweep out
+  of an account is often what closed it. The forecast reads such a link as no movement and a report, for
+a leg posted before the close, as one (T5).
+- A provider revising a leg's amount leaves the link, and `difference` shows what it says now.
+
+### 8.13 Rules
+
+Decisions made for issue #71. Where they differ from an earlier section, they govern. API only for
+now (#49 tracks the pages).
+
+**U1. What a rule is.** It matches a transaction's description, as its source gave it: `contains` or
+`starts_with`, ignoring case, Unicode included. Optionally it is narrowed to one account and to a
+range of signed amounts in one currency, since a number of minor units means nothing without one. It
+sets a category, an assignee or both. A category is one split of the whole amount, with no goal.
+
+**U2. Bank text is data.** Matching is plain text in Rust, in time linear in what it reads: no regular
+expressions, no `LIKE`, no wildcard. A pattern is 1 to 200 characters and a household holds at most 200
+rules, which bounds the work per transaction. A description and a pattern never reach a log.
+
+**U3. When rules run.** Only when a transaction is first created from a provider's record, held records
+placed at binding included, and when a person or an agent runs one by hand. So not on a record seen
+again, a manual transaction's creation, a merge, or an un-merge. A rule that is off doesn't run on
+arrival, but can be tried and run by hand. Rules run inside the sync's own transaction, so a failure
+rolls back that account's data with it.
+
+**U4. Order.** By `position`, ties oldest first. For each field on its own, the first match wins.
+Running a rule by hand applies only what it would win against the rules that are on, so running rules
+one at a time in any order gives what running them together would. What it loses is counted as
+`earlier_rule`.
+
+**U5. Only what nobody has set.** A category is open while the transaction has no splits and
+`categorized_by` is `null`, and an assignee while it has none and `assigned_by` is `null`. So a person
+or an agent clearing a value has set it, and that stands against every later run. The migration reads
+who last changed each assignee from the audit log, so this holds for edits made before it. A rule never
+touches the review.
+
+**U6. Everything says who did it.** `categorized_by` and `assigned_by` carry `rule`: on arrival with
+`system: "system:rules"`, and in a run by hand with the member and agent who ran it. Each transaction
+gets a `transaction.rule_applied` audit entry naming the rule behind each field, as `system:rules` or
+the runner. Undoing is the same edit as any other, and clears `rule`. Changing or deleting a rule
+leaves what it did in place, still naming it, so the id has no foreign key.
+
+**U7. What only a rule chose is not user state.** `user_state` leaves it out, for two reasons a person
+would otherwise trip over. A pending record its bank takes back would be kept and flagged
+`source_removed` for a rule's work, and stay in the numbers. And two duplicates a rule filed the same way
+couldn't merge without `discard_duplicate_state`. What a merge drops is still in its audit entry.
+Reviewing or editing it makes it a person's. Setting the same value again changes nothing, so it doesn't.
+
+**U8. How rules meet the rest.**
+
+- **Several splits:** left alone whole, assignee too. Someone divided it, and one person assigned the
+  whole of it would say otherwise. Counted as `split`.
+- **Reviewed:** left alone whole, since the review covered what it held then. Counted as `reviewed`.
+- **A pending record posting:** runs no rule. What a rule chose stays, even if the new description no
+  longer matches, and a single split follows the amount (`categorized_by` then says `system:sync` and
+  still names the rule). One that didn't match while pending stays empty until someone runs the rule,
+  and a dry run shows it.
+- **Merged duplicates:** U7. The target keeps its own, so a duplicate's rule-filled category doesn't pass
+  to an empty target; a run by hand can fill that.
+- **A transfer leg (§8.12):** takes only a `transfer` category, since an `expense` or `income` one would
+  file a movement as spending or income. It may still be assigned. Other kinds are skipped, the next
+  rule may fill it, and it is counted as `transfer_leg`. A rule filing a transaction before anyone links
+  it is ordinary: T1 leaves a leg's category alone, and T5 says what it then counts as.
+- **A `transfer` category on a goal link:** can't happen. A goal link lives on a split, so its transaction
+  isn't open, and a rule's split has no goal. Adding one to a `transfer` split is refused as ever (R8), and a
+  category with goal-linked splits still can't change kind.
+- **An archived category, or one in an archived group:** categories are never deleted, so this is how one
+  is removed. It takes no new splits, so the rule doesn't count as a match for that field, the next one
+  may fill it, its other field still works, and `category_archived` says so. Restored, it files again.
+  A rule can't be created on one, or moved to one. A disabled member is the same (`assignee_disabled`).
+- **A zero amount:** can't take a split, so only an assignee. Counted as `zero_amount`.
+
+A `transfer` category clears an outflow from `uncategorized_spending` as it always does, so a broad rule
+filing under one hides real spending from that caution. That is why a dry run exists; the agent docs say so.
+
+**U9. Trying and running.** `GET .../dry-run` writes nothing, lists up to `limit` changes (default 50, at
+most 200) and counts them all, with why matches are left alone. `POST .../apply` reads a page of 500 open
+transactions without the write lock, and fills 100 at a time, deciding again under the lock, since a person
+may have got there first. Each batch commits its `transaction.rule_applied` entries and a `rule.apply`
+entry with its counts, then rests 25 ms. Stopped partway, what is done stays done and audited, and running
+it again carries on. So one run may leave several `rule.apply` entries.
+
+**U10. Who may.** There is no `ManageCategories`. Changing or running a rule needs `WriteHousehold` (the
+closest: the `write` scope, as for categories), plus `write` on the rule's account, or on every account
+for a rule without one (`authorize_rule_change`). Changing one needs that as it is and as it would be.
+Reading follows a planned item (R3): `transactions` on its account, or for a rule of every account on at
+least one account, so anyone who can see a transaction a rule could fill can read that rule, and anything
+below answers as missing. The text of a rule for every account is therefore visible to a token limited to
+one account: scope a rule to its account to keep its text there. A dry run reads only transactions the
+token can read, so no list or count says anything of others. The audit log keeps its own `all` grant.

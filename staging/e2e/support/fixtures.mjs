@@ -31,7 +31,7 @@ export const test = base.extend({
   },
 
   api: async ({ server }, use) => {
-    await use(new CheckedApi(server.base, server.seeded.adminToken));
+    await use(new CheckedApi(server.base, server.seeded?.adminToken));
   },
 });
 

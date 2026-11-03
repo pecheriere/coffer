@@ -34,7 +34,7 @@ async fn a_dry_run_says_what_a_run_does_and_writes_nothing() {
     assert_eq!(answer["changes"][0]["description"], "CORNER SHOP");
     assert_eq!(answer["changes"][0]["category"], groceries.to_string());
     assert_eq!(answer["changes"][0]["amount"]["minor_units"], -1200);
-    assert!(world.stored(first).await.splits.is_empty());
+    assert_eq!(world.stored(first).await.splits.len(), 0);
     assert_eq!(
         world.events("transaction.rule_applied").await.len(),
         before,
@@ -86,7 +86,7 @@ async fn a_run_fills_what_a_dry_run_said_names_the_runner_and_the_rule_and_is_au
     assert_eq!(after(applied, "transactions"), Some(AuditValue::Int(1)));
     assert_eq!(after(applied, "categorized"), Some(AuditValue::Int(1)));
     let filled = world.events("transaction.rule_applied").await;
-    assert_eq!(after(&filled[0], "category_rule"), text(&rule));
+    assert_eq!(after(&filled[0], "category_rule"), Some(text(&rule)));
 
     // Running it again finds nothing to do and records nothing.
     let again = world.run(&rule).await;
@@ -135,7 +135,7 @@ async fn a_run_only_fills_empties_and_a_person_s_edit_stands() {
     assert_eq!(answer["categorized"], 1);
     assert_eq!(answer["assigned"], 2);
     let stored = world.stored(cleared).await;
-    assert!(stored.splits.is_empty(), "the cleared category stays empty");
+    assert_eq!(stored.splits.len(), 0, "the cleared category stays empty");
     assert_eq!(stored.assignee, None, "the cleared assignee stays empty");
     let stored = world.stored(filed).await;
     assert_eq!(stored.splits[0].category, chosen);
@@ -166,7 +166,7 @@ async fn undoing_a_rule_is_an_ordinary_edit_that_stays_undone() {
     assert_eq!(view["assigned_by"]["rule"], json!(null));
     assert_eq!(view["assignee"], json!(null));
     assert_eq!(world.run(&rule).await["changed"], 0, "the edit stands");
-    assert!(world.stored(id).await.splits.is_empty());
+    assert_eq!(world.stored(id).await.splits.len(), 0);
 }
 
 #[tokio::test]
@@ -204,7 +204,7 @@ async fn deleting_a_rule_leaves_what_it_did_and_who_did_it() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     world.sync(&feed, vec![record("b", -9, "SHOP")]).await;
     let later = world.holding(&feed, "b").await;
-    assert!(world.stored(later).await.splits.is_empty());
+    assert_eq!(world.stored(later).await.splits.len(), 0);
 }
 
 #[tokio::test]
@@ -230,7 +230,7 @@ async fn changing_a_rule_changes_nothing_it_already_did() {
     assert_eq!(view["category"], other.to_string());
     assert_eq!(world.stored(id).await.splits[0].category, groceries);
     let updates = world.events("rule.update").await;
-    assert_eq!(after(&updates[0], "category"), text(other));
+    assert_eq!(after(&updates[0], "category"), Some(text(&other)));
 }
 
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn running_rules_one_at_a_time_keeps_their_order() {
     let answer = world.run(&later).await;
     assert_eq!(answer["changed"], 0);
     assert_eq!(answer["left_alone"]["earlier_rule"], 1);
-    assert!(world.stored(id).await.splits.is_empty());
+    assert_eq!(world.stored(id).await.splits.len(), 0);
 
     assert_eq!(world.run(&earlier).await["changed"], 1);
     assert_eq!(world.stored(id).await.splits[0].category, first);

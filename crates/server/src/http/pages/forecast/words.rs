@@ -213,6 +213,10 @@ fn bill_sentence(category: Option<&str>, amount: Money) -> String {
     )
 }
 
+const TRANSFER_LEG_REMOVED: &str = "A bank took back one side of a linked transfer, so its money \
+                                    counts as filed again. Check the link, and remove it if it \
+                                    no longer holds.";
+
 /// A goal with spending linked on both the household's accounts and money that isn't its own.
 /// `goal` starts the sentence.
 fn both_sides_sentence(goal: &str) -> String {
@@ -362,6 +366,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             day(*due_on),
         ),
         Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
+        Caution::TransferLegRemoved { .. } => TRANSFER_LEG_REMOVED.to_owned(),
         Caution::ItemHintNotCounted {
             item,
             account,

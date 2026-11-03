@@ -2,6 +2,7 @@
 //! goal, and a category or member that can't take new work.
 
 use axum::http::{Method, StatusCode};
+use coffer_domain::ids::TransactionId;
 use coffer_domain::time::Clock as _;
 use coffer_domain::transactions::CategoryKind;
 use coffer_server::ledger::plan_items::PlannedItemInput;
@@ -59,7 +60,7 @@ async fn a_reviewed_transaction_is_left_alone() {
 
     assert_eq!(answer["changed"], 0);
     assert_eq!(answer["left_alone"]["reviewed"], 1);
-    assert!(world.stored(id).await.splits.is_empty());
+    assert_eq!(world.stored(id).await.splits.len(), 0);
 }
 
 #[tokio::test]
@@ -70,12 +71,10 @@ async fn a_duplicate_only_a_rule_filled_merges_without_asking_and_is_recorded() 
     let account = world.account("Everyday").await;
     let (one, two) = (world.feed(&account).await, world.feed(&account).await);
     let target = world.arrive(&one, "a", -1200, "SHOP").await;
-    world
-        .sync(&two, vec![pending("b", -1300, "SHOP")])
-        .await;
+    world.sync(&two, vec![pending("b", -1300, "SHOP")]).await;
     let duplicate = world.holding(&two, "b").await;
     assert_ne!(duplicate, target, "two transactions to merge");
-    assert!(!world.stored(duplicate).await.splits.is_empty());
+    assert_eq!(!world.stored(duplicate).await.splits.len(), 0);
 
     let (status, merged) = world
         .call(
@@ -112,9 +111,7 @@ async fn a_duplicate_a_person_filed_still_needs_saying_so() {
     let account = world.account("Everyday").await;
     let (one, two) = (world.feed(&account).await, world.feed(&account).await);
     let target = world.arrive(&one, "a", -1200, "SHOP").await;
-    world
-        .sync(&two, vec![pending("b", -1300, "SHOP")])
-        .await;
+    world.sync(&two, vec![pending("b", -1300, "SHOP")]).await;
     let duplicate = world.holding(&two, "b").await;
     world
         .patch_transaction(
@@ -231,8 +228,9 @@ async fn an_archived_category_stops_only_that_part_and_the_next_rule_may_fill_it
     let alone = world
         .stored(world.arrive(&feed, "a", -100, "SHOP").await)
         .await;
-    assert!(
-        alone.splits.is_empty(),
+    assert_eq!(
+        alone.splits.len(),
+        0,
         "an archived category takes no splits"
     );
     assert_eq!(alone.assignee, Some(bob));
@@ -289,7 +287,7 @@ async fn an_archived_group_counts_as_an_archived_category() {
         .stored(world.arrive(&feed, "a", -100, "SHOP").await)
         .await;
 
-    assert!(stored.splits.is_empty());
+    assert_eq!(stored.splits.len(), 0);
 }
 
 #[tokio::test]
@@ -372,6 +370,112 @@ async fn a_held_record_is_filed_when_its_account_is_bound() {
     let id = world.holding(&feed, "held").await;
     let events = world.events("transaction.rule_applied").await;
 
-    assert_eq!(after(&events[0], "category_rule"), text(&rule));
+    assert_eq!(after(&events[0], "category_rule"), Some(text(&rule)));
     assert_eq!(events[0].entity_id, id.to_string());
+}
+
+/// A link between `outflow` and `inflow`.
+async fn link(world: &super::World, outflow: TransactionId, inflow: TransactionId) {
+    let (status, link) = world
+        .call(
+            Method::POST,
+            "/api/v1/transfer-links",
+            &world.write,
+            Some(json!({"outflow": outflow, "inflow": inflow})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{link}");
+}
+
+#[tokio::test]
+async fn a_transfer_leg_takes_only_a_transfer_category_and_may_still_be_assigned() {
+    let world = world().await;
+    let checking = world.account("Checking").await;
+    let savings = world.account("Savings").await;
+    let (from, to) = (world.feed(&checking).await, world.feed(&savings).await);
+    let outflow = world.arrive(&from, "a", -5000, "MOVE TO SAVINGS").await;
+    let inflow = world.arrive(&to, "b", 5000, "MOVE FROM CHECKING").await;
+    link(&world, outflow, inflow).await;
+    let spending = world.category("Spending").await;
+    let moving = world
+        .category_of_kind("Moving", CategoryKind::Transfer)
+        .await;
+    let bob = world.second_member().await;
+    let filing = world
+        .rule(json!({
+            "match_kind": "contains", "pattern": "MOVE", "category": spending, "assignee": bob,
+        }))
+        .await;
+
+    let tried = world.dry_run(&filing).await;
+    assert_eq!(tried["would_categorize"], 0, "a movement isn't spending");
+    assert_eq!(tried["would_assign"], 2);
+    let answer = world.run(&filing).await;
+    assert_eq!(answer["categorized"], 0);
+    assert_eq!(answer["assigned"], 2);
+    let stored = world.stored(outflow).await;
+    assert_eq!(stored.splits.len(), 0);
+    assert_eq!(stored.assignee, Some(bob));
+    assert!(stored.transfer_link.is_some(), "the link stays");
+
+    let only_filing = world.filing("MOVE", spending).await;
+    let answer = world.run(&only_filing).await;
+    assert_eq!(answer["left_alone"]["transfer_leg"], 2);
+
+    let transferring = world.filing("MOVE", moving).await;
+    assert_eq!(world.run(&transferring).await["categorized"], 2);
+    let stored = world.stored(outflow).await;
+    assert_eq!(stored.splits[0].category, moving);
+    assert!(stored.transfer_link.is_some());
+}
+
+#[tokio::test]
+async fn a_link_made_later_keeps_what_a_rule_already_filed() {
+    let world = world().await;
+    let spending = world.category("Spending").await;
+    let rule = world.filing("MOVE", spending).await;
+    let checking = world.account("Checking").await;
+    let savings = world.account("Savings").await;
+    let (from, to) = (world.feed(&checking).await, world.feed(&savings).await);
+    let outflow = world.arrive(&from, "a", -5000, "MOVE TO SAVINGS").await;
+    let inflow = world.arrive(&to, "b", 5000, "MOVE FROM CHECKING").await;
+
+    link(&world, outflow, inflow).await;
+
+    let view = world.read_transaction(outflow).await;
+    assert_eq!(view["splits"][0]["category"], spending.to_string());
+    assert_eq!(view["categorized_by"]["rule"], rule);
+}
+
+#[tokio::test]
+async fn unmerging_runs_no_rule() {
+    let world = world().await;
+    let account = world.account("Everyday").await;
+    let (one, two) = (world.feed(&account).await, world.feed(&account).await);
+    let target = world.arrive(&one, "a", -1200, "SHOP").await;
+    let duplicate = world.arrive(&two, "b", -1300, "SHOP").await;
+    let (status, _) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/transactions/{target}/merge"),
+            &world.write,
+            Some(json!({"duplicate": duplicate})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let groceries = world.category("Groceries").await;
+    world.filing("SHOP", groceries).await;
+    let source = world.stored(target).await.sources[1].id;
+
+    let (status, split_off) = world
+        .call(
+            Method::POST,
+            &format!("/api/v1/transactions/{target}/unmerge"),
+            &world.write,
+            Some(json!({"source": source})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{split_off}");
+    assert_eq!(split_off["splits"], json!([]));
 }

@@ -190,20 +190,6 @@ impl StoreTx {
         fetch_rule(&mut *self.tx, id).await
     }
 
-    /// The position after the last rule, capped like every position.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures.
-    pub async fn next_rule_position(&mut self) -> Result<u32, StoreError> {
-        let last: Option<i64> = sqlx::query_scalar("SELECT max(position) FROM rules")
-            .fetch_one(&mut *self.tx)
-            .await
-            .map_err(StoreError::from_sqlx)?;
-        let next = last.map_or(0, |last| last.saturating_add(1));
-        Ok(u32::try_from(next.min(i64::from(MAX_POSITION))).unwrap_or(MAX_POSITION))
-    }
-
     /// Creates a rule.
     ///
     /// # Errors

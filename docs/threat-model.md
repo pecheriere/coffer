@@ -143,6 +143,12 @@
   handler. An agent token is capped by its scope and by its member's role,
   and the member is re-read on every request, so disabling a member or
   changing a role takes effect immediately.
+- **Rules read bank text as data** (spec §8.13). A provider chooses a description, and
+  through a rule it can choose a category or an assignee from those a member set up, which is
+  why a rule fills only what nobody has set, never reviews, and names itself on what it did.
+  Matching is plain text in linear time, with no regular expressions, so neither side can make it
+  slow, and neither a description nor a pattern is logged. A dry run reads only what its
+  caller can read, in its list and its counts.
 - **Account grants narrow an agent token.** A token may carry grants: a
   level (`balances`, `transactions`, `write`) on chosen accounts, or on
   `all` accounts including ones created later. Its level on an account is
@@ -342,6 +348,14 @@
 
 ## Accepted residual risks
 
+- **A rule for every account shows its text to a token limited to one.** A rule's pattern is a
+  member's free text, and could say what another account's money goes on. It is shown to a token with
+  `transactions` on any account, so that a token can always read a rule that could fill a transaction it
+  sees, as with a planned item without a hint. A rule for one account stays with that account. The
+  limit of 200 rules, when reached, tells a narrow token that many exist.
+- **A rule outlives the token that made it.** It stays until someone deletes it, as a category does.
+  It can only fill what's empty on the accounts it was allowed to reach when it was made, it is audited, and
+  it names itself on each change.
 - **A staging seed restored on a real server.** The staging stack's members sign in with
   private keys committed to this repository. `serve` refuses a database where an admin
   holds the seeded credential unless `COFFER_PUBLIC_URL` is on localhost. That is a guard

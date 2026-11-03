@@ -689,7 +689,8 @@ async fn user_field_changes_apply_only_set_fields() {
             notes: true,
             reviewed: true,
             assignee: true,
-            payee_edited: true
+            payee_edited: true,
+            transfer_link: false,
         }
     );
 

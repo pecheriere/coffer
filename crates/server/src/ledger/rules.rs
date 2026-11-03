@@ -314,11 +314,11 @@ fn fields_of(record: &RuleRecord) -> RuleFields {
 }
 
 /// `patch` over `current`.
-fn patched<T: Copy>(patch: Patch<T>, current: Option<T>) -> Option<T> {
+fn patched<T: Copy>(patch: &Patch<T>, current: Option<T>) -> Option<T> {
     match patch {
         Patch::Absent => current,
         Patch::Clear => None,
-        Patch::Set(value) => Some(value),
+        Patch::Set(value) => Some(*value),
     }
 }
 
@@ -391,7 +391,8 @@ impl Ledger {
         input: RuleInput,
         slot: Option<IdempotencySlot>,
     ) -> Result<RuleView, LedgerError> {
-        self.authorize_rule_input(actor, input.account).await?;
+        let access = self.access.resolve(actor).await?;
+        authorize_rule_change(actor, &access, input.account)?;
         let text = RuleText::new(input.match_kind, pattern(&input.pattern)?);
         let amount = input.amount.map(RuleAmount::range).transpose()?;
         let position = input.position.map(check_position).transpose()?;
@@ -400,13 +401,20 @@ impl Ledger {
         }
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        if tx.list_rules().await?.len() >= MAX_RULES {
+        let existing = tx.list_rules().await?;
+        if existing.len() >= MAX_RULES {
             return Err(LedgerError::Invalid(TOO_MANY));
         }
-        let position = match position {
-            Some(position) => position,
-            None => tx.next_rule_position().await?,
-        };
+        // After the last one the actor can see: a rule it can't see can't compete with this
+        // one, and its place is none of its business.
+        let last_seen = existing
+            .iter()
+            .filter(|record| rule_visible(&access, record.rule.account))
+            .map(|record| record.position)
+            .max();
+        let position = position.unwrap_or_else(|| {
+            last_seen.map_or(0, |last| last.saturating_add(1).min(MAX_POSITION))
+        });
         let fields = RuleFields {
             text,
             account: input.account,
@@ -478,10 +486,10 @@ impl Ledger {
                 patch.match_kind.unwrap_or(before.text.kind()),
                 new_pattern.unwrap_or_else(|| before.text.pattern().clone()),
             ),
-            account: patched(patch.account, before.account),
-            amount: patched(new_amount, before.amount),
-            category: patched(patch.category, before.category),
-            assignee: patched(patch.assignee, before.assignee),
+            account: patched(&patch.account, before.account),
+            amount: patched(&new_amount, before.amount),
+            category: patched(&patch.category, before.category),
+            assignee: patched(&patch.assignee, before.assignee),
             position: new_position.unwrap_or(before.position),
             enabled: patch.enabled.unwrap_or(before.enabled),
         };
@@ -532,12 +540,18 @@ impl Ledger {
         authorize_rule_change(actor, &access, current.rule.account)?;
         tx.delete_rule(id).await?;
         let fields = fields_of(&current);
-        let changes = AuditChanges::new()
+        let empty = RuleFields {
+            account: None,
+            amount: None,
+            category: None,
+            assignee: None,
+            ..fields.clone()
+        };
+        let changes = audit_difference(&fields, &empty)
             .unset("match_kind", fields.text.kind().as_str())
             .unset("pattern", fields.text.pattern().as_str())
-            .unset("account", fields.account)
-            .unset("category", fields.category)
-            .unset("assignee", fields.assignee);
+            .unset("position", i64::from(fields.position))
+            .unset("enabled", fields.enabled);
         audit(&mut tx, now, actor, "rule.delete", "rule", id, changes).await?;
         tx.commit().await?;
         Ok(())

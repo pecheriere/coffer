@@ -5092,7 +5092,7 @@
           "reports"
         ],
         "summary": "Plan versus actual.",
-        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts. What a transfer link between two counted accounts says moved is out of all of these, whatever it is filed as: `moved_between_counted_accounts` says what left and what arrived, per month and currency, and a difference between the legs stays as filed. Any other link changes nothing here. An account closed since its leg posted still counts.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getPlanVsActual",
         "parameters": [
           {
@@ -5136,6 +5136,782 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PlanReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "The rules.",
+        "description": "The rules the token may see, in the order they run. Needs `read`; a token with account grants sees a rule for one account with `transactions` on it, and a rule for every account with `transactions` on any account.",
+        "operationId": "listRules",
+        "responses": {
+          "200": {
+            "description": "The rules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Creates a rule.",
+        "description": "Creates a rule matching on the bank description, optionally narrowed by account and amount, that sets a category, an assignee or both. It runs on transactions arriving from now on unless created with `enabled: false`; nothing already held changes until it is run by hand. Needs `write`, and write on the rule's account, or on every account for a rule without one. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "operationId": "createRule",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The rule, created now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "One rule.",
+        "description": "One rule. Needs `read`; one the token may not see answers like one that doesn't exist.",
+        "operationId": "getRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Deletes a rule.",
+        "description": "Deletes a rule. What it did stays in place, still naming it. Needs `write`, and write on the accounts the rule is for.",
+        "operationId": "deleteRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The rule is gone."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Changes a rule.",
+        "description": "Changes the fields given. What the rule already did stays as it is. Needs `write`, and write on the accounts the rule is for, before and after.",
+        "operationId": "updateRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RulePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rule as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}/apply": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Runs a rule by hand.",
+        "description": "Runs the rule over the transactions already held, filling only what nobody has set, in short batches, each audited with its count. It never marks anything reviewed. Safe to repeat: what is filled isn't filled again, and if the call is cut short what it did stays, so calling again carries on. Needs `write`, and write on the accounts the rule is for.",
+        "operationId": "applyRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What it changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/{rule_id}/dry-run": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "What a rule would change.",
+        "description": "What running the rule by hand would change now, and what it would leave alone and why. Writes nothing. Needs `read`, and covers only transactions the token can read: nothing in it counts any other.",
+        "operationId": "dryRunRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most changes to list, clamped to 1 to 200; by default 50. The counts cover\nthem all.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What it would change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleDryRun"
                 }
               }
             }
@@ -5287,6 +6063,15 @@
             "name": "uncategorized",
             "in": "query",
             "description": "`true`: only transactions without splits. `false` does not filter.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "unmatched_transfer",
+            "in": "query",
+            "description": "`true`: only transactions with a split in a `transfer` category and in no transfer\nlink, which is what is left to match. `false` does not filter. A transaction linked to\none the token can't see stays out, since it has a link.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -5799,7 +6584,7 @@
           "transactions"
         ],
         "summary": "Deletes a manual transaction.",
-        "description": "Deletes a manual transaction and its splits. Imported transactions are never deleted by hand. Needs `write` on its account.",
+        "description": "Deletes a manual transaction and its splits. Imported transactions are never deleted by hand, and one in a transfer link stays until the link is removed. Needs `write` on its account.",
         "operationId": "deleteTransaction",
         "parameters": [
           {
@@ -5867,7 +6652,7 @@
             }
           },
           "409": {
-            "description": "The transaction is imported.",
+            "description": "The transaction is imported, or in a transfer link.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6134,7 +6919,7 @@
           "transactions"
         ],
         "summary": "Merges a duplicate into a transaction.",
-        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Two transactions that each hold a posted record of the same connection are distinct purchases and are refused. Needs `write` on the account.",
+        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. A transfer link is user state, and discarding it needs `write` on the other leg's account too. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Two transactions that each hold a posted record of the same connection are distinct purchases and are refused. Needs `write` on the account.",
         "operationId": "mergeTransactions",
         "parameters": [
           {
@@ -6220,6 +7005,114 @@
           },
           "409": {
             "description": "`merge_conflict`: the duplicate has user state and `discard_duplicate_state` is not `true`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/{transaction_id}/transfer-candidates": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Transactions that might be the other leg of a transfer.",
+        "description": "What might be the other leg of this transaction, for a person or agent to confirm with `createTransferLink`: the same amount the other way, in the same currency, on another account the token can read, posted within 5 days, in no link and with at most one split, nearest first. Empty for a transaction that can't be linked itself. A leg of another amount or currency is never suggested, and may still be linked. It changes nothing. Needs `read`.",
+        "operationId": "listTransferCandidates",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The candidates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferCandidates"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6360,6 +7253,344 @@
           },
           "409": {
             "description": "The record is the transaction's only one, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transfer-links": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Links two transactions.",
+        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are in counted cash (open, switched into the forecast, of a spendable class), what moved is one movement in reports and the forecast: neither spending nor income, whatever it is filed as, so it lowers no budget and pays no bill. Only the smaller leg's amount moved: a difference in one currency stays what its leg is filed as. Any other link, to a brokerage, a loan, a closed account or one that isn't the household's, stays spending and changes no number, and an uncategorized leg stays on `uncategorized` until it is filed. `one_movement` says which for the forecast and follows the accounts; `one_movement_in_reports` says it for reports, where an account closed since its leg posted still counts. A leg its provider takes back suspends this: the money counts as filed again, with the caution `transfer_leg_removed`.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are in counted cash. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
+        "operationId": "createTransferLink",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTransferLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The link, made now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferLinkView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A transaction is already in a link, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transfer-links/{transfer_link_id}": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "One transfer link.",
+        "description": "One link, with what each leg says now: a provider may have revised an amount since, and a leg it took back is flagged `source_removed`, for a person to decide about. A transaction names its link in `transfer_link`. Needs `read`, at `transactions` on both accounts; with one hidden, this answers as for a missing link.",
+        "operationId": "getTransferLink",
+        "parameters": [
+          {
+            "name": "transfer_link_id",
+            "in": "path",
+            "description": "The link's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransferLinkId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferLinkView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Removes a transfer link.",
+        "description": "Ends the link: both transactions stay as they are, and count again as what they are filed as. The audit log keeps what was joined, so it can be made again. Needs `write` on both accounts; with one hidden, this answers as for a missing link.",
+        "operationId": "removeTransferLink",
+        "parameters": [
+          {
+            "name": "transfer_link_id",
+            "in": "path",
+            "description": "The link's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransferLinkId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The link is gone."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6883,6 +8114,7 @@
           "member",
           "agent",
           "system",
+          "rule",
           "at"
         ],
         "properties": {
@@ -6905,6 +8137,17 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/MemberId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleId",
+                "description": "The rule that chose the value, if one did, even one since deleted. A member\nrunning a rule by hand is named beside it. Editing the value clears it."
               },
               {
                 "type": "null"
@@ -7894,6 +9137,25 @@
               },
               "total": {
                 "$ref": "#/components/schemas/Money"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A provider took back one leg of this transfer link between counted accounts, so its\nmoney counts as it is filed again, spending included, until a person says what happened.",
+            "required": [
+              "link",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transfer_leg_removed"
+                ]
+              },
+              "link": {
+                "$ref": "#/components/schemas/TransferLinkId"
               }
             }
           },
@@ -9177,7 +10439,7 @@
         "properties": {
           "discard_duplicate_state": {
             "type": "boolean",
-            "description": "Merge even though the duplicate has notes, splits, a review, an\nassignee or an edited payee, discarding them (default `false`)."
+            "description": "Merge even though the duplicate has notes, splits, a review, an\nassignee, an edited payee or a transfer link, discarding them (default\n`false`)."
           },
           "duplicate": {
             "$ref": "#/components/schemas/TransactionId",
@@ -9283,6 +10545,28 @@
           },
           "source": {
             "$ref": "#/components/schemas/LineSource"
+          }
+        }
+      },
+      "MovedRow": {
+        "type": "object",
+        "description": "What moved between counted accounts in one month and currency, by the legs posted in it. A\nleg posted in another month shows as the two sides differing. A fee isn't here: it stays\nwhat its leg is filed as.",
+        "required": [
+          "month",
+          "money_out",
+          "money_in"
+        ],
+        "properties": {
+          "money_in": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Positive: what reached one."
+          },
+          "money_out": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Positive: what left an account."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
           }
         }
       },
@@ -10054,6 +11338,25 @@
         },
         "additionalProperties": false
       },
+      "NewTransferLinkRequest": {
+        "type": "object",
+        "description": "Two transactions to link.",
+        "required": [
+          "outflow",
+          "inflow"
+        ],
+        "properties": {
+          "inflow": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The leg with money coming into its account, on another account."
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The leg with money going out of its account."
+          }
+        },
+        "additionalProperties": false
+      },
       "NotCountedReason": {
         "type": "string",
         "description": "Why an account's balance is not part of the cash available.",
@@ -10161,6 +11464,7 @@
           "goals",
           "uncategorized",
           "not_the_households",
+          "moved_between_counted_accounts",
           "settled",
           "rollovers",
           "partial_months"
@@ -10172,6 +11476,13 @@
               "$ref": "#/components/schemas/GoalRow"
             },
             "description": "Ordered by month and goal."
+          },
+          "moved_between_counted_accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovedRow"
+            },
+            "description": "Money a transfer link says only moved between two counted accounts. Never in `actual`\nor `uncategorized`, whatever its legs are filed as. Ordered by month and currency, the\nreported months only."
           },
           "not_the_households": {
             "type": "array",
@@ -10918,6 +12229,501 @@
           }
         }
       },
+      "RuleAmount": {
+        "type": "object",
+        "description": "The signed amounts a rule applies to, in one currency. Negative is money out of\nthe account.",
+        "required": [
+          "currency",
+          "min_minor",
+          "max_minor"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "max_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The highest amount, in minor units; `null` for no highest."
+          },
+          "min_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The lowest amount, in minor units; `null` for no lowest."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RuleApplied": {
+        "type": "object",
+        "description": "What running a rule by hand changed.",
+        "required": [
+          "changed",
+          "categorized",
+          "assigned",
+          "left_alone"
+        ],
+        "properties": {
+          "assigned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of them it assigned.",
+            "minimum": 0
+          },
+          "categorized": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of them it filed under its category.",
+            "minimum": 0
+          },
+          "changed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many transactions it changed.",
+            "minimum": 0
+          },
+          "left_alone": {
+            "$ref": "#/components/schemas/RuleLeftAlone"
+          }
+        }
+      },
+      "RuleChangeView": {
+        "type": "object",
+        "description": "One change a rule would make.",
+        "required": [
+          "transaction",
+          "account",
+          "posted_on",
+          "amount",
+          "description",
+          "category",
+          "assignee"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Negative is money out of the account."
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "The member it would assign; `null` if it wouldn't."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "The category it would file under; `null` if it wouldn't."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "The description as its source gave it."
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionId"
+          }
+        }
+      },
+      "RuleDryRun": {
+        "type": "object",
+        "description": "What running a rule by hand would change now, among the transactions the token\ncan read. Nothing is written.",
+        "required": [
+          "changes",
+          "would_change",
+          "would_categorize",
+          "would_assign",
+          "left_alone"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleChangeView"
+            },
+            "description": "The first of the changes, up to `limit`, oldest transaction first."
+          },
+          "left_alone": {
+            "$ref": "#/components/schemas/RuleLeftAlone"
+          },
+          "would_assign": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of them it would assign.",
+            "minimum": 0
+          },
+          "would_categorize": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of them it would file under its category.",
+            "minimum": 0
+          },
+          "would_change": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many transactions it would change, listed or not.",
+            "minimum": 0
+          }
+        }
+      },
+      "RuleId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "RuleInput": {
+        "type": "object",
+        "description": "A rule to create.",
+        "required": [
+          "match_kind",
+          "pattern"
+        ],
+        "properties": {
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "Only this account's transactions. Without one the rule is for every account,\nwhich needs write on every account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleAmount",
+                "description": "Only amounts in this range. With an `account`, in its currency."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "The active member to assign."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "The category to file under: one split of the whole amount."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it runs on new transactions; by default it does. Create one off to try\nit first."
+          },
+          "match_kind": {
+            "$ref": "#/components/schemas/RuleMatchKind"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "1 to 200 characters, without control characters. Plain text, matched ignoring\ncase."
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0 to 10000; by default after the last rule.",
+            "maximum": 10000,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RuleLeftAlone": {
+        "type": "object",
+        "description": "Transactions the rule matches, with a field it could fill still open, that it\nleaves as they are.",
+        "required": [
+          "reviewed",
+          "split",
+          "transfer_leg",
+          "zero_amount",
+          "earlier_rule"
+        ],
+        "properties": {
+          "earlier_rule": {
+            "type": "integer",
+            "format": "int32",
+            "description": "An earlier rule fills that field: run that one.",
+            "minimum": 0
+          },
+          "reviewed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Someone has reviewed them.",
+            "minimum": 0
+          },
+          "split": {
+            "type": "integer",
+            "format": "int32",
+            "description": "They have several splits.",
+            "minimum": 0
+          },
+          "transfer_leg": {
+            "type": "integer",
+            "format": "int32",
+            "description": "They are transfer legs, and the rule's category isn't a `transfer` one.",
+            "minimum": 0
+          },
+          "zero_amount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A zero amount can't take a split.",
+            "minimum": 0
+          }
+        }
+      },
+      "RuleList": {
+        "type": "object",
+        "description": "The rules the token may see, in the order they run.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleView"
+            }
+          }
+        }
+      },
+      "RuleMatchKind": {
+        "type": "string",
+        "description": "How a rule's text is looked for.",
+        "enum": [
+          "contains",
+          "starts_with"
+        ]
+      },
+      "RulePatch": {
+        "type": "object",
+        "description": "Changes to a rule; an absent field stays as it is. What it already did stays too.",
+        "properties": {
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "`null` makes it a rule for every account, which needs write on every account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleAmount",
+                "description": "`null` drops the range."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "`null` stops it assigning. A rule keeps a category or an assignee."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "`null` stops it filing. A rule keeps a category or an assignee."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "match_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleMatchKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pattern": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 200 characters, without control characters."
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0 to 10000.",
+            "maximum": 10000,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RuleView": {
+        "type": "object",
+        "description": "A rule.",
+        "required": [
+          "id",
+          "match_kind",
+          "pattern",
+          "account",
+          "amount",
+          "category",
+          "category_archived",
+          "assignee",
+          "assignee_disabled",
+          "position",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountId",
+                "description": "Only this account's transactions; `null` for every account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleAmount",
+                "description": "Only amounts in this range; `null` for any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "The member it assigns; `null` if it doesn't."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee_disabled": {
+            "type": "boolean",
+            "description": "The member is disabled, so the rule assigns nobody until they are enabled, and\na later rule may."
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId",
+                "description": "The category it files under; `null` if it doesn't."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category_archived": {
+            "type": "boolean",
+            "description": "The category, or its group, is archived, so the rule files nothing until it is\nrestored, and a later rule may."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it runs on new transactions. Off, it can still be tried and run by\nhand."
+          },
+          "id": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "match_kind": {
+            "$ref": "#/components/schemas/RuleMatchKind"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "The text looked for in the description, ignoring case. Plain text: nothing in\nit is a wildcard."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its place in the order: lower first, ties oldest first. For each field, the\nfirst rule that matches wins.",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "SafetyFloor": {
         "oneOf": [
           {
@@ -11491,8 +13297,10 @@
           "origin",
           "sources",
           "duplicate_candidates",
+          "transfer_link",
           "reviewed_by",
           "categorized_by",
+          "assigned_by",
           "created_at",
           "updated_at"
         ],
@@ -11503,6 +13311,17 @@
           "amount": {
             "$ref": "#/components/schemas/Money",
             "description": "Negative is money out of the account."
+          },
+          "assigned_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttributionView",
+                "description": "Who last set or cleared its assignee; `null` if nobody has."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "assignee": {
             "oneOf": [
@@ -11614,9 +13433,142 @@
             "format": "date",
             "description": "The day it was made, when the source says (ISO 8601)."
           },
+          "transfer_link": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransferLinkRef",
+                "description": "The transfer link it is one leg of; `null` for none, and for one with a side the token\ncan't read, so that nothing says that side exists."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "TransferCandidates": {
+        "type": "object",
+        "description": "Transactions that might be the other leg, nearest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          }
+        }
+      },
+      "TransferLegView": {
+        "type": "object",
+        "description": "One leg of a link, as far as it matters to the link.",
+        "required": [
+          "transaction",
+          "account",
+          "amount",
+          "posted_on",
+          "pending",
+          "flags"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Negative is money out of the account."
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionFlag"
+            },
+            "description": "`source_removed` says its provider took it back, which ends nothing: a person decides\nwhether the link still stands."
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day it posted (ISO 8601)."
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionId"
+          }
+        }
+      },
+      "TransferLinkId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "TransferLinkRef": {
+        "type": "object",
+        "description": "The transfer link a transaction is one leg of.",
+        "required": [
+          "id",
+          "other_transaction"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TransferLinkId"
+          },
+          "other_transaction": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The other leg."
+          }
+        }
+      },
+      "TransferLinkView": {
+        "type": "object",
+        "description": "Two transactions that are one movement of money.",
+        "required": [
+          "id",
+          "outflow",
+          "inflow",
+          "difference",
+          "one_movement",
+          "one_movement_in_reports",
+          "created_by"
+        ],
+        "properties": {
+          "created_by": {
+            "$ref": "#/components/schemas/AttributionView"
+          },
+          "difference": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "What arrived less what left, negative when less arrived, such as for a fee; `null` for\nlegs in two currencies, since a link doesn't read an exchange rate."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/TransferLinkId"
+          },
+          "inflow": {
+            "$ref": "#/components/schemas/TransferLegView"
+          },
+          "one_movement": {
+            "type": "boolean",
+            "description": "Both accounts are in counted cash (open, switched into the forecast, of a spendable\nclass) and neither leg was taken back by its provider, so what moved is one movement in\nthe forecast, whatever it is filed as. `false` is any other link, which records the\nmovement and changes no number. It follows the accounts."
+          },
+          "one_movement_in_reports": {
+            "type": "boolean",
+            "description": "The same as reports read it, for what happened: an account closed since its leg posted\nstill counts here, so closing one doesn't rewrite its past months."
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/TransferLegView"
           }
         }
       },
@@ -11751,6 +13703,10 @@
     {
       "name": "categories",
       "description": "The household's category groups and categories, which transaction splits use."
+    },
+    {
+      "name": "rules",
+      "description": "Rules that file or assign transactions nobody has filled yet: on arrival from a sync, or when run by hand. What a rule did is on the transaction and in the audit log, and undone like any other edit."
     },
     {
       "name": "transactions",

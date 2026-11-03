@@ -59,6 +59,7 @@ FROM (
     FROM audit_events
     WHERE entity_type = 'transaction'
       AND action = 'transaction.update'
+      AND actor_kind = 'member'
       AND json_extract(changes_json, '$.assignee') IS NOT NULL
     GROUP BY entity_id
 ) AS last_edit
