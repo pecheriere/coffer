@@ -145,5 +145,110 @@ async fn a_forged_form_without_the_token_is_refused() {
     let reply = admin.post_form(ENTER, &A_RATE).await;
 
     assert_eq!(reply.status, StatusCode::FORBIDDEN);
-    assert_eq!(world.server.store.manual_coverage().await.unwrap(), []);
+    assert_eq!(
+        world
+            .server
+            .store
+            .fx_coverage_with_manual()
+            .await
+            .unwrap()
+            .1,
+        []
+    );
+}
+
+/// The form's words are the only guard where nothing is published to compare with.
+#[tokio::test]
+async fn the_form_says_which_way_round_a_rate_goes() {
+    let world = world().await;
+    let mut admin = alice(&world).await;
+
+    let form = admin.get(HOUSEHOLD).await.body;
+
+    assert!(section(&form, "manual-rates").contains("How much of it one euro buys"));
+}
+
+#[tokio::test]
+async fn an_unusual_rate_is_shown_back_with_a_box_to_tick() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-26", "1.75")]).await;
+    let mut admin = alice(&world).await;
+    let entry = [("currency", "USD"), ("on", "2026-10-26"), ("rate", "0.92")];
+
+    let reply = post(&mut admin, ENTER, &entry).await;
+
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let card = section(&reply.body, "confirm-rate");
+    assert!(
+        card.contains("0.92") && card.contains("1.75"),
+        "both numbers"
+    );
+    assert!(card.contains("name=\"confirm_unusual\""));
+    assert!(card.contains("value=\"0.92\""), "the entry is kept");
+    assert_eq!(
+        world.server.store.manual_rates(0).await.unwrap().0.len(),
+        0,
+        "nothing saved yet"
+    );
+
+    let mut confirmed = entry.to_vec();
+    confirmed.push(("confirm_unusual", "yes"));
+    let reply = post(&mut admin, ENTER, &confirmed).await;
+
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
+    assert_eq!(world.server.store.manual_rates(0).await.unwrap().0.len(), 1);
+}
+
+#[tokio::test]
+async fn a_confirmation_the_form_does_not_offer_is_refused() {
+    let world = world().await;
+    let mut admin = alice(&world).await;
+
+    let reply = post(
+        &mut admin,
+        ENTER,
+        &[
+            ("currency", "XAF"),
+            ("on", "2026-10-26"),
+            ("rate", "1"),
+            ("confirm_unusual", "<b>nope</b>"),
+        ],
+    )
+    .await;
+
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!reply.body.contains("nope"), "does not echo");
+}
+
+/// An older rate past the first part of the list can still be reached and removed.
+#[tokio::test]
+async fn the_page_says_the_list_stops_short_and_reaches_the_rest() {
+    let world = world().await;
+    world.many_manual_rates(1_001).await;
+    let mut admin = alice(&world).await;
+
+    let first = admin.get(HOUSEHOLD).await.body;
+    assert!(section(&first, "manual-rates").contains("These aren't all of them"));
+    assert!(first.contains("?rates_from=1000"));
+    assert!(!first.contains("value=\"2020-01-01\""));
+
+    let rest = admin.get(&format!("{HOUSEHOLD}?rates_from=1000")).await;
+    assert_eq!(rest.status, StatusCode::OK);
+    assert!(
+        rest.body.contains("value=\"2020-01-01\""),
+        "the oldest, with its button"
+    );
+    assert!(!section(&rest.body, "manual-rates").contains("These aren't all of them"));
+
+    let reply = post(
+        &mut admin,
+        REMOVE,
+        &[("currency", "XAF"), ("on", "2020-01-01")],
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        admin.get(&format!("{HOUSEHOLD}?rates_from=x")).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }

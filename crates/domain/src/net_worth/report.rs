@@ -14,9 +14,9 @@ use jiff::civil::Date;
 use super::daily::DailyValue;
 use super::periods::{PeriodEnd, period_ends};
 use super::types::{
-    AccountPoint, AccountSeries, ConversionState, LiquidityLine, NetWorthBlocker, NetWorthBucket,
-    NetWorthCaution, NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport, NetWorthStatus,
-    NotCountedReason, RateMissingReason, ReportAccount,
+    AccountPoint, AccountSeries, ConversionState, LiquidityLine, ManualRateUse, NetWorthBlocker,
+    NetWorthBucket, NetWorthCaution, NetWorthError, NetWorthInput, NetWorthPoint, NetWorthReport,
+    NetWorthStatus, NotCountedReason, RateMissingReason, ReportAccount,
 };
 use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::fx::{RATE_STALE_AFTER_DAYS, RateLeg, is_euro};
@@ -39,6 +39,7 @@ struct Section {
     accounts: Vec<AccountSeries>,
     blockers: Vec<NetWorthBlocker>,
     cautions: Vec<NetWorthCaution>,
+    manual_rates: Vec<ManualRateUse>,
 }
 
 /// One included account's row on one point.
@@ -87,6 +88,7 @@ pub fn net_worth_report(input: &NetWorthInput) -> Result<NetWorthReport, NetWort
                 Vec::new(),
                 vec![NetWorthBlocker::Rebuilding],
                 Vec::new(),
+                Vec::new(),
             );
             return Ok(report(input, rebuilding, Vec::new()));
         }
@@ -116,6 +118,7 @@ pub fn net_worth_report(input: &NetWorthInput) -> Result<NetWorthReport, NetWort
                 accounts: own.accounts,
                 blockers: own.blockers,
                 cautions: own.cautions,
+                manual_rates: own.manual_rates,
             })
         })
         .collect::<Result<Vec<_>, NetWorthError>>()?;
@@ -169,7 +172,14 @@ fn section(
     let accounts = series(input, members, &days);
     let blockers = blockers(input, members, periods, &days);
     let cautions = cautions(input, through, periods, &days);
-    Ok(section_of(points, accounts, blockers, cautions))
+    let manual_rates = manual_rate_uses(input, &days);
+    Ok(section_of(
+        points,
+        accounts,
+        blockers,
+        cautions,
+        manual_rates,
+    ))
 }
 
 fn section_of(
@@ -177,6 +187,7 @@ fn section_of(
     accounts: Vec<AccountSeries>,
     blockers: Vec<NetWorthBlocker>,
     cautions: Vec<NetWorthCaution>,
+    manual_rates: Vec<ManualRateUse>,
 ) -> Section {
     let status = if !blockers.is_empty() {
         NetWorthStatus::Unavailable
@@ -191,6 +202,7 @@ fn section_of(
         accounts,
         blockers,
         cautions,
+        manual_rates,
     }
 }
 
@@ -210,6 +222,7 @@ fn report(
         accounts: household.accounts,
         blockers: household.blockers,
         cautions: household.cautions,
+        manual_rates: household.manual_rates,
         buckets,
     }
 }
@@ -512,19 +525,10 @@ fn rate_cautions(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<NetWorthCaution
     };
     let mut missing: BTreeMap<Currency, (RateMissingReason, Date, Date)> = BTreeMap::new();
     let mut stale: BTreeMap<Currency, (Date, Date, u32)> = BTreeMap::new();
-    let mut manual: BTreeMap<Currency, (Date, Date)> = BTreeMap::new();
     for day in days {
         let on = day.period.on;
         for line in day.lines.iter().filter(|line| line.counted) {
             let held = line.holder.currency;
-            if let (Some(_), Some(leg)) = (line.amount, line.row.manual_rate_leg) {
-                for currency in leg_currencies(leg, held, display) {
-                    manual
-                        .entry(currency)
-                        .and_modify(|seen| seen.1 = on)
-                        .or_insert((on, on));
-                }
-            }
             if line.amount.is_none() {
                 if line.row.conversion == ConversionState::TooLarge {
                     continue;
@@ -565,15 +569,36 @@ fn rate_cautions(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<NetWorthCaution
                 age_days,
             },
         );
-    let manual =
-        manual.into_iter().map(
-            |(currency, (first_on, last_on))| NetWorthCaution::RateManual {
-                currency,
-                first_on,
-                last_on,
-            },
-        );
-    missing.chain(stale).chain(manual).collect()
+    missing.chain(stale).collect()
+}
+
+/// Which rates admins entered among those behind the amounts, one line per currency, by
+/// currency: for information, so never a caution.
+fn manual_rate_uses(input: &NetWorthInput, days: &[Day<'_>]) -> Vec<ManualRateUse> {
+    let Some(display) = input.display else {
+        return Vec::new();
+    };
+    let mut uses: BTreeMap<Currency, (Date, Date)> = BTreeMap::new();
+    for day in days {
+        let on = day.period.on;
+        for line in day.lines.iter().filter(|line| line.counted) {
+            let (Some(_), Some(leg)) = (line.amount, line.row.manual_rate_leg) else {
+                continue;
+            };
+            for currency in leg_currencies(leg, line.holder.currency, display) {
+                uses.entry(currency)
+                    .and_modify(|seen| seen.1 = on)
+                    .or_insert((on, on));
+            }
+        }
+    }
+    uses.into_iter()
+        .map(|(currency, (first_on, last_on))| ManualRateUse {
+            currency,
+            first_on,
+            last_on,
+        })
+        .collect()
 }
 
 /// The row's rate date and age, when that is more than a week older than its day.

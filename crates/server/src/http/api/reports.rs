@@ -97,7 +97,8 @@ pub(super) async fn plan_vs_actual(
                    from, `balance_source`, the `amount` in the display currency and `rate_on`, the \
                    older of the dates of the rates used: a weekend reports Friday's. `manual_rate` on \
                    a point, a `by_liquidity` line or an account's point says an amount there used \
-                   a rate an admin entered, and the caution `rate_manual` names the currency.\n\n\
+                   a rate an admin entered, and `manual_rates` names the currency and the points: for \
+                   information, since it doesn't stop a report being `firm`.\n\n\
                    `status` says how far to trust it. `firm` is numbers with nothing to warn about. \
                    `provisional` is numbers with `cautions`. `unavailable` is `blockers`: \
                    `display_currency_not_set` (an admin has to choose one, and points still hold \

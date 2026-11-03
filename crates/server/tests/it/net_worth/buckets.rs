@@ -439,6 +439,7 @@ async fn the_answer_has_the_documented_shape() {
             }],
             "blockers": [],
             "cautions": [],
+            "manual_rates": [],
         }])
     );
 }

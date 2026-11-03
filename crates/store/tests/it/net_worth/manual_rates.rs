@@ -62,8 +62,8 @@ async fn coverage_of_fetches_knows_nothing_of_manual_rates() {
     let (_dir, store) = open().await;
     enter(&store, "XAF", oct(5), "655.957").await;
 
-    assert_eq!(store.fx_coverage().await.unwrap(), []);
-    let manual = store.manual_coverage().await.unwrap();
+    let (fetched, manual) = store.fx_coverage_with_manual().await.unwrap();
+    assert_eq!(fetched, []);
     assert_eq!(manual.len(), 1);
     assert_eq!(
         (manual[0].currency, manual[0].first_on, manual[0].last_on),
@@ -84,7 +84,7 @@ async fn removing_one_brings_back_the_published_rate_under_it() {
         (back.rate.to_string().as_str(), back.manual),
         ("1.1", false)
     );
-    assert_eq!(store.manual_coverage().await.unwrap(), []);
+    assert_eq!(store.fx_coverage_with_manual().await.unwrap().1, []);
 }
 
 /// The test of N3: what incremental changes leave is what a rebuild makes.

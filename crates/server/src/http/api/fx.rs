@@ -37,6 +37,19 @@ pub struct ManualRatePath {
 #[serde(deny_unknown_fields)]
 pub struct ManualRateInput {
     pub rate: FxRate,
+    /// Keeps a rate over 1.5 times from the published rate nearest its day, within 30 days,
+    /// which is otherwise refused as `unusual_rate`. By default `false`.
+    #[serde(default)]
+    pub confirm_unusual: bool,
+}
+
+/// Which manual rates to read.
+#[derive(Debug, Clone, Copy, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct ManualRatesQuery {
+    /// How many of the newest to skip: by default none.
+    pub offset: Option<u32>,
 }
 
 /// What is known of fetching each currency's rates.
@@ -105,11 +118,13 @@ pub(super) async fn rates(
     operation_id = "listManualRates",
     tag = tags::FX,
     description = "The rates admins have entered, the newest day first, then by currency: at most \
-                   1,000, the newest of a longer list. `getFxRates` also shows each, marked. \
+                   1,000 from `offset`. `truncated` says there are older ones: ask again with \
+                   `offset` past these. `getFxRates` also shows each, marked. \
                    Needs `read`; a token with account grants also needs `all` at `balances`, \
                    since which rates are stored depends on the currencies in use. The refusal is \
                    the same whatever exists.",
     security(("bearer" = [])),
+    params(ManualRatesQuery),
     responses(
         (status = 200, description = "The rates.", body = ManualRateList),
         CommonProblems,
@@ -118,8 +133,14 @@ pub(super) async fn rates(
 pub(super) async fn manual_rates(
     State(state): State<AppState>,
     ApiActor(actor): ApiActor,
+    TypedQuery(query): TypedQuery<ManualRatesQuery>,
 ) -> Result<Json<ManualRateList>, Problem> {
-    Ok(Json(state.ledger.manual_rates(&actor).await?))
+    Ok(Json(
+        state
+            .ledger
+            .manual_rates(&actor, query.offset.unwrap_or(0))
+            .await?,
+    ))
 }
 
 /// Enters a rate for a currency and a day.
@@ -133,13 +154,19 @@ pub(super) async fn manual_rates(
                    rate, from its day until a later rate of either kind. A fetch never overwrites \
                    it. On its own day it wins over a published rate, which stays behind it, and a \
                    published rate on a later day takes over as usual. Everything built from it is \
-                   marked: `manual_rate` on a report's points, the caution `rate_manual` and \
-                   `manual` on `getFxRates`. It rewrites the net worth values it moves; with very \
+                   marked: `manual_rate` on a report's points, its `manual_rates` and `manual` on \
+                   `getFxRates`. It doesn't stop a report being `firm`, until it is old enough for \
+                   `rate_stale`. It rewrites the net worth values it moves; with very \
                    many, a report answers `rebuilding` for a moment. Audited with the old and new \
                    rate. The same rate again writes nothing and answers with what is held.\n\n\
                    A rate that is malformed, not above zero or a JSON number is 400, as is an \
                    unknown code or a day not written `YYYY-MM-DD`. The euro, the display currency, \
                    a day after today or before 1970 is 422.\n\n\
+                   A rate over 1.5 times from the published rate nearest its day, within 30 days, \
+                   as one entered the wrong way round often is, is 422 with the code `unusual_rate` \
+                   and both numbers in `detail`, unless `confirm_unusual` is true, and the audit \
+                   entry of one kept says what it was against. With no published rate nearby \
+                   there is nothing to compare it with, and no such check.\n\n\
                    Needs `admin`; a token with account grants also needs `all` at `balances`: \
                    which codes convert at once depends on the currencies in use. The refusal is \
                    the same whatever exists.",
@@ -160,7 +187,13 @@ pub(super) async fn set_manual_rate(
     Ok(Json(
         state
             .ledger
-            .set_manual_rate(&actor, path.currency, path.on, input.rate)
+            .set_manual_rate(
+                &actor,
+                path.currency,
+                path.on,
+                input.rate,
+                input.confirm_unusual,
+            )
             .await?,
     ))
 }

@@ -8,7 +8,7 @@ use coffer_domain::accounts::{BelongsTo, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
-    AccountPoint, AccountSeries, ConversionState, NetWorthBlocker, NetWorthCaution,
+    AccountPoint, AccountSeries, ConversionState, ManualRateUse, NetWorthBlocker, NetWorthCaution,
     RateMissingReason,
 };
 use jiff::civil::Date;
@@ -240,16 +240,6 @@ fn worded_caution(caution: &NetWorthCaution, names: &Names<'_>, words: &CautionW
             day(*rate_on),
             days(*age_days),
         ),
-        NetWorthCaution::RateManual {
-            currency,
-            first_on,
-            last_on,
-        } => format!(
-            "The {} rate used {} was entered by hand, not published, so those amounts are only \
-             as good as that entry.",
-            currency.as_str(),
-            stretch(*first_on, *last_on),
-        ),
         NetWorthCaution::AmountTooLarge { account, on } => format!(
             "{} is too large to convert, last on {}. Those periods have no total, which isn't \
              money leaving.",
@@ -343,6 +333,16 @@ fn closed_owing_sentence(
     }
 }
 
+/// A note on a rate an admin entered, which isn't a caution: it doesn't stop a number being firm.
+pub(super) fn manual_rate_sentence(used: ManualRateUse) -> String {
+    format!(
+        "The {} rate used {} was entered by hand, not published, so those amounts are only as \
+         good as that entry.",
+        used.currency.as_str(),
+        stretch(used.first_on, used.last_on),
+    )
+}
+
 /// Why one account has no amount for a period, for that period's row of the table.
 pub(super) fn no_amount_sentence(name: &str, conversion: Option<ConversionState>) -> String {
     match conversion {
@@ -414,11 +414,6 @@ mod tests {
                 on: ON,
                 rate_on: date(2026, 10, 1),
                 age_days: 32,
-            },
-            NetWorthCaution::RateManual {
-                currency: usd(),
-                first_on: date(2026, 10, 1),
-                last_on: ON,
             },
             NetWorthCaution::AmountTooLarge { account, on: ON },
             NetWorthCaution::BalanceStale {

@@ -7,13 +7,15 @@
 //!
 //! [`RateHistory::merged`]: coffer_domain::fx::RateHistory::merged
 
-use coffer_domain::fx::{FxRate, ManualCoverage, ManualRate};
+use coffer_domain::fx::FxCoverage;
+use coffer_domain::fx::{FxRate, ManualCoverage, ManualRate, RateObservation};
 use coffer_domain::money::Currency;
 use jiff::Timestamp;
 use jiff::civil::Date;
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteRow;
 
+use super::{coverage_from_row, observation_from_row};
 use crate::convert::{parsed, text, time};
 use crate::{Store, StoreError, StoreTx};
 
@@ -54,8 +56,8 @@ pub(crate) async fn currencies_with_manual_rates(
 }
 
 impl Store {
-    /// Every rate an admin entered, the newest day first, then by currency: at most 1,000,
-    /// the newest of a longer list.
+    /// The rates an admin entered, the newest day first, then by currency, skipping `offset`:
+    /// at most 1,000, and whether there are more after them.
     ///
     /// Which currencies have one can reveal the currencies accounts hold: a caller must
     /// not return it to anyone below `all` accounts at `balances`.
@@ -63,18 +65,27 @@ impl Store {
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
-    pub async fn manual_rates(&self) -> Result<Vec<ManualRate>, StoreError> {
-        sqlx::query("SELECT * FROM fx_manual_rates ORDER BY on_date DESC, quote LIMIT ?")
-            .bind(MAX_MANUAL_RATES_PER_READ)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(manual_rate_from_row)
-            .collect()
+    pub async fn manual_rates(&self, offset: u32) -> Result<(Vec<ManualRate>, bool), StoreError> {
+        // One past the limit says whether there are more, without a second read.
+        let mut rates = sqlx::query(
+            "SELECT * FROM fx_manual_rates ORDER BY on_date DESC, quote LIMIT ? OFFSET ?",
+        )
+        .bind(MAX_MANUAL_RATES_PER_READ + 1)
+        .bind(i64::from(offset))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(manual_rate_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+        let limit = usize::try_from(MAX_MANUAL_RATES_PER_READ).map_err(StoreError::backend)?;
+        let truncated = rates.len() > limit;
+        rates.truncate(limit);
+        Ok((rates, truncated))
     }
 
-    /// Which days each currency has a rate an admin entered, by currency.
+    /// What is known of fetching each currency's rates and which days each has a rate an
+    /// admin entered, by currency, seen at one moment.
     ///
     /// As [`Store::manual_rates`], a caller must not return it to anyone below `all`
     /// accounts at `balances`.
@@ -82,12 +93,22 @@ impl Store {
     /// # Errors
     ///
     /// Backend failures, including a stored row that no longer parses.
-    pub async fn manual_coverage(&self) -> Result<Vec<ManualCoverage>, StoreError> {
-        sqlx::query(
+    pub async fn fx_coverage_with_manual(
+        &self,
+    ) -> Result<(Vec<FxCoverage>, Vec<ManualCoverage>), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
+        let fetched = sqlx::query("SELECT * FROM fx_coverage ORDER BY currency")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(coverage_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        let manual = sqlx::query(
             "SELECT quote, MIN(on_date) AS first_on, MAX(on_date) AS last_on \
              FROM fx_manual_rates GROUP BY quote ORDER BY quote",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(StoreError::from_sqlx)?
         .iter()
@@ -98,11 +119,39 @@ impl Store {
                 last_on: parsed(row, "last_on")?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, StoreError>>()?;
+        tx.commit().await.map_err(StoreError::from_sqlx)?;
+        Ok((fetched, manual))
     }
 }
 
 impl StoreTx {
+    /// `currency`'s published rates for the days in `[from, to]`, in no order, which a
+    /// manual rate is compared with.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures, including a stored rate that no longer parses.
+    pub async fn published_rates_between(
+        &mut self,
+        currency: Currency,
+        from: Date,
+        to: Date,
+    ) -> Result<Vec<RateObservation>, StoreError> {
+        sqlx::query(
+            "SELECT on_date, rate FROM fx_rates WHERE quote = ? AND on_date BETWEEN ? AND ?",
+        )
+        .bind(currency.as_str())
+        .bind(from.to_string())
+        .bind(to.to_string())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(observation_from_row)
+        .collect()
+    }
+
     /// The rate an admin entered for `currency` on `on`, if any.
     ///
     /// # Errors

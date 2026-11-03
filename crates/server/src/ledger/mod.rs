@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
+use coffer_domain::fx::{FxRate, RateObservation};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::AccountId;
 use coffer_domain::policy::{
@@ -149,6 +150,19 @@ pub enum LedgerError {
     /// A submitted value is not acceptable; the message says which.
     #[error("{0}")]
     Invalid(&'static str),
+    /// A manual rate is far from a published one nearby and wasn't confirmed. It says both,
+    /// which are validated rates, since the person has to compare them.
+    #[error(
+        "this rate is {entered} per euro, but the published rate of {} is {}. That is more than \
+         1.5 times away, so it may be entered the wrong way round: it should be how much of the \
+         currency one euro buys. To keep it anyway, confirm it.",
+        .published.on,
+        .published.rate
+    )]
+    UnusualRate {
+        entered: FxRate,
+        published: RateObservation,
+    },
     /// The change conflicts with the current state.
     #[error("{1}")]
     Conflict(ProblemCode, &'static str),
@@ -222,6 +236,12 @@ impl From<LedgerError> for Problem {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 ProblemCode::Invalid,
                 "Invalid value",
+            )
+            .with_detail(message),
+            LedgerError::UnusualRate { .. } => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ProblemCode::UnusualRate,
+                "Unusual rate",
             )
             .with_detail(message),
             LedgerError::Conflict(code, _) => {

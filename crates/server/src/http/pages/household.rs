@@ -5,7 +5,8 @@
 mod manual_rates;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use coffer_domain::identity::ThemeName;
@@ -33,12 +34,22 @@ pub fn routes() -> Router<AppState> {
         .merge(manual_rates::routes())
 }
 
+/// How far down the list of manual rates to start. Unknown fields are refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HouseholdQuery {
+    rates_from: Option<u32>,
+}
+
 async fn household(
     State(state): State<AppState>,
     session: PageSession,
+    query: Result<Query<HouseholdQuery>, QueryRejection>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageHousehold).map_err(AuthError::from)?;
+    let Query(query) = query.map_err(|_| PageError::invalid("not a place in the list"))?;
+    let rates_from = query.rates_from.unwrap_or(0);
     let settings = state
         .ledger
         .household_settings(&actor)
@@ -46,7 +57,7 @@ async fn household(
         .map_err(|err| PageError(Problem::from(err)))?;
     let rates = state
         .ledger
-        .manual_rates(&actor)
+        .manual_rates(&actor, rates_from)
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
     let today = state.ledger.today();
@@ -98,7 +109,7 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save display currency" }
             }
         }
-        (manual_rates::card(&viewer.csrf, &rates.items, settings.display_currency, today))
+        (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
     };
     let frame = Frame {
         look,

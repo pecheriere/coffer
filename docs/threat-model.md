@@ -624,11 +624,15 @@
   one isn't fetched again. The forecast never reads a rate, so it can't be moved by
   one.
 - **An admin can enter a wrong rate by hand** (N16), a slip or on purpose, and it moves
-  net worth at once. A rate is bounded in form as a fetched one is, and not in value, for
-  the same reason, and it can't be for the display currency, the euro or a day to come.
+  net worth at once. A rate is bounded in form as a fetched one is, and it can't be for the display
+  currency, the euro or a day to come. In value, one over 1.5 times from a published rate within
+  30 days needs confirming, and a confirmed one says so in the log. Within that factor a wrong
+  rate passes, including one near 1 written the wrong way round. With no published rate nearby
+  nothing bounds it but the form's wording, so a wrong rate for a currency no source publishes
+  passes.
   So it is never silent: each write and removal is audited with the old and new rate and
   who did it, a token's writes need `admin` and `all` at `balances`, and everything built
-  from one says `manual_rate`, with the caution `rate_manual`. A fetch can't overwrite it,
+  from one says `manual_rate`, and the report lists it in `manual_rates`. A fetch can't overwrite it,
   so a wrong one lasts until an admin removes it or a later day's rate takes over.
 - **A forged rate after a series has ended stays.** An answer only speaks for the
   days from the start of its window to its own last row, since one cut at the end of

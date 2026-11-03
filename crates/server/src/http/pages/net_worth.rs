@@ -33,7 +33,10 @@ use crate::http::AppState;
 use crate::http::problem::{Problem, ProblemCode};
 use crate::ledger::net_worth::NetWorthQuery;
 use chart::{ChartPoint, ChartSize, line_chart, scale_misses_zero};
-use words::{Names, blocker_sentence, caution_sentence, liquidity_name, no_amount_sentence};
+use words::{
+    Names, blocker_sentence, caution_sentence, liquidity_name, manual_rate_sentence,
+    no_amount_sentence,
+};
 
 const NO_TOTAL: &str = "No total";
 /// Beside a figure resting on an exchange rate an admin entered.
@@ -207,6 +210,9 @@ fn answer(report: &NetWorthReport, names: &Names<'_>, may_choose: bool) -> Marku
                         li { (caution_sentence(caution, names)) }
                     }
                 }
+            }
+            @for used in &report.manual_rates {
+                p.fine { (manual_rate_sentence(*used)) }
             }
         }
     }

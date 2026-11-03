@@ -5,6 +5,7 @@ use axum::http::{Method, StatusCode};
 use coffer_domain::audit::{AuditActor, AuditValue};
 use coffer_domain::identity::Scope;
 use coffer_domain::policy::AccountLevel::{Balances, Write};
+use coffer_domain::time::Clock as _;
 use coffer_store::{AuditEvent, AuditFilter, PageRequest};
 use serde_json::{Value, json};
 
@@ -18,6 +19,24 @@ fn rate_uri(currency: &str, on: &str) -> String {
 }
 
 impl World {
+    /// `count` rates of one currency, a day apart from 2020-01-01, entered at once.
+    pub(crate) async fn many_manual_rates(&self, count: i64) {
+        let start: jiff::civil::Date = "2020-01-01".parse().unwrap();
+        let mut tx = self.server.store.begin().await.unwrap();
+        for days in 0..count {
+            let on = start.checked_add(jiff::Span::new().days(days)).unwrap();
+            tx.set_manual_rate(
+                coffer_domain::money::Currency::parse("XAF").unwrap(),
+                on,
+                "655.957".parse().unwrap(),
+                self.server.clock.now(),
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
     async fn enter(&self, currency: &str, on: &str, rate: &str) -> Value {
         self.admin_send(Method::PUT, &rate_uri(currency, on), &json!({"rate": rate}))
             .await
@@ -86,11 +105,14 @@ async fn a_rate_gives_a_total_and_everything_built_from_it_says_manual() {
     assert_eq!(account_point["manual_rate"], true);
     assert_eq!(account_point["rate_on"], "2026-10-26");
     assert_eq!(
-        of_kind(&report, "cautions", "rate_manual"),
-        [&json!({"kind": "rate_manual", "currency": "XAF",
-                 "first_on": "2026-10-26", "last_on": "2026-11-02"})]
+        report["manual_rates"],
+        json!([{"currency": "XAF", "first_on": "2026-10-26", "last_on": "2026-11-02"}])
     );
-    assert_eq!(report["status"], "provisional");
+    assert_eq!(
+        report["status"], "firm",
+        "a fresh rate is a note, not a caution"
+    );
+    assert_eq!(report["cautions"], json!([]));
 }
 
 #[tokio::test]
@@ -178,11 +200,11 @@ async fn removing_a_rate_falls_back_on_what_it_covered() {
     world.balance(held, "2026-10-26", 100_000).await;
     world.display("EUR").await;
     world.rates("USD", &[("2026-10-26", "1")]).await;
-    world.enter("USD", "2026-10-26", "2").await;
+    world.enter("USD", "2026-10-26", "1.25").await;
     let entered = world.report(DAY_REPORT).await;
     assert_eq!(
         point(&entered, "2026-10-26")["total"]["minor_units"],
-        50_000
+        80_000
     );
 
     world.remove("USD", "2026-10-26").await;
@@ -193,10 +215,7 @@ async fn removing_a_rate_falls_back_on_what_it_covered() {
         100_000
     );
     assert_eq!(point(&report, "2026-10-26")["manual_rate"], false);
-    assert_eq!(
-        of_kind(&report, "cautions", "rate_manual"),
-        [] as [&Value; 0]
-    );
+    assert_eq!(report["manual_rates"], json!([]));
 }
 
 #[tokio::test]
@@ -325,7 +344,16 @@ async fn a_wrong_rate_is_refused_whole() {
     }
 
     assert_eq!(world.audit_count().await, before);
-    assert_eq!(world.server.store.manual_coverage().await.unwrap(), []);
+    assert_eq!(
+        world
+            .server
+            .store
+            .fx_coverage_with_manual()
+            .await
+            .unwrap()
+            .1,
+        []
+    );
 }
 
 #[tokio::test]
@@ -433,6 +461,8 @@ async fn an_old_manual_rate_raises_rate_stale() {
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0]["currency"], "XAF");
     assert_eq!(stale[0]["rate_on"], "2026-10-01");
+    assert_eq!(report["status"], "provisional", "as any old rate would");
+    assert_eq!(report["manual_rates"][0]["currency"], "XAF");
     assert!(point(&report, "2026-10-30")["total"].is_object());
 }
 
@@ -467,8 +497,7 @@ async fn a_manual_rate_on_the_display_side_is_named() {
     world.display("XAF").await;
 
     let report = world.report(DAY_REPORT).await;
-    let caution = of_kind(&report, "cautions", "rate_manual");
-    assert_eq!(caution[0]["currency"], "XAF");
+    assert_eq!(report["manual_rates"][0]["currency"], "XAF");
     assert_eq!(point(&report, "2026-10-30")["total"]["minor_units"], 65_596);
     let (status, _) = world
         .send(
@@ -479,4 +508,126 @@ async fn a_manual_rate_on_the_display_side_is_named() {
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "still removable");
+}
+
+/// A rate written the wrong way round, far enough from 1 to tell: refused, showing both numbers.
+#[tokio::test]
+async fn a_rate_far_from_a_published_one_needs_confirming() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-20", "1.75")]).await;
+    let uri = rate_uri("USD", "2026-10-26");
+
+    let (status, text) = world
+        .send(
+            Method::PUT,
+            &uri,
+            &world.admin,
+            Some(&json!({"rate": "0.92"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let problem = parsed(&text);
+    assert_eq!(problem["code"], "unusual_rate");
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(detail.contains("0.92") && detail.contains("1.75") && detail.contains("2026-10-20"));
+    assert_eq!(world.rate_events().await.len(), 0, "nothing written");
+
+    let answer = world
+        .admin_send(
+            Method::PUT,
+            &uri,
+            &json!({"rate": "0.92", "confirm_unusual": true}),
+        )
+        .await;
+
+    assert_eq!(answer["rate"], "0.92");
+    let logged = world.rate_events().await;
+    let change = logged[0]
+        .changes
+        .iter()
+        .find(|(field, _)| *field == "confirmed_against_published")
+        .map(|(_, change)| change.after.clone());
+    assert_eq!(change, Some(AuditValue::from("1.75")), "the log says so");
+}
+
+/// Within 1.5 times passes unasked, and confirming a rate that needs none adds nothing.
+#[tokio::test]
+async fn a_rate_near_a_published_one_needs_no_confirming() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-26", "2")]).await;
+
+    world.enter("USD", "2026-10-26", "3").await;
+    world
+        .admin_send(
+            Method::PUT,
+            &rate_uri("USD", "2026-10-25"),
+            &json!({"rate": "2.5", "confirm_unusual": true}),
+        )
+        .await;
+
+    for event in world.rate_events().await {
+        assert_eq!(event.changes.iter().count(), 1);
+    }
+}
+
+/// With no published rate near its day there is nothing to compare: no check, only the
+/// form's words, whatever the entry.
+#[tokio::test]
+async fn with_no_published_rate_nearby_any_rate_passes() {
+    let world = world().await;
+    world.rates("USD", &[("2026-09-25", "2")]).await;
+
+    world.enter("XAF", "2026-10-26", "0.001").await;
+    world.enter("USD", "2026-10-26", "90").await;
+    let (status, _) = world
+        .send(
+            Method::PUT,
+            &rate_uri("USD", "2026-10-25"),
+            &world.admin,
+            Some(&json!({"rate": "90"})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "30 days away is nearby"
+    );
+}
+
+/// Only other manual rates near it: they are no check, or a wrong one could vouch for another.
+#[tokio::test]
+async fn a_manual_rate_is_not_compared_with_another_manual_rate() {
+    let world = world().await;
+    world.enter("XAF", "2026-10-25", "1").await;
+
+    let answer = world.enter("XAF", "2026-10-26", "655.957").await;
+
+    assert_eq!(answer["rate"], "655.957");
+}
+
+#[tokio::test]
+async fn the_list_says_when_it_stops_short_and_goes_on_from_an_offset() {
+    let world = world().await;
+    world.many_manual_rates(1_001).await;
+    let uri = "/api/v1/fx/manual-rates";
+
+    let (_, first) = world.send(Method::GET, uri, &world.admin, None).await;
+    let first = parsed(&first);
+    assert_eq!(first["items"].as_array().unwrap().len(), 1_000);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["items"][0]["on"], "2022-09-27", "the newest first");
+
+    let (_, rest) = world
+        .send(
+            Method::GET,
+            &format!("{uri}?offset=1000"),
+            &world.admin,
+            None,
+        )
+        .await;
+    let rest = parsed(&rest);
+    assert_eq!(rest["items"].as_array().unwrap().len(), 1);
+    assert_eq!(rest["items"][0]["on"], "2020-01-01");
+    assert_eq!(rest["truncated"], false);
 }

@@ -72,7 +72,7 @@ async fn a_fetch_leaves_a_manual_rate_alone() {
         Some(20_000),
         "a later day's rate takes over"
     );
-    let manual = server.store.manual_rates().await.unwrap();
+    let (manual, _) = server.store.manual_rates(0).await.unwrap();
     assert_eq!(manual.len(), 1);
     assert_eq!(manual[0].rate.to_string(), "4");
 }

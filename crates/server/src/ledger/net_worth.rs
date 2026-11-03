@@ -247,10 +247,8 @@ impl Ledger {
     /// every account; a failure to resolve access; storage failures.
     pub async fn fx_coverage(&self, actor: &Actor) -> Result<FxCoverageList, LedgerError> {
         self.authorize_fx(actor).await?;
-        Ok(FxCoverageList {
-            items: self.store.fx_coverage().await?,
-            manual: self.store.manual_coverage().await?,
-        })
+        let (items, manual) = self.store.fx_coverage_with_manual().await?;
+        Ok(FxCoverageList { items, manual })
     }
 
     /// The rates `query` asks for.

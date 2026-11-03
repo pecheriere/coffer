@@ -6,11 +6,12 @@
 //! the currencies in use, so a write spans every account as a display currency does (N8).
 
 use coffer_domain::audit::AuditChanges;
-use coffer_domain::fx::{FxRate, ManualRate};
+use coffer_domain::fx::{FxRate, ManualRate, UNUSUAL_RATE_NEARBY_DAYS, unusual_against};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::Currency;
 use coffer_domain::net_worth::MIN_VALUE_DATE;
 use coffer_domain::policy::{AccountLevel, Action, authorize};
+use jiff::Span;
 use jiff::civil::Date;
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -28,8 +29,10 @@ const NOT_BEFORE_THE_TABLE: &str = "a rate can't be entered for a day before 197
 /// The rates admins have entered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ManualRateList {
-    /// The newest day first, then by currency: at most 1,000, the newest of a longer list.
+    /// The newest day first, then by currency: at most 1,000 from `offset`.
     pub items: Vec<ManualRate>,
+    /// There are older rates than these: ask again with `offset` past them.
+    pub truncated: bool,
 }
 
 /// An audit entity's id: one currency's one day.
@@ -38,33 +41,41 @@ fn entity_id(currency: Currency, on: Date) -> String {
 }
 
 impl Ledger {
-    /// The rates admins have entered.
+    /// The rates admins have entered, skipping the `offset` newest.
     ///
     /// # Errors
     ///
     /// As [`Self::fx_coverage`].
-    pub async fn manual_rates(&self, actor: &Actor) -> Result<ManualRateList, LedgerError> {
+    pub async fn manual_rates(
+        &self,
+        actor: &Actor,
+        offset: u32,
+    ) -> Result<ManualRateList, LedgerError> {
         self.authorize_fx(actor).await?;
-        Ok(ManualRateList {
-            items: self.store.manual_rates().await?,
-        })
+        let (items, truncated) = self.store.manual_rates(offset).await?;
+        Ok(ManualRateList { items, truncated })
     }
 
     /// Enters `rate` for `currency` on `on`, replacing what an admin entered for that day.
     /// It rewrites the daily values it moves, in this transaction or if there are too many
-    /// for one, in a rebuild the daily job runs. The same rate again writes nothing.
+    /// for one, in a rebuild the daily job runs. The same rate again writes nothing. A rate
+    /// over 1.5 times from the published rate nearest its day, within 30 days, is refused
+    /// unless `confirm_unusual`, and the audit entry of one kept says what it was against.
+    /// With no published rate nearby there is nothing to compare it with.
     ///
     /// # Errors
     ///
     /// [`LedgerError::Denied`] without [`Action::ManageHousehold`] and `balances` access to
     /// every account; [`LedgerError::Invalid`] for the euro, the display currency, a day
-    /// after today or before 1970; a failure to resolve access; storage failures.
+    /// after today or before 1970; [`LedgerError::UnusualRate`] as above; a failure to
+    /// resolve access; storage failures.
     pub async fn set_manual_rate(
         &self,
         actor: &Actor,
         currency: Currency,
         on: Date,
         rate: FxRate,
+        confirm_unusual: bool,
     ) -> Result<ManualRate, LedgerError> {
         self.authorize_manual_rate(actor).await?;
         if currency.as_str() == "EUR" {
@@ -85,7 +96,26 @@ impl Ledger {
         if let Some(same) = before.filter(|before| before.rate == rate) {
             return Ok(same);
         }
+        let reach = Span::new().days(UNUSUAL_RATE_NEARBY_DAYS);
+        let nearby = tx
+            .published_rates_between(currency, on.saturating_sub(reach), on.saturating_add(reach))
+            .await?;
+        let unusual = unusual_against(rate, on, &nearby);
+        if let (Some(published), false) = (unusual, confirm_unusual) {
+            return Err(LedgerError::UnusualRate {
+                entered: rate,
+                published,
+            });
+        }
         tx.set_manual_rate(currency, on, rate, now).await?;
+        let mut changes = AuditChanges::new().change(
+            "rate",
+            before.map(|before| before.rate.to_string()),
+            rate.to_string(),
+        );
+        if let Some(published) = unusual {
+            changes = changes.set("confirmed_against_published", published.rate.to_string());
+        }
         audit(
             &mut tx,
             now,
@@ -93,11 +123,7 @@ impl Ledger {
             "fx.manual_rate.set",
             ENTITY,
             entity_id(currency, on),
-            AuditChanges::new().change(
-                "rate",
-                before.map(|before| before.rate.to_string()),
-                rate.to_string(),
-            ),
+            changes,
         )
         .await?;
         tx.commit().await?;

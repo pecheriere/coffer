@@ -169,6 +169,7 @@ point.)
   ],
   "blockers": [],
   "cautions": [],
+  "manual_rates": [],
   "buckets": [
     {
       "belongs_to": "someone_else",
@@ -250,7 +251,8 @@ point.)
         }
       ],
       "blockers": [],
-      "cautions": []
+      "cautions": [],
+      "manual_rates": []
     },
     {
       "belongs_to": "given_away",
@@ -308,7 +310,8 @@ point.)
         }
       ],
       "blockers": [],
-      "cautions": []
+      "cautions": [],
+      "manual_rates": []
     }
   ]
 }
@@ -336,7 +339,11 @@ How to read it:
   `too_large` (it doesn't fit in 64 bits) or `no_display_currency`.
 - `manual_rate` is `true` on an account's point whose `amount` used a rate an admin
   entered, and on a report's point or `by_liquidity` line with such an amount in it,
-  so a total resting on one says so. The caution `rate_manual` says which currency.
+  so a total resting on one says so. `manual_rates`, on the report and on each bucket,
+  lists each such `currency` with the `first_on` and `last_on` points using it. **It is for
+  information, not a caution:** a fresh manual rate leaves `status` `firm`. Say that the total
+  rests on a rate entered by hand. `rate_stale` applies once it is over 7 days old, and then
+  `status` is `provisional` as with any rate.
 - `rate_on` is the date of the rate used: the most recent rate on or before the
   day, never a later one. A weekend or a holiday reports the Friday before. A
   conversion between two currencies neither of which is the euro goes through
@@ -412,7 +419,7 @@ bucket's own accounts and numbers alone.
 - `closed_account_owing` means the debt keeps counting in that bucket's sums, not in
   net worth. Setting `include_in_net_worth` to `false` changes nothing, since it
   already is: if it was paid off, record its balance as 0.
-- `rate_missing`, `rate_stale`, `rate_manual`, `amount_too_large`, `balance_stale`,
+- `rate_missing`, `rate_stale`, `amount_too_large`, `balance_stale`,
   `to_date_not_yet_filled`, `daily_value_missing`, `nothing_counted_after_last_point`
   and `liability_balance_positive` mean what the table says, and call for the same
   step, with "counted" meaning in the bucket's sums.
@@ -470,7 +477,8 @@ point are left out; each class's `amount` is `null` as well):
     }
   ],
   "blockers": [{"kind": "display_currency_not_set"}],
-  "cautions": []
+  "cautions": [],
+  "manual_rates": []
 }
 ```
 
@@ -481,7 +489,6 @@ point are left out; each class's `amount` is `null` as well):
 |---|---|---|
 | `rate_missing` (`currency`, `reason`, `first_on`, `last_on`) | From the point `first_on` to the point `last_on` that currency's rate is missing, so the accounts it converts have no amount and those periods have `total: null`. `currency` is the one whose rate is missing: for a euro account, the display currency, never the euro. | See the reasons below. Report `by_currency` meanwhile, and say that the total is unknown, not lower. |
 | `rate_stale` (`currency`, `on`, `rate_on`, `age_days`) | The point `on` used a rate more than 7 days older than the day, the worst such point. A source that stopped publishing (the ECB's rouble rate ends on 2022-03-01) would otherwise be converted at its last rate for ever. The amount is included. | Say that the amount uses an old rate, from `rate_on`. Tell the owner: the currency may no longer be published. |
-| `rate_manual` (`currency`, `first_on`, `last_on`) | From the point `first_on` to the point `last_on` amounts were converted with a rate of that currency that an admin entered, not one a source published. The amounts are included. | Say that the total rests on a rate entered by hand. Ask the owner if it looks wrong: `GET /fx/manual-rates` lists them, and the audit log says who entered each. |
 | `amount_too_large` (`account`, `on`) | The last point at which that account's amount didn't fit in 64 bits. Its amount and the total are `null`. | Check the account for a mistyped balance, and tell the owner. |
 | `balance_stale` (`account`, `on`, `age_days`) | On the latest point, that counted account's balance dates from `on`, older than `stale_after_days`. | Sync, or ask the owner for a current balance. The total may have changed. |
 | `to_date_not_yet_filled` (`through`) | The daily values stop at `through`, before the range's end or today. | Right after midnight, ask again in a minute. If it persists for hours, tell the owner: the job that fills the days is failing. Say the date the number is for. |
@@ -636,7 +643,8 @@ date not written `YYYY-MM-DD` is 400.
 **Entering a rate by hand.** The ECB publishes about 30 currencies. For another, or a day
 it has wrong, an admin enters a rate on `/admin/household`, or a token with `admin` calls
 `PUT /api/v1/fx/manual-rates/{currency}/{on}` with `{"rate": "655.957"}`. `GET
-/api/v1/fx/manual-rates` lists them and `DELETE` on the same path removes one (404 if there
+/api/v1/fx/manual-rates` lists them, at most 1,000 from `offset`, with `truncated` true when
+there are older ones, and `DELETE` on the same path removes one (404 if there
 is none). Each write is audited with the old and new rate, as `fx.manual_rate.set` or
 `fx.manual_rate.remove`. The rule:
 
@@ -649,6 +657,14 @@ is none). Each write is audited with the old and new rate, as `fx.manual_rate.se
   rate, or none, and then `rate_missing` again.
 - It is refused when it isn't text above zero with at most 10 digits, 6 of them decimals
   (400), and for the euro, the display currency, a day after today or before 1970 (422).
+- **A rate over 1.5 times from the published rate nearest its day, within 30 days, needs
+  confirming:** 422 with the code `unusual_rate` and both numbers in `detail`, unless the
+  request sets `confirm_unusual: true`, and the audit entry then says what it was against.
+  It catches most rates entered the wrong way round, as euros per unit, **but not one near 1**:
+  USD at 1.087 written 0.92 is only 1.18 times away, and passes. **With no published rate
+  nearby, as for a currency no source publishes, there is nothing to compare it with:** the
+  only guard is the form's wording, "How much of it one euro buys". Other manual rates are
+  not compared.
 - An old one is an old rate: `rate_stale` applies after 7 days as it does to any other. To
   cover an old balance, date the rate on or before it.
 

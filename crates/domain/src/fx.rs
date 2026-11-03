@@ -19,6 +19,9 @@ use crate::transactions::string_enum;
 /// for ever.
 pub const RATE_STALE_AFTER_DAYS: i32 = 7;
 
+/// How many days either side of its own a manual rate is compared with a published one.
+pub const UNUSUAL_RATE_NEARBY_DAYS: i64 = 30;
+
 /// The most digits a rate holds, on both sides of the point together.
 const MAX_RATE_DIGITS: usize = 10;
 /// The most decimals a rate holds.
@@ -334,6 +337,31 @@ impl RateBook {
             .and_then(|history| history.on_or_before(on))
             .map_or(RateLookup::Missing, RateLookup::Found)
     }
+}
+
+/// The published rate nearest `on` among `nearby`, if `entered` is more than 1.5 times away
+/// from it in either direction, the earlier of two as near. No published rate says nothing.
+/// A rate entered the wrong way round is caught only when the true one is above about 1.22 or
+/// below about 0.82: closer to 1, its inverse is within 1.5 times.
+#[must_use]
+pub fn unusual_against(
+    entered: FxRate,
+    on: Date,
+    nearby: &[RateObservation],
+) -> Option<RateObservation> {
+    let nearest = nearby
+        .iter()
+        .filter_map(|one| {
+            let distance = on.until(one.on).ok()?.get_days().abs();
+            Some((distance, one.on, *one))
+        })
+        .min_by_key(|&(distance, day, _)| (distance, day))
+        .map(|(_, _, one)| one)?;
+    let (ours, theirs) = (
+        u128::from(entered.millionths),
+        u128::from(nearest.rate.millionths),
+    );
+    (ours * 2 > theirs * 3 || theirs * 2 > ours * 3).then_some(nearest)
 }
 
 /// Whether `currency` is the euro, which every rate is quoted against.

@@ -156,6 +156,10 @@ pub struct NetWorthReport {
     pub blockers: Vec<NetWorthBlocker>,
     /// What keeps the numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
+    /// Which currencies' rates an admin entered among those used here, and over which
+    /// points. For information: it doesn't stop the numbers being firm, and an old such
+    /// rate raises `rate_stale` as any rate does.
+    pub manual_rates: Vec<ManualRateUse>,
     /// Money that isn't the household's, in no number above and added to nothing:
     /// `someone_else` before `given_away`, and within one no label first, then labels by
     /// their bytes.
@@ -183,6 +187,9 @@ pub struct NetWorthBucket {
     pub blockers: Vec<NetWorthBlocker>,
     /// What keeps this bucket's numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
+    /// Which currencies' rates an admin entered among those used here: for information, as
+    /// on the report.
+    pub manual_rates: Vec<ManualRateUse>,
 }
 
 /// Leaves out `beneficiary`, which may be a child's name, and its `accounts`.
@@ -194,6 +201,7 @@ impl std::fmt::Debug for NetWorthBucket {
             .field("points", &self.points)
             .field("blockers", &self.blockers)
             .field("cautions", &self.cautions)
+            .field("manual_rates", &self.manual_rates)
             .finish_non_exhaustive()
     }
 }
@@ -234,7 +242,7 @@ pub struct NetWorthPoint {
     /// did earlier.
     pub unconverted: Vec<AccountId>,
     /// An amount on this point was converted with a rate an admin entered, so `total`, if
-    /// there is one, rests on it: see the caution `rate_manual`.
+    /// there is one, rests on it: see `manual_rates`.
     pub manual_rate: bool,
 }
 
@@ -310,6 +318,18 @@ pub struct AccountPoint {
     pub conversion: ConversionState,
 }
 
+/// Between these points amounts were converted with a rate of this currency that an admin
+/// entered, not one a source published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ManualRateUse {
+    pub currency: Currency,
+    /// The first point using it.
+    pub first_on: Date,
+    /// The last point using it.
+    pub last_on: Date,
+}
+
 /// Why there is no number to trust. `display_currency_not_set`: an admin has to choose
 /// one, and points still hold their sums per currency. `rebuilding`: the daily values are
 /// being rebuilt, so there are no points. `no_counted_accounts`: nothing visible counts in
@@ -348,15 +368,6 @@ pub enum NetWorthCaution {
         on: Date,
         rate_on: Date,
         age_days: u32,
-    },
-    /// Between these points amounts were converted with a rate of this currency that an
-    /// admin entered, not one a source published, so they are only as good as that entry.
-    RateManual {
-        currency: Currency,
-        /// The first point using it.
-        first_on: Date,
-        /// The last point using it.
-        last_on: Date,
     },
     /// The last point at which this account's amount did not fit, so it is
     /// `null`.

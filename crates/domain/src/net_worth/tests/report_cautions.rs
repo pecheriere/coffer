@@ -7,8 +7,8 @@ use crate::accounts::LiquidityClass;
 use crate::fx::{RateBook, RateHistory, RateObservation};
 use crate::money::Currency;
 use crate::net_worth::{
-    CurrencyState, NetWorthCaution, NetWorthInterval, NetWorthStatus, RateMissingReason,
-    net_worth_report,
+    CurrencyState, ManualRateUse, NetWorthCaution, NetWorthInterval, NetWorthStatus,
+    RateMissingReason, net_worth_report,
 };
 
 const OCT_26: Date = date(2026, 10, 26);
@@ -632,12 +632,16 @@ fn a_manual_rate_gives_a_total_and_marks_all_it_touches() {
     };
     assert!(!account_point(0).manual_rate);
     assert!(account_point(1).manual_rate);
-    assert_eq!(report.status, NetWorthStatus::Provisional);
-    assert!(report.cautions.contains(&NetWorthCaution::RateManual {
-        currency: currency("XAF"),
-        first_on: report.points[0].on,
-        last_on: NOV_1,
-    }));
+    assert_eq!(
+        report.manual_rates,
+        [ManualRateUse {
+            currency: currency("XAF"),
+            first_on: report.points[0].on,
+            last_on: NOV_1,
+        }]
+    );
+    assert_eq!(report.status, NetWorthStatus::Firm, "a note, not a caution");
+    assert_eq!(report.cautions, []);
 }
 
 /// An old manual rate is an old rate: it isn't excused from `rate_stale`.
@@ -656,6 +660,7 @@ fn an_old_manual_rate_raises_the_same_caution_as_an_old_published_one() {
         NetWorthCaution::RateStale { currency: code, rate_on, .. }
             if *code == currency("XAF") && *rate_on == entered
     )));
+    assert_eq!(report.status, NetWorthStatus::Provisional);
 }
 
 /// A published rate on a later day takes over, so a later point is no longer marked.

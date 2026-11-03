@@ -9,7 +9,7 @@ use proptest::{collection, sample};
 
 use super::{
     Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateBook, RateHistory,
-    RateLeg, RateLookup, RateObservation, convert,
+    RateLeg, RateLookup, RateObservation, convert, unusual_against,
 };
 use crate::money::Currency;
 
@@ -445,6 +445,41 @@ fn a_conversion_names_the_side_with_a_manual_rate() {
     assert_eq!(manual_of("XAF", "USD"), Some(RateLeg::Held));
     assert_eq!(manual_of("USD", "XAF"), Some(RateLeg::Display));
     assert_eq!(manual_of("XAF", "XOF"), Some(RateLeg::Both));
+}
+
+/// Exactly 1.5 times away isn't more than that, on either side.
+#[test]
+fn a_rate_over_one_and_a_half_times_from_the_nearest_published_one_is_unusual() {
+    let on = date(2026, 10, 15);
+    let near = RateObservation {
+        on: date(2026, 10, 14),
+        rate: rate("2"),
+    };
+    let far = RateObservation {
+        on: date(2026, 10, 1),
+        rate: rate("100"),
+    };
+    let unusual = |text| unusual_against(rate(text), on, &[far, near]);
+
+    assert_eq!(unusual("3"), None);
+    assert_eq!(unusual("3.000001"), Some(near));
+    assert_eq!(unusual("1.333334"), None);
+    assert_eq!(unusual("1.333333"), Some(near));
+    assert_eq!(unusual("0.5"), Some(near));
+    assert_eq!(
+        unusual_against(rate("0.5"), on, &[]),
+        None,
+        "nothing to compare"
+    );
+    let inverted = RateObservation {
+        on,
+        rate: rate("1.087"),
+    };
+    assert_eq!(
+        unusual_against(rate("0.92"), on, &[inverted]),
+        None,
+        "near 1 the wrong way round is only 1.18 times away, and passes"
+    );
 }
 
 /// Leap days, month ends and the days around them.
