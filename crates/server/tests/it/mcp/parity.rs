@@ -314,7 +314,7 @@ async fn every_tool_says_how_to_read_it() {
     for name in ["get_forecast", "what_if_forecast", "get_net_worth"] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         let description = tool["description"].as_str().unwrap();
-        for word in ["`status`", "provisional", "cautions", "blockers"] {
+        for word in ["`status`", "provisional", "cautions", "blockers", "`kind`"] {
             assert!(description.contains(word), "{name}: {word}");
         }
     }

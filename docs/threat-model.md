@@ -277,6 +277,11 @@
     a `POST`, so a page led here by a rebound name is refused; a program sends none and
     needs a token. There are no CORS headers, so a preflight fails. `Host` isn't checked,
     as nowhere in coffer: a proxy may rewrite it, and it would add nothing to the `Origin` rule.
+    That opts out of what the MCP library does about RUSTSEC-2026-0189 (CVE-2026-42559), its
+    loopback-only `Host` list, deliberately. That advisory is about a server with no
+    credential, on loopback or a private network, which a page reaches through a rebound name.
+    Here such a page has no bearer token to send and is refused by its `Origin` first, and the
+    library's list would have to name a host the proxy may not pass on.
   - *CSRF doesn't apply.* A browser attaches nothing by itself to these requests, since the
     cookie isn't read and the bearer token isn't in the browser.
   - *No session.* Nothing is kept between requests and no `Mcp-Session-Id` is issued or read
@@ -285,9 +290,17 @@
     its member applies at the next one. There is no stream to leave open.
   - *Limits.* A body may be 256 KiB, as on the API, and is counted as it arrives. A tool has
     30 seconds and a whole request 45, which bounds a client sending its body slowly, unlike the
-    routes under "No time limit on reading a request's body" below. A tool past its limit is
-    dropped, so an unfinished write rolls back; one that had committed stays, and the answer
-    tells the agent to read it back. A panic in a tool gets the fixed answer and logs no message.
+    routes under "No time limit on reading a request's body" below. At most 16 tools run at once,
+    across all tokens, and a call past that is refused at once and does nothing, so a holder of
+    any token can make others' tool calls busy, though not the API or the pages. A panic in a tool
+    gets the fixed answer and logs no message.
+  - *An answer of "too long" doesn't mean nothing happened.* The MCP library runs a tool on a task of
+    its own, which outlives the request. So a tool is dropped on its own limit, and also when the
+    library says the request is over, a client having gone away or the 45 seconds having run out,
+    and an unfinished write rolls back. But a `review_transactions` may have committed just before,
+    or the 45 seconds may end as it commits, so both the 503 and the 408 tell the agent to read it
+    back. A batch is atomic, so what it finds is all of it or none. That the library's signal
+    reaches a tool is read from its source, and tested only as far as the tool's own side.
   - *Logs.* The MCP library logs each call's arguments and answer at `debug`, and at `info` what
     the client says of itself, so its events are dropped whatever `RUST_LOG` says, and a test holds
     that. coffer logs only a rejected argument's documented name, a status or a fixed text.

@@ -16,8 +16,10 @@ use coffer_domain::time::SystemClock;
 use coffer_store::{Store, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tracing::Subscriber;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterFn, filter_fn};
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
@@ -481,19 +483,8 @@ fn init_tracing(env: &impl Fn(&str) -> Option<String>) -> Result<(), CliError> {
         );
         return Ok(());
     }
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
-        .with_writer(std::io::stderr);
-    let installed = if env("COFFER_LOG_FORMAT").as_deref() == Some("json") {
-        builder
-            .json()
-            .finish()
-            .with(without_mcp_library())
-            .try_init()
-    } else {
-        builder.finish().with(without_mcp_library()).try_init()
-    };
+    let json = env("COFFER_LOG_FORMAT").as_deref() == Some("json");
+    let installed = log_subscriber(filter, json, std::io::stderr).try_init();
     installed.map_err(|error| CliError::Failed(error.to_string()))
 }
 
@@ -508,6 +499,22 @@ fn log_filter(spec: Option<&str>) -> Result<EnvFilter, CliError> {
             .into()
         }),
         None => Ok(EnvFilter::new("info")),
+    }
+}
+
+/// What logs go through, in either format.
+fn log_subscriber<W>(filter: EnvFilter, json: bool, writer: W) -> Box<dyn Subscriber + Send + Sync>
+where
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_writer(writer);
+    if json {
+        Box::new(builder.json().finish().with(without_mcp_library()))
+    } else {
+        Box::new(builder.finish().with(without_mcp_library()))
     }
 }
 
@@ -620,30 +627,29 @@ mod tests {
     /// What the MCP library logs holds a tool call's arguments and answers.
     #[test]
     fn no_log_filter_lets_the_mcp_library_speak() {
-        for spec in [
+        let specs = [
             None,
             Some("trace"),
             Some("debug,rmcp=trace"),
             Some("info,rmcp::service=trace"),
-        ] {
-            let filter = log_filter(spec).unwrap();
+        ];
+        for (spec, json) in specs
+            .into_iter()
+            .flat_map(|spec| [(spec, false), (spec, true)])
+        {
             let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let writer = {
                 let lines = std::sync::Arc::clone(&lines);
                 move || LineWriter(std::sync::Arc::clone(&lines))
             };
-            let subscriber = tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_writer(writer)
-                .finish()
-                .with(without_mcp_library());
+            let subscriber = log_subscriber(log_filter(spec).unwrap(), json, writer);
             tracing::subscriber::with_default(subscriber, || {
                 tracing::error!(target: "rmcp::service", "from the library");
                 tracing::error!(target: "coffer_server::http", "from coffer");
             });
             let lines = String::from_utf8(lines.lock().unwrap().clone()).unwrap();
-            assert!(!lines.contains("from the library"), "{spec:?}");
-            assert!(lines.contains("from coffer"), "{spec:?}");
+            assert!(!lines.contains("from the library"), "{spec:?} {json}");
+            assert!(lines.contains("from coffer"), "{spec:?} {json}");
         }
     }
 
