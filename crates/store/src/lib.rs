@@ -19,6 +19,7 @@ mod kept_balances;
 mod members;
 mod net_worth;
 mod passkeys;
+mod plan_report;
 mod planned_items;
 mod provider_accounts;
 mod rule_filed_transfers;
@@ -26,6 +27,7 @@ mod rules;
 mod sessions;
 mod settlements;
 mod sources;
+mod spending_sql;
 mod sync_runs;
 mod token_grants;
 mod transactions;
@@ -54,7 +56,7 @@ pub use connections::{
 pub use error::StoreError;
 pub use forecast::{
     CategorySpentRow, ConnectionHealth, ForecastData, LooseEndsRow, NewerSpendingRow,
-    PlanReportData, SpentTransactionRow,
+    SpentTransactionRow,
 };
 pub use household::HouseholdSettingsRecord;
 pub use idempotency::{IdempotencyOwner, Reservation};
@@ -63,6 +65,7 @@ pub use kept_balances::{BroughtIn, KeptBalance};
 pub use members::{Member, NewMember};
 pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch, RunsThrough};
 pub use passkeys::{NewPasskey, PasskeyRecord};
+pub use plan_report::PlanReportData;
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
 pub use rules::{RuleFields, RuleRecord};
