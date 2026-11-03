@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use coffer_domain::audit::{AuditChanges, AuditEntry};
-use coffer_domain::fx::{FxRate, RateObservation};
+use coffer_domain::fx::{FxRate, RateObservation, UnusualEntry};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::AccountId;
 use coffer_domain::policy::{
@@ -150,18 +150,12 @@ pub enum LedgerError {
     /// A submitted value is not acceptable; the message says which.
     #[error("{0}")]
     Invalid(&'static str),
-    /// A manual rate is far from a published one nearby and wasn't confirmed. It says both,
+    /// A manual rate is odd against a published one nearby and wasn't confirmed. It says both,
     /// which are validated rates, since the person has to compare them.
-    #[error(
-        "this rate is {entered} per euro, but the published rate of {} is {}. That is more than \
-         1.5 times away, so it may be entered the wrong way round: it should be how much of the \
-         currency one euro buys. To keep it anyway, confirm it.",
-        .published.on,
-        .published.rate
-    )]
+    #[error("{}", unusual_rate_words(*entered, *unusual))]
     UnusualRate {
         entered: FxRate,
-        published: RateObservation,
+        unusual: UnusualEntry,
     },
     /// The change conflicts with the current state.
     #[error("{1}")]
@@ -224,6 +218,21 @@ impl From<AuthError> for LedgerError {
             other => Self::Auth(other),
         }
     }
+}
+
+/// What is odd about a manual rate, both numbers said.
+fn unusual_rate_words(entered: FxRate, unusual: UnusualEntry) -> String {
+    let RateObservation { on, rate } = unusual.published();
+    let compared =
+        format!("this rate is {entered} per euro, but the published rate of {on} is {rate}");
+    let verdict = match unusual {
+        UnusualEntry::WrongWayRound(_) => "It looks like it was entered the wrong way round",
+        UnusualEntry::FarFrom(_) => "That is more than 1.5 times away, so it may be a slip",
+    };
+    format!(
+        "{compared}. {verdict}: it should be how much of the currency one euro buys. To keep it \
+         anyway, confirm it."
+    )
 }
 
 impl From<LedgerError> for Problem {

@@ -9,7 +9,7 @@ use proptest::{collection, sample};
 
 use super::{
     Conversion, FxErrorCode, FxFetchStatus, FxRate, FxSource, HeldRate, RateBook, RateHistory,
-    RateLeg, RateLookup, RateObservation, convert, unusual_against,
+    RateLeg, RateLookup, RateObservation, UnusualEntry, convert, unusual_against,
 };
 use crate::money::Currency;
 
@@ -462,24 +462,76 @@ fn a_rate_over_one_and_a_half_times_from_the_nearest_published_one_is_unusual() 
     let unusual = |text| unusual_against(rate(text), on, &[far, near]);
 
     assert_eq!(unusual("3"), None);
-    assert_eq!(unusual("3.000001"), Some(near));
+    assert_eq!(unusual("3.000001"), Some(UnusualEntry::FarFrom(near)));
     assert_eq!(unusual("1.333334"), None);
-    assert_eq!(unusual("1.333333"), Some(near));
-    assert_eq!(unusual("0.5"), Some(near));
+    assert_eq!(unusual("1.333333"), Some(UnusualEntry::FarFrom(near)));
     assert_eq!(
         unusual_against(rate("0.5"), on, &[]),
         None,
         "nothing to compare"
     );
-    let inverted = RateObservation {
+}
+
+/// What a rate comes to against `published` on one day.
+fn against(entered: &str, published: &str) -> Option<UnusualEntry> {
+    let on = date(2026, 10, 15);
+    unusual_against(
+        rate(entered),
         on,
-        rate: rate("1.087"),
-    };
-    assert_eq!(
-        unusual_against(rate("0.92"), on, &[inverted]),
-        None,
-        "near 1 the wrong way round is only 1.18 times away, and passes"
+        &[RateObservation {
+            on,
+            rate: rate(published),
+        }],
+    )
+}
+
+fn wrong_way_round(entered: &str, published: &str) -> bool {
+    matches!(
+        against(entered, published),
+        Some(UnusualEntry::WrongWayRound(_))
+    )
+}
+
+/// USD at 0.92 for 1.087 is only 1.18 times away, so the factor alone would miss it.
+#[test]
+fn a_rate_near_the_inverse_of_a_published_one_is_the_wrong_way_round() {
+    assert!(wrong_way_round("0.92", "1.087"));
+    assert!(wrong_way_round("1.087", "0.92"));
+    assert!(
+        wrong_way_round("0.5", "2"),
+        "the inverse says more than far"
     );
+    // Exactly 2% from the inverse on each side, and just past it.
+    assert!(wrong_way_round("0.49", "2"));
+    assert!(wrong_way_round("0.51", "2"));
+    assert_eq!(
+        against("1.3", "2"),
+        Some(UnusualEntry::FarFrom(RateObservation {
+            on: date(2026, 10, 15),
+            rate: rate("2"),
+        })),
+        "far, and not near the inverse"
+    );
+    assert!(!wrong_way_round("0.489999", "2"));
+    assert!(!wrong_way_round("0.510001", "2"));
+}
+
+/// Within 5% of parity a rate and its inverse are an ordinary move apart.
+#[test]
+fn near_parity_nothing_is_the_wrong_way_round() {
+    assert_eq!(against("0.98", "1.02"), None);
+    assert_eq!(against("1.02", "0.98"), None);
+    assert_eq!(against("0.96", "1.049999"), None);
+    assert_eq!(against("1.05", "0.950001"), None);
+    assert!(wrong_way_round("0.952", "1.05"), "5% away counts");
+    assert!(wrong_way_round("1.0526", "0.95"), "on either side of 1");
+}
+
+#[test]
+fn an_ordinary_move_is_not_unusual() {
+    assert_eq!(against("1.1", "1.087"), None);
+    assert_eq!(against("1.2", "1.087"), None);
+    assert_eq!(against("150", "175.68"), None);
 }
 
 /// Leap days, month ends and the days around them.

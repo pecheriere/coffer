@@ -252,3 +252,26 @@ async fn the_page_says_the_list_stops_short_and_reaches_the_rest() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
 }
+
+#[tokio::test]
+async fn the_page_says_a_rate_looks_the_wrong_way_round() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-26", "1.087")]).await;
+    let mut admin = alice(&world).await;
+
+    let reply = post(
+        &mut admin,
+        ENTER,
+        &[("currency", "USD"), ("on", "2026-10-26"), ("rate", "0.92")],
+    )
+    .await;
+
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let card = section(&reply.body, "confirm-rate");
+    assert!(card.contains("the wrong way round"));
+    assert!(
+        card.contains("0.92") && card.contains("1.087"),
+        "both numbers"
+    );
+    assert!(card.contains("name=\"confirm_unusual\""));
+}

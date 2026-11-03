@@ -631,3 +631,65 @@ async fn the_list_says_when_it_stops_short_and_goes_on_from_an_offset() {
     assert_eq!(rest["items"][0]["on"], "2020-01-01");
     assert_eq!(rest["truncated"], false);
 }
+
+/// The case the factor alone misses: 1.18 times away, and the inverse of the published rate.
+#[tokio::test]
+async fn usd_entered_the_wrong_way_round_needs_confirming() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-26", "1.087")]).await;
+    let uri = rate_uri("USD", "2026-10-26");
+
+    let (status, text) = world
+        .send(
+            Method::PUT,
+            &uri,
+            &world.admin,
+            Some(&json!({"rate": "0.92"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let problem = parsed(&text);
+    assert_eq!(problem["code"], "unusual_rate");
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("0.92") && detail.contains("1.087"),
+        "both numbers"
+    );
+    assert!(detail.contains("the wrong way round"));
+    assert_eq!(world.rate_events().await.len(), 0, "nothing written");
+
+    let answer = world
+        .admin_send(
+            Method::PUT,
+            &uri,
+            &json!({"rate": "0.92", "confirm_unusual": true}),
+        )
+        .await;
+
+    assert_eq!(answer["rate"], "0.92");
+    let logged = world.rate_events().await;
+    let against = logged[0]
+        .changes
+        .iter()
+        .find(|(field, _)| *field == "confirmed_against_published")
+        .map(|(_, change)| change.after.clone());
+    assert_eq!(against, Some(AuditValue::from("1.087")));
+}
+
+/// Near parity a rate and its inverse are an ordinary move apart, and a usual move is usual.
+#[tokio::test]
+async fn neither_a_rate_near_one_nor_an_ordinary_move_asks_for_confirming() {
+    let world = world().await;
+    world.rates("USD", &[("2026-10-20", "1.02")]).await;
+    world.rates("GBP", &[("2026-10-20", "1.087")]).await;
+
+    let near_one = world.enter("USD", "2026-10-26", "0.98").await;
+    let ordinary = world.enter("GBP", "2026-10-26", "1.12").await;
+
+    assert_eq!(near_one["rate"], "0.98");
+    assert_eq!(ordinary["rate"], "1.12");
+    for event in world.rate_events().await {
+        assert_eq!(event.changes.iter().count(), 1, "not recorded as confirmed");
+    }
+}

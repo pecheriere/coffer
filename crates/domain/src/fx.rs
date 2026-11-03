@@ -339,16 +339,37 @@ impl RateBook {
     }
 }
 
-/// The published rate nearest `on` among `nearby`, if `entered` is more than 1.5 times away
-/// from it in either direction, the earlier of two as near. No published rate says nothing.
-/// A rate entered the wrong way round is caught only when the true one is above about 1.22 or
-/// below about 0.82: closer to 1, its inverse is within 1.5 times.
+/// What is odd about a manual rate, against the published rate nearest its day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnusualEntry {
+    /// Within 2% of that rate's inverse, as euros per unit rather than units per euro.
+    WrongWayRound(RateObservation),
+    /// More than 1.5 times away from it, in either direction.
+    FarFrom(RateObservation),
+}
+
+impl UnusualEntry {
+    /// The published rate it was compared with.
+    #[must_use]
+    pub fn published(self) -> RateObservation {
+        match self {
+            Self::WrongWayRound(published) | Self::FarFrom(published) => published,
+        }
+    }
+}
+
+/// What is odd about `entered` against the published rate nearest `on` among `nearby`, the
+/// earlier of two as near. No published rate says nothing.
+///
+/// Near 1 a rate and its inverse are too close to tell apart, so the inverse is looked for only
+/// when the published rate is at least 5% away from 1. It is looked for first: such a rate may
+/// also be far away, and the wrong way round says more.
 #[must_use]
 pub fn unusual_against(
     entered: FxRate,
     on: Date,
     nearby: &[RateObservation],
-) -> Option<RateObservation> {
+) -> Option<UnusualEntry> {
     let nearest = nearby
         .iter()
         .filter_map(|one| {
@@ -361,7 +382,20 @@ pub fn unusual_against(
         u128::from(entered.millionths),
         u128::from(nearest.rate.millionths),
     );
-    (ours * 2 > theirs * 3 || theirs * 2 > ours * 3).then_some(nearest)
+    // Below `10^16` each, so a product times 100 stays far inside `u128`. One is `10^12` in
+    // millionths of millionths, and a rate times its inverse is one.
+    let one = u128::from(RATE_SCALE) * u128::from(RATE_SCALE);
+    let product = ours * theirs * 100;
+    let near_inverse = (one * 98..=one * 102).contains(&product);
+    let scale = u128::from(RATE_SCALE);
+    let away_from_parity = theirs * 100 >= scale * 105 || theirs * 100 <= scale * 95;
+    if near_inverse && away_from_parity {
+        Some(UnusualEntry::WrongWayRound(nearest))
+    } else if ours * 2 > theirs * 3 || theirs * 2 > ours * 3 {
+        Some(UnusualEntry::FarFrom(nearest))
+    } else {
+        None
+    }
 }
 
 /// Whether `currency` is the euro, which every rate is quoted against.

@@ -626,8 +626,9 @@
 - **An admin can enter a wrong rate by hand** (N16), a slip or on purpose, and it moves
   net worth at once. A rate is bounded in form as a fetched one is, and it can't be for the display
   currency, the euro or a day to come. In value, one over 1.5 times from a published rate within
-  30 days needs confirming, and a confirmed one says so in the log. Within that factor a wrong
-  rate passes, including one near 1 written the wrong way round. With no published rate nearby
+  30 days, or within 2% of its inverse when that rate is at least 5% away from 1, needs
+  confirming, and a confirmed one says so in the log. Any other wrong rate within that factor
+  passes, including one written the wrong way round when the true rate is within 5% of 1. With no published rate nearby
   nothing bounds it but the form's wording, so a wrong rate for a currency no source publishes
   passes.
   So it is never silent: each write and removal is audited with the old and new rate and

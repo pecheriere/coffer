@@ -37,8 +37,8 @@ pub struct ManualRatePath {
 #[serde(deny_unknown_fields)]
 pub struct ManualRateInput {
     pub rate: FxRate,
-    /// Keeps a rate over 1.5 times from the published rate nearest its day, within 30 days,
-    /// which is otherwise refused as `unusual_rate`. By default `false`.
+    /// Keeps a rate over 1.5 times from the published rate nearest its day, within 30 days, or
+    /// close to its inverse, which is otherwise refused as `unusual_rate`. By default `false`.
     #[serde(default)]
     pub confirm_unusual: bool,
 }
@@ -163,8 +163,8 @@ pub(super) async fn manual_rates(
                    unknown code or a day not written `YYYY-MM-DD`. The euro, the display currency, \
                    a day after today or before 1970 is 422.\n\n\
                    A rate over 1.5 times from the published rate nearest its day, within 30 days, \
-                   as one entered the wrong way round often is, is 422 with the code `unusual_rate` \
-                   and both numbers in `detail`, unless `confirm_unusual` is true, and the audit \
+                   or within 2% of that rate's inverse when it is at least 5% away from 1, as a \
+                   rate entered the wrong way round is, is 422 with the code `unusual_rate` and both numbers in `detail`, unless `confirm_unusual` is true, and the audit \
                    entry of one kept says what it was against. With no published rate nearby \
                    there is nothing to compare it with, and no such check.\n\n\
                    Needs `admin`; a token with account grants also needs `all` at `balances`: \

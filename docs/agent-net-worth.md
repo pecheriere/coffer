@@ -657,11 +657,13 @@ is none). Each write is audited with the old and new rate, as `fx.manual_rate.se
   rate, or none, and then `rate_missing` again.
 - It is refused when it isn't text above zero with at most 10 digits, 6 of them decimals
   (400), and for the euro, the display currency, a day after today or before 1970 (422).
-- **A rate over 1.5 times from the published rate nearest its day, within 30 days, needs
+- **A rate that looks wrong against the published rate nearest its day, within 30 days, needs
   confirming:** 422 with the code `unusual_rate` and both numbers in `detail`, unless the
   request sets `confirm_unusual: true`, and the audit entry then says what it was against.
-  It catches most rates entered the wrong way round, as euros per unit, **but not one near 1**:
-  USD at 1.087 written 0.92 is only 1.18 times away, and passes. **With no published rate
+  That is a rate over 1.5 times away, or within 2% of that rate's inverse, as euros per unit
+  (USD at 1.087 written 0.92), when the published rate is at least 5% away from 1. **Within
+  5% of 1 a rate and its inverse are an ordinary move apart, so that case isn't caught.**
+  **With no published rate
   nearby, as for a currency no source publishes, there is nothing to compare it with:** the
   only guard is the form's wording, "How much of it one euro buys". Other manual rates are
   not compared.

@@ -1211,9 +1211,10 @@ one: what it covered falls back on that day's fetched rate, an earlier rate or n
 A wrong rate moves net worth, so nothing about one is silent. It is refused unless it is positive,
 in `FxRate`'s form (N4), with a day from 1970 to today, in an ISO 4217 code other than the euro or
 the display currency. A rate over 1.5 times from the published rate nearest its day, within 30 days,
-is refused as `unusual_rate`, showing both numbers, unless `confirm_unusual` is set, since one
-entered the wrong way round misstates net worth without looking wrong. A rate between about 0.82
-and 1.22 written the wrong way round is within that factor and passes. With no published rate
+or within 2% of that rate's inverse when it is at least 5% away from 1, is refused as
+`unusual_rate`, showing both numbers, unless `confirm_unusual` is set, since one entered the wrong
+way round misstates net worth without looking wrong: USD at 1.087 written 0.92 is only 1.18 times
+away. Within 5% of 1 a rate and its inverse are an ordinary move apart, so that isn't caught. With no published rate
 nearby there is nothing to compare it with, and the form's wording is the only guard. A later change of display currency to a code holding a manual rate
 goes on using it. Each change is audited with the old and new rate, and the same rate again writes
 nothing. It is marked `manual` wherever it is reported: `manual` on `GET /api/v1/fx/rates`, a list

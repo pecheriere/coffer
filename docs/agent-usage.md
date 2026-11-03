@@ -483,7 +483,7 @@ to do about each. In short:
   A fetch never overwrites it, on its own day it wins, and a later published rate takes
   over. Totals built from one are marked `manual_rate` and listed in the report's `manual_rates`,
   which is for information: `status` stays `firm` until `rate_stale` applies. A rate over 1.5
-  times from a published one nearby is 422 `unusual_rate` unless `confirm_unusual: true`.
+  times from a published one nearby, or close to its inverse, is 422 `unusual_rate` unless `confirm_unusual: true`.
 - The display currency is `display_currency` in `PATCH
   /api/v1/household/settings`: `admin`, and `all` at `balances` for a token with
   grants. It starts unset, and until it is there is no total.

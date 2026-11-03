@@ -59,8 +59,9 @@ impl Ledger {
     /// Enters `rate` for `currency` on `on`, replacing what an admin entered for that day.
     /// It rewrites the daily values it moves, in this transaction or if there are too many
     /// for one, in a rebuild the daily job runs. The same rate again writes nothing. A rate
-    /// over 1.5 times from the published rate nearest its day, within 30 days, is refused
-    /// unless `confirm_unusual`, and the audit entry of one kept says what it was against.
+    /// over 1.5 times from the published rate nearest its day, within 30 days, or within 2% of
+    /// its inverse when that rate is at least 5% away from 1, is refused unless
+    /// `confirm_unusual`, and the audit entry of one kept says what it was against.
     /// With no published rate nearby there is nothing to compare it with.
     ///
     /// # Errors
@@ -101,10 +102,10 @@ impl Ledger {
             .published_rates_between(currency, on.saturating_sub(reach), on.saturating_add(reach))
             .await?;
         let unusual = unusual_against(rate, on, &nearby);
-        if let (Some(published), false) = (unusual, confirm_unusual) {
+        if let (Some(unusual), false) = (unusual, confirm_unusual) {
             return Err(LedgerError::UnusualRate {
                 entered: rate,
-                published,
+                unusual,
             });
         }
         tx.set_manual_rate(currency, on, rate, now).await?;
@@ -113,8 +114,11 @@ impl Ledger {
             before.map(|before| before.rate.to_string()),
             rate.to_string(),
         );
-        if let Some(published) = unusual {
-            changes = changes.set("confirmed_against_published", published.rate.to_string());
+        if let Some(unusual) = unusual {
+            changes = changes.set(
+                "confirmed_against_published",
+                unusual.published().rate.to_string(),
+            );
         }
         audit(
             &mut tx,

@@ -48,8 +48,8 @@ pub enum ProblemCode {
     /// The provider account's currency is not the account's, or is not a
     /// supported ISO 4217 currency.
     CurrencyMismatch,
-    /// A rate entered by hand is over 1.5 times from a published one nearby; `detail` says
-    /// both. `confirm_unusual` keeps it.
+    /// A rate entered by hand is over 1.5 times from a published one nearby, or looks like its
+    /// inverse; `detail` says both. `confirm_unusual` keeps it.
     UnusualRate,
     Internal,
 }
