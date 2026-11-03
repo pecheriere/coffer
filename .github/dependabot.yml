@@ -88,6 +88,20 @@ updates:
     commit-message:
       prefix: test
 
+  # The end-to-end tests' packages.
+  - package-ecosystem: npm
+    directory: /staging/e2e
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    commit-message:
+      prefix: test
+
   # The digest-pinned Spectral image the openapi-lint job runs.
   - package-ecosystem: docker
     directory: /.github/spectral
