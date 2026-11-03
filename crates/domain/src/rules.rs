@@ -219,10 +219,6 @@ pub enum TransferLeg {
 
 /// What rules read of a transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "one independent yes/no per thing a rule asks of a transaction, read together"
-)]
 pub struct RuleSubject<'a> {
     pub account: AccountId,
     pub amount_minor: i64,
