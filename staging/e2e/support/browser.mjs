@@ -41,12 +41,16 @@ export const test = serverTest.extend({
   // For the one test about catching a problem.
   expectProblems: [false, { option: true }],
 
+  // Console errors a test has reason to expect, by what they say. All else still fails it.
+  expectedConsole: [[], { option: true }],
+
   // What the browser said went wrong, gathered all through a test. Console warnings are left
   // out on purpose: browsers use them for advice about a page, not for something broken.
-  consoleProblems: async ({ page }, use) => {
+  consoleProblems: async ({ page, expectedConsole }, use) => {
     const problems = [];
     page.on('console', (message) => {
-      if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+      const expected = expectedConsole.some((text) => message.text().includes(text));
+      if (message.type() === 'error' && !expected) problems.push(`console: ${message.text()}`);
     });
     page.on('pageerror', (error) => problems.push(`uncaught: ${error.message}`));
     await use(problems);
