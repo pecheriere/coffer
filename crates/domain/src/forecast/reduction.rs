@@ -72,6 +72,9 @@ pub(super) struct Reduction {
     /// The currencies where more spending found this month could change the number:
     /// a budget still to reduce, or a gap it might close.
     pub(super) spending_sensitive_currencies: BTreeSet<Currency>,
+    /// The pools where a bill settled as paid decided how much of the spending is the budget's,
+    /// because no transaction says what paid it.
+    pub(super) assumed: BTreeSet<PoolKey>,
 }
 
 /// A stored outflow's category, the only kind of item that shares a pool.
@@ -184,7 +187,7 @@ pub(super) fn reduce(
         }
     }
 
-    let pools = pools_settled(&pools, &bills, &matching, &month_budgets, input);
+    let (pools, assumed) = pools_settled(&pools, &bills, &matching, &month_budgets, input);
 
     let Outcome {
         not_seen,
@@ -211,6 +214,7 @@ pub(super) fn reduce(
         bill_cautions,
         last_month_unpaid_currencies,
         spending_sensitive_currencies,
+        assumed,
     })
 }
 
@@ -260,17 +264,26 @@ fn bills_counted(bills: &[Bill], seen: &[Seen], as_of: Date) -> BTreeMap<PoolKey
 /// less what settling saved in its category. A budget's need rises by no more than that use falls,
 /// so settling can't raise the need, however a settled bill sends a payment on: to today's bill,
 /// which counts in full whatever pays it, or to a smaller one in tolerance.
+///
+/// Also the pools where that assumption moved the pool: a charge no transaction fits, or the
+/// floor, so a budget's reduction there may be money that was the bill's.
 fn pools_settled(
     spent: &BTreeMap<PoolKey, i128>,
     bills: &[Bill],
     matching: &Matching,
     month_budgets: &[Occurrence],
     input: &ForecastInput,
-) -> BTreeMap<PoolKey, i128> {
+) -> (BTreeMap<PoolKey, i128>, BTreeSet<PoolKey>) {
     let mut pools = pools_after(spent, matching, input);
     if bills.iter().all(|bill| bill.settled.is_none()) {
-        return pools;
+        return (pools, BTreeSet::new());
     }
+    let mut assumed: BTreeSet<PoolKey> = matching
+        .settled_charges
+        .iter()
+        .filter(|&(_, &charged)| charged > 0)
+        .map(|(&key, _)| key)
+        .collect();
     let plain: Vec<Bill> = bills
         .iter()
         .map(|bill| Bill {
@@ -294,9 +307,13 @@ fn pools_settled(
             .min(planned.get(key).copied().unwrap_or_default());
         let saved = counted_unsettled.get(key).copied().unwrap_or_default()
             - counted.get(key).copied().unwrap_or_default();
-        *pool = (*pool).max(before - saved);
+        let floored = (*pool).max(before - saved);
+        if floored > *pool {
+            assumed.insert(*key);
+        }
+        *pool = floored;
     }
-    pools
+    (pools, assumed)
 }
 
 /// What to say of refunds that undid no charge, beside a bill paid in their category.

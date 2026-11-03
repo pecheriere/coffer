@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
     AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
-    SettledLine, bills_looked_at_from,
+    SettledBudget, SettledLine, bills_looked_at_from,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
@@ -121,6 +121,18 @@ pub(super) fn settled_sentence(line: &SettledLine) -> String {
         line.name,
         money(line.amount),
         month_name(line.month),
+    )
+}
+
+/// A budget lowered beside a bill settled as paid, which the number takes at its word.
+pub(super) fn settled_budget_sentence(line: &SettledBudget) -> String {
+    format!(
+        "{}: {} of spending lowered this budget for {}. A bill settled as paid shares its \
+         category, so if some of that was the bill's, the budget needs up to {} more.",
+        line.name,
+        money(line.amount),
+        month_name(line.month),
+        money(line.amount),
     )
 }
 

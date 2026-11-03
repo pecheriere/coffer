@@ -439,7 +439,8 @@ household's settings. The first example is a household that has just started:
   ],
   "blockers": [{"kind": "floor_not_set"}, {"kind": "no_counted_accounts"}],
   "cautions": [],
-  "settled": []
+  "settled": [],
+  "settled_budgets": []
 }
 ```
 
@@ -474,6 +475,18 @@ planned, so a bill a transaction had already paid changes the number by less: th
 transaction goes on to the category's next bill or budget instead. Settling raises no
 caution, so a forecast whose only doubt was that bill is `firm`, since a person
 decided. Say what was settled when you report the number.
+
+`settled_budgets` is a note, never a caution, so it never changes `status`: a settled
+bill is a person's decision. A bill settled as `paid` keeps its own amount off its
+category's spending, whether or not a transaction fits it, and what is left of that
+spending lowers the category's budgets. When no transaction pays the bill that is a
+guess, and it can read low: rent of 2,000 charged 2,300 fits no transaction, so 300
+lowers a budget of 500 to a need of 200, where the truth may be 500. `settled_budgets`
+has an entry per such budget, with `source`, `name`, `category`, `month` (always `as_of`'s,
+the only one spending reduces) and `amount`, the budget's `reduced_by` there, which
+the budget may need more of, up to that much. It is empty when nothing was lowered that way,
+and a settled bill that a transaction fits leaves it empty. Say it when you report a
+surplus, since reading low overstates what can be invested.
 
 ### What pays a bill
 
@@ -619,7 +632,8 @@ first entry):
   ],
   "blockers": [],
   "cautions": [],
-  "settled": []
+  "settled": [],
+  "settled_budgets": []
 }
 ```
 

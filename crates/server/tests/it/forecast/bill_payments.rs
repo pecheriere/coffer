@@ -181,6 +181,49 @@ async fn a_transaction_that_could_be_either_is_said_until_settled() {
     assert_eq!(settled["surplus"], usd(950_000));
 }
 
+/// Rent of 2,000.00 charged 2,300.00 fits nothing, so settled as paid its 2,000.00 comes off the
+/// spending and the 300.00 left lowers a budget of 500.00 to a need of 200.00, where the truth may
+/// be 500.00. The answer says 300.00 for that budget and month, and stays firm: 10,000.00 less
+/// 200.00 and December's rent of 2,000.00. Without the settlement there is no note.
+#[tokio::test]
+async fn a_budget_lowered_beside_a_settled_bill_is_noted_not_cautioned() {
+    let (world, checking) = holding().await;
+    let home = world.expense("Home").await;
+    let rent = world
+        .item(&outflow("Rent", 200_000, home, &monthly("2026-11-05")))
+        .await;
+    let upkeep = world
+        .item(&with(
+            outflow("Upkeep", 50_000, home, &monthly("2026-11-20")),
+            "spending",
+            json!("budget"),
+        ))
+        .await;
+    world.spend(checking, "2026-11-05", 230_000, home).await;
+    assert_eq!(
+        world.forecast_at(ONE_MONTH).await["settled_budgets"],
+        json!([])
+    );
+
+    world.settle(&rent, "2026-11", "paid").await;
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(
+        forecast["settled_budgets"],
+        json!([{
+            "source": {"kind": "planned_item", "id": upkeep},
+            "name": "Upkeep",
+            "category": home,
+            "month": "2026-11",
+            "amount": usd(30_000),
+        }])
+    );
+    assert_eq!(line(&forecast, "Upkeep")["counted"], usd(20_000));
+    assert_eq!(forecast["status"], "firm");
+    assert_eq!(forecast["cautions"], json!([]));
+    assert_eq!(forecast["surplus"], usd(780_000));
+}
+
 /// Paid from an account that isn't counted, no money left counted cash, so it pays nothing and the
 /// bill still counts, until a person settles it.
 #[tokio::test]
