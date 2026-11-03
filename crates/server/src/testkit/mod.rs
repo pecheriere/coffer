@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use coffer_domain::accounts::ConnectionLabel;
 use coffer_domain::ids::{ConnectionId, MemberId};
-use coffer_domain::time::{Clock as _, ManualClock, SystemClock};
+use coffer_domain::time::{Clock, ManualClock, SystemClock};
 pub use coffer_store::{
     INJECTED_BIND_RECORD_ID, INJECTED_FAILURE_LABEL, INJECTED_FAILURE_RECORD_ID,
     INJECTED_FAULT_RECORD_ID, InjectedRunUpdate,
@@ -63,8 +63,10 @@ pub const TEST_START: i64 = 1_800_000_000;
 /// A server's state in a temporary directory, with a clock that only moves
 /// when told to.
 pub struct TestServer {
-    /// Advance this to move time for every service.
+    /// Advance this to move time for every service. On a server from
+    /// [`TestServer::with_system_clock`] the services don't read it.
     pub clock: Arc<ManualClock>,
+    services_clock: Arc<dyn Clock>,
     /// The database.
     pub store: Store,
     /// The server key.
@@ -114,7 +116,21 @@ impl TestServer {
         let dir = tempfile::tempdir().expect("temporary directory");
         let clock = ManualClock::new(Timestamp::from_second(TEST_START).expect("valid start time"));
         let path = dir.path().to_owned();
-        Self::build(&path, Some(dir), clock, vars).await
+        Self::build(&path, Some(dir), clock, false, vars).await
+    }
+
+    /// A fresh, empty server whose services read the real clock, as in production, so what
+    /// a save answers can be checked against what the store rounds. Moving
+    /// [`TestServer::clock`] changes nothing here.
+    ///
+    /// # Panics
+    ///
+    /// As [`TestServer::new`].
+    pub async fn with_system_clock() -> Self {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let clock = ManualClock::new(SystemClock.now());
+        let path = dir.path().to_owned();
+        Self::build(&path, Some(dir), clock, true, &[]).await
     }
 
     /// A fresh, empty server whose sync engine uses a [`FakeProvider`] for
@@ -161,7 +177,7 @@ impl TestServer {
         self.sync = Arc::new(
             SyncService::new(
                 self.store.clone(),
-                self.clock.clone(),
+                Arc::clone(&self.services_clock),
                 Arc::clone(&self.vault),
                 Arc::new(registry),
                 Arc::clone(&self.access),
@@ -223,7 +239,7 @@ impl TestServer {
                 label: ConnectionLabel::parse(label).expect("valid connection label"),
                 owner,
                 credentials: Vec::new(),
-                created_at: self.clock.now(),
+                created_at: self.services_clock.now(),
             })
             .await
             .expect("insert connection");
@@ -247,13 +263,14 @@ impl TestServer {
     /// If the database, key or service cannot be opened.
     pub async fn open_at(data_dir: &Path) -> Self {
         let now = SystemClock.now();
-        Self::build(data_dir, None, ManualClock::new(now), &[]).await
+        Self::build(data_dir, None, ManualClock::new(now), false, &[]).await
     }
 
     async fn build(
         data_dir: &Path,
         dir: Option<TempDir>,
         clock: ManualClock,
+        real_time: bool,
         extra: &[(&str, &str)],
     ) -> Self {
         capture_logs();
@@ -270,7 +287,12 @@ impl TestServer {
             .await
             .expect("open store");
         let key = Arc::new(ServerKey::load_or_create(&config.secret_key_file).expect("server key"));
-        let clock = Arc::new(clock);
+        let manual = Arc::new(clock);
+        let clock: Arc<dyn Clock> = if real_time {
+            Arc::new(SystemClock)
+        } else {
+            manual.clone()
+        };
         let identity = Arc::new(
             Identity::new(
                 store.clone(),
@@ -311,7 +333,8 @@ impl TestServer {
             config.clone(),
         ));
         Self {
-            clock,
+            clock: manual,
+            services_clock: clock,
             store,
             key,
             config,
@@ -342,14 +365,14 @@ impl TestServer {
             sync: Arc::clone(&self.sync),
             fx: Arc::new(FxService::new(
                 self.store.clone(),
-                self.clock.clone(),
+                Arc::clone(&self.services_clock),
                 self.config.default_timezone.clone(),
                 None,
             )),
             idempotency: Arc::new(RequestHasher::new(&self.key)),
             store: self.store.clone(),
             config: self.config.clone(),
-            clock: self.clock.clone(),
+            clock: Arc::clone(&self.services_clock),
         }
     }
 
