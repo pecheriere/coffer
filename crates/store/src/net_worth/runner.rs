@@ -47,7 +47,9 @@ impl Store {
     /// Recompute the whole table up to `through`, starting over if a rebuild was left
     /// part way, once any rebuild running has ended. A table that fits in one batch
     /// changes at one moment. A larger one answers as rebuilding until the last batch,
-    /// and other writers get their turn between batches. Answers the rows it wrote.
+    /// and other writers get their turn between batches. Answers the rows it wrote: more
+    /// than the table holds if a change started it over, and without those a write
+    /// between batches added.
     ///
     /// # Errors
     ///
@@ -60,6 +62,24 @@ impl Store {
             }
             tokio::time::sleep(PAUSE_BETWEEN_BATCHES).await;
         };
+        self.start_over_and_run(through).await
+    }
+
+    /// As [`Self::rebuild_net_worth`], but answers `None` at once if a rebuild is running,
+    /// for a caller that wants to say so before waiting.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rebuild_net_worth`].
+    pub async fn try_rebuild_net_worth(&self, through: Date) -> Result<Option<u64>, StoreError> {
+        let Some(_claim) = RebuildClaim::take(&self.rebuild_claim)? else {
+            return Ok(None);
+        };
+        self.start_over_and_run(through).await.map(Some)
+    }
+
+    /// The whole table, for a caller holding the claim.
+    async fn start_over_and_run(&self, through: Date) -> Result<u64, StoreError> {
         let mut tx = self.begin().await?;
         tx.ask_for_net_worth_rebuild().await?;
         let first = tx.rebuild_batch(through, ROWS_PER_TRANSACTION).await?;

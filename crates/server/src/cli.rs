@@ -260,11 +260,21 @@ async fn execute(
             let store = open_existing_store(&config).await?;
             let today = SystemClock.now().to_zoned(config.timezone).date();
             // In short transactions under the write lock like any writer's, so
-            // other writes get their turn and none of them is lost. If the server's
-            // job is running a rebuild this waits for it, and the job then leaves
-            // this one alone, so the rows counted are all of them.
-            let rows = store.rebuild_net_worth(today).await?;
-            writeln!(out, "net worth rebuilt: {rows} rows, through {today}")?;
+            // other writes get their turn and none of them is lost. The count is what
+            // this run wrote, not what the table holds: a display currency change or a
+            // large rate can start it over, and a balance can add rows it didn't write.
+            let rows = match store.try_rebuild_net_worth(today).await? {
+                Some(rows) => rows,
+                None => {
+                    writeln!(out, "waiting for another net worth rebuild to finish")?;
+                    out.flush()?;
+                    store.rebuild_net_worth(today).await?
+                }
+            };
+            writeln!(
+                out,
+                "net worth rebuilt through {today}: {rows} rows written"
+            )?;
             Ok(ExitCode::SUCCESS)
         }
     }

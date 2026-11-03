@@ -246,17 +246,46 @@ async fn the_job_leaves_a_rebuild_to_the_command() {
         .unwrap()
         .unwrap();
     let fx = service(&server, None);
+    let start_log = log_marker();
+    let said = |start: &str| {
+        let logged = captured_log_text();
+        let (_, after) = logged.split_once(start).unwrap();
+        after
+            .lines()
+            .filter(|line| line.contains("INFO") && line.contains("another process is running"))
+            .count()
+    };
 
+    fx.keep_table_current().await.unwrap();
     fx.keep_table_current().await.unwrap();
 
     assert!(server.store.net_worth_state().await.unwrap().rebuild_needed);
     assert_eq!(rows_of(&server.store, usd).await.len(), 0);
+    assert_eq!(said(&start_log), 1, "once, not every pass");
 
     drop(held);
     fx.keep_table_current().await.unwrap();
 
     assert!(!server.store.net_worth_state().await.unwrap().rebuild_needed);
     assert_eq!(rows_of(&server.store, usd).await.len(), 41);
+
+    // The next runner gets a line of its own.
+    let held = server
+        .store
+        .hold_net_worth_rebuild_for_tests()
+        .unwrap()
+        .unwrap();
+    server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE net_worth_state SET rebuild_needed = 1 WHERE id = ?",
+            "1",
+        )
+        .await
+        .unwrap();
+    fx.keep_table_current().await.unwrap();
+    assert_eq!(said(&start_log), 2);
+    drop(held);
 }
 
 /// The table's day moves while a fetch hangs: two tasks, not one.
