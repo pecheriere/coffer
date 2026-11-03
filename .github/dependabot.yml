@@ -74,6 +74,20 @@ updates:
     commit-message:
       prefix: build
 
+  # The digest-pinned Node image of the staging stack.
+  - package-ecosystem: docker-compose
+    directory: /staging
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docker-staging:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    commit-message:
+      prefix: test
+
   # The digest-pinned Spectral image the openapi-lint job runs.
   - package-ecosystem: docker
     directory: /.github/spectral

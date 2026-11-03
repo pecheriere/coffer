@@ -1,0 +1,58 @@
+# The parts of the staging stack that run all along: the mock providers and the
+# one way in from the Mac. scripts/staging.sh starts this and the coffer
+# containers, which join the internal network and nothing else.
+name: coffer-staging
+
+x-node: &node
+  # The newest Node 24 image at least 7 days old when pinned. Node's standard
+  # library is all that runs here, so nothing is installed.
+  image: node:24.22.1-alpine3.23@sha256:0468540aa58203ff9e40c2aab3907c52644ab818af6176b1c70a026137dc92a2
+  user: node
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+
+services:
+  # Answers as the SimpleFin bridge and the ECB, on port 443, with a certificate
+  # for their real names from a CA only the staging containers trust. coffer's
+  # COFFER_EGRESS_RELAY points here, and its allow-lists and TLS checks run as
+  # they do in production.
+  mock:
+    <<: *node
+    command: [node, /staging/mock/server.mjs]
+    environment:
+      MOCK_CERT_DIR: /certs
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "443"
+    volumes:
+      - ./mock:/staging/mock:ro
+      - ./.state/certs/mock:/certs:ro
+    networks:
+      internal:
+        ipv4_address: 172.30.90.10
+    healthcheck:
+      test: [CMD, node, /staging/mock/healthcheck.mjs]
+      interval: 1s
+      retries: 30
+
+  # An internal network publishes no port, so this forwards each port on
+  # 127.0.0.1 to the coffer container named after it.
+  gateway:
+    <<: *node
+    command: [node, /staging/mock/gateway.mjs]
+    volumes:
+      - ./mock:/staging/mock:ro
+    networks: [internal, edge]
+    ports:
+      - 127.0.0.1:18080-18099:18080-18099
+
+networks:
+  # No route out: the coffer containers can reach the mocks and nothing else.
+  internal:
+    name: coffer-staging-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.90.0/24
+  edge: {}
