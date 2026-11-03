@@ -5092,7 +5092,7 @@
           "reports"
         ],
         "summary": "Plan versus actual.",
-        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts. What a transfer link between two counted accounts says moved is out of all of these, whatever it is filed as: `moved_between_counted_accounts` says what left and what arrived, per month and currency, and a difference between the legs stays as filed. Any other link changes nothing here. An account closed since its leg posted still counts.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getPlanVsActual",
         "parameters": [
           {
@@ -5287,6 +5287,15 @@
             "name": "uncategorized",
             "in": "query",
             "description": "`true`: only transactions without splits. `false` does not filter.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "unmatched_transfer",
+            "in": "query",
+            "description": "`true`: only transactions with a split in a `transfer` category and in no transfer\nlink, which is what is left to match. `false` does not filter. A transaction linked to\none the token can't see stays out, since it has a link.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -5799,7 +5808,7 @@
           "transactions"
         ],
         "summary": "Deletes a manual transaction.",
-        "description": "Deletes a manual transaction and its splits. Imported transactions are never deleted by hand. Needs `write` on its account.",
+        "description": "Deletes a manual transaction and its splits. Imported transactions are never deleted by hand, and one in a transfer link stays until the link is removed. Needs `write` on its account.",
         "operationId": "deleteTransaction",
         "parameters": [
           {
@@ -5867,7 +5876,7 @@
             }
           },
           "409": {
-            "description": "The transaction is imported.",
+            "description": "The transaction is imported, or in a transfer link.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6134,7 +6143,7 @@
           "transactions"
         ],
         "summary": "Merges a duplicate into a transaction.",
-        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Two transactions that each hold a posted record of the same connection are distinct purchases and are refused. Needs `write` on the account.",
+        "description": "Merges `duplicate` into this transaction, both imported and of the same account: the duplicate's source records move here and the duplicate is deleted. This transaction keeps its notes, splits, review, assignee and payee, so choose the one holding them as the target; a pending target merged with a posted duplicate takes its posted fields. The duplicate's own user state is never combined: unless `discard_duplicate_state` is `true`, a duplicate that has any is refused with `merge_conflict`, and discarded values are recorded in the audit log. A transfer link is user state, and discarding it needs `write` on the other leg's account too. Its candidacies move here, and `possible_duplicate` clears once no candidate is left. Two transactions that each hold a posted record of the same connection are distinct purchases and are refused. Needs `write` on the account.",
         "operationId": "mergeTransactions",
         "parameters": [
           {
@@ -6220,6 +6229,114 @@
           },
           "409": {
             "description": "`merge_conflict`: the duplicate has user state and `discard_duplicate_state` is not `true`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transactions/{transaction_id}/transfer-candidates": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Transactions that might be the other leg of a transfer.",
+        "description": "What might be the other leg of this transaction, for a person or agent to confirm with `createTransferLink`: the same amount the other way, in the same currency, on another account the token can read, posted within 5 days, in no link and with at most one split, nearest first. Empty for a transaction that can't be linked itself. A leg of another amount or currency is never suggested, and may still be linked. It changes nothing. Needs `read`.",
+        "operationId": "listTransferCandidates",
+        "parameters": [
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The transaction's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The candidates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferCandidates"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6360,6 +6477,344 @@
           },
           "409": {
             "description": "The record is the transaction's only one, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transfer-links": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Links two transactions.",
+        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are in counted cash (open, switched into the forecast, of a spendable class), what moved is one movement in reports and the forecast: neither spending nor income, whatever it is filed as, so it lowers no budget and pays no bill. Only the smaller leg's amount moved: a difference in one currency stays what its leg is filed as. Any other link, to a brokerage, a loan, a closed account or one that isn't the household's, stays spending and changes no number, and an uncategorized leg stays on `uncategorized` until it is filed. `one_movement` says which for the forecast and follows the accounts; `one_movement_in_reports` says it for reports, where an account closed since its leg posted still counts. A leg its provider takes back suspends this: the money counts as filed again, with the caution `transfer_leg_removed`.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are in counted cash. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
+        "operationId": "createTransferLink",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 visible ASCII characters naming this create, unique per token (or session) for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTransferLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The link, made now or by an earlier request with the same `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferLinkView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A transaction is already in a link, or a request with this `Idempotency-Key` is still in progress.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/transfer-links/{transfer_link_id}": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "One transfer link.",
+        "description": "One link, with what each leg says now: a provider may have revised an amount since, and a leg it took back is flagged `source_removed`, for a person to decide about. A transaction names its link in `transfer_link`. Needs `read`, at `transactions` on both accounts; with one hidden, this answers as for a missing link.",
+        "operationId": "getTransferLink",
+        "parameters": [
+          {
+            "name": "transfer_link_id",
+            "in": "path",
+            "description": "The link's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransferLinkId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferLinkView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Removes a transfer link.",
+        "description": "Ends the link: both transactions stay as they are, and count again as what they are filed as. The audit log keeps what was joined, so it can be made again. Needs `write` on both accounts; with one hidden, this answers as for a missing link.",
+        "operationId": "removeTransferLink",
+        "parameters": [
+          {
+            "name": "transfer_link_id",
+            "in": "path",
+            "description": "The link's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TransferLinkId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The link is gone."
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7899,6 +8354,25 @@
           },
           {
             "type": "object",
+            "description": "A provider took back one leg of this transfer link between counted accounts, so its\nmoney counts as it is filed again, spending included, until a person says what happened.",
+            "required": [
+              "link",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transfer_leg_removed"
+                ]
+              },
+              "link": {
+                "$ref": "#/components/schemas/TransferLinkId"
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction or hide an unpaid bill or one-off.",
             "required": [
               "count",
@@ -9177,7 +9651,7 @@
         "properties": {
           "discard_duplicate_state": {
             "type": "boolean",
-            "description": "Merge even though the duplicate has notes, splits, a review, an\nassignee or an edited payee, discarding them (default `false`)."
+            "description": "Merge even though the duplicate has notes, splits, a review, an\nassignee, an edited payee or a transfer link, discarding them (default\n`false`)."
           },
           "duplicate": {
             "$ref": "#/components/schemas/TransactionId",
@@ -9283,6 +9757,28 @@
           },
           "source": {
             "$ref": "#/components/schemas/LineSource"
+          }
+        }
+      },
+      "MovedRow": {
+        "type": "object",
+        "description": "What moved between counted accounts in one month and currency, by the legs posted in it. A\nleg posted in another month shows as the two sides differing. A fee isn't here: it stays\nwhat its leg is filed as.",
+        "required": [
+          "month",
+          "money_out",
+          "money_in"
+        ],
+        "properties": {
+          "money_in": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Positive: what reached one."
+          },
+          "money_out": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Positive: what left an account."
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
           }
         }
       },
@@ -10054,6 +10550,25 @@
         },
         "additionalProperties": false
       },
+      "NewTransferLinkRequest": {
+        "type": "object",
+        "description": "Two transactions to link.",
+        "required": [
+          "outflow",
+          "inflow"
+        ],
+        "properties": {
+          "inflow": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The leg with money coming into its account, on another account."
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The leg with money going out of its account."
+          }
+        },
+        "additionalProperties": false
+      },
       "NotCountedReason": {
         "type": "string",
         "description": "Why an account's balance is not part of the cash available.",
@@ -10161,6 +10676,7 @@
           "goals",
           "uncategorized",
           "not_the_households",
+          "moved_between_counted_accounts",
           "settled",
           "rollovers",
           "partial_months"
@@ -10172,6 +10688,13 @@
               "$ref": "#/components/schemas/GoalRow"
             },
             "description": "Ordered by month and goal."
+          },
+          "moved_between_counted_accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovedRow"
+            },
+            "description": "Money a transfer link says only moved between two counted accounts. Never in `actual`\nor `uncategorized`, whatever its legs are filed as. Ordered by month and currency, the\nreported months only."
           },
           "not_the_households": {
             "type": "array",
@@ -11491,6 +12014,7 @@
           "origin",
           "sources",
           "duplicate_candidates",
+          "transfer_link",
           "reviewed_by",
           "categorized_by",
           "created_at",
@@ -11614,9 +12138,142 @@
             "format": "date",
             "description": "The day it was made, when the source says (ISO 8601)."
           },
+          "transfer_link": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransferLinkRef",
+                "description": "The transfer link it is one leg of; `null` for none, and for one with a side the token\ncan't read, so that nothing says that side exists."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "TransferCandidates": {
+        "type": "object",
+        "description": "Transactions that might be the other leg, nearest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionView"
+            }
+          }
+        }
+      },
+      "TransferLegView": {
+        "type": "object",
+        "description": "One leg of a link, as far as it matters to the link.",
+        "required": [
+          "transaction",
+          "account",
+          "amount",
+          "posted_on",
+          "pending",
+          "flags"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Negative is money out of the account."
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionFlag"
+            },
+            "description": "`source_removed` says its provider took it back, which ends nothing: a person decides\nwhether the link still stands."
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "posted_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The calendar day it posted (ISO 8601)."
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionId"
+          }
+        }
+      },
+      "TransferLinkId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUIDv7"
+      },
+      "TransferLinkRef": {
+        "type": "object",
+        "description": "The transfer link a transaction is one leg of.",
+        "required": [
+          "id",
+          "other_transaction"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TransferLinkId"
+          },
+          "other_transaction": {
+            "$ref": "#/components/schemas/TransactionId",
+            "description": "The other leg."
+          }
+        }
+      },
+      "TransferLinkView": {
+        "type": "object",
+        "description": "Two transactions that are one movement of money.",
+        "required": [
+          "id",
+          "outflow",
+          "inflow",
+          "difference",
+          "one_movement",
+          "one_movement_in_reports",
+          "created_by"
+        ],
+        "properties": {
+          "created_by": {
+            "$ref": "#/components/schemas/AttributionView"
+          },
+          "difference": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "What arrived less what left, negative when less arrived, such as for a fee; `null` for\nlegs in two currencies, since a link doesn't read an exchange rate."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/TransferLinkId"
+          },
+          "inflow": {
+            "$ref": "#/components/schemas/TransferLegView"
+          },
+          "one_movement": {
+            "type": "boolean",
+            "description": "Both accounts are in counted cash (open, switched into the forecast, of a spendable\nclass) and neither leg was taken back by its provider, so what moved is one movement in\nthe forecast, whatever it is filed as. `false` is any other link, which records the\nmovement and changes no number. It follows the accounts."
+          },
+          "one_movement_in_reports": {
+            "type": "boolean",
+            "description": "The same as reports read it, for what happened: an account closed since its leg posted\nstill counts here, so closing one doesn't rewrite its past months."
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/TransferLegView"
           }
         }
       },

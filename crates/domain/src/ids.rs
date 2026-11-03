@@ -156,6 +156,10 @@ id_type!(
     SplitId
 );
 id_type!(
+    /// Identifies a link between the two legs of one transfer.
+    TransferLinkId
+);
+id_type!(
     /// Identifies a connection to a data provider.
     ConnectionId
 );

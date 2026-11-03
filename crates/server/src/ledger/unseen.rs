@@ -1,6 +1,6 @@
 //! What a token with grants doesn't get of a transaction it can read (spec §8.2,
-//! §8.9 R3): a duplicate candidate in an account it can't read, and a goal link it
-//! may not see. A goal's id on a split would confirm a hidden item exists, tell when
+//! §8.9 R3, §8.12): a duplicate candidate or the other leg of a transfer link in an account it
+//! can't read, and a goal link it may not see. A goal's id on a split would confirm a hidden item exists, tell when
 //! it was made and which transactions share it, so the split reads as linked to
 //! nothing.
 //!
@@ -55,16 +55,23 @@ pub(super) async fn hide_unseen_in_tx(
     Ok(())
 }
 
-/// The distinct candidates of `views`.
+/// The distinct candidates and other legs of `views`.
 ///
-/// Defence in depth: the server pairs candidates and merges only within one
-/// account, so a transaction the token can read should not list one it cannot.
-/// Should such a pair ever exist, naming it would reveal a hidden transaction.
-/// `possible_duplicate` stays: it says only that a member should look.
+/// For a candidate this is defence in depth: the server pairs candidates and merges
+/// only within one account, so a transaction the token can read should not list one
+/// it cannot. Should such a pair ever exist, naming it would reveal a hidden
+/// transaction. `possible_duplicate` stays: it says only that a member should look.
+///
+/// A transfer link is between two accounts by what it is, so here it is the rule.
 fn candidates_of(views: &[TransactionView]) -> Vec<TransactionId> {
     let distinct: HashSet<TransactionId> = views
         .iter()
-        .flat_map(|view| view.duplicate_candidates.iter().copied())
+        .flat_map(|view| {
+            view.duplicate_candidates
+                .iter()
+                .copied()
+                .chain(view.transfer_link.map(|link| link.other_transaction))
+        })
         .collect();
     distinct.into_iter().collect()
 }
@@ -74,12 +81,16 @@ fn keep_visible_candidates(
     views: &mut [TransactionView],
     accounts: &HashMap<TransactionId, AccountId>,
 ) {
+    let readable = |transaction: &TransactionId| {
+        accounts
+            .get(transaction)
+            .is_some_and(|account| access.level_for(*account) >= Some(AccountLevel::Transactions))
+    };
     for view in views {
-        view.duplicate_candidates.retain(|candidate| {
-            accounts.get(candidate).is_some_and(|account| {
-                access.level_for(*account) >= Some(AccountLevel::Transactions)
-            })
-        });
+        view.duplicate_candidates.retain(&readable);
+        view.transfer_link = view
+            .transfer_link
+            .filter(|link| readable(&link.other_transaction));
     }
 }
 

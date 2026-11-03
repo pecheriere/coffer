@@ -207,13 +207,20 @@ pub struct UserState {
     pub reviewed: bool,
     pub assignee: bool,
     pub payee_edited: bool,
+    /// One leg of a transfer link: a person said where the money went.
+    pub transfer_link: bool,
 }
 
 impl UserState {
     /// Whether no user field is set.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !(self.splits || self.notes || self.reviewed || self.assignee || self.payee_edited)
+        !(self.splits
+            || self.notes
+            || self.reviewed
+            || self.assignee
+            || self.payee_edited
+            || self.transfer_link)
     }
 }
 
@@ -410,6 +417,10 @@ mod tests {
         for state in [
             UserState {
                 splits: true,
+                ..UserState::default()
+            },
+            UserState {
+                transfer_link: true,
                 ..UserState::default()
             },
             UserState {
