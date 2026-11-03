@@ -63,7 +63,7 @@ class Refusals(unittest.TestCase):
     def test_a_port_outside_the_stack_is_refused(self) -> None:
         """A port names a container, and only these are published."""
         for port in ("80", "18100", "18079", "x; true", "../x"):
-            for command in ("start", "stop"):
+            for command in ("start", "start-empty", "stop"):
                 result = self.run_script(command, port)
                 self.assertNotEqual(result.returncode, 0, (command, port))
                 self.assertEqual(self.changes(), [], (command, port))
@@ -95,6 +95,7 @@ class Refusals(unittest.TestCase):
             ("down",),
             ("template",),
             ("start", "18081"),
+            ("start-empty", "18081"),
             ("stop", "18081"),
             ("sweep",),
             ("elsewhere",),

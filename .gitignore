@@ -7,3 +7,4 @@ __pycache__/
 /staging/e2e/node_modules
 /staging/e2e/test-results
 /staging/e2e/playwright-report
+/staging/e2e/.browser
