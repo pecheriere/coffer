@@ -8,7 +8,7 @@ use coffer_domain::audit::{AuditChanges, AuditValue};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{
     AccountId, AgentTokenId, CategoryId, ConnectionId, MemberId, PlannedItemId, ProviderAccountId,
-    SourceRecordId, SplitId, TransactionId,
+    RuleId, SourceRecordId, SplitId, TransactionId,
 };
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::PlanItemType;
@@ -18,8 +18,9 @@ use coffer_domain::transactions::{
     TransactionFlag, TransactionOrigin, validate_splits,
 };
 use coffer_store::{
-    AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange, ReviewChange,
-    SourceRecord, StoreError, StoreTx, TransactionFilter, TransactionRecord, UserFieldChanges,
+    AssigneeChange, AssigneeFilter, Attribution, NewTransaction, PageRequest, PayeeChange,
+    ReviewChange, SourceRecord, StoreError, StoreTx, TransactionFilter, TransactionRecord,
+    UserFieldChanges,
 };
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -117,6 +118,10 @@ pub struct AttributionView {
     /// The system's reason, such as `system:sync`; `null` for a member.
     #[schema(required)]
     pub system: Option<String>,
+    /// The rule that chose the value, if one did, even one since deleted. A member
+    /// running a rule by hand is named beside it. Editing the value clears it.
+    #[schema(required)]
+    pub rule: Option<RuleId>,
     pub at: Timestamp,
 }
 
@@ -126,6 +131,7 @@ impl AttributionView {
             member: attribution.member,
             agent: attribution.agent,
             system: attribution.system.clone(),
+            rule: attribution.rule,
             at: attribution.at,
         }
     }
@@ -212,6 +218,9 @@ pub struct TransactionView {
     /// Who last changed its splits; `null` if nobody has.
     #[schema(required)]
     pub categorized_by: Option<AttributionView>,
+    /// Who last set or cleared its assignee; `null` if nobody has.
+    #[schema(required)]
+    pub assigned_by: Option<AttributionView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -251,6 +260,7 @@ impl TransactionView {
             duplicate_candidates: record.duplicate_candidates.clone(),
             reviewed_by: record.reviewed.as_ref().map(AttributionView::new),
             categorized_by: record.categorized.as_ref().map(AttributionView::new),
+            assigned_by: record.assigned.as_ref().map(AttributionView::new),
             created_at: record.created_at,
             updated_at: record.updated_at,
         }
@@ -341,6 +351,7 @@ pub(super) fn attribution(actor: &Actor, at: Timestamp) -> Attribution {
             Via::Agent { token, .. } => Some(token),
         },
         system: None,
+        rule: None,
         at,
     }
 }
@@ -365,7 +376,7 @@ pub(super) fn current_splits(record: &TransactionRecord) -> Vec<SplitInput> {
 }
 
 /// Refuses an assignee that does not exist or is disabled.
-async fn check_assignee(tx: &mut StoreTx, member: MemberId) -> Result<(), LedgerError> {
+pub(super) async fn check_assignee(tx: &mut StoreTx, member: MemberId) -> Result<(), LedgerError> {
     match tx.get_member(member).await {
         Ok(found) if found.disabled_at.is_none() => Ok(()),
         Ok(_) | Err(StoreError::NotFound) => Err(LedgerError::Invalid(ASSIGNEE_INVALID)),
@@ -526,7 +537,10 @@ async fn apply_patch(
     };
     if let Some(assignee) = new_assignee.filter(|assignee| *assignee != current.assignee) {
         audited = audited.change("assignee", current.assignee, assignee);
-        changes.assignee = Some(assignee);
+        changes.assignee = Some(AssigneeChange {
+            member: assignee,
+            by: attribution(actor, now),
+        });
     }
     let mut new_splits = None;
     if let Some(splits) = patch.splits {

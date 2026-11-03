@@ -21,6 +21,7 @@ mod net_worth;
 mod passkeys;
 mod planned_items;
 mod provider_accounts;
+mod rules;
 mod sessions;
 mod settlements;
 mod sources;
@@ -61,13 +62,14 @@ pub use net_worth::{NetWorthData, NetWorthState, RebuildBatch, RunsThrough};
 pub use passkeys::{NewPasskey, PasskeyRecord};
 pub use planned_items::{NewPlannedItem, PlannedItemChanges, PlannedItemRecord};
 pub use provider_accounts::{ProviderAccountRecord, ProviderAccountUpsert, RawBalance};
+pub use rules::{RuleFields, RuleRecord};
 pub use sessions::{NewSession, SessionRecord};
 pub use settlements::SettlementRecord;
 pub use sources::{CandidateRow, ImportedFields, NewSource, SourceRecord, SourceUpdate};
 pub use sync_runs::{NewSyncRun, QueuedRun, RunCounts, SyncRunRecord};
 pub use transactions::{
-    AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange, SplitRecord,
-    TransactionFilter, TransactionRecord, UserFieldChanges,
+    AssigneeChange, AssigneeFilter, Attribution, NewTransaction, PayeeChange, ReviewChange,
+    SplitRecord, TransactionFilter, TransactionRecord, UserFieldChanges,
 };
 
 /// How long a writer waits for the write lock before it fails. A sync

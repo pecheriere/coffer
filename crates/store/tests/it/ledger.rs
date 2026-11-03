@@ -16,7 +16,7 @@ use coffer_domain::transactions::{
     SplitInput, TransactionOrigin, UserState,
 };
 use coffer_store::{
-    AccountChanges, AccountRecord, Attribution, BalanceSnapshot, CategoryChanges,
+    AccountChanges, AccountRecord, AssigneeChange, Attribution, BalanceSnapshot, CategoryChanges,
     CategoryGroupChanges, CategoryRecord, IdempotencyOwner, NewAccount, NewCategory,
     NewCategoryGroup, NewMember, NewTransaction, PageRequest, PayeeChange, Reservation,
     ReviewChange, Store, StoreError, UserFieldChanges,
@@ -561,6 +561,7 @@ async fn deleting_transaction_cascades_splits() {
         member: Some(member),
         agent: None,
         system: None,
+        rule: None,
         at: at(9),
     };
     let splits = [
@@ -652,6 +653,7 @@ async fn user_field_changes_apply_only_set_fields() {
         member: Some(member),
         agent: None,
         system: None,
+        rule: None,
         at: at(20),
     };
     let changed = tx
@@ -661,7 +663,10 @@ async fn user_field_changes_apply_only_set_fields() {
                 payee: Some(PayeeChange::Set(Payee::parse("Grocer").unwrap())),
                 notes: Some(Some(Notes::parse("weekly\nshop").unwrap())),
                 review: Some(ReviewChange::Reviewed(by.clone())),
-                assignee: Some(Some(member)),
+                assignee: Some(AssigneeChange {
+                    member: Some(member),
+                    by: by.clone(),
+                }),
                 at: at(20),
             },
         )

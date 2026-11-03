@@ -1,10 +1,11 @@
 //! Canonical transactions and their splits.
 
 use coffer_domain::ids::{
-    AccountId, AgentTokenId, CategoryId, MemberId, PlannedItemId, SplitId, TransactionId,
+    AccountId, AgentTokenId, CategoryId, MemberId, PlannedItemId, RuleId, SplitId, TransactionId,
 };
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountScope;
+use coffer_domain::rules::RuleSubject;
 use coffer_domain::transactions::{
     Description, Memo, Notes, Payee, ReviewStatus, SplitInput, TransactionFlag, TransactionOrigin,
     UserState,
@@ -26,19 +27,23 @@ macro_rules! columns {
         "id, account_id, origin, posted_on, transacted_on, pending, amount_minor, currency, \
          raw_description, imported_payee, payee, payee_edited, memo, notes, review, \
          assignee_id, reviewed_by_member, reviewed_by_agent, reviewed_at, \
-         categorized_by_member, categorized_by_agent, categorized_by_system, categorized_at, \
-         flag_possible_duplicate, flag_source_removed, flag_split_mismatch, created_at, \
+         categorized_by_member, categorized_by_agent, categorized_by_system, \
+         categorized_by_rule, categorized_at, assigned_by_member, assigned_by_agent, \
+         assigned_by_system, assigned_by_rule, assigned_at, flag_possible_duplicate, flag_source_removed, flag_split_mismatch, created_at, \
          updated_at"
     };
 }
+pub(crate) use columns;
 
 /// Who made a change and when: a member (possibly through one of their
 /// agent tokens), or the system with its reason (such as `system:sync`).
+/// `rule` names the rule that chose the value, whoever ran it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribution {
     pub member: Option<MemberId>,
     pub agent: Option<AgentTokenId>,
     pub system: Option<String>,
+    pub rule: Option<RuleId>,
     pub at: Timestamp,
 }
 
@@ -72,6 +77,8 @@ pub struct TransactionRecord {
     pub notes: Option<Notes>,
     pub review: ReviewStatus,
     pub assignee: Option<MemberId>,
+    /// Who last set or cleared its assignee.
+    pub assigned: Option<Attribution>,
     /// Who marked it reviewed; `Some` exactly while it is reviewed.
     pub reviewed: Option<Attribution>,
     /// Who last changed its splits.
@@ -90,15 +97,35 @@ pub struct TransactionRecord {
 }
 
 impl TransactionRecord {
-    /// Which user fields are set.
+    /// Which user fields are set. What only a rule chose isn't anyone's work, so a
+    /// sync may still discard it and a merge doesn't ask before dropping it.
     #[must_use]
     pub fn user_state(&self) -> UserState {
+        let by_rule = |attribution: &Option<Attribution>| {
+            attribution.as_ref().is_some_and(|by| by.rule.is_some())
+        };
         UserState {
-            splits: !self.splits.is_empty(),
+            splits: !self.splits.is_empty() && !by_rule(&self.categorized),
             notes: self.notes.is_some(),
             reviewed: self.review == ReviewStatus::Reviewed,
-            assignee: self.assignee.is_some(),
+            assignee: self.assignee.is_some() && !by_rule(&self.assigned),
             payee_edited: self.payee_edited,
+        }
+    }
+
+    /// What rules read of it.
+    #[must_use]
+    pub fn rule_subject(&self) -> RuleSubject<'_> {
+        RuleSubject {
+            account: self.account,
+            amount_minor: self.amount_minor,
+            currency: self.currency,
+            description: self.raw_description.as_str(),
+            category_open: self.splits.is_empty() && self.categorized.is_none(),
+            assignee_open: self.assignee.is_none() && self.assigned.is_none(),
+            splits: self.splits.len(),
+            reviewed: self.review == ReviewStatus::Reviewed,
+            transfer_leg: false,
         }
     }
 }
@@ -141,6 +168,14 @@ pub enum ReviewChange {
     Unreviewed,
 }
 
+/// A change of assignee.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssigneeChange {
+    /// `None` unassigns.
+    pub member: Option<MemberId>,
+    pub by: Attribution,
+}
+
 /// The user fields of a transaction to change; `None` leaves a field as it
 /// is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,8 +184,7 @@ pub struct UserFieldChanges {
     /// `Some(None)` clears the notes; empty notes clear them too.
     pub notes: Option<Option<Notes>>,
     pub review: Option<ReviewChange>,
-    /// `Some(None)` unassigns.
-    pub assignee: Option<Option<MemberId>>,
+    pub assignee: Option<AssigneeChange>,
     /// When the change was made: the new `updated_at`.
     pub at: Timestamp,
 }
@@ -247,7 +281,11 @@ fn parse_cursor(cursor: &str) -> Result<(Date, TransactionId), StoreError> {
 }
 
 /// Appends ` AND <column> IN (<ids>)` to `query`.
-fn push_in<T: std::fmt::Display>(query: &mut QueryBuilder<Sqlite>, column: &str, ids: &[T]) {
+pub(crate) fn push_in<T: std::fmt::Display>(
+    query: &mut QueryBuilder<Sqlite>,
+    column: &str,
+    ids: &[T],
+) {
     query.push(" AND ").push(column).push(" IN (");
     let mut separated = query.separated(", ");
     for id in ids {
@@ -343,13 +381,26 @@ fn label<T>(
         .transpose()
 }
 
+/// The columns of one [`Attribution`].
+struct AttributionColumns {
+    member: &'static str,
+    agent: &'static str,
+    system: Option<&'static str>,
+    rule: Option<&'static str>,
+    at: &'static str,
+}
+
 fn attribution(
     row: &SqliteRow,
-    member: &str,
-    agent: &str,
-    system: Option<&str>,
-    at: &str,
+    columns: &AttributionColumns,
 ) -> Result<Option<Attribution>, StoreError> {
+    let AttributionColumns {
+        member,
+        agent,
+        system,
+        rule,
+        at,
+    } = *columns;
     let Some(at) = time_opt(row, at)? else {
         return Ok(None);
     };
@@ -360,11 +411,15 @@ fn attribution(
             .map(|column| text_opt(row, column))
             .transpose()?
             .flatten(),
+        rule: rule
+            .map(|column| parsed_opt(row, column))
+            .transpose()?
+            .flatten(),
         at,
     }))
 }
 
-fn transaction_from_row(row: &SqliteRow) -> Result<TransactionRecord, StoreError> {
+pub(crate) fn transaction_from_row(row: &SqliteRow) -> Result<TransactionRecord, StoreError> {
     let mut flags = Vec::new();
     for (column, set) in [
         (
@@ -396,19 +451,35 @@ fn transaction_from_row(row: &SqliteRow) -> Result<TransactionRecord, StoreError
         notes: label(row, "notes", Notes::parse)?,
         review: parsed(row, "review")?,
         assignee: parsed_opt(row, "assignee_id")?,
+        assigned: attribution(
+            row,
+            &AttributionColumns {
+                member: "assigned_by_member",
+                agent: "assigned_by_agent",
+                system: Some("assigned_by_system"),
+                rule: Some("assigned_by_rule"),
+                at: "assigned_at",
+            },
+        )?,
         reviewed: attribution(
             row,
-            "reviewed_by_member",
-            "reviewed_by_agent",
-            None,
-            "reviewed_at",
+            &AttributionColumns {
+                member: "reviewed_by_member",
+                agent: "reviewed_by_agent",
+                system: None,
+                rule: None,
+                at: "reviewed_at",
+            },
         )?,
         categorized: attribution(
             row,
-            "categorized_by_member",
-            "categorized_by_agent",
-            Some("categorized_by_system"),
-            "categorized_at",
+            &AttributionColumns {
+                member: "categorized_by_member",
+                agent: "categorized_by_agent",
+                system: Some("categorized_by_system"),
+                rule: Some("categorized_by_rule"),
+                at: "categorized_at",
+            },
         )?,
         flags,
         splits: Vec::new(),
@@ -441,7 +512,7 @@ async fn fetch_transaction(
 
 /// Loads the splits (in order), source records and duplicate candidates of
 /// every record in `records`.
-async fn attach_children(
+pub(crate) async fn attach_children(
     conn: &mut SqliteConnection,
     records: &mut [TransactionRecord],
 ) -> Result<(), StoreError> {
@@ -619,10 +690,20 @@ impl StoreTx {
             }
             None => {}
         }
-        if let Some(assignee) = changes.assignee {
+        if let Some(AssigneeChange { member, by }) = changes.assignee {
             query
                 .push(", assignee_id = ")
-                .push_bind(assignee.map(|member| member.to_string()));
+                .push_bind(member.map(|member| member.to_string()))
+                .push(", assigned_by_member = ")
+                .push_bind(by.member.map(|member| member.to_string()))
+                .push(", assigned_by_agent = ")
+                .push_bind(by.agent.map(|agent| agent.to_string()))
+                .push(", assigned_by_system = ")
+                .push_bind(by.system)
+                .push(", assigned_by_rule = ")
+                .push_bind(by.rule.map(|rule| rule.to_string()))
+                .push(", assigned_at = ")
+                .push_bind(by.at.as_millisecond());
         }
         query.push(" WHERE id = ").push_bind(id.to_string());
         let result = query
@@ -650,11 +731,13 @@ impl StoreTx {
     ) -> Result<(), StoreError> {
         let result = sqlx::query(
             "UPDATE transactions SET categorized_by_member = ?, categorized_by_agent = ?, \
-             categorized_by_system = ?, categorized_at = ?, updated_at = ? WHERE id = ?",
+             categorized_by_system = ?, categorized_by_rule = ?, categorized_at = ?, \
+             updated_at = ? WHERE id = ?",
         )
         .bind(by.member.map(|member| member.to_string()))
         .bind(by.agent.map(|agent| agent.to_string()))
         .bind(by.system.as_deref())
+        .bind(by.rule.map(|rule| rule.to_string()))
         .bind(by.at.as_millisecond())
         .bind(by.at.as_millisecond())
         .bind(id.to_string())

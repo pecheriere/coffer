@@ -59,6 +59,7 @@ async fn categorize_records_attribution_with_agent() {
             member: Some(world.alice.member),
             agent: Some(token),
             system: None,
+            rule: None,
             at: now,
         })
     );
@@ -217,6 +218,7 @@ async fn review_records_reviewer() {
             member: Some(world.alice.member),
             agent: None,
             system: None,
+            rule: None,
             at: reviewed_at,
         })
     );

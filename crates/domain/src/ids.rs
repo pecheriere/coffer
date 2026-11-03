@@ -175,6 +175,10 @@ id_type!(
     /// Identifies a planned item: a recurring bill, a one-off or a goal.
     PlannedItemId
 );
+id_type!(
+    /// Identifies a rule that files or assigns transactions.
+    RuleId
+);
 
 #[cfg(test)]
 mod tests {

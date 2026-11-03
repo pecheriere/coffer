@@ -1,6 +1,6 @@
 //! Changes to canonical transactions shared by the sync and the ledger:
-//! applying a record's imported fields, and forgetting duplicate
-//! candidates (spec §6.2, §8.4).
+//! applying a record's imported fields, forgetting duplicate candidates
+//! (spec §6.2, §8.4), and what rules fill (§8.13).
 //!
 //! A candidate pair is stale once both sides hold a posted record of the
 //! same connection: one connection reports each purchase once, so they are
@@ -12,10 +12,12 @@
 use std::collections::HashSet;
 
 use coffer_domain::audit::{AuditActor, AuditChanges, AuditEntry};
-use coffer_domain::ids::{ConnectionId, SourceRecordId, TransactionId};
+use coffer_domain::ids::{ConnectionId, RuleId, SourceRecordId, TransactionId};
+use coffer_domain::rules::RuleFills;
 use coffer_domain::transactions::{Memo, Payee, SplitInput, TransactionFlag};
 use coffer_store::{
-    Attribution, ImportedFields, SourceRecord, StoreError, StoreTx, TransactionRecord,
+    AssigneeChange, Attribution, ImportedFields, SourceRecord, StoreError, StoreTx,
+    TransactionRecord, UserFieldChanges,
 };
 use jiff::Timestamp;
 
@@ -133,7 +135,8 @@ pub(crate) async fn drop_stale_candidates(
 /// Replaces `current`'s imported fields with `fields`, appending what
 /// changed to `changes`; a transaction whose fields already match writes
 /// nothing. User fields never change, except that a single split follows a
-/// new amount, recorded as categorized by `split_by`; several splits stay,
+/// new amount, recorded as categorized by `split_by` and still naming the rule
+/// that chose it, if one did; several splits stay,
 /// and the transaction is flagged `SplitMismatch` while they no longer sum
 /// to it. Shared by the sync and by merge and unmerge.
 ///
@@ -226,7 +229,10 @@ async fn follow_amount(
                     minor_units: amount_minor,
                     goal: only.goal,
                 }],
-                split_by.clone(),
+                Attribution {
+                    rule: current.categorized.as_ref().and_then(|by| by.rule),
+                    ..split_by.clone()
+                },
             )
             .await?;
             changes = changes.change("split_minor_units", only.minor_units, amount_minor);
@@ -247,6 +253,66 @@ async fn follow_amount(
         changes = changes.change("split_mismatch", flagged, mismatch);
     }
     Ok(changes)
+}
+
+/// Writes what rules fill on `current`, which the caller has decided with
+/// [`coffer_domain::rules::decide`] in this transaction: a category as one split of
+/// the whole amount, an assignee as itself. Audited as `transaction.rule_applied` by
+/// `actor`, naming the rule behind each field. Never touches the review.
+///
+/// # Errors
+///
+/// Storage failures.
+pub(crate) async fn fill_from_rules(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    actor: &AuditActor,
+    by: &Attribution,
+    current: &TransactionRecord,
+    fills: RuleFills,
+) -> Result<(), StoreError> {
+    let naming = |rule: RuleId| Attribution {
+        rule: Some(rule),
+        ..by.clone()
+    };
+    let mut changes = AuditChanges::new();
+    if let Some((rule, category)) = fills.category {
+        let split = SplitInput {
+            category,
+            minor_units: current.amount_minor,
+            goal: None,
+        };
+        tx.replace_splits(current.id, &[split], naming(rule))
+            .await?;
+        changes = changes
+            .set("category", category)
+            .set("minor_units", current.amount_minor)
+            .set("category_rule", rule);
+    }
+    if let Some((rule, member)) = fills.assignee {
+        let assignee = AssigneeChange {
+            member: Some(member),
+            by: naming(rule),
+        };
+        tx.update_user_fields(
+            current.id,
+            UserFieldChanges {
+                assignee: Some(assignee),
+                ..UserFieldChanges::new(now)
+            },
+        )
+        .await?;
+        changes = changes.set("assignee", member).set("assignee_rule", rule);
+    }
+    record_audit(
+        tx,
+        now,
+        actor,
+        "transaction.rule_applied",
+        current.id,
+        changes,
+    )
+    .await
 }
 
 #[cfg(test)]

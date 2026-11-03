@@ -7,6 +7,8 @@
 //! the pending one it replaces); only then are the vanished records
 //! removed. Every change to a canonical transaction is audited as
 //! `system:sync`; a record that changes nothing writes no audit entry.
+//! A transaction created here is then offered to the rules (spec §8.13), which
+//! run only then: their changes are audited as `system:rules`.
 //!
 //! A transaction fed by several connections shows the imported fields of the
 //! one that owns them (spec §8.4). A record of another connection is
@@ -22,6 +24,7 @@ use coffer_domain::matching::{
     Candidate, DATE_TOLERANCE_DAYS, Incoming, MatchDecision, decide, description_key,
     pending_counterparts, posted_counterparts,
 };
+use coffer_domain::rules::{self, Rule};
 use coffer_domain::time::IanaZone;
 use coffer_domain::transactions::{Description, Memo, Payee, TransactionFlag, TransactionOrigin};
 use coffer_store::{
@@ -33,10 +36,15 @@ use jiff::{Span, Timestamp};
 
 use super::SyncError;
 use super::dating::{RecordDating, may_precede_window};
-use crate::canonical::{apply_imported_fields, drop_candidate, drop_stale_candidates};
+use crate::canonical::{
+    apply_imported_fields, drop_candidate, drop_stale_candidates, fill_from_rules,
+};
 
 /// The reason every sync change is attributed to.
 pub const SYNC_REASON: &str = "system:sync";
+
+/// The reason a rule's change to a new transaction is attributed to.
+pub const RULES_REASON: &str = "system:rules";
 
 const CONNECTION_MISMATCH: &str = "the provider account belongs to another connection";
 const BINDING_MISMATCH: &str = "the account is not the provider account's binding";
@@ -267,6 +275,8 @@ struct Apply<'a> {
     /// matching they already are, and this one leaves them in place.
     vanishing: &'a HashSet<SourceRecordId>,
     report: ApplyReport,
+    /// The rules, read when the first new transaction needs them.
+    rules: Option<Vec<Rule>>,
 }
 
 /// Applies one provider account's records (see the module documentation).
@@ -336,6 +346,7 @@ pub(super) async fn apply_account_batch_beside(
             skipped,
             ..ApplyReport::default()
         },
+        rules: None,
     };
 
     // 1. The vanished set; nothing is deleted yet.
@@ -407,6 +418,7 @@ pub async fn apply_held(
         vanished: HashSet::new(),
         vanishing: &vanishing,
         report: ApplyReport::default(),
+        rules: None,
     };
     for source in held {
         let id = source.id;
@@ -440,6 +452,7 @@ fn sync_attribution(at: Timestamp) -> Attribution {
         member: None,
         agent: None,
         system: Some(SYNC_REASON.to_owned()),
+        rule: None,
         at,
     }
 }
@@ -751,6 +764,30 @@ impl Apply<'_> {
         self.audit("transaction.import", created.id, changes)
             .await?;
         self.report.created += 1;
+        self.offer_to_rules(&created).await
+    }
+
+    /// Lets the rules fill what they can of a transaction just created.
+    async fn offer_to_rules(&mut self, created: &TransactionRecord) -> Result<(), SyncError> {
+        let rules = match &self.rules {
+            Some(rules) => rules,
+            None => self.rules.insert(self.tx.enabled_rules().await?),
+        };
+        let fills = rules::decide(rules, &created.rule_subject());
+        if fills.is_empty() {
+            return Ok(());
+        }
+        let actor = AuditActor::System {
+            reason: RULES_REASON.to_owned(),
+        };
+        let by = Attribution {
+            member: None,
+            agent: None,
+            system: Some(RULES_REASON.to_owned()),
+            rule: None,
+            at: self.now,
+        };
+        fill_from_rules(self.tx, self.now, &actor, &by, created, fills).await?;
         Ok(())
     }
 

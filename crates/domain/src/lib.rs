@@ -12,6 +12,7 @@ pub mod net_worth;
 pub mod plan;
 pub mod plan_report;
 pub mod policy;
+pub mod rules;
 pub mod sync;
 pub mod time;
 pub mod transactions;
