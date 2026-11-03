@@ -1449,7 +1449,8 @@ narrow R6, R9 and R10 for linked money.
 **T1. A link joins two transactions.** Exactly two, on different accounts, one money out and one
 money in, each in one link at most, held by the table and a trigger. Their amounts may differ, as
 for a fee, and their currencies too. A link reports the `difference`, what arrived less what left
-(`null` across currencies, since a link doesn't read an exchange rate), and hides nothing. It writes nothing on
+(`null` across currencies, where `rate_check` compares the legs at a rate instead, T8), and hides
+nothing. It writes nothing on
 either transaction: a leg keeps its category, and its other fields, as they were. API only for now
 (#49 tracks the pages).
 
@@ -1488,9 +1489,8 @@ of one sign.
 
 What moved is the smaller leg, in one currency. The difference stays what its leg is filed as, so a
 link of -1,250.00 and +12.50 moves 12.50, and 1,237.50 stays spending, whatever the reason for it. Across
-currencies a link doesn't read an exchange rate, though coffer holds them, so all of each leg moved. A
-known limit: nothing bounds a link across currencies, and it takes all of each leg out on a person's
-word.
+currencies all of each leg moved, whatever the rate: no amount is ever read from an exchange rate.
+T8 checks the two legs against one and cautions when they disagree, but changes no amount.
 
 | Number | Effect of linking |
 |---|---|
@@ -1541,3 +1541,33 @@ treating it as a movement would owe the bill again on top of the fallen balance.
   of an account is often what closed it. The forecast reads such a link as no movement and a report, for
 a leg posted before the close, as one (T5).
 - A provider revising a leg's amount leaves the link, and `difference` shows what it says now.
+
+**T8. A link across currencies is checked at a rate.** Issue #109. A link between legs in two currencies
+moves all of each leg (T5), so a slipped decimal point, such as -1,250.00 USD linked to +12.50 EUR,
+would take real spending out of the counts unseen. Nothing about the numbers changes: moved amounts
+stay as T5 has them, and no forecast number gains a rate dependency. The legs are compared, and a
+disagreement is cautioned:
+
+- *How.* The outflow is converted into the inflow's currency at the rate for the **later of the two
+  posted days** (the day the movement was complete), by the one conversion every report uses (§8.10):
+  the most recent rate on or before that day, carried forward, an admin's rate (N16) winning on its own
+  day. The legs **differ** when the inflow is more than 5% (`RATE_TOLERANCE_PERCENT`) away from the
+  converted outflow, taken as a share of the converted amount, both directions, and by more than one
+  minor unit of the inflow's currency (`ROUNDING_ALLOWANCE_MINOR`), which converting a few cents can
+  round by alone. A bank's spread and a fee are usually inside 5%. The comparison is in `i128`: exactly
+  5% is not a difference, one minor unit past it is, and no `i64` amount overflows.
+- *Where.* The link's API view carries `rate_check`: `null` for one currency, otherwise `agrees`,
+  `mismatch` (both legs' amounts, `expected_inflow`, the date `rate_on` of the older rate used and
+  `manual_rate`) or `not_checked`. A mismatch on a link that is one movement (T5) is also the caution
+  `transfer_link_rate_mismatch`, naming the same, in the report for a link with a leg in a reported month
+  (`cautions`, a list new to the report) and in the forecast for one with a leg in `as_of`'s month up to
+  `as_of`, where it makes the number `provisional` as any caution does. A link that is not one movement
+  moved nothing, so it only shows its `rate_check`.
+- *No rate.* With no rate on or before the day for either currency, or a converted amount too large to
+  hold, the link is `not_checked`: a quieter note on the link only, raising no caution and not making
+  the forecast provisional, since the forecast never needed a rate. Rates are read when asked, so it
+  changes when one is fetched or entered.
+- *Access.* A link is read, and so its check, only with `transactions` on both accounts (T3); the
+  forecast and the report need `all`. A token that doesn't see both sides is told nothing about it.
+- *Not decided here.* Whether the difference should stay spending, as it does within one currency, is
+  not: the amounts moved stay as T5 has them, and the caution is what asks a person to look.

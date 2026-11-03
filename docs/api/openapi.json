@@ -6519,7 +6519,7 @@
           "transactions"
         ],
         "summary": "Links two transactions.",
-        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are in counted cash (open, switched into the forecast, of a spendable class), what moved is one movement in reports and the forecast: neither spending nor income, whatever it is filed as, so it lowers no budget and pays no bill. Only the smaller leg's amount moved: a difference in one currency stays what its leg is filed as. Any other link, to a brokerage, a loan, a closed account or one that isn't the household's, stays spending and changes no number, and an uncategorized leg stays on `uncategorized` until it is filed. `one_movement` says which for the forecast and follows the accounts; `one_movement_in_reports` says it for reports, where an account closed since its leg posted still counts. A leg its provider takes back suspends this: the money counts as filed again, with the caution `transfer_leg_removed`.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are in counted cash. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
+        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are in counted cash (open, switched into the forecast, of a spendable class), what moved is one movement in reports and the forecast: neither spending nor income, whatever it is filed as, so it lowers no budget and pays no bill. Only the smaller leg's amount moved: a difference in one currency stays what its leg is filed as. Any other link, to a brokerage, a loan, a closed account or one that isn't the household's, stays spending and changes no number, and an uncategorized leg stays on `uncategorized` until it is filed. `one_movement` says which for the forecast and follows the accounts; `one_movement_in_reports` says it for reports, where an account closed since its leg posted still counts. A leg its provider takes back suspends this: the money counts as filed again, with the caution `transfer_leg_removed`.\n\nAcross two currencies all of each leg moved, so the link is checked against the exchange rate for the later posted day, carried forward as usual and including a rate an admin entered. `rate_check` says `mismatch` when the legs differ by more than 5% after conversion, with both amounts, what the outflow comes to in the inflow's currency and the date of the rate; `agrees`; or `not_checked` when no rate is held for that day. A mismatch is also the caution `transfer_link_rate_mismatch` in the forecast and the report. It changes no amount.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are in counted cash. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
         "operationId": "createTransferLink",
         "parameters": [
           {
@@ -8368,6 +8368,51 @@
               },
               "link": {
                 "$ref": "#/components/schemas/TransferLinkId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The legs of this transfer link between counted accounts in two currencies differ by\nmore than the tolerance at the rate for the day they posted, which is the case for a\nslipped decimal point. What moved is still taken as it stands, so spending that wasn't\nreally a movement may be missing from the number until a person checks the link.",
+            "required": [
+              "link",
+              "outflow",
+              "inflow",
+              "expected_inflow",
+              "rate_on",
+              "manual_rate",
+              "kind"
+            ],
+            "properties": {
+              "expected_inflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What the outflow comes to in the inflow's currency at the rate used."
+              },
+              "inflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What arrived."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transfer_link_rate_mismatch"
+                ]
+              },
+              "link": {
+                "$ref": "#/components/schemas/TransferLinkId"
+              },
+              "manual_rate": {
+                "type": "boolean",
+                "description": "An admin entered a rate used."
+              },
+              "outflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What left, negative."
+              },
+              "rate_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The date of the older rate used."
               }
             }
           },
@@ -10679,9 +10724,17 @@
           "moved_between_counted_accounts",
           "settled",
           "rollovers",
-          "partial_months"
+          "partial_months",
+          "cautions"
         ],
         "properties": {
+          "cautions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportCaution"
+            },
+            "description": "What a person should look at, which changes no amount above. Ordered by link."
+          },
           "goals": {
             "type": "array",
             "items": {
@@ -11364,6 +11417,98 @@
           }
         }
       },
+      "RateCheck": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The legs are within the tolerance of each other.",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "agrees"
+                ]
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RateMismatch",
+                "description": "The legs differ by more than the tolerance."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "mismatch"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The legs differ by more than the tolerance."
+          },
+          {
+            "type": "object",
+            "description": "No rate is held for one of the currencies on or before the day, or the converted\namount is too large, so nothing is said either way.",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_checked"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What comparing the legs at a rate came to."
+      },
+      "RateMismatch": {
+        "type": "object",
+        "description": "Two legs that differ by more than the tolerance at the rate used.",
+        "required": [
+          "outflow",
+          "inflow",
+          "expected_inflow",
+          "rate_on",
+          "manual_rate"
+        ],
+        "properties": {
+          "expected_inflow": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the outflow comes to in the inflow's currency at the rate used, as a positive\namount."
+          },
+          "inflow": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What arrived."
+          },
+          "manual_rate": {
+            "type": "boolean",
+            "description": "An admin entered a rate used."
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What left, negative."
+          },
+          "rate_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The date of the older rate used, which a weekend or holiday carries forward."
+          }
+        }
+      },
       "RateMissingReason": {
         "type": "string",
         "description": "Why a currency has no rate for a day.",
@@ -11393,6 +11538,56 @@
             "description": "The calendar day it describes (ISO 8601)."
           }
         }
+      },
+      "ReportCaution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The legs of this transfer link between counted accounts in two currencies differ by\nmore than the tolerance at the rate for the day they posted, such as for a slipped\ndecimal point. The link still counts as moved money, so spending may be missing from\nthe rows above until a person checks it.",
+            "required": [
+              "link",
+              "outflow",
+              "inflow",
+              "expected_inflow",
+              "rate_on",
+              "manual_rate",
+              "kind"
+            ],
+            "properties": {
+              "expected_inflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What the outflow comes to in the inflow's currency at the rate used."
+              },
+              "inflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What arrived."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transfer_link_rate_mismatch"
+                ]
+              },
+              "link": {
+                "$ref": "#/components/schemas/TransferLinkId"
+              },
+              "manual_rate": {
+                "type": "boolean",
+                "description": "An admin entered a rate used."
+              },
+              "outflow": {
+                "$ref": "#/components/schemas/Money",
+                "description": "What left, negative."
+              },
+              "rate_on": {
+                "type": "string",
+                "format": "date",
+                "description": "The date of the older rate used."
+              }
+            }
+          }
+        ],
+        "description": "Something in the reported months worth a look."
       },
       "ReviewStatus": {
         "type": "string",
@@ -12241,6 +12436,7 @@
           "difference",
           "one_movement",
           "one_movement_in_reports",
+          "rate_check",
           "created_by"
         ],
         "properties": {
@@ -12251,7 +12447,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Money",
-                "description": "What arrived less what left, negative when less arrived, such as for a fee; `null` for\nlegs in two currencies, since a link doesn't read an exchange rate."
+                "description": "What arrived less what left, negative when less arrived, such as for a fee; `null` for\nlegs in two currencies, whose `rate_check` compares them instead."
               },
               {
                 "type": "null"
@@ -12274,6 +12470,17 @@
           },
           "outflow": {
             "$ref": "#/components/schemas/TransferLegView"
+          },
+          "rate_check": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RateCheck",
+                "description": "For legs in two currencies, whether they agree at the exchange rate for the day they\nposted (the later of the two), within 5%. Only a check: what moved is the same either\nway. `null` for legs in one currency."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

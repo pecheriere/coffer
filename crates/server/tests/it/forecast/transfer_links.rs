@@ -500,3 +500,97 @@ async fn a_link_to_a_closed_account_changes_no_number() {
 
     assert_eq!(world.forecast_at(ONE_MONTH).await, before);
 }
+
+impl World {
+    /// 1,250.00 USD filed in a budget out of checking, and `euros_minor` EUR into a euro
+    /// account, on the 5th, linked; returns the link.
+    async fn dollars_to_euros(&self, euros_minor: i64) -> Value {
+        let (checking, _) = self.two_accounts().await;
+        let euros = self
+            .account_with("Euros", "checking", "EUR", json!({}))
+            .await;
+        self.balance(euros, BALANCE_ON, 100_000).await;
+        let food = self.expense("Food").await;
+        self.item(&with(
+            outflow("Groceries", 200_000, food, &monthly("2026-11-20")),
+            "spending",
+            json!("budget"),
+        ))
+        .await;
+        let out = self.charge(checking, "2026-11-05", 125_000, food).await;
+        let into = self.deposit(euros, "2026-11-05", euros_minor).await;
+        self.link_legs(&out, &into).await
+    }
+
+    async fn enter_usd_rate(&self, on: &str, rate: &str) {
+        self.admin_send(
+            Method::PUT,
+            &format!("/api/v1/fx/manual-rates/USD/{on}"),
+            &json!({"rate": rate}),
+        )
+        .await;
+    }
+}
+
+/// -1,250.00 USD linked to +12.50 EUR still moves all of both, as it always did; what changes is
+/// that, once the day's rate is held, the forecast names the two legs and the rate.
+#[tokio::test]
+async fn a_link_across_currencies_that_disagrees_gets_a_caution_and_moves_the_same() {
+    let world = world().await;
+    let link = world.dollars_to_euros(1_250).await;
+    let without_a_rate = world.forecast_at(ONE_MONTH).await;
+    assert!(!kinds(&without_a_rate, "cautions").contains(&"transfer_link_rate_mismatch".into()));
+    assert_eq!(line(&without_a_rate, "Groceries")["reduced_by"], usd(0));
+
+    world.enter_usd_rate("2026-11-05", "1.1172").await;
+
+    let with_a_rate = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(
+        caution(&with_a_rate, "transfer_link_rate_mismatch"),
+        &json!({
+            "kind": "transfer_link_rate_mismatch",
+            "link": link["id"],
+            "outflow": usd(-125_000),
+            "inflow": {"minor_units": 1_250, "currency": "EUR"},
+            "expected_inflow": {"minor_units": 111_887, "currency": "EUR"},
+            "rate_on": "2026-11-05",
+            "manual_rate": true,
+        })
+    );
+    assert_eq!(
+        line(&with_a_rate, "Groceries"),
+        line(&without_a_rate, "Groceries"),
+        "a rate changes no number"
+    );
+}
+
+/// A bank's spread isn't worth a caution.
+#[tokio::test]
+async fn a_link_across_currencies_inside_the_spread_has_no_caution() {
+    let world = world().await;
+    world.enter_usd_rate("2026-11-05", "1.25").await;
+
+    // 1,250.00 USD is 1,000.00 EUR at 1.25; 960.00 is 4% less.
+    world.dollars_to_euros(96_000).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+    assert!(!kinds(&forecast, "cautions").contains(&"transfer_link_rate_mismatch".into()));
+}
+
+/// Last month's link is not this month's to ask about, as a leg taken back isn't.
+#[tokio::test]
+async fn a_link_with_both_legs_before_the_month_has_no_caution() {
+    let world = world().await;
+    world.enter_usd_rate("2026-10-05", "1.1172").await;
+    let (checking, _) = world.two_accounts().await;
+    let euros = world
+        .account_with("Euros", "checking", "EUR", json!({}))
+        .await;
+    let out = world.deposit(checking, "2026-10-05", -125_000).await;
+    let into = world.deposit(euros, "2026-10-05", 1_250).await;
+    world.link_legs(&out, &into).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert!(!kinds(&forecast, "cautions").contains(&"transfer_link_rate_mismatch".into()));
+}

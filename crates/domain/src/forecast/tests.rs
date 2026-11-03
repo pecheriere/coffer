@@ -11,6 +11,7 @@ use super::{
     ForecastStatus, ItemInput, ItemLine, LineSource, NotCountedReason, compute_forecast,
 };
 use crate::accounts::{BelongsTo, LiquidityClass};
+use crate::fx::RateBook;
 use crate::ids::{AccountId, CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
 use crate::plan::{
@@ -72,6 +73,8 @@ fn household() -> ForecastInput {
         loose_ends: Vec::new(),
         newer_spending: Vec::new(),
         links_with_leg_removed: Vec::new(),
+        cross_currency_links: Vec::new(),
+        rates: RateBook::default(),
         unbound: Vec::new(),
         feeds: Vec::new(),
     }

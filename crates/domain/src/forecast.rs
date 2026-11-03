@@ -11,6 +11,7 @@ use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
 use crate::plan::{CalendarMonth, PlanDirection, PlanSchedule, SafetyFloor, goal_need};
+use crate::transfer_rate::mismatches;
 use reduction::{ItemAdjustment, Reduction};
 
 mod reduction;
@@ -838,6 +839,18 @@ fn loose_end_cautions(input: &ForecastInput, reduction: &Reduction, cautions: &m
             .links_with_leg_removed
             .iter()
             .map(|&link| Caution::TransferLegRemoved { link }),
+    );
+    cautions.extend(
+        mismatches(&input.cross_currency_links, &input.rates)
+            .into_iter()
+            .map(|found| Caution::TransferLinkRateMismatch {
+                link: found.link,
+                outflow: found.mismatch.outflow,
+                inflow: found.mismatch.inflow,
+                expected_inflow: found.mismatch.expected_inflow,
+                rate_on: found.mismatch.rate_on,
+                manual_rate: found.mismatch.manual_rate,
+            }),
     );
 }
 
