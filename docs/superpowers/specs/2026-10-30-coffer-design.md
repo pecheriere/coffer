@@ -1222,7 +1222,8 @@ account's point, and `manual_rates` on a report and a bucket naming the currency
 That is for information and not a caution: for a currency no source publishes every report would
 otherwise stay `provisional` with nothing to act on, which teaches people to ignore the word. A
 fresh manual rate leaves a report `firm`. `rate_stale` applies after 7 days as to any rate, and
-then it is `provisional`.
+then it is `provisional`. The list of them answers at most 1,000 from an `offset` with a `truncated` flag,
+and the page links to the rest, so an older one can always be reached and removed.
 
 The daily rows move as for any rate (N3): those it converts, from its day, in the transaction, or
 past 25,000 rows a rebuild. A write needs `admin`, and with grants `all` at `balances` for the
