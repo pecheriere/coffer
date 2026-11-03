@@ -263,13 +263,12 @@ async fn execute(
             // other writes get their turn and none of them is lost. The count is what
             // this run wrote, not what the table holds: a display currency change or a
             // large rate can start it over, and a balance can add rows it didn't write.
-            let rows = match store.try_rebuild_net_worth(today).await? {
-                Some(rows) => rows,
-                None => {
-                    writeln!(out, "waiting for another net worth rebuild to finish")?;
-                    out.flush()?;
-                    store.rebuild_net_worth(today).await?
-                }
+            let rows = if let Some(rows) = store.try_rebuild_net_worth(today).await? {
+                rows
+            } else {
+                writeln!(out, "waiting for another net worth rebuild to finish")?;
+                out.flush()?;
+                store.rebuild_net_worth(today).await?
             };
             writeln!(
                 out,
