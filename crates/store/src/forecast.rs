@@ -41,6 +41,8 @@ pub struct ForecastData {
     /// The goals with spending linked on both the household's accounts and an account that
     /// isn't the household's, ordered by id.
     pub goals_linked_both_sides: Vec<PlannedItemId>,
+    /// The accounts with spending linked to a goal that `goal_spent` counts, ordered by id.
+    pub goal_spending_accounts: Vec<AccountId>,
     pub category_spent: Vec<CategorySpentRow>,
     pub loose_ends: Vec<LooseEndsRow>,
     /// Outflows on counted accounts that their balances may not show yet.
@@ -226,21 +228,39 @@ const LOOSE_ENDS: &str = concat!(
 /// closed card: spending newer than the balance isn't in it yet, an account with no
 /// balance shows none, and a closed card's debt may be what the balance hasn't reached.
 /// Spending from any other account never touched counted cash.
+macro_rules! goal_spending {
+    () => {
+        concat!(
+            "FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
+             JOIN transactions t ON t.id = s.transaction_id \
+             JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
+            latest_balance!(),
+            " WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
+               AND ",
+            counts_against_goal!(),
+            " AND t.posted_on <= ?1 AND ( \
+               NOT (a.include_in_forecast = 1 AND ",
+            spendable!(),
+            " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
+               OR t.posted_on <= COALESCE(b.on_date, '') \
+             )"
+        )
+    };
+}
+
+/// Spending linked to each goal, positive for money spent: see [`goal_spending`].
 const GOAL_SPENT: &str = concat!(
-    "SELECT s.goal_id AS goal, MAX(0, -SUM(s.minor_units)) AS spent_minor \
-     FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
-     JOIN transactions t ON t.id = s.transaction_id \
-     JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
-    latest_balance!(),
-    " WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
-       AND ",
-    counts_against_goal!(),
-    " AND t.posted_on <= ?1 AND ( \
-       NOT (a.include_in_forecast = 1 AND ",
-    spendable!(),
-    " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
-       OR t.posted_on <= COALESCE(b.on_date, '') \
-     ) GROUP BY s.goal_id ORDER BY s.goal_id"
+    "SELECT s.goal_id AS goal, MAX(0, -SUM(s.minor_units)) AS spent_minor ",
+    goal_spending!(),
+    " GROUP BY s.goal_id ORDER BY s.goal_id"
+);
+
+/// The accounts [`GOAL_SPENT`] reads, whoever's money they hold: the spending that lowers a
+/// goal's need is not limited to the accounts the cash is summed from.
+const GOAL_SPENDING_ACCOUNTS: &str = concat!(
+    "SELECT DISTINCT t.account_id AS account ",
+    goal_spending!(),
+    " ORDER BY t.account_id"
 );
 
 /// The goals with money spent on them both on the household's accounts, counted or not, and
@@ -518,6 +538,14 @@ impl Store {
             .iter()
             .map(|row| parsed(row, "goal"))
             .collect::<Result<_, _>>()?;
+        let goal_spending_accounts = sqlx::query(GOAL_SPENDING_ACCOUNTS)
+            .bind(&day)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(StoreError::from_sqlx)?
+            .iter()
+            .map(|row| parsed(row, "account"))
+            .collect::<Result<_, _>>()?;
         let category_spent = sqlx::query(CATEGORY_SPENT)
             .bind(&day)
             .bind(&month_start)
@@ -566,6 +594,7 @@ impl Store {
             settlements,
             goal_spent,
             goals_linked_both_sides,
+            goal_spending_accounts,
             category_spent,
             loose_ends,
             newer_spending,
