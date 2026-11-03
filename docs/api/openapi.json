@@ -4743,7 +4743,7 @@
           "reports"
         ],
         "summary": "Plan versus actual.",
-        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts. Both legs of a transfer link between two of the household's accounts are out of all of these, whatever they are filed as: `moved_within_household` says what left and what arrived, per month and currency, so a fee shows as the two differing. A link out of the household changes nothing.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "Per category and month, what the plan says against what happened. `planned` is the occurrences of today's active items falling in the month, not spread across months, and the plan has no history, so changing an item rewrites past months. `actual` is posted splits on any account: positive for spending in an `expense` category and for income in an `income` one, net of refunds, so it can be negative. `transfer` categories don't count. `difference` is `planned` minus `actual`, and `rolling_average` the mean of `actual` over the `average_months` calendar months ending at that month, zeros included.\n\nMoney that isn't in `actual` is still reported, at what its splits say, not the transaction's revised amount. A charge, or a deposit in an `income` category, whose provider removed it or revised it away from its splits stays out of `actual`, with the amount in `left_out`; a refund on such a transaction keeps counting. A possible duplicate stays in `actual`, with the amount in `possible_duplicate`. A split linked to a goal counts only on that goal's line in `goals`, as `spent_against` beside what its schedule `accrued`, and a removed, revised or possibly duplicate charge there is in that line's `left_out`. Outflows with no splits are never spending: `uncategorized` lists them, without invested and illiquid accounts. What a transfer link between two counted accounts says moved is out of all of these, whatever it is filed as: `moved_between_counted_accounts` says what left and what arrived, per month and currency, and a difference between the legs stays as filed. Any other link changes nothing here but `uncategorized`, which any link's movement leaves.\n\nAn occurrence a person settled (`settlePlanItem`) stays in `planned`, since it is what was planned: a row's `settled` says how much of `planned` it is, and the list `settled` says which item, for which month, and whether `paid` or `skipped`. A settled occurrence takes no share of the spending in `rollovers`, since that spending wasn't for it.\n\n`rollovers` has a line for each category and currency with a budget: what was `budgeted` over the reported months up to today's, what they `spent` on it while a budget was running, once bills and one-offs dated up to today have taken their share, and the `rollover` between them, positive for unspent and negative for overspent. It is a window over those months, not a running balance, so moving `from` changes it, and today's month counts all its budget occurrences. A bill has none, and the forecast doesn't carry it over. `partial_months` names the reported month holding today, whose figures aren't final. Amounts are integer minor units, and currencies are never netted.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getPlanVsActual",
         "parameters": [
           {
@@ -6170,7 +6170,7 @@
           "transactions"
         ],
         "summary": "Links two transactions.",
-        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are the household's, the two are one movement in reports and the forecast: neither spending nor income, whatever they are filed as, so they lower no budget, pay no bill and aren't uncategorized. A link out of the household stays spending and changes no number. `within_household` says which, and follows the accounts' `belongs_to`.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are the household's. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
+        "description": "Says that two transactions are one movement of money: `outflow` left one account and `inflow` reached another. Coffer never does this by itself; see `listTransferCandidates` for suggestions to confirm. Their amounts may differ, as for a fee, and `difference` says by how much, and they may be in two currencies, when it is `null`. Each keeps its category.\n\nWhen both accounts are in counted cash (open, switched into the forecast, of a spendable class), what moved is one movement in reports and the forecast: neither spending nor income, whatever it is filed as, so it lowers no budget and pays no bill. Only the smaller leg's amount moved: a difference in one currency stays what its leg is filed as. Any other link, to a brokerage, a loan, a closed account or one that isn't the household's, stays spending and changes no number. Any link takes what it says moved out of `uncategorized`. `one_movement` says which, and follows the accounts. A leg its provider takes back suspends this: the money counts as filed again, with the caution `transfer_leg_removed`.\n\nA transaction is in one link at most. One with more than one split is refused, since part of it may be spending, and so is one linked to a goal when both accounts are in counted cash. Needs `write` on both accounts; with one hidden, this answers as for a missing transaction. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response.",
         "operationId": "createTransferLink",
         "parameters": [
           {
@@ -8000,6 +8000,25 @@
           },
           {
             "type": "object",
+            "description": "A provider took back one leg of this transfer link between counted accounts, so its\nmoney counts as it is filed again, spending included, until a person says what happened.",
+            "required": [
+              "link",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transfer_leg_removed"
+                ]
+              },
+              "link": {
+                "$ref": "#/components/schemas/TransferLinkId"
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Possible duplicates this month might be inflating a category's spending, which\ncould shrink a reduction or hide an unpaid bill or one-off.",
             "required": [
               "count",
@@ -9221,7 +9240,7 @@
       },
       "MovedRow": {
         "type": "object",
-        "description": "What moved between the household's accounts in one month and currency, by the legs posted\nin it. A leg posted in another month, or a fee between them, shows as the two sides differing.",
+        "description": "What moved between counted accounts in one month and currency, by the legs posted in it. A\nleg posted in another month shows as the two sides differing. A fee isn't here: it stays\nwhat its leg is filed as.",
         "required": [
           "month",
           "money_out",
@@ -10114,7 +10133,7 @@
           "goals",
           "uncategorized",
           "not_the_households",
-          "moved_within_household",
+          "moved_between_counted_accounts",
           "settled",
           "rollovers",
           "partial_months"
@@ -10127,12 +10146,12 @@
             },
             "description": "Ordered by month and goal."
           },
-          "moved_within_household": {
+          "moved_between_counted_accounts": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MovedRow"
             },
-            "description": "Money a transfer link says only moved between the household's accounts. Never in\n`actual` or `uncategorized`, whatever its legs are filed as. Ordered by month and\ncurrency, the reported months only."
+            "description": "Money a transfer link says only moved between two counted accounts. Never in `actual`\nor `uncategorized`, whatever its legs are filed as. Ordered by month and currency, the\nreported months only."
           },
           "not_the_households": {
             "type": "array",
@@ -11693,7 +11712,7 @@
           "outflow",
           "inflow",
           "difference",
-          "within_household",
+          "one_movement",
           "created_by"
         ],
         "properties": {
@@ -11717,12 +11736,12 @@
           "inflow": {
             "$ref": "#/components/schemas/TransferLegView"
           },
+          "one_movement": {
+            "type": "boolean",
+            "description": "Both accounts are in counted cash (open, switched into the forecast, of a spendable\nclass) and neither leg was taken back by its provider, so what moved is one movement in\nreports and the forecast, whatever it is filed as. `false` is any other link, which\nrecords the movement and changes no number but `uncategorized`. It follows the accounts."
+          },
           "outflow": {
             "$ref": "#/components/schemas/TransferLegView"
-          },
-          "within_household": {
-            "type": "boolean",
-            "description": "Both accounts are the household's, so reports and the forecast take the two legs as one\nmovement, whatever they are filed as. `false` is money leaving the household or moving\noutside it, and the link changes no number. It follows the accounts' `belongs_to`."
           }
         }
       },

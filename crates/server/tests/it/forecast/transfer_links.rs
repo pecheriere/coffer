@@ -1,5 +1,5 @@
-//! Linked transfers in the forecast (spec §8.12 T6): one movement between the household's
-//! accounts lowers no budget and pays no bill, and a link out of it changes nothing.
+//! Linked transfers in the forecast (spec §8.12 T6): one movement between counted accounts lowers
+//! no budget and pays no bill, and any other link changes nothing.
 
 use axum::http::Method;
 use coffer_domain::ids::{AccountId, CategoryId};
@@ -142,6 +142,52 @@ async fn a_linked_leg_raises_no_uncategorized_spending() {
     assert_eq!(after["status"], "firm");
 }
 
+/// The worked case. Checking held 10,000.00, and a 2,000.00 mortgage bill and a 5,000.00
+/// auto-invest bill were both paid from it this month, so the balance is 3,000.00, nothing more
+/// is owed and 3,000.00 is surplus. Linking each to where it went says only that, into an
+/// invested and a long-term account, which aren't counted cash: treating them as movements
+/// would owe both bills again, a surplus of -4,000.00, and might prompt a second contribution.
+#[tokio::test]
+async fn a_paid_bill_stays_paid_when_linked_out_of_counted_cash() {
+    let world = world().await;
+    world.floor(0).await;
+    let checking = world.funded("Checking", 300_000).await;
+    let brokerage = world
+        .account_with("Brokerage", "brokerage", "USD", json!({}))
+        .await;
+    let loan = world
+        .account_with("Home loan", "mortgage", "USD", json!({}))
+        .await;
+    let house = world.expense("Mortgage").await;
+    let invest = world.expense("Investing").await;
+    for (name, amount, category) in [("House", 200_000, house), ("Auto-invest", 500_000, invest)] {
+        let mut bill = outflow(name, amount, category, &monthly("2026-11-05"));
+        bill["schedule"]["end_on"] = json!("2026-11-30");
+        world.item(&bill).await;
+    }
+    let house_out = world.charge(checking, "2026-11-05", 200_000, house).await;
+    let invest_out = world.charge(checking, "2026-11-05", 500_000, invest).await;
+    let house_in = world.deposit(loan, "2026-11-06", 200_000).await;
+    let invest_in = world.deposit(brokerage, "2026-11-06", 500_000).await;
+
+    let before = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(totals(&before)["cash_available"], usd(300_000));
+    assert_eq!(totals(&before)["planned_outflows"], usd(0));
+    assert_eq!(before["surplus"], usd(300_000));
+    assert_eq!(before["cautions"], json!([]));
+
+    assert_eq!(
+        world.link_legs(&house_out, &house_in).await["one_movement"],
+        false
+    );
+    assert_eq!(
+        world.link_legs(&invest_out, &invest_in).await["one_movement"],
+        false
+    );
+
+    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+}
+
 /// Spec §8.11 B9: into a fund, it is spending, so a bill is paid and the number stays what it
 /// was before the link, cautions and all.
 #[tokio::test]
@@ -156,6 +202,27 @@ async fn a_link_out_of_the_household_changes_no_number() {
     let mut bill = outflow("Contribution", 50_000, college, &monthly("2026-11-05"));
     bill["schedule"]["end_on"] = json!("2026-11-30");
     world.item(&bill).await;
+    let out = world.charge(checking, "2026-11-05", 50_000, college).await;
+    let into = world.deposit(fund, "2026-11-05", 50_000).await;
+
+    let before = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(totals(&before)["planned_outflows"], usd(0));
+
+    world.link_legs(&out, &into).await;
+
+    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+}
+
+/// A person has said where an uncategorized outflow went, whatever the other account is, so the
+/// caution asks only about the rest: 500.00 sent, 300.00 arrived.
+#[tokio::test]
+async fn any_link_answers_uncategorized_spending_for_what_it_says() {
+    let world = world().await;
+    world.floor(0).await;
+    let checking = world.funded("Checking", 200_000).await;
+    let brokerage = world
+        .account_with("Brokerage", "brokerage", "USD", json!({}))
+        .await;
     let food = world.expense("Food").await;
     world
         .item(&with(
@@ -164,26 +231,111 @@ async fn a_link_out_of_the_household_changes_no_number() {
             json!("budget"),
         ))
         .await;
-    let out = world.charge(checking, "2026-11-05", 50_000, college).await;
-    let into = world.deposit(fund, "2026-11-05", 50_000).await;
-    let plain_out = world.deposit(checking, "2026-11-06", -700).await;
-    let plain_in = world.deposit(fund, "2026-11-06", 700).await;
-
-    let before = world.forecast_at(ONE_MONTH).await;
-    assert_eq!(
-        kinds(&before, "cautions"),
-        ["uncategorized_spending"],
-        "the bill is paid, and the plain outflow isn't filed"
-    );
+    let out = world.deposit(checking, "2026-11-05", -50_000).await;
+    let into = world.deposit(brokerage, "2026-11-06", 30_000).await;
 
     world.link_legs(&out, &into).await;
-    world.link_legs(&plain_out, &plain_in).await;
 
-    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+    let forecast = world.forecast_at(ONE_MONTH).await;
+    let caution = caution(&forecast, "uncategorized_spending");
+    assert_eq!(caution["total"], usd(20_000));
+    assert_eq!(caution["count"], 1);
 }
 
-/// A contribution linked to a goal lowers its need, until the fund is said to be the
-/// household's: then nothing left, and the need comes back. Read when asked, as every count.
+/// A difference in one currency stays spending: 1,250.00 linked to 12.50 lowers the budget by
+/// 1,237.50, and nothing says the number is firm for the wrong reason.
+#[tokio::test]
+async fn only_what_moved_leaves_a_budget() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let food = world.expense("Food").await;
+    world
+        .item(&with(
+            outflow("Groceries", 200_000, food, &monthly("2026-11-20")),
+            "spending",
+            json!("budget"),
+        ))
+        .await;
+    let out = world.charge(checking, "2026-11-05", 125_000, food).await;
+    let into = world.deposit(savings, "2026-11-05", 1_250).await;
+
+    world.link_legs(&out, &into).await;
+
+    assert_eq!(
+        line(&world.forecast_at(ONE_MONTH).await, "Groceries")["reduced_by"],
+        usd(123_750)
+    );
+}
+
+/// A provider taking back a leg brings the money back and says so: the charge lowers the budget
+/// again, and the forecast is provisional until a person looks. A link to an account that isn't
+/// counted has nothing to say.
+#[tokio::test]
+async fn a_leg_taken_back_brings_the_money_back_with_a_caution() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let food = world.expense("Food").await;
+    world
+        .item(&with(
+            outflow("Groceries", 40_000, food, &monthly("2026-11-20")),
+            "spending",
+            json!("budget"),
+        ))
+        .await;
+    let out = world.charge(checking, "2026-11-05", 30_000, food).await;
+    let into = world.deposit(savings, "2026-11-05", 30_000).await;
+    let link = world.link_legs(&out, &into).await;
+    let held = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&held, "Groceries")["reduced_by"], usd(0));
+    assert_eq!(held["status"], "firm");
+
+    world
+        .server
+        .store
+        .execute_unchecked_for_tests(
+            "UPDATE transactions SET flag_source_removed = 1 WHERE id = ?",
+            &into,
+        )
+        .await
+        .unwrap();
+
+    let after = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&after, "Groceries")["reduced_by"], usd(30_000));
+    assert_eq!(after["status"], "provisional");
+    assert_eq!(caution(&after, "transfer_leg_removed")["link"], link["id"]);
+}
+
+/// A pending charge its provider withdrew is no money at all, so the balance isn't missing it.
+#[tokio::test]
+async fn a_pending_leg_taken_back_isnt_newer_spending() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let out = world.deposit(checking, AS_OF, -30_000).await;
+    let into = world.deposit(savings, BALANCE_ON, 30_000).await;
+    world.link_legs(&out, &into).await;
+    for statement in [
+        "UPDATE transactions SET pending = 1 WHERE id = ?",
+        "UPDATE transactions SET flag_source_removed = 1 WHERE id = ?",
+    ] {
+        world
+            .server
+            .store
+            .execute_unchecked_for_tests(statement, &out)
+            .await
+            .unwrap();
+    }
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    assert_eq!(
+        kinds(&forecast, "cautions"),
+        ["transfer_leg_removed"],
+        "the link still wants a look"
+    );
+}
+
+/// A contribution linked to a goal lowers its need, until the fund is said to be the household's
+/// cash: then nothing left, and the need comes back. Read when asked, as every count.
 #[tokio::test]
 async fn a_goal_counts_a_leg_only_while_the_money_leaves() {
     let world = world().await;
@@ -192,6 +344,7 @@ async fn a_goal_counts_a_leg_only_while_the_money_leaves() {
     let fund = world
         .account_with("College fund", "education", "USD", json!({}))
         .await;
+    world.balance(fund, BALANCE_ON, 50_000).await;
     let college = world.expense("College").await;
     let goal = world
         .item(&outflow(
@@ -215,7 +368,7 @@ async fn a_goal_counts_a_leg_only_while_the_money_leaves() {
         .admin_send(
             Method::PATCH,
             &format!("/api/v1/accounts/{fund}"),
-            &json!({"belongs_to": "household"}),
+            &json!({"belongs_to": "household", "liquidity": "cash"}),
         )
         .await;
 
@@ -223,13 +376,12 @@ async fn a_goal_counts_a_leg_only_while_the_money_leaves() {
     assert_eq!(minor(&inside, "goals"), minor(&leaving, "goals") + 50_000);
 }
 
-/// A balance that hasn't shown the money may still be the one that matters, and a link doesn't
-/// say which sides have moved, so the caution stands (R10).
+/// Neither balance shows a movement between them, so counted cash is right as it stands and
+/// there is nothing to warn of.
 #[tokio::test]
-async fn a_link_doesnt_quiet_a_balance_behind_its_money() {
+async fn a_movement_neither_balance_shows_raises_no_caution() {
     let world = world().await;
     let (checking, savings) = world.two_accounts().await;
-    assert!(BALANCE_ON < AS_OF);
     let moved = world.category("Moved", "transfer").await;
     let out = world.charge(checking, AS_OF, 30_000, moved).await;
     let into = world.deposit(savings, AS_OF, 30_000).await;
@@ -242,13 +394,52 @@ async fn a_link_doesnt_quiet_a_balance_behind_its_money() {
 
     world.link_legs(&out, &into).await;
 
-    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
+    assert_eq!(world.forecast_at(ONE_MONTH).await["cautions"], json!([]));
 }
 
-/// A closed account's spending was never in the budget (R10), but a leg on an open account
-/// linked to one is still a movement: the money went somewhere of the household's.
+/// A difference is real money a balance is missing, so it alone stays asked about.
 #[tokio::test]
-async fn a_leg_on_a_closed_account_still_makes_a_movement() {
+async fn the_difference_of_a_movement_stays_newer_spending() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let moved = world.category("Moved", "transfer").await;
+    let out = world.charge(checking, AS_OF, 30_000, moved).await;
+    let into = world.deposit(savings, AS_OF, 29_000).await;
+
+    world.link_legs(&out, &into).await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(
+        caution(&forecast, "spending_newer_than_balance")["total"],
+        usd(1_000)
+    );
+}
+
+/// The deposit shows and the charge doesn't: one balance is ahead of the other, and cash really
+/// is overstated, so the alarm stands.
+#[tokio::test]
+async fn a_movement_only_one_balance_shows_keeps_the_caution() {
+    let world = world().await;
+    let (checking, savings) = world.two_accounts().await;
+    let moved = world.category("Moved", "transfer").await;
+    let out = world.charge(checking, AS_OF, 30_000, moved).await;
+    let into = world.deposit(savings, BALANCE_ON, 30_000).await;
+
+    world.link_legs(&out, &into).await;
+
+    assert_eq!(
+        caution(
+            &world.forecast_at(ONE_MONTH).await,
+            "spending_newer_than_balance"
+        )["total"],
+        usd(30_000)
+    );
+}
+
+/// A link to a closed account is no movement (T5), so a charge filed in a budget stays spending:
+/// that account's cash isn't in the number, so the money did leave what is counted.
+#[tokio::test]
+async fn a_link_to_a_closed_account_changes_no_number() {
     let world = world().await;
     let (checking, savings) = world.two_accounts().await;
     let food = world.expense("Food").await;
@@ -262,11 +453,10 @@ async fn a_leg_on_a_closed_account_still_makes_a_movement() {
     let out = world.charge(checking, "2026-11-05", 30_000, food).await;
     let into = world.deposit(savings, "2026-11-05", 30_000).await;
     world.close(savings).await;
+    let before = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(line(&before, "Groceries")["reduced_by"], usd(30_000));
 
     world.link_legs(&out, &into).await;
 
-    assert_eq!(
-        line(&world.forecast_at(ONE_MONTH).await, "Groceries")["reduced_by"],
-        usd(0)
-    );
+    assert_eq!(world.forecast_at(ONE_MONTH).await, before);
 }

@@ -6,7 +6,6 @@
 
 use std::cmp::Reverse;
 
-use coffer_domain::accounts::BelongsTo;
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, TransactionId, TransferLinkId};
@@ -22,7 +21,8 @@ use jiff::{Span, Timestamp};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use super::transactions::{AttributionView, TransactionView, attribution};
+use super::transactions::{AttributionView, TransactionView, attribution, current_splits};
+use super::unseen::splits_as_shown;
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::ProblemCode;
@@ -39,13 +39,13 @@ const OUTFLOW_SIGN: &str = "`outflow` must be money out of its account";
 const INFLOW_SIGN: &str = "`inflow` must be money into its account";
 const SPLIT_LEG: &str = "a transaction with more than one split can't be one leg of a transfer link: part of it may \
      be spending";
-const GOAL_LEG: &str = "money moved between the household's accounts can't count towards a goal: it is still the \
-     household's";
+const GOAL_LEG: &str =
+    "money moved between two counted accounts can't count towards a goal: it is still cash";
 const ALREADY_LINKED: &str = "a transaction is already one leg of a transfer link";
 const SPLIT_LINKED: &str = "a leg of a transfer link keeps one split at most: remove the link \
                             first";
 const GOAL_LINKED: &str = "this leg of a transfer link can't count towards a goal: the money is \
-                           still the household's";
+                           still cash";
 const DELETE_LINKED: &str = "the transaction is one leg of a transfer link: remove the link first";
 /// What a token that doesn't see a link is told, in no words of one (spec §8.2).
 const NOT_WITH_THIS_ACCESS: &str = "this change can't be made to this transaction with this access";
@@ -94,10 +94,11 @@ pub struct TransferLinkView {
     /// legs in two currencies, which have no difference without a rate.
     #[schema(required)]
     pub difference: Option<Money>,
-    /// Both accounts are the household's, so reports and the forecast take the two legs as one
-    /// movement, whatever they are filed as. `false` is money leaving the household or moving
-    /// outside it, and the link changes no number. It follows the accounts' `belongs_to`.
-    pub within_household: bool,
+    /// Both accounts are in counted cash (open, switched into the forecast, of a spendable
+    /// class) and neither leg was taken back by its provider, so what moved is one movement in
+    /// reports and the forecast, whatever it is filed as. `false` is any other link, which
+    /// records the movement and changes no number but `uncategorized`. It follows the accounts.
+    pub one_movement: bool,
     pub created_by: AttributionView,
 }
 
@@ -119,7 +120,7 @@ impl TransferLinkView {
                     minor_units,
                     currency: outflow.currency,
                 }),
-            within_household: link.within_household,
+            one_movement: link.one_movement,
             created_by: AttributionView::new(&link.created),
         }
     }
@@ -131,16 +132,28 @@ pub struct TransferCandidates {
     pub items: Vec<TransactionView>,
 }
 
-/// Whether both legs' accounts are the household's.
-async fn both_the_households(
+/// Refuses a link that would be one movement, on legs where one has a goal. A token not shown
+/// that goal is refused in words that don't say there is one (spec §8.9 R3).
+async fn refuse_goal_on_movement(
     tx: &mut StoreTx,
+    access: &AccountAccess,
     outflow: &TransactionRecord,
     inflow: &TransactionRecord,
-) -> Result<bool, LedgerError> {
-    Ok(
-        tx.get_account(outflow.account).await?.belongs_to == BelongsTo::Household
-            && tx.get_account(inflow.account).await?.belongs_to == BelongsTo::Household,
-    )
+) -> Result<(), LedgerError> {
+    let has_goal = |splits: &[SplitInput]| splits.iter().any(|split| split.goal.is_some());
+    let (out_splits, in_splits) = (current_splits(outflow), current_splits(inflow));
+    if !(has_goal(&out_splits) || has_goal(&in_splits))
+        || !tx.both_in_counted_cash(outflow.id, inflow.id).await?
+    {
+        return Ok(());
+    }
+    let shown = has_goal(&splits_as_shown(tx, access, &out_splits).await?)
+        || has_goal(&splits_as_shown(tx, access, &in_splits).await?);
+    Err(LedgerError::Invalid(if shown {
+        GOAL_LEG
+    } else {
+        NOT_WITH_THIS_ACCESS
+    }))
 }
 
 /// `shown` if `access` can read the other leg of `side`, and otherwise words that don't tell
@@ -161,8 +174,8 @@ async fn link_words(
     )
 }
 
-/// Refuses `splits` a leg can't hold: more than one, or, inside the household, a goal. Linking a
-/// transaction out of the household to a goal stays allowed (spec §8.11 B10).
+/// Refuses `splits` a leg can't hold: more than one, or, on a link that is one movement, a goal.
+/// Any other link's money left counted cash, so its goal stays allowed (spec §8.11 B10).
 pub(super) async fn check_splits_on_leg(
     tx: &mut StoreTx,
     access: &AccountAccess,
@@ -171,7 +184,7 @@ pub(super) async fn check_splits_on_leg(
 ) -> Result<(), LedgerError> {
     let refused = if splits.len() > 1 {
         SPLIT_LINKED
-    } else if side.within_household && splits.iter().any(|split| split.goal.is_some()) {
+    } else if side.one_movement && splits.iter().any(|split| split.goal.is_some()) {
         GOAL_LINKED
     } else {
         return Ok(());
@@ -276,7 +289,7 @@ impl Ledger {
     /// [`LedgerError::NotFound`] for an unknown transaction or one in a hidden account;
     /// [`LedgerError::Denied`] without write access to either account;
     /// [`LedgerError::Invalid`] for legs that can't be joined: on one account, not out and in,
-    /// split in more than one, or, inside the household, linked to a goal;
+    /// split in more than one, or, between two counted accounts, linked to a goal;
     /// [`LedgerError::Conflict`] when a leg is already in a link; storage failures.
     pub async fn create_transfer_link(
         &self,
@@ -310,12 +323,7 @@ impl Ledger {
                 return Err(LedgerError::Conflict(ProblemCode::Conflict, words));
             }
         }
-        let goal_on_a_leg = [&outflow, &inflow]
-            .iter()
-            .any(|leg| leg.splits.iter().any(|split| split.goal.is_some()));
-        if goal_on_a_leg && both_the_households(&mut tx, &outflow, &inflow).await? {
-            return Err(LedgerError::Invalid(GOAL_LEG));
-        }
+        refuse_goal_on_movement(&mut tx, &access, &outflow, &inflow).await?;
         let link = tx
             .insert_transfer_link(NewTransferLink {
                 outflow: outflow.id,
@@ -338,7 +346,7 @@ impl Ledger {
                 .set("inflow", inflow.id)
                 .set("inflow_account", inflow.account)
                 .set("inflow_amount_minor", inflow.amount_minor)
-                .set("within_household", link.within_household),
+                .set("one_movement", link.one_movement),
         )
         .await?;
         complete_created(&mut tx, slot, &view).await?;

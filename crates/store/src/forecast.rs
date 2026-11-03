@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
+use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId, TransferLinkId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::ForecastSettings;
 use coffer_domain::plan_report::{
@@ -21,6 +21,10 @@ use crate::household::fetch_forecast_settings;
 use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
 use crate::settlements;
+use crate::transfer_links::{
+    after_moved, amount_unsaid, both_counted, counted_cash, link_amount, link_legs, link_stands,
+    moved_minor, said_minor,
+};
 use crate::{
     AccountRecord, BalanceSnapshot, ConnectionStatus, PlannedItemRecord, ProviderAccountRecord,
     SettlementRecord, Store, StoreError,
@@ -49,6 +53,9 @@ pub struct ForecastData {
     pub loose_ends: Vec<LooseEndsRow>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
+    /// The links between counted accounts with a leg its provider took back and a leg in
+    /// `as_of`'s month, ordered by id.
+    pub links_with_leg_removed: Vec<TransferLinkId>,
     /// Every provider account, ordered by id.
     pub provider_accounts: Vec<ProviderAccountRecord>,
     /// Every connection, removed ones included, ordered by id.
@@ -136,22 +143,6 @@ macro_rules! the_households {
     };
 }
 
-/// The transaction `t` is one leg of a transfer link between two of the household's accounts,
-/// so it is one movement of money and neither spending nor income, whatever it is filed as
-/// (spec §8.12 T5). Read at the time, as whose money an account is always is (§8.11 B6), so a
-/// link out of the household says nothing here and changes no number (§8.11 B9).
-macro_rules! moved_within_household {
-    () => {
-        "EXISTS (SELECT 1 FROM transfer_links lk \
-         JOIN transactions lo ON lo.id = lk.outflow_id \
-         JOIN accounts ao ON ao.id = lo.account_id \
-         JOIN transactions li ON li.id = lk.inflow_id \
-         JOIN accounts ai ON ai.id = li.account_id \
-         WHERE (lk.outflow_id = t.id OR lk.inflow_id = t.id) \
-         AND ao.belongs_to = 'household' AND ai.belongs_to = 'household')"
-    };
-}
-
 /// Transactions in `t` the balance of an account in the forecast already shows, in
 /// the window from the bound month start to the bound `as_of`. The inner join leaves
 /// out an account with no balance. A closed account is left out too, though a closed
@@ -162,9 +153,8 @@ macro_rules! shown_this_month {
             "transactions t JOIN accounts a ON a.id = t.account_id JOIN ",
             latest_balance!(),
             " WHERE t.pending = 0 AND t.posted_on >= ?2 AND t.posted_on <= ?1 \
-             AND t.posted_on <= b.on_date AND a.closed_at IS NULL \
-             AND a.include_in_forecast = 1 AND ",
-            spendable!()
+             AND t.posted_on <= b.on_date AND ",
+            counted_cash!("a")
         )
     };
 }
@@ -200,41 +190,38 @@ macro_rules! left_out_of_category {
 
 /// Money counted against a goal (R10a): a charge the provider removed or revised away
 /// from its splits, or that may be another charge again, doesn't count. An inflow on such
-/// a transaction keeps counting, since leaving a refund out would lower the need. A leg of a
-/// transfer inside the household counts neither way: the money is still the household's.
+/// a transaction keeps counting, since leaving a refund out would lower the need.
 macro_rules! counts_against_goal {
     () => {
         concat!(
-            "(NOT ",
-            moved_within_household!(),
-            " AND (s.minor_units > 0 OR (",
+            "(s.minor_units > 0 OR (",
             splits_hold!(),
-            " AND t.flag_possible_duplicate = 0)))"
+            " AND t.flag_possible_duplicate = 0))"
         )
     };
 }
 
 const CATEGORY_SPENT: &str = concat!(
     "SELECT s.category_id AS category, t.currency AS currency, \
-     MAX(0, -SUM(s.minor_units)) AS spent_minor \
+     MAX(0, -SUM(",
+    after_moved!("s.minor_units"),
+    ")) AS spent_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id, ",
     shown_this_month!(),
     " AND s.transaction_id = t.id AND s.goal_id IS NULL AND c.kind = 'expense' \
      AND NOT ",
-    moved_within_household!(),
-    " AND NOT ",
     left_out_of_category!(),
     " GROUP BY s.category_id, t.currency ORDER BY s.category_id, t.currency"
 );
 
-/// An outflow with no splits at all and no link saying where it went, in `t`.
+/// An outflow with no splits at all, in `t`, and something of it no link says where it went.
 macro_rules! uncategorized {
     () => {
         concat!(
             "FILTER (WHERE t.amount_minor < 0 AND NOT EXISTS \
-             (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id) AND NOT ",
-            moved_within_household!(),
-            ")"
+             (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id) AND ",
+            amount_unsaid!(),
+            " < 0)"
         )
     };
 }
@@ -242,7 +229,9 @@ macro_rules! uncategorized {
 const LOOSE_ENDS: &str = concat!(
     "SELECT t.currency AS currency, COUNT(*) ",
     uncategorized!(),
-    " AS uncategorized_count, COALESCE(-SUM(t.amount_minor) ",
+    " AS uncategorized_count, COALESCE(-SUM(",
+    amount_unsaid!(),
+    ") ",
     uncategorized!(),
     ", 0) AS uncategorized_minor, SUM(t.flag_possible_duplicate) AS possible_duplicates FROM ",
     shown_this_month!(),
@@ -272,14 +261,18 @@ macro_rules! goal_spending {
             spendable!(),
             " AND (a.closed_at IS NULL OR a.liquidity = 'short_term_liability')) \
                OR t.posted_on <= COALESCE(b.on_date, '') \
-             )"
+             ) AND ",
+            after_moved!("s.minor_units"),
+            " <> 0"
         )
     };
 }
 
 /// Spending linked to each goal, positive for money spent: see [`goal_spending`].
 const GOAL_SPENT: &str = concat!(
-    "SELECT s.goal_id AS goal, MAX(0, -SUM(s.minor_units)) AS spent_minor ",
+    "SELECT s.goal_id AS goal, MAX(0, -SUM(",
+    after_moved!("s.minor_units"),
+    ")) AS spent_minor ",
     goal_spending!(),
     " GROUP BY s.goal_id ORDER BY s.goal_id"
 );
@@ -303,7 +296,9 @@ const GOALS_LINKED_BOTH_SIDES: &str = concat!(
      JOIN transactions t ON t.id = s.transaction_id \
      JOIN accounts a ON a.id = t.account_id \
      WHERE s.goal_id IS NOT NULL AND c.kind = 'expense' AND t.pending = 0 \
-     AND s.minor_units < 0 AND ",
+     AND ",
+    after_moved!("s.minor_units"),
+    " < 0 AND ",
     counts_against_goal!(),
     " AND t.posted_on <= ?1 GROUP BY s.goal_id HAVING MAX(",
     the_households!(),
@@ -312,18 +307,46 @@ const GOALS_LINKED_BOTH_SIDES: &str = concat!(
     ") = 1 ORDER BY s.goal_id"
 );
 
+/// What of the outflow `t` a link says moved to a counted account in the same currency whose own
+/// balance doesn't show it either, up to the bound `as_of`.
+macro_rules! moved_unseen {
+    () => {
+        concat!(
+            "COALESCE((SELECT MIN(-lo.amount_minor, li.amount_minor) FROM ",
+            link_legs!(),
+            " WHERE lk.outflow_id = t.id AND lo.currency = li.currency AND ",
+            link_stands!(),
+            " AND ",
+            both_counted!(),
+            " AND li.posted_on <= ?1 AND (li.pending = 1 OR li.posted_on > COALESCE(\
+             (SELECT MAX(on_date) FROM balance_snapshots \
+              WHERE account_id = li.account_id AND on_date <= ?1), ''))), 0)"
+        )
+    };
+}
+
 /// Outflows up to `as_of` that a balance may not show, on an account switched in and of a
 /// spendable class: posted after the date of the balance the forecast takes, or pending
 /// on any date, which is either one or the other. An open account has to have a balance,
 /// since without one the forecast is blocked already. A closed card doesn't, since closing
 /// it settles no debt its balance doesn't show. Closed cash isn't in the cash.
+///
+/// A pending record its provider took back is no money at all. What a link says moved leaves
+/// too when the other leg is just as new on its own counted account, since then neither balance
+/// shows it and counted cash is right as it stands. With the other leg shown, this one is what
+/// the balances are missing, and it stays.
 const NEWER_SPENDING: &str = concat!(
     "SELECT t.currency AS currency, \
-     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.pending = 0), 0) AS total_minor, \
-     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.pending = 1), 0) AS pending_minor \
+     COALESCE(-SUM(t.amount_minor + ",
+    moved_unseen!(),
+    ") FILTER (WHERE t.pending = 0), 0) AS total_minor, \
+     COALESCE(-SUM(t.amount_minor + ",
+    moved_unseen!(),
+    ") FILTER (WHERE t.pending = 1), 0) AS pending_minor \
      FROM transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN ",
     latest_balance!(),
     " WHERE t.amount_minor < 0 AND t.posted_on <= ?1 \
+       AND NOT (t.pending = 1 AND t.flag_source_removed = 1) \
        AND (t.pending = 1 OR t.posted_on > COALESCE(b.on_date, '')) \
        AND a.include_in_forecast = 1 AND ",
     spendable!(),
@@ -338,13 +361,19 @@ const NEWER_SPENDING: &str = concat!(
 const REPORT_ACTUALS: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, s.category_id AS category, c.kind AS kind, \
      t.currency AS currency, \
-     COALESCE(SUM(s.minor_units) FILTER (WHERE NOT ",
+     COALESCE(SUM(",
+    after_moved!("s.minor_units"),
+    ") FILTER (WHERE NOT ",
     left_out_of_category!(),
     "), 0) AS net_minor, \
-     COALESCE(ABS(SUM(s.minor_units) FILTER (WHERE ",
+     COALESCE(ABS(SUM(",
+    after_moved!("s.minor_units"),
+    ") FILTER (WHERE ",
     left_out_of_category!(),
     ")), 0) AS left_out_minor, \
-     COALESCE(ABS(SUM(s.minor_units) FILTER (WHERE t.flag_possible_duplicate = 1 AND ",
+     COALESCE(ABS(SUM(",
+    after_moved!("s.minor_units"),
+    ") FILTER (WHERE t.flag_possible_duplicate = 1 AND ",
     adds_to_category!(),
     " AND ",
     splits_hold!(),
@@ -353,9 +382,7 @@ const REPORT_ACTUALS: &str = concat!(
      JOIN transactions t ON t.id = s.transaction_id \
      JOIN accounts a ON a.id = t.account_id \
      WHERE s.goal_id IS NULL AND t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 \
-     AND NOT ",
-    moved_within_household!(),
-    " AND ",
+     AND ",
     the_households!(),
     " GROUP BY month, s.category_id, c.kind, t.currency \
      ORDER BY month, s.category_id, t.currency"
@@ -376,26 +403,48 @@ const REPORT_NOT_HOUSEHOLD: &str = concat!(
     " GROUP BY month, t.currency ORDER BY month, t.currency"
 );
 
-/// The legs [`REPORT_ACTUALS`] and [`REPORT_UNCATEGORIZED`] leave out for being one movement, by
-/// month: every posted one, whatever it is filed as.
+/// What [`REPORT_ACTUALS`] leaves out for being one movement, by month: what moved of every
+/// posted leg, whatever it is filed as.
 const REPORT_MOVED: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, \
-     COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.amount_minor < 0), 0) AS out_minor, \
-     COALESCE(SUM(t.amount_minor) FILTER (WHERE t.amount_minor > 0), 0) AS in_minor \
+     COALESCE(SUM(",
+    moved_minor!(),
+    ") FILTER (WHERE t.amount_minor < 0), 0) AS out_minor, \
+     COALESCE(SUM(",
+    moved_minor!(),
+    ") FILTER (WHERE t.amount_minor > 0), 0) AS in_minor \
      FROM transactions t \
      WHERE t.pending = 0 AND t.posted_on >= ?1 AND t.posted_on < ?2 AND ",
-    moved_within_household!(),
-    " GROUP BY month, t.currency ORDER BY month, t.currency"
+    moved_minor!(),
+    " > 0 GROUP BY month, t.currency ORDER BY month, t.currency"
+);
+
+/// The links one movement but for a leg its provider took back, with a leg in `as_of`'s month:
+/// their money counts again as it is filed, and a person should look (spec §8.12 T7).
+const LINKS_WITH_LEG_REMOVED: &str = concat!(
+    "SELECT lk.id AS link FROM ",
+    link_legs!(),
+    " WHERE (lo.flag_source_removed = 1 OR li.flag_source_removed = 1) AND ",
+    both_counted!(),
+    " AND ((lo.posted_on >= ?2 AND lo.posted_on <= ?1) \
+     OR (li.posted_on >= ?2 AND li.posted_on <= ?1)) ORDER BY lk.id"
 );
 
 /// What is linked to each goal by month, on any account: `expense` splits only, as in
-/// [`GOAL_SPENT`].
+/// [`GOAL_SPENT`]. A charge that moved is left out as one the flags keep out is. A refund that
+/// moved was never a refund, so it just isn't counted, and `left_out` stays charges only.
 const REPORT_GOAL_SPENT: &str = concat!(
     "SELECT s.goal_id AS goal, substr(t.posted_on, 1, 7) AS month, \
-     COALESCE(-SUM(s.minor_units) FILTER (WHERE ",
+     COALESCE(-SUM(",
+    after_moved!("s.minor_units"),
+    ") FILTER (WHERE ",
     counts_against_goal!(),
     "), 0) AS spent_minor, \
      COALESCE(-SUM(s.minor_units) FILTER (WHERE NOT ",
+    counts_against_goal!(),
+    "), 0) + COALESCE(-SUM(s.minor_units - ",
+    after_moved!("s.minor_units"),
+    ") FILTER (WHERE s.minor_units < 0 AND ",
     counts_against_goal!(),
     "), 0) AS left_out_minor \
      FROM transaction_splits s JOIN categories c ON c.id = s.category_id \
@@ -411,7 +460,9 @@ const REPORT_GOAL_SPENT: &str = concat!(
 const REPORT_UNCATEGORIZED: &str = concat!(
     "SELECT substr(t.posted_on, 1, 7) AS month, t.currency AS currency, COUNT(*) ",
     uncategorized!(),
-    " AS uncategorized_count, COALESCE(-SUM(t.amount_minor) ",
+    " AS uncategorized_count, COALESCE(-SUM(",
+    amount_unsaid!(),
+    ") ",
     uncategorized!(),
     ", 0) AS uncategorized_minor \
      FROM transactions t JOIN accounts a ON a.id = t.account_id \
@@ -519,6 +570,23 @@ fn connection_health_from_row(row: &SqliteRow) -> Result<ConnectionHealth, Store
     })
 }
 
+/// See [`LINKS_WITH_LEG_REMOVED`].
+async fn links_with_leg_removed(
+    conn: &mut SqliteConnection,
+    as_of: &str,
+    month_start: &str,
+) -> Result<Vec<TransferLinkId>, StoreError> {
+    sqlx::query(LINKS_WITH_LEG_REMOVED)
+        .bind(as_of)
+        .bind(month_start)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(|row| parsed(row, "link"))
+        .collect()
+}
+
 /// Each account with its latest balance on or before `as_of`.
 async fn accounts_with_balances(
     conn: &mut SqliteConnection,
@@ -624,6 +692,7 @@ impl Store {
             .iter()
             .map(newer_spending_from_row)
             .collect::<Result<_, _>>()?;
+        let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &month_start).await?;
         let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
             .fetch_all(&mut *tx)
             .await
@@ -650,6 +719,7 @@ impl Store {
             category_spent,
             loose_ends,
             newer_spending,
+            links_with_leg_removed,
             provider_accounts,
             connections,
         })

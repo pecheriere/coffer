@@ -13,9 +13,10 @@
 //! - A split linked to a goal counts on the goal's line and never in its category.
 //! - Categorized money on an account that isn't the household's is never in `actual`
 //!   (spec §8.11 B10), and `not_the_households` says how much, per month and currency.
-//! - Both legs of a transfer link between two of the household's accounts are out of `actual`,
-//!   `uncategorized` and a goal's `spent_against`, whatever they are filed as (spec §8.12 T5), and
-//!   `moved_within_household` says how much, per month and currency.
+//! - What a transfer link between two counted accounts says moved is out of `actual`,
+//!   `uncategorized` and a goal's `spent_against`, whatever it is filed as (spec §8.12 T5), and
+//!   `moved_between_counted_accounts` says how much, per month and currency. A difference
+//!   between the legs stays what it is filed as.
 //!
 //! An occurrence a person settled (R9a) stays in `planned`, since it is what was planned, and
 //! the row's `settled` says how much of it is. It takes no share of a rollover's spending,
@@ -124,7 +125,7 @@ pub struct MonthNotHousehold {
     pub net_minor: i64,
 }
 
-/// Posted legs of transfer links between two of the household's accounts, in one month and
+/// What moved of posted legs of transfer links between two counted accounts, in one month and
 /// currency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonthMoved {
@@ -149,10 +150,10 @@ pub struct PlanReport {
     /// Categorized money on accounts that aren't the household's. Never in `actual`. Ordered
     /// by month and currency, the reported months only.
     pub not_the_households: Vec<NotHouseholdRow>,
-    /// Money a transfer link says only moved between the household's accounts. Never in
-    /// `actual` or `uncategorized`, whatever its legs are filed as. Ordered by month and
-    /// currency, the reported months only.
-    pub moved_within_household: Vec<MovedRow>,
+    /// Money a transfer link says only moved between two counted accounts. Never in `actual`
+    /// or `uncategorized`, whatever its legs are filed as. Ordered by month and currency, the
+    /// reported months only.
+    pub moved_between_counted_accounts: Vec<MovedRow>,
     /// The occurrences a person settled, ordered by month and item: they stay in `planned`,
     /// and this is why a row's `difference` may be no surprise.
     pub settled: Vec<SettledRow>,
@@ -225,8 +226,9 @@ pub struct NotHouseholdRow {
     pub net: Money,
 }
 
-/// What moved between the household's accounts in one month and currency, by the legs posted
-/// in it. A leg posted in another month, or a fee between them, shows as the two sides differing.
+/// What moved between counted accounts in one month and currency, by the legs posted in it. A
+/// leg posted in another month shows as the two sides differing. A fee isn't here: it stays
+/// what its leg is filed as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct MovedRow {
@@ -356,7 +358,7 @@ pub fn plan_vs_actual(input: &PlanReportInput) -> Result<PlanReport, ForecastErr
                 },
             })
             .collect(),
-        moved_within_household: input
+        moved_between_counted_accounts: input
             .moved
             .iter()
             .filter(|row| reported.contains(&row.month))

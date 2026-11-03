@@ -394,37 +394,42 @@ confirm.
   days, nearest first. A guess to check, and it changes nothing.
 - `POST /api/v1/transfer-links` (`write` on both accounts) links `{"outflow": "<id>", "inflow":
   "<id>"}`. Answers 201 with `difference`, what arrived less what left (`null` across
-  currencies), and `within_household`. Amounts may differ, as for a fee, and currencies too.
+  currencies), and `one_movement`. Amounts may differ, as for a fee, and currencies too.
   Accepts an `Idempotency-Key`. A transaction already in a link is a 409 `conflict`.
 - `GET /api/v1/transfer-links/{transfer_link_id}` reads one, with what each leg says now. Each
   transaction names its own in `transfer_link`.
 - `DELETE /api/v1/transfer-links/{transfer_link_id}` (`write` on both accounts) ends one. Both
   transactions stay, and count again as what they are filed as.
 
-**What it changes.** Between two of the household's accounts, the two legs are one movement:
-neither spending nor income, whatever they are filed as. They are out of `actual`, reduce no
-budget, pay no bill, count towards no goal and raise no `uncategorized_spending`, and
-`moved_within_household` in plan versus actual says what left and what arrived. Each leg keeps
-its category, which counts again if the link goes. Net worth and the forecast's cash read
-balances, so a link changes neither, and `spending_newer_than_balance` stands, since a link
-doesn't say which balances have moved. A fee inside a link is in no `actual`: file it apart if
-it should be.
+**What it changes.** When both accounts are in counted cash (open, switched into the forecast,
+`cash` or `short_term_liability`), `one_movement` is `true`: what moved is neither spending nor
+income, whatever it is filed as. It is out of `actual`, reduces no budget, pays no bill and counts
+towards no goal, and `moved_between_counted_accounts` in plan versus actual says how much. Each leg
+keeps its category, which counts again if the link goes. Only the smaller leg's amount moved: a fee
+stays what its leg is filed as, and a link of -1,250.00 to +12.50 still spends 1,237.50. Across
+currencies all of each leg moved, so check those before you link. Net worth and the forecast's cash
+read balances, so a link changes neither. `spending_newer_than_balance` drops what moved only when
+neither balance shows it.
 
-**A link out of the household** (`within_household: false`) records the movement and changes no
-number: see the next section. It follows `belongs_to`, so saying a fund is the household's
-turns its links into movements inside.
+**Any other link** (`one_movement: false`), to a brokerage, a loan, a closed account or an account
+that isn't the household's, records the movement and changes no number: that money left counted
+cash, so an auto-invest stays spending and keeps paying its bill. The one exception is that any
+link takes what it says out of `uncategorized` and `uncategorized_spending`, as you have said what
+it is. It reads the accounts at the time, so closing an account, or changing `belongs_to`, a class
+or `include_in_forecast`, changes what its links mean, history included.
 
 **What a leg may hold.** One split at most, since part of a split transaction may be spending,
 so one with more is refused, and a leg can't take more until its link is removed. A goal only
-on money leaving the household: money moved inside it is still the household's. A leg can be on
-a closed account.
+on a link with `one_movement: false`: money moved between counted accounts is still cash. A leg can
+be on a closed account.
 
-**When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it,
-and a provider's record vanishing leaves the leg with its link, flagged `source_removed`, for
-you to look at: merge the posted form into it (use the leg as the target), or remove the link.
-A merge discarding a leg's link needs `discard_duplicate_state` and `write` on the other
-account. An un-merge leaves the link on the transaction it was on. A manual leg can't be deleted
-until its link is removed.
+**When a leg changes.** Only a person ends a link. A leg going from pending to posted keeps it. A
+provider's record vanishing leaves the leg with its link, flagged `source_removed`, and the link
+stops counting: the money counts as filed again, and the caution `transfer_leg_removed` asks you to
+look. A record attaching again restores it; otherwise remove the link, or merge the posted form into
+the leg (use the leg as the target). A merge discarding a leg's link needs
+`discard_duplicate_state` and `write` on the other account. An un-merge leaves the link on the
+transaction it was on. A manual leg can't be deleted until its link is removed.
 
 ### Money to and from accounts that aren't the household's
 
@@ -444,7 +449,7 @@ follow. A contribution means money from one of the household's accounts to one w
   `item_hint_not_counted`, whose `effect` is `still_needed`. A `transfer` category on a
   planned item is refused (422).
 - **A link records it and changes nothing.** You may link the charge to the deposit in the
-  fund. That answers `within_household: false`, it stays spending, and the number is the same
+  fund. That answers `one_movement: false`, it stays spending, and the number is the same
   either way, in a `transfer` category too: a link doesn't correct the category.
 - **Money coming back**, such as a 529 paying a tuition bill into checking, is a refund
   in the `expense` category it paid for, or `income`, on the household's side.

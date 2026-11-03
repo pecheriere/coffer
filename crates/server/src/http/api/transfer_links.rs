@@ -49,14 +49,19 @@ pub struct TransferLinkPath {
                    `listTransferCandidates` for suggestions to confirm. Their amounts may differ, \
                    as for a fee, and `difference` says by how much, and they may be in two \
                    currencies, when it is `null`. Each keeps its category.\n\n\
-                   When both accounts are the household's, the two are one movement in reports \
-                   and the forecast: neither spending nor income, whatever they are filed as, so \
-                   they lower no budget, pay no bill and aren't uncategorized. A link out of the \
-                   household stays spending and changes no number. `within_household` says which, \
-                   and follows the accounts' `belongs_to`.\n\n\
+                   When both accounts are in counted cash (open, switched into the forecast, of a \
+                   spendable class), what moved is one movement in reports and the forecast: \
+                   neither spending nor income, whatever it is filed as, so it lowers no budget \
+                   and pays no bill. Only the smaller leg's amount moved: a difference in one \
+                   currency stays what its leg is filed as. Any other link, to a brokerage, a \
+                   loan, a closed account or one that isn't the household's, stays spending and \
+                   changes no number. Any link takes what it says moved out of `uncategorized`. \
+                   `one_movement` says which, and follows the accounts. A leg its provider takes \
+                   back suspends this: the money counts as filed again, with the caution \
+                   `transfer_leg_removed`.\n\n\
                    A transaction is in one link at most. One with more than one split is refused, \
                    since part of it may be spending, and so is one linked to a goal when both \
-                   accounts are the household's. Needs `write` on both accounts; with one hidden, \
+                   accounts are in counted cash. Needs `write` on both accounts; with one hidden, \
                    this answers as for a missing transaction. With an `Idempotency-Key`, a retry \
                    of the same request within 24 hours returns the first response.",
     security(("bearer" = [])),

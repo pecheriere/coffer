@@ -113,6 +113,71 @@ async fn a_link_to_a_hidden_side_doesnt_show() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// A token shown `goal: null` isn't told by a refusal that a goal is there, when the goal is
+/// hinted at an account it can't see.
+#[tokio::test]
+async fn a_refusal_doesnt_name_a_hidden_goal() {
+    let world = world().await;
+    let (outflow, inflow) = world.pair().await;
+    let hidden = world.account("Hidden", "checking", "USD").await;
+    let home = world.category("Home", "expense").await;
+    let goal = world
+        .admin_send(
+            Method::POST,
+            "/api/v1/plan-items",
+            &serde_json::json!({
+                "name": "Roof",
+                "category": home,
+                "account_hint": hidden,
+                "amount": {"minor_units": 100_000, "currency": "USD"},
+                "direction": "outflow",
+                "schedule": {"type": "goal", "start_on": "2026-01-01", "due_on": "2027-01-01"},
+            }),
+        )
+        .await["id"]
+        .clone();
+    world
+        .splits(
+            &outflow,
+            &serde_json::json!([{"category": home, "minor_units": -50_000, "goal": goal}]),
+        )
+        .await;
+    let token = world
+        .token(vec![on(world.checking, Write), on(world.savings, Write)])
+        .await;
+    let (_, read) = world
+        .send(
+            Method::GET,
+            &format!("{TRANSACTIONS}/{outflow}"),
+            &token,
+            None,
+        )
+        .await;
+    assert_eq!(read["splits"][0]["goal"], Value::Null, "not shown it");
+
+    let (status, refusal) = world
+        .send(
+            Method::POST,
+            LINKS,
+            &token,
+            Some(&linking(&outflow, &inflow)),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!refusal["detail"].as_str().unwrap().contains("goal"));
+    let (status, refusal) = world
+        .send(
+            Method::POST,
+            LINKS,
+            &world.admin,
+            Some(&linking(&outflow, &inflow)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(refusal["detail"].as_str().unwrap().contains("goal"));
+}
+
 /// A token that doesn't see the link is told only that the change can't be made, and in no
 /// words of a link: its refusal and the admin's are worded apart.
 #[tokio::test]

@@ -1,5 +1,5 @@
 //! What a leg may hold (spec §8.12 T4): one category at most, and no goal while the money
-//! stays inside the household.
+//! stays in counted cash.
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::ids::CategoryId;
@@ -134,12 +134,12 @@ async fn a_goal_stays_off_a_transfer() {
     );
 }
 
-/// Money leaving the household is spending, and a contribution to a 529 may count towards
-/// its goal (B10), so a link out of the household refuses no goal, either way round.
+/// Money leaving counted cash is spending, and a contribution to a 529 or a brokerage may count
+/// towards its goal (B10), so such a link refuses no goal, either way round.
 #[tokio::test]
-async fn a_goal_stays_allowed_on_money_leaving_the_household() {
+async fn a_goal_stays_allowed_on_money_leaving_counted_cash() {
     let world = world().await;
-    let fund = world.account("College fund", "education", "USD").await;
+    let fund = world.account("Brokerage", "brokerage", "USD").await;
     let tuition = world.category("Tuition", "expense").await;
     let goal = world.goal_in(tuition).await;
     let on_the_goal = json!([{"category": tuition, "minor_units": -50_000, "goal": goal}]);

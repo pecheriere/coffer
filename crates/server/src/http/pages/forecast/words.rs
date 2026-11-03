@@ -362,6 +362,10 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
             day(*due_on),
         ),
         Caution::GoalLinkedBothSides { goal } => both_sides_sentence(&names.goal(*goal)),
+        Caution::TransferLegRemoved { .. } => "A bank took back one side of a linked transfer, \
+                                               so its money counts as filed again. Check the \
+                                               link, and remove it if it no longer holds."
+            .to_owned(),
         Caution::ItemHintNotCounted {
             item,
             account,

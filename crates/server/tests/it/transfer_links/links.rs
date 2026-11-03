@@ -68,7 +68,7 @@ async fn a_link_joins_two_transactions() {
     assert_eq!(link["inflow"]["account"], json!(world.savings));
     assert_eq!(link["inflow"]["amount"], usd(50_000));
     assert_eq!(link["difference"], usd(0));
-    assert_eq!(link["within_household"], true);
+    assert_eq!(link["one_movement"], true);
 
     let (status, read) = world
         .send(
@@ -136,9 +136,9 @@ async fn currencies_that_differ_may_be_linked() {
     assert_eq!(link["inflow"]["amount"]["currency"], "EUR");
 }
 
-/// Crossing out of the household is recorded as such, and is allowed: spec §8.11 B9.
+/// Crossing out of counted cash is recorded as such, and is allowed: spec §8.11 B9.
 #[tokio::test]
-async fn a_link_out_of_the_household_says_so() {
+async fn a_link_out_of_counted_cash_says_so() {
     let world = world().await;
     let fund = world.account("College fund", "education", "USD").await;
     let outflow = world.manual(world.checking, "2026-10-05", -50_000).await;
@@ -146,7 +146,7 @@ async fn a_link_out_of_the_household_says_so() {
 
     let link = world.link(&outflow, &inflow).await;
 
-    assert_eq!(link["within_household"], false);
+    assert_eq!(link["one_movement"], false);
 }
 
 /// Two legs, on two accounts, one out and one in, and neither already in a link.
@@ -281,7 +281,7 @@ async fn a_closed_account_can_hold_a_leg() {
 
     let link = world.link(&outflow, &inflow).await;
 
-    assert_eq!(link["within_household"], true);
+    assert_eq!(link["one_movement"], false, "closed isn't counted");
     let (status, _) = world
         .send(
             Method::DELETE,
