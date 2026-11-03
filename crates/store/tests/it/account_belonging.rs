@@ -300,7 +300,8 @@ async fn migration_keeps_every_row() {
         assert_eq!(before[table].1.len(), rows, "the seed fills {table}");
     }
 
-    every_migration().run(&pool).await.unwrap();
+    // This migration alone: a later one may add a table of its own.
+    migrations_up_to(22).run(&pool).await.unwrap();
 
     let after = dump_all(&pool).await;
     assert_eq!(

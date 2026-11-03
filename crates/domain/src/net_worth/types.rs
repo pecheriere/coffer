@@ -156,6 +156,10 @@ pub struct NetWorthReport {
     pub blockers: Vec<NetWorthBlocker>,
     /// What keeps the numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
+    /// Which currencies' rates an admin entered among those used here, and over which
+    /// points. For information: it doesn't stop the numbers being firm, and an old such
+    /// rate raises `rate_stale` as any rate does.
+    pub manual_rates: Vec<ManualRateUse>,
     /// Money that isn't the household's, in no number above and added to nothing:
     /// `someone_else` before `given_away`, and within one no label first, then labels by
     /// their bytes.
@@ -183,6 +187,9 @@ pub struct NetWorthBucket {
     pub blockers: Vec<NetWorthBlocker>,
     /// What keeps this bucket's numbers but stops them being firm.
     pub cautions: Vec<NetWorthCaution>,
+    /// Which currencies' rates an admin entered among those used here: for information, as
+    /// on the report.
+    pub manual_rates: Vec<ManualRateUse>,
 }
 
 /// Leaves out `beneficiary`, which may be a child's name, and its `accounts`.
@@ -194,6 +201,7 @@ impl std::fmt::Debug for NetWorthBucket {
             .field("points", &self.points)
             .field("blockers", &self.blockers)
             .field("cautions", &self.cautions)
+            .field("manual_rates", &self.manual_rates)
             .finish_non_exhaustive()
     }
 }
@@ -233,6 +241,9 @@ pub struct NetWorthPoint {
     /// there is a display currency, or holding no value on this day though they
     /// did earlier.
     pub unconverted: Vec<AccountId>,
+    /// An amount on this point was converted with a rate an admin entered, so `total`, if
+    /// there is one, rests on it: see `manual_rates`.
+    pub manual_rate: bool,
 }
 
 /// One liquidity class on one day.
@@ -243,6 +254,8 @@ pub struct LiquidityLine {
     /// `null` when a counted account in it has no amount.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub amount: Option<Money>,
+    /// An amount in this class was converted with a rate an admin entered.
+    pub manual_rate: bool,
 }
 
 /// One visible account and its values.
@@ -300,7 +313,21 @@ pub struct AccountPoint {
     /// The older of the rate dates used.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub rate_on: Option<Date>,
+    /// `amount` was converted with a rate an admin entered.
+    pub manual_rate: bool,
     pub conversion: ConversionState,
+}
+
+/// Between these points amounts were converted with a rate of this currency that an admin
+/// entered, not one a source published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ManualRateUse {
+    pub currency: Currency,
+    /// The first point using it.
+    pub first_on: Date,
+    /// The last point using it.
+    pub last_on: Date,
 }
 
 /// Why there is no number to trust. `display_currency_not_set`: an admin has to choose

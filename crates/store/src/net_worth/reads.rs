@@ -17,7 +17,7 @@ use sqlx::{QueryBuilder, Row as _, Sqlite, SqliteConnection};
 use super::{NetWorthState, fetch_state};
 use crate::accounts::accounts_in_scope;
 use crate::convert::{corrupt, int, parsed, parsed_opt, text_opt};
-use crate::fx::coverage_from_row;
+use crate::fx::{coverage_from_row, currencies_with_manual_rates};
 use crate::household::{fetch_display_currency, fetch_forecast_settings};
 use crate::{AccountRecord, Store, StoreError};
 
@@ -41,6 +41,9 @@ pub struct NetWorthData {
     /// of these can depend on an account outside the scope: see
     /// [`Store::net_worth_data`].
     pub coverage: Vec<FxCoverage>,
+    /// Those of the same currencies holding a rate an admin entered, whatever the fetches
+    /// say of them. Exposed only as `coverage` is.
+    pub manual_rates_held: Vec<Currency>,
 }
 
 fn daily_value_from_row(row: &SqliteRow) -> Result<DailyValue, StoreError> {
@@ -58,6 +61,7 @@ fn daily_value_from_row(row: &SqliteRow) -> Result<DailyValue, StoreError> {
             .map_err(StoreError::from_sqlx)?,
         rate_on: parsed_opt(row, "rate_on")?,
         rate_leg: parsed_opt(row, "rate_leg")?,
+        manual_rate_leg: parsed_opt(row, "manual_rate_leg")?,
         conversion: parsed(row, "conversion")?,
     })
 }
@@ -134,22 +138,25 @@ async fn fetch_first_on(
     Ok(first_on)
 }
 
-async fn fetch_coverage(
-    conn: &mut SqliteConnection,
-    accounts: &[AccountRecord],
-    display: Option<Currency>,
-) -> Result<Vec<FxCoverage>, StoreError> {
+/// The currencies of `accounts` and the display currency, in code order.
+fn codes_of(accounts: &[AccountRecord], display: Option<Currency>) -> Vec<Currency> {
     let codes: BTreeSet<Currency> = accounts
         .iter()
         .map(|one| one.currency)
         .chain(display)
         .collect();
+    codes.into_iter().collect()
+}
+
+async fn fetch_coverage(
+    conn: &mut SqliteConnection,
+    codes: &[Currency],
+) -> Result<Vec<FxCoverage>, StoreError> {
     if codes.is_empty() {
         return Ok(Vec::new());
     }
-    let codes: Vec<Currency> = codes.into_iter().collect();
     let mut query = QueryBuilder::<Sqlite>::new("SELECT * FROM fx_coverage WHERE currency IN");
-    push_list(&mut query, &codes);
+    push_list(&mut query, codes);
     query.push(" ORDER BY currency");
     query
         .build()
@@ -176,7 +183,7 @@ impl Store {
     /// none. `accounts`, `rows` and `first_on` hold only what `scope` covers, and
     /// `state` and the settings are the household's.
     ///
-    /// `coverage` is limited to the currencies of `accounts` and the display currency,
+    /// `coverage` and `manual_rates_held` are limited to the currencies of `accounts` and the display currency,
     /// yet it can still depend on an account outside `scope`: a currency is fetched
     /// only when the household needs rates at all (N7), so a hidden account in another
     /// currency can be why a visible currency has an entry, and what it says.
@@ -233,7 +240,9 @@ impl Store {
             }
             None => (Vec::new(), Vec::new()),
         };
-        let coverage = fetch_coverage(&mut tx, &accounts, display).await?;
+        let codes = codes_of(&accounts, display);
+        let coverage = fetch_coverage(&mut tx, &codes).await?;
+        let manual_rates_held = currencies_with_manual_rates(&mut tx, &codes).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(NetWorthData {
             state,
@@ -243,6 +252,7 @@ impl Store {
             rows,
             first_on,
             coverage,
+            manual_rates_held,
         })
     }
 }

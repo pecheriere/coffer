@@ -1,16 +1,19 @@
 //! Household settings: the theme everyone sees unless they choose their
-//! own, the display currency and the time zone. Admin-only; a denial renders as
-//! a 403 page.
+//! own, the display currency, the time zone and the exchange rates entered by hand.
+//! Admin-only; a denial renders as a 403 page.
+
+mod manual_rates;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use coffer_domain::identity::ThemeName;
 use coffer_domain::money::Currency;
 use coffer_domain::policy::{Action, authorize};
 use coffer_domain::time::IanaZone;
-use maud::html;
+use maud::{Markup, html};
 use serde::Deserialize;
 
 use super::account::viewer;
@@ -19,7 +22,7 @@ use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::Problem;
-use crate::ledger::settings::ForecastSettingsPatch;
+use crate::ledger::settings::{ForecastSettingsPatch, HouseholdSettings};
 use crate::ledger::transactions::Patch;
 use crate::themes::THEMES;
 
@@ -32,17 +35,38 @@ pub fn routes() -> Router<AppState> {
         .route(HOUSEHOLD, get(household).post(set_theme))
         .route(DISPLAY_CURRENCY, post(set_display_currency))
         .route(TIME_ZONE, post(set_time_zone))
+        .merge(manual_rates::routes())
+}
+
+/// How far down the list of manual rates to start. Unknown fields are refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HouseholdQuery {
+    rates_from: Option<u32>,
 }
 
 async fn household(
     State(state): State<AppState>,
     session: PageSession,
+    query: Result<Query<HouseholdQuery>, QueryRejection>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
     authorize(&actor, Action::ManageHousehold).map_err(AuthError::from)?;
+    let Query(query) = query.map_err(|_| PageError::invalid("not a place in the list"))?;
+    let rates_from = query.rates_from.unwrap_or(0);
     let settings = state
         .ledger
         .household_settings(&actor)
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
+    let rates = state
+        .ledger
+        .manual_rates(&actor, rates_from)
+        .await
+        .map_err(|err| PageError(Problem::from(err)))?;
+    let today = state
+        .ledger
+        .today()
         .await
         .map_err(|err| PageError(Problem::from(err)))?;
     let viewer = viewer(&state, &session).await;
@@ -68,6 +92,22 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save household theme" }
             }
         }
+        (display_currency_card(&viewer.csrf, &settings))
+        (time_zone_card(&viewer.csrf, &settings, state.ledger.default_zone_name()))
+        (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
+    };
+    let frame = Frame {
+        look,
+        viewer: Some(&viewer),
+        current: Some(Nav::Household),
+        narrow: false,
+    };
+    Ok(page(&frame, "Household", &content).into_response())
+}
+
+/// What net worth is shown in, and the form to change it.
+fn display_currency_card(csrf: &str, settings: &HouseholdSettings) -> Markup {
+    html! {
         section.card {
             h2 { "Display currency" }
             p {
@@ -75,7 +115,7 @@ async fn household(
                 "once, at the rates of each day, and changes no balance."
             }
             form method="post" action=(DISPLAY_CURRENCY) {
-                (csrf_field(&viewer.csrf))
+                (csrf_field(csrf))
                 label.field {
                     "Display currency"
                     select.input name="display_currency" required {
@@ -93,6 +133,12 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save display currency" }
             }
         }
+    }
+}
+
+/// Which zone decides the household's day, and the form to change it.
+fn time_zone_card(csrf: &str, settings: &HouseholdSettings, default_zone: &str) -> Markup {
+    html! {
         section.card {
             h2 { "Time zone" }
             p {
@@ -105,12 +151,12 @@ async fn household(
                 "moving it could move money between months. Only new days use the new zone."
             }
             form method="post" action=(TIME_ZONE) {
-                (csrf_field(&viewer.csrf))
+                (csrf_field(csrf))
                 label.field {
                     "Time zone"
                     select.input name="timezone" {
                         option value="" selected[settings.timezone_setting.is_none()] {
-                            "Server default (" (state.ledger.default_zone_name()) ")"
+                            "Server default (" (default_zone) ")"
                         }
                         @for name in IanaZone::all_names() {
                             option value=(name)
@@ -123,14 +169,7 @@ async fn household(
                 button.btn.btn-primary type="submit" { "Save time zone" }
             }
         }
-    };
-    let frame = Frame {
-        look,
-        viewer: Some(&viewer),
-        current: Some(Nav::Household),
-        narrow: false,
-    };
-    Ok(page(&frame, "Household", &content).into_response())
+    }
 }
 
 /// Unknown fields are refused: a forged form fails whole.
