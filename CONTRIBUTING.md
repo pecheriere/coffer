@@ -85,7 +85,8 @@ what a failing test saw as an artifact. They need Node 24 or later on the machin
 11.10 or later, the first to read `min-release-age` in `staging/e2e/.npmrc`, and run from
 `staging/e2e/` in
 [Playwright](https://playwright.dev): `npm ci` installs what its lockfile says, with no
-install scripts. Each test gets its own server on a new copy of the template, and every
+install scripts, and the browser comes from `browser.lock.json`, its archive's hash checked
+(about 150 MB in `staging/e2e/.browser`). Needs `unzip`. Each test gets its own server on a new copy of the template, and every
 API response is checked against `docs/api/openapi.json`, whichever test made it, a field the
 document doesn't name included. One run goes at a time in a checkout. They cover
 what the in-process tests in `crates/*/tests/it/` can't, the built image, the real

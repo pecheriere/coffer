@@ -91,41 +91,37 @@ async fn another_admin_passkey_serves_anywhere() {
     serve_once(&server).await.unwrap();
 }
 
-/// The check looks for the id of the key the seed really uses.
+/// The checks look for the ids of the keys the seed really uses.
 #[test]
-fn the_check_names_the_committed_fixture() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../staging/fixtures/passkeys.json"
-    );
-    let fixture: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let admin = fixture["members"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|member| member["role"] == "admin")
-        .expect("the fixture has an admin");
-    let id = URL_SAFE_NO_PAD
-        .decode(admin["credentialId"].as_str().unwrap())
-        .unwrap();
-    assert_eq!(id, STAGING_ADMIN_CREDENTIAL_ID);
+fn the_checks_name_the_committed_fixture() {
+    for (username, expected) in [("alex", STAGING_ADMIN_CREDENTIAL_ID), ("sam", MEMBER_ID)] {
+        let member = fixture_member(username);
+        let id = URL_SAFE_NO_PAD
+            .decode(member["credentialId"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(id, expected);
+    }
 }
 
-/// The x and y of a key in the fixture, the end of its PKCS#8 form.
-fn fixture_key(username: &str) -> ([u8; 32], [u8; 32]) {
+fn fixture_member(username: &str) -> serde_json::Value {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../staging/fixtures/passkeys.json"
     );
     let fixture: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let member = fixture["members"]
+    fixture["members"]
         .as_array()
         .unwrap()
         .iter()
         .find(|member| member["username"] == username)
-        .unwrap();
+        .unwrap()
+        .clone()
+}
+
+/// The x and y of a key in the fixture, the end of its PKCS#8 form.
+fn fixture_key(username: &str) -> ([u8; 32], [u8; 32]) {
+    let member = fixture_member(username);
     let der = STANDARD
         .decode(member["privateKeyPkcs8"].as_str().unwrap())
         .unwrap();

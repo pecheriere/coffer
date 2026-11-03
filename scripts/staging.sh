@@ -72,7 +72,7 @@ refuse_another_checkout() {
   running=$(docker ps --filter label=com.docker.compose.project=coffer-staging \
     --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n 1)
   if [ -n "$running" ] && [ "$running" != "$root/staging" ]; then
-    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker compose -p coffer-staging down'"
+    fail "a stack is running from $running; run its 'down' first, or if that checkout is gone, 'docker ps -aq --filter label=coffer.staging | xargs docker rm -f -v; docker compose -p coffer-staging down'"
   fi
 }
 
@@ -309,9 +309,8 @@ case "${1:-}" in
     ensure_mocks
     npm ci --prefix "$root/staging/e2e"
     cd "$root/staging/e2e"
-    # The one browser the virtual authenticator works in, at the version the lockfile's
-    # Playwright names.
-    npx playwright install --only-shell chromium
+    # The one browser the virtual authenticator works in, its archive's hash checked.
+    node support/install-browser.mjs
     npx playwright test "$@"
     ;;
   sweep)

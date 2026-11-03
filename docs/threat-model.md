@@ -349,9 +349,10 @@
   a warning when it serves the seed on an address that isn't loopback; the stack's containers
   log it too, as they must listen on their internal network.
 - **A seed key registered on a real server.** Away from localhost, coffer refuses to register
-  a seeded key, by credential id or by public key, for any member, so nobody can add a key
-  everyone knows, or use one to stop the server: a member promoted to admin would otherwise
-  trip the refusal above at the next restart. If a database does trip it, restore a backup
+  a seeded key, by credential id or by public key, for any member, so nobody can add the seeded
+  keys, or use one to stop the server: a member promoted to admin would otherwise trip the
+  refusal above at the next restart. This is a list of two keys: a member can still choose to
+  publish a key of their own, or derive another from a seeded one. If a database does trip it, restore a backup
   from before, or remove the passkey on an instance reachable from that machine alone. Don't
   put a proxied instance on a localhost URL to get there, since it then answers to the
   committed key.

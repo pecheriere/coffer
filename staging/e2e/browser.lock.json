@@ -1,0 +1,25 @@
+{
+  "playwright": "1.64.1",
+  "archives": {
+    "darwin-arm64": {
+      "url": "https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-arm64/chrome-headless-shell-mac-arm64.zip",
+      "sha256": "94e4337b70cbc5638f0935fbc46b9f242bc7416f657e3fbe924baf348404b53d",
+      "published": "2026-09-30"
+    },
+    "darwin-x64": {
+      "url": "https://cdn.playwright.dev/builds/cft/156.0.8078.4/mac-x64/chrome-headless-shell-mac-x64.zip",
+      "sha256": "8a9e4a32ba5b1a796f8b16d01896e355cf6662544d9743296394fd999d782331",
+      "published": "2026-09-30"
+    },
+    "linux-x64": {
+      "url": "https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip",
+      "sha256": "c3e50596aef52c58f8fda3c6b3411c33d34c88b177b3ed1c2243359fd3b8ba20",
+      "published": "2026-09-30"
+    },
+    "linux-arm64": {
+      "url": "https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-headless-shell-linux-arm64.zip",
+      "sha256": "81ab9d4d3c301dc5fdfb6c541b9e6632b16fc819a6a854460f40a76fe2b2c476",
+      "published": "2026-09-30"
+    }
+  }
+}

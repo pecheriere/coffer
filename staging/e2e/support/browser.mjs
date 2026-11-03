@@ -3,6 +3,28 @@
 import { eventually, expect, test as serverTest } from './fixtures.mjs';
 import { member } from './server.mjs';
 
+const QUIET_MS = 2_000;
+const LOG_WAIT_LIMIT_MS = 15_000;
+
+// The log once it has stopped growing: a browser may send a report a while after the thing it
+// reports, and a test that read the log at once would pass without it.
+export async function settledLogs(server) {
+  const limit = Date.now() + LOG_WAIT_LIMIT_MS;
+  let logs = await server.logs();
+  let changed = Date.now();
+  while (Date.now() - changed < QUIET_MS && Date.now() < limit) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    const now = await server.logs();
+    if (now.length !== logs.length) {
+      logs = now;
+      changed = Date.now();
+    }
+  }
+  return logs;
+}
+
 // Reads the log the way an operator would, per docs/configuration.md.
 export function browserReports(logs) {
   const reports = [];
@@ -19,7 +41,8 @@ export const test = serverTest.extend({
   // For the one test about catching a problem.
   expectProblems: [false, { option: true }],
 
-  // What the browser said went wrong, gathered all through a test.
+  // What the browser said went wrong, gathered all through a test. Console warnings are left
+  // out on purpose: browsers use them for advice about a page, not for something broken.
   consoleProblems: async ({ page }, use) => {
     const problems = [];
     page.on('console', (message) => {
@@ -32,10 +55,12 @@ export const test = serverTest.extend({
   // Runs for every test. A violation of the content security policy shows twice: on the
   // console here, and in the report the browser sends to the server's log.
   noBrowserProblems: [
-    async ({ consoleProblems, server, expectProblems }, use) => {
+    async ({ page, consoleProblems, server, expectProblems }, use) => {
       await use();
       if (!expectProblems) {
-        const reports = browserReports(await server.logs());
+        // Leaving the page makes the browser send what it has been holding back.
+        await page.goto('about:blank');
+        const reports = browserReports(await settledLogs(server));
         expect([...consoleProblems, ...reports]).toEqual([]);
       }
     },
