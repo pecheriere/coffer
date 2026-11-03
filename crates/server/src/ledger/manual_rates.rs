@@ -131,10 +131,13 @@ impl Ledger {
             changes,
         )
         .await?;
-        // Answered as stored, which keeps milliseconds: the list shows the same instant.
-        let saved = tx.manual_rate(currency, on).await?;
         tx.commit().await?;
-        saved.ok_or(LedgerError::Internal("the saved rate was not found"))
+        Ok(ManualRate {
+            currency,
+            on,
+            rate,
+            entered_at: now,
+        })
     }
 
     /// Removes the rate an admin entered for `currency` on `on`: what it covered falls back

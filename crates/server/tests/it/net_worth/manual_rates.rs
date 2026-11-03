@@ -9,10 +9,11 @@ use coffer_domain::identity::Scope;
 use coffer_domain::policy::AccountLevel::{Balances, Write};
 use coffer_domain::time::Clock as _;
 use coffer_server::http::api::openapi::document;
+use coffer_server::testkit::TestServer;
 use coffer_store::{AuditEvent, AuditFilter, PageRequest};
 use serde_json::{Value, json};
 
-use super::{World, all, of_kind, on, point, rate_missing, series, world};
+use super::{World, all, of_kind, on, point, rate_missing, series, world, world_on};
 
 const DAY_REPORT: &str = "from=2026-10-26&to=2026-11-02&interval=day";
 const REFUSAL: &str = "this action needs balances access to every account";
@@ -165,15 +166,11 @@ async fn rates_coverage_and_the_list_mark_it() {
     assert_eq!(items.as_array().unwrap().len(), 2);
 }
 
-/// The answer to a save is the rate as it was stored, so it reads the same as in the list:
-/// the store keeps milliseconds, and a clock reading finer than that must not show.
+/// The answer to a save reads the same as the list does, on the real clock, which the store
+/// would otherwise show rounded.
 #[tokio::test]
 async fn a_saved_rate_is_answered_as_the_list_shows_it() {
-    let world = world().await;
-    world
-        .server
-        .clock
-        .advance(jiff::SignedDuration::from_nanos(123_456));
+    let world = world_on(TestServer::with_system_clock().await).await;
 
     let saved = world.enter("XAF", "2026-10-26", "655.957").await;
     let (_, list) = world
