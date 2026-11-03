@@ -102,3 +102,19 @@ async fn what_no_rule_filed_money_in_another_kind_or_month_is_not() {
 
     assert_eq!(world.rule_filed_transfers().await, Vec::new());
 }
+
+#[tokio::test]
+async fn a_pending_record_its_provider_took_back_is_no_money() {
+    let world = world().await;
+    let transfer = world.category_of(CategoryKind::Transfer).await;
+    world
+        .filed(world.account, date(2026, 11, 3), -4_000, transfer, true)
+        .await;
+    let pool = world.pool().await;
+    sqlx::query("UPDATE transactions SET pending = 1, flag_source_removed = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(world.rule_filed_transfers().await, Vec::new());
+}

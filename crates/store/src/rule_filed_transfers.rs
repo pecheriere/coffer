@@ -11,9 +11,9 @@ use crate::error::StoreError;
 
 /// By currency, for the bound `?1` day and the bound `?2` first day of its month. The splits a
 /// rule filed under a `transfer` category on a transaction no link holds, whoever's account it is
-/// on and whatever its state, as `GET /transactions?unmatched_transfer=true&rule=` lists them.
-/// A category someone chose since isn't a rule's (`categorized_by_rule` is replaced with each
-/// filing), and money in isn't counted.
+/// on, as `GET /transactions?unmatched_transfer=true&rule=` lists them.
+/// A pending record its provider took back is no money at all. A category someone chose since
+/// isn't a rule's (`categorized_by_rule` is replaced with each filing), and money in isn't counted.
 const RULE_FILED_TRANSFERS: &str = "\
     SELECT t.currency AS currency, COUNT(DISTINCT t.id) AS count, \
     -SUM(s.minor_units) AS amount_minor \
@@ -22,6 +22,7 @@ const RULE_FILED_TRANSFERS: &str = "\
     JOIN categories c ON c.id = s.category_id \
     WHERE c.kind = 'transfer' AND s.minor_units < 0 \
     AND t.categorized_by_rule IS NOT NULL \
+    AND NOT (t.pending = 1 AND t.flag_source_removed = 1) \
     AND t.posted_on >= ?2 AND t.posted_on <= ?1 \
     AND NOT EXISTS (SELECT 1 FROM transfer_links l \
     WHERE l.outflow_id = t.id OR l.inflow_id = t.id) \
