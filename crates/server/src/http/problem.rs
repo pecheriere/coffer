@@ -48,6 +48,9 @@ pub enum ProblemCode {
     /// The provider account's currency is not the account's, or is not a
     /// supported ISO 4217 currency.
     CurrencyMismatch,
+    /// A rate entered by hand is over 1.5 times from a published one nearby, or looks like its
+    /// inverse; `detail` says both. `confirm_unusual` keeps it.
+    UnusualRate,
     Internal,
 }
 
@@ -78,6 +81,7 @@ impl ProblemCode {
             Self::SyncRateLimited => "sync_rate_limited",
             Self::SyncInProgress => "sync_in_progress",
             Self::CurrencyMismatch => "currency_mismatch",
+            Self::UnusualRate => "unusual_rate",
             Self::Internal => "internal",
         }
     }
@@ -94,7 +98,8 @@ pub struct ProblemBody {
     pub status: u16,
     pub code: ProblemCode,
     /// A human-readable explanation of this occurrence. Never echoes input
-    /// or a credential.
+    /// or a credential, but for the rate `unusual_rate` has to compare, once it has
+    /// been read as a valid rate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }

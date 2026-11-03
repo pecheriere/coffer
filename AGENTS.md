@@ -40,6 +40,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
+  `manual_rates` (exchange rates an admin enters: validated, audited and marked),
   transactions and their splits, merging, un-merging and dismissing possible duplicates, `transfer_links` (two
   transactions that are one movement of money); `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates and transfer links with a side in
@@ -123,6 +124,11 @@ a throwaway server and seed. What holds it together:
   of the stack's own, on a Docker network with no route out. A scenario is named by the
   request, a SimpleFin setup token or an ECB currency, never set as a mode, so tests
   running side by side don't disturb each other.
+- **End-to-end tests (`scripts/staging.sh test`, `staging/e2e/`) cover the image:** real
+  HTTP, the real configuration and the egress rules, with each server a new copy and every
+  API response checked against `docs/api/openapi.json`. Logic and edge cases stay in
+  `crates/*/tests/it/`. Packages keep to the rules below: exact versions at least 7 days
+  old, a committed lockfile, `npm ci` and no install scripts.
 - **The seeded passkeys' private keys are public** (`staging/fixtures/passkeys.json`).
   `serve` refuses a database where an admin holds that key unless `COFFER_PUBLIC_URL` is
   localhost (`cli/staging_seed.rs`), and registering those keys is refused away from localhost
@@ -161,9 +167,9 @@ a throwaway server and seed. What holds it together:
   can change it while the server runs (spec §8.7). A writer whose change depends on the
   day asks with `today_seen_by`, under the write lock.
 - Every mutation goes through a `StoreTx` together with its audit entry. The one
-  exception is exchange rates and the daily net worth rows (spec §8.10 N10): public
+  exception is fetched exchange rates and the daily net worth rows (spec §8.10 N10): public
   reference data and derived values, written in the transaction of whatever changes
-  them. What changes them is audited.
+  them. What changes them is audited, and a rate an admin enters is (N16).
 - Every handler authorizes through `coffer_domain::policy`: `authorize` for
   household actions, `authorize_account` for anything tied to an account,
   `authorize_every_account` for what spans every account (the rule table in

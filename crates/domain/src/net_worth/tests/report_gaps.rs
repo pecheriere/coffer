@@ -47,6 +47,7 @@ fn a_missing_row_nulls_the_total_and_names_the_account() {
         [LiquidityLine {
             liquidity: LiquidityClass::Cash,
             amount: None,
+            manual_rate: false,
         }]
     );
     assert_eq!(point.by_currency, [money(5_000, "USD")]);
@@ -83,10 +84,12 @@ fn a_missing_row_nulls_only_its_own_class() {
             LiquidityLine {
                 liquidity: LiquidityClass::Cash,
                 amount: Some(money(100, "USD")),
+                manual_rate: false,
             },
             LiquidityLine {
                 liquidity: LiquidityClass::ShortTermLiability,
                 amount: None,
+                manual_rate: false,
             },
         ]
     );

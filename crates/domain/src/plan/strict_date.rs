@@ -32,7 +32,9 @@ pub fn deserialize_option<'de, D: Deserializer<'de>>(
         .transpose()
 }
 
-fn parse(text: &str) -> Option<Date> {
+/// The date `text` writes, if it is a real date written exactly `YYYY-MM-DD`.
+#[must_use]
+pub fn parse(text: &str) -> Option<Date> {
     let &[y0, y1, y2, y3, b'-', m0, m1, b'-', d0, d1] = text.as_bytes() else {
         return None;
     };

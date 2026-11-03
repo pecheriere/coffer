@@ -1,12 +1,13 @@
 // The SimpleFin bridge. A setup token is the base64 of a claim URL, whose path
-// picks the scenario and a one-time name: /claim/<scenario>/<name>. Claiming it
-// answers an access URL whose user is the scenario, so every later fetch through
-// that connection behaves that way.
+// picks the scenario and a one-time name: /claim/<scenario>/<name>, with an optional
+// /<day> the bridge's answers are dated from when that day has passed. Claiming it
+// answers an access URL whose user holds these, so every later fetch through that
+// connection behaves that way.
 
 export const SIMPLEFIN_HOSTS = ['bridge.simplefin.org', 'beta-bridge.simplefin.org'];
 
 const PASSWORD = 'made-up-staging-password';
-const CLAIM_PATH = /^\/claim\/([a-z-]+)\/([\w-]+)$/;
+const CLAIM_PATH = /^\/claim\/([a-z-]+)\/([\w-]+)(?:\/(\d{4}-\d{2}-\d{2}))?$/;
 const ACCOUNTS_PATH = '/simplefin/accounts';
 const DAY_SECONDS = 86_400;
 const HISTORY_DAYS = 60;
@@ -17,7 +18,7 @@ const claimed = new Set();
 
 function claim(request, response, path) {
   const match = CLAIM_PATH.exec(path);
-  const [scenario, name] = match ? match.slice(1) : [];
+  const [scenario, name, day] = match ? match.slice(1) : [];
   if (request.method !== 'POST' || !SCENARIOS.includes(scenario) || claimed.has(name)) {
     response.writeHead(403).end();
     return;
@@ -25,7 +26,8 @@ function claim(request, response, path) {
   claimed.add(name);
   const host = request.headers.host;
   response.writeHead(200, { 'content-type': 'text/plain' });
-  response.end(`https://${scenario}:${PASSWORD}@${host}/simplefin`);
+  const user = day ? `${scenario}_${day}` : scenario;
+  response.end(`https://${user}:${PASSWORD}@${host}/simplefin`);
 }
 
 // A purchase every five days. An id comes from its day, so syncing again on a
@@ -75,15 +77,22 @@ function accountSet(nowSeconds, startSeconds) {
   };
 }
 
-function scenarioOf(request) {
+function connectionOf(request) {
   const [kind, encoded] = (request.headers.authorization ?? '').split(' ');
-  if (kind !== 'Basic' || !encoded) return undefined;
+  if (kind !== 'Basic' || !encoded) return {};
   const [user, password] = Buffer.from(encoded, 'base64').toString().split(':');
-  return password === PASSWORD && SCENARIOS.includes(user) ? user : undefined;
+  const [scenario, day] = user.split('_');
+  return password === PASSWORD && SCENARIOS.includes(scenario) ? { scenario, day } : {};
+}
+
+// The connection's day while it lasts, or else the time now.
+function secondsAt(day, now) {
+  const end = day ? Date.parse(`${day}T23:59:59Z`) : Infinity;
+  return Math.floor(Math.min(end, now.getTime()) / 1000);
 }
 
 function accounts(request, response, url, now) {
-  const scenario = scenarioOf(request);
+  const { scenario, day } = connectionOf(request);
   if (scenario === undefined || scenario === 'revoked') {
     response.writeHead(403).end();
     return;
@@ -96,7 +105,7 @@ function accounts(request, response, url, now) {
     response.writeHead(429).end();
     return;
   }
-  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const nowSeconds = secondsAt(day, now);
   const start = Number(url.searchParams.get('start-date') ?? 0);
   const body = JSON.stringify(accountSet(nowSeconds, start));
   const half = body.slice(0, Math.floor(body.length / 2));

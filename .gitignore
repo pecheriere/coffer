@@ -4,3 +4,6 @@
 /data
 __pycache__/
 /staging/.state
+/staging/e2e/node_modules
+/staging/e2e/test-results
+/staging/e2e/playwright-report

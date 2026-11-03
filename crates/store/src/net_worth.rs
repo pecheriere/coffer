@@ -1,5 +1,5 @@
 //! The daily table (spec §8.10 N3): one row per account per day, derived from
-//! `balance_snapshots`, `fx_rates` and the display currency. Only this module
+//! `balance_snapshots`, the rates and the display currency. Only this module
 //! writes it. Every change to a source calls in here within its own transaction,
 //! so no caller can forget, and every path computes rows with `daily_values`, so
 //! they share one rule. `filled_through` and `rebuild_needed` say what the table
@@ -37,7 +37,7 @@ mod runner;
 pub use reads::NetWorthData;
 pub use runner::RunsThrough;
 
-/// Rows per `INSERT`: ten binds each stay far below `SQLite`'s limit.
+/// Rows per `INSERT`: eleven binds each stay far below `SQLite`'s limit.
 const BATCH_ROWS: usize = 500;
 
 /// The most rows a transaction here rewrites for a change or a batch of a rebuild,
@@ -172,7 +172,7 @@ async fn insert_rows(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result
     let mut query = QueryBuilder::<Sqlite>::new(
         "INSERT OR REPLACE INTO account_daily_values (account_id, on_date, balance_minor, \
          balance_on, balance_source, display_currency, display_minor, rate_on, rate_leg, \
-         conversion) ",
+         manual_rate_leg, conversion) ",
     );
     query.push_values(rows, |mut bound, row| {
         bound
@@ -185,6 +185,7 @@ async fn insert_rows(conn: &mut SqliteConnection, rows: &[DailyValue]) -> Result
             .push_bind(row.display_minor)
             .push_bind(row.rate_on.map(|on| on.to_string()))
             .push_bind(row.rate_leg.map(RateLeg::as_str))
+            .push_bind(row.manual_rate_leg.map(RateLeg::as_str))
             .push_bind(row.conversion.as_str());
     });
     let done = query

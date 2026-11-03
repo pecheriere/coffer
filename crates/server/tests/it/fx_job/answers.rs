@@ -38,6 +38,45 @@ async fn rates_and_rows_commit_together() {
     );
 }
 
+/// Through the real job, both first use and a later window that speaks for the day: an
+/// admin's rate stays and wins its day, and a later published rate takes over.
+#[tokio::test]
+async fn a_fetch_leaves_a_manual_rate_alone() {
+    let (server, provider, fx) = scripted().await;
+    let usd = usd_holding_in_euros(&server, &fx, FRIDAY).await;
+    let mut tx = server.store.begin().await.unwrap();
+    tx.set_manual_rate(cur("USD"), FRIDAY, "4".parse().unwrap(), server.clock.now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "2")]));
+    fx.fetch_due().await.unwrap();
+    assert_eq!(
+        display_minor(&server.store, usd, FRIDAY).await,
+        Some(25_000),
+        "it wins on its day"
+    );
+
+    server.clock.advance(hours(6));
+    provider.answer("USD", Ok(vec![rate(FRIDAY, "2.5"), rate(MONDAY, "5")]));
+    fx.fetch_due().await.unwrap();
+
+    assert_eq!(
+        display_minor(&server.store, usd, SUNDAY).await,
+        Some(25_000),
+        "a corrected fetch changes nothing under it, and it is carried forward"
+    );
+    assert_eq!(
+        display_minor(&server.store, usd, MONDAY).await,
+        Some(20_000),
+        "a later day's rate takes over"
+    );
+    let (manual, _) = server.store.manual_rates(0).await.unwrap();
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0].rate.to_string(), "4");
+}
+
 #[tokio::test]
 async fn an_unchanged_answer_rewrites_no_row() {
     let (server, provider, fx) = scripted().await;

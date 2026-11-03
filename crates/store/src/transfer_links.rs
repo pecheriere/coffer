@@ -61,8 +61,9 @@ pub(crate) use both_counted;
 
 /// As [`both_counted`], for a report, which says what happened: an account closed later was
 /// counted when its leg posted, so closing it says nothing about January, nor about the last sweep
-/// before it closed. A day's slack, since `closed_at` is an instant and `posted_on` a day in the
-/// household's zone. The flags and the class are still read at the time (§8.11 B6).
+/// before it closed. A leg counts when `posted_on` is on or before the UTC date of `closed_at` plus
+/// one day. That isn't worked out in the household's zone: the extra day only covers a `posted_on`
+/// that is ahead of the UTC date. The flags and the class are still read at the time (§8.11 B6).
 macro_rules! both_counted_when_posted {
     () => {
         concat!(

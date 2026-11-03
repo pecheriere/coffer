@@ -1112,7 +1112,8 @@ rate date, `rate_leg` and the state of the conversion. `rate_leg` (`held`, `disp
 says which currency's rate the rate date, or a missing rate, is about: a cross rate goes through
 the euro and reports the older of its two dates, and a euro account has only the display
 currency's, so a caution names the currency whose rate is old or missing and never the euro.
-It is derived: `balance_snapshots`, `fx_rates`
+`manual_rate_leg` says which side, if any, used a rate an admin entered (N16). It is derived:
+`balance_snapshots`, `fx_rates`, `fx_manual_rates`
 and the display currency are the source of truth, and the table can be dropped and rebuilt.
 Names, `include_in_net_worth`, the liquidity class and closing are applied at read, so
 changing them needs no rebuild.
@@ -1218,9 +1219,9 @@ a range's later periods, the last point stops short of the range, and the cautio
 `nothing_counted_after_last_point` says from when: it makes the report `provisional`, since a
 reader would take the last point as the value now.
 
-**N10. Rates and rows aren't audited.** They are public reference data and derived values,
-and an entry per row would bury the log. What changes them is: a snapshot's write and the
-display currency are audited as before.
+**N10. Fetched rates and rows aren't audited.** They are public reference data and derived
+values, and an entry per row would bury the log. What changes them is: a snapshot's write and the
+display currency are audited as before, and so is a rate entered by hand (N16).
 
 **N11. Sign and age.** A report sums balances as stored. A positive balance on a liability
 class raises the caution `liability_balance_positive`, and a counted balance older than the
@@ -1236,8 +1237,8 @@ on the last day of its period, or on the last day available, when it says `parti
 forecast page's rules (R14): session only, calls the same service, computes nothing, the
 default content security policy, no script or inline style of its own, and no form. Its chart
 is server-rendered SVG drawn in integers, beside a table of the same numbers, and it takes a
-range through plain links. `/admin/household` gains a form for the display currency, for
-admins, with the anti-forgery token.
+range through plain links. `/admin/household` gains a form for the display currency and one
+for rates entered by hand (N16), for admins, with the anti-forgery token.
 
 **N14. Derived balances are optional and asked for.** `balance_snapshots.source` gains
 `derived`, for balances worked back from a reported balance through posted transactions, on
@@ -1246,9 +1247,46 @@ transaction. Nothing derives them unless a member calls for it on one account, a
 default. They never replace a reported balance, a forecast ignores them, and every report
 naming one says so. Unbuilt until the owner asks for it (plan 4, Task 10).
 
-**N15. Not in this plan:** a forecast across currencies (N1), entering a rate by hand for a currency the ECB doesn't publish,
+**N15. Not in this plan:** a forecast across currencies (N1),
 each member's display currency, separate buckets (#38) and unvested RSUs (#44). Buckets
 filter accounts at read and vesting adds accounts or balances, so neither changes the table.
+
+**N16. An admin can enter a rate by hand** (issue #79), since the ECB publishes about 30
+currencies and a household holding another would otherwise have no total. It is for one currency
+and one day, through `PUT /api/v1/fx/manual-rates/{currency}/{on}` or `/admin/household`, and it
+is carried forward like any rate (N5).
+
+The rule beside a fetch: **a fetch never overwrites a manual rate on the same day; a manual rate
+wins over a fetched rate on the same day, while a fetched rate on a later day takes over as
+usual.** Manual rates live in their own table, `fx_manual_rates`, which no fetch writes, so this
+holds whatever a fetch does (N7), and `RateHistory::merged` is the one place the two join. What is
+asked of a source still depends on fetched rates alone, as does `fx_coverage`. An admin can remove
+one: what it covered falls back on that day's fetched rate, an earlier rate or none.
+
+A wrong rate moves net worth, so nothing about one is silent. It is refused unless it is positive,
+in `FxRate`'s form (N4), with a day from 1970 to the household's today, as its transaction
+sees the zone chosen, in an ISO 4217 code other than the euro or
+the display currency. A rate over 1.5 times from the published rate nearest its day, within 30 days,
+or within 2% of that rate's inverse when it is at least 5% away from 1, is refused as
+`unusual_rate`, showing both numbers, unless `confirm_unusual` is set, since one entered the wrong
+way round misstates net worth without looking wrong: USD at 1.087 written 0.92 is only 1.18 times
+away. Within 5% of 1 a rate and its inverse are an ordinary move apart, so that isn't caught. With no published rate
+nearby there is nothing to compare it with, and the form's wording is the only guard. A later change of display currency to a code holding a manual rate
+goes on using it. Each change is audited with the old and new rate, and the same rate again writes
+nothing. It is marked `manual` wherever it is reported: `manual` on `GET /api/v1/fx/rates`, a list
+of its own on `GET /api/v1/fx/coverage`, and on a report `manual_rate` on a point, a class and an
+account's point, and `manual_rates` on a report and a bucket naming the currency and the stretch.
+That is for information and not a caution: for a currency no source publishes every report would
+otherwise stay `provisional` with nothing to act on, which teaches people to ignore the word. A
+fresh manual rate leaves a report `firm`. `rate_stale` applies after 7 days as to any rate, and
+then it is `provisional`. The list of them answers at most 1,000 from an `offset` with a `truncated` flag,
+and the page links to the rest, so an older one can always be reached and removed.
+
+The daily rows move as for any rate (N3): those it converts, from its day, in the transaction, or
+past 25,000 rows a rebuild. A write needs `admin`, and with grants `all` at `balances` for the
+reason N8 gives: a row converts at once, so a restricted token could otherwise try a code and read
+from its report whether the household uses it. A day before the first rate is still `rate_missing`,
+with `none_that_early`, since a rate never applies to an earlier day.
 
 ### 8.11 Accounts for other people and purposes
 
@@ -1442,7 +1480,7 @@ the definition the forecast's actuals use (R10): open, `include_in_forecast`, an
 definition in the store, behind every number here. Flags and classes are read at the time as every
 count is (B6), so switching one changes what its links mean, history included. Closing an account
 doesn't: a report says what happened, so it counts a closed account for a leg posted before
-`closed_at`, with a day's slack for the time zone, and January and the last sweep before closing keep
+`closed_at`, up to the UTC date of `closed_at` plus one day, and January and the last sweep before closing keep
 their meaning. The forecast reads the current state, in which a closed account isn't counted, so
 `one_movement` and `one_movement_in_reports` can differ on such a link. A link also
 stops being one while a leg is flagged `source_removed` (T7) or a provider's revision leaves two legs

@@ -55,7 +55,7 @@ class Refusals(unittest.TestCase):
     def test_a_day_that_is_not_a_date_never_reaches_a_path(self) -> None:
         """A day becomes a directory that is removed, so `..` must not get through."""
         for day in ("../../../crates", "..", "2026-11-02/..", "2026-11-02\n", "", "x"):
-            for args in (("template", day), ("start", "18081", day)):
+            for args in (("template", day), ("start", "18081", day), ("elsewhere", day)):
                 result = self.run_script(*args)
                 self.assertNotEqual(result.returncode, 0, args)
                 self.assertEqual(self.changes(), [], args)
@@ -68,6 +68,25 @@ class Refusals(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, (command, port))
                 self.assertEqual(self.changes(), [], (command, port))
 
+    def test_a_second_test_run_in_a_checkout_is_refused(self) -> None:
+        """Two runs would remove each other's servers."""
+        state = SCRIPT.parent.parent / "staging" / ".state"
+        if not state.exists():
+            state.mkdir()
+            self.addCleanup(state.rmdir)
+        lock = state / "test.lock"
+        lock.mkdir()
+        self.addCleanup(lock.rmdir)
+        pid = lock / "pid"
+        pid.write_text(str(os.getpid()))
+        self.addCleanup(pid.unlink)
+
+        result = self.run_script("test")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already running", result.stderr)
+        self.assertEqual(self.changes(), [])
+
     def test_another_checkouts_stack_is_left_alone(self) -> None:
         """Each command that touches the shared stack refuses while another's is running."""
         for args in (
@@ -77,6 +96,9 @@ class Refusals(unittest.TestCase):
             ("template",),
             ("start", "18081"),
             ("stop", "18081"),
+            ("sweep",),
+            ("elsewhere",),
+            ("test",),
         ):
             result = self.run_script(*args, running="/somewhere/else/staging")
             self.assertNotEqual(result.returncode, 0, args)
