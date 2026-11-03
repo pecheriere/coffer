@@ -315,6 +315,52 @@ pub(crate) async fn fill_from_rules(
     .await
 }
 
+/// Takes back what `rule` filled on `current` and nobody has changed since, reopening each
+/// field so a rule may fill it again. Audited as `transaction.rule_undone` by `actor`. Answers
+/// whether it took back a category and an assignee.
+///
+/// # Errors
+///
+/// Storage failures.
+pub(crate) async fn undo_rule_fills(
+    tx: &mut StoreTx,
+    now: Timestamp,
+    actor: &AuditActor,
+    current: &TransactionRecord,
+    rule: RuleId,
+) -> Result<(bool, bool), StoreError> {
+    let names = |by: &Option<Attribution>| by.as_ref().is_some_and(|by| by.rule == Some(rule));
+    let (category, assignee) = (names(&current.categorized), names(&current.assigned));
+    let mut changes = AuditChanges::new();
+    if category {
+        if let [only] = current.splits.as_slice() {
+            changes = changes
+                .unset("category", only.category)
+                .unset("minor_units", only.minor_units);
+        }
+        changes = changes.unset("category_rule", rule);
+        tx.reopen_category(current.id, now).await?;
+    }
+    if assignee {
+        changes = changes
+            .unset("assignee", current.assignee)
+            .unset("assignee_rule", rule);
+        tx.reopen_assignee(current.id, now).await?;
+    }
+    if !changes.is_empty() {
+        record_audit(
+            tx,
+            now,
+            actor,
+            "transaction.rule_undone",
+            current.id,
+            changes,
+        )
+        .await?;
+    }
+    Ok((category, assignee))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

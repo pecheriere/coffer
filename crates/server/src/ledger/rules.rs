@@ -4,6 +4,7 @@
 //! itself.
 
 pub mod run;
+pub mod undo;
 
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
@@ -21,7 +22,8 @@ use super::transactions::{Patch, check_assignee};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 
-const PATTERN_INVALID: &str = "pattern must be 1 to 200 characters without control characters";
+const PATTERN_INVALID: &str =
+    "pattern must be 1 to 200 characters without control characters, and not only spaces";
 const POSITION_INVALID: &str = "position must be at most 10000";
 const AMOUNT_INVALID: &str = "an amount range needs a lowest or a highest amount, lowest first";
 const AMOUNT_CURRENCY: &str = "an amount range must be in the currency of the rule's account";
@@ -68,8 +70,8 @@ impl From<AmountRange> for RuleAmount {
 pub struct RuleView {
     pub id: RuleId,
     pub match_kind: RuleMatchKind,
-    /// The text looked for in the description, ignoring case. Plain text: nothing in
-    /// it is a wildcard.
+    /// The text looked for in the description, ignoring case. Plain text, kept as
+    /// written with any spaces at its ends: nothing in it is a wildcard.
     pub pattern: String,
     /// Only this account's transactions; `null` for every account.
     #[schema(required)]
@@ -131,8 +133,8 @@ pub struct RuleList {
 #[serde(deny_unknown_fields)]
 pub struct RuleInput {
     pub match_kind: RuleMatchKind,
-    /// 1 to 200 characters, without control characters. Plain text, matched ignoring
-    /// case.
+    /// 1 to 200 characters, without control characters and not only spaces. Plain text,
+    /// matched ignoring case and kept as written: `"TAX "` doesn't match `TAXI`.
     pub pattern: String,
     /// Only this account's transactions. Without one the rule is for every account,
     /// which needs write on every account.
@@ -156,7 +158,7 @@ pub struct RuleInput {
 #[serde(deny_unknown_fields)]
 pub struct RulePatch {
     pub match_kind: Option<RuleMatchKind>,
-    /// 1 to 200 characters, without control characters.
+    /// 1 to 200 characters, without control characters and not only spaces.
     pub pattern: Option<String>,
     /// `null` makes it a rule for every account, which needs write on every account.
     #[serde(default)]

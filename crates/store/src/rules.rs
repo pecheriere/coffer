@@ -296,22 +296,59 @@ impl Store {
         after: Option<TransactionId>,
         limit: u32,
     ) -> Result<Vec<TransactionRecord>, StoreError> {
-        if matches!(scope, AccountScope::Only(ids) if ids.is_empty()) {
-            return Ok(Vec::new());
-        }
         let mut query = QueryBuilder::<Sqlite>::new(concat!(
             "SELECT ",
             columns!(),
             " FROM transactions WHERE (categorized_at IS NULL \
              OR (assignee_id IS NULL AND assigned_at IS NULL))"
         ));
-        if let AccountScope::Only(ids) = scope {
-            push_in(&mut query, "account_id", ids);
-        }
         if let Some(account) = account {
             query
                 .push(" AND account_id = ")
                 .push_bind(account.to_string());
+        }
+        self.page_of_transactions(query, scope, after, limit).await
+    }
+
+    /// A page of the transactions in `scope` holding something `rule` filled, after `after`
+    /// in id order. Read without the write lock.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    pub async fn transactions_filled_by_rule(
+        &self,
+        scope: &AccountScope,
+        rule: RuleId,
+        after: Option<TransactionId>,
+        limit: u32,
+    ) -> Result<Vec<TransactionRecord>, StoreError> {
+        let mut query = QueryBuilder::<Sqlite>::new(concat!(
+            "SELECT ",
+            columns!(),
+            " FROM transactions WHERE (categorized_by_rule = "
+        ));
+        query
+            .push_bind(rule.to_string())
+            .push(" OR assigned_by_rule = ")
+            .push_bind(rule.to_string())
+            .push(")");
+        self.page_of_transactions(query, scope, after, limit).await
+    }
+
+    /// Finishes `query`, which has its `WHERE`, as one page in id order.
+    async fn page_of_transactions(
+        &self,
+        mut query: QueryBuilder<Sqlite>,
+        scope: &AccountScope,
+        after: Option<TransactionId>,
+        limit: u32,
+    ) -> Result<Vec<TransactionRecord>, StoreError> {
+        if matches!(scope, AccountScope::Only(ids) if ids.is_empty()) {
+            return Ok(Vec::new());
+        }
+        if let AccountScope::Only(ids) = scope {
+            push_in(&mut query, "account_id", ids);
         }
         if let Some(after) = after {
             query.push(" AND id > ").push_bind(after.to_string());

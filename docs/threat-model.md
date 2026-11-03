@@ -148,7 +148,8 @@
   why a rule fills only what nobody has set, never reviews, and names itself on what it did.
   Matching is plain text in linear time, with no regular expressions, so neither side can make it
   slow, and neither a description nor a pattern is logged. A dry run reads only what its
-  caller can read, in its list and its counts.
+  caller can read, in its list and its counts, and stops at 20,000 open transactions, since
+  `read` may ask for one. A run or an undo asks again at each batch whether its caller still may.
 - **Account grants narrow an agent token.** A token may carry grants: a
   level (`balances`, `transactions`, `write`) on chosen accounts, or on
   `all` accounts including ones created later. Its level on an account is
@@ -351,11 +352,14 @@
 - **A rule for every account shows its text to a token limited to one.** A rule's pattern is a
   member's free text, and could say what another account's money goes on. It is shown to a token with
   `transactions` on any account, so that a token can always read a rule that could fill a transaction it
-  sees, as with a planned item without a hint. A rule for one account stays with that account. The
-  limit of 200 rules, when reached, tells a narrow token that many exist.
+  sees, as with a planned item without a hint. A rule for one account stays with that account.
+- **One narrow writer can use up the limit of 200 rules.** The limit is the household's, since it bounds
+  the work a sync does, so a token with write on one account can fill it and refuse everyone else's, and
+  reaching it tells that token that many exist. Each create is audited, and an admin can delete them.
 - **A rule outlives the token that made it.** It stays until someone deletes it, as a category does.
-  It can only fill what's empty on the accounts it was allowed to reach when it was made, it is audited, and
-  it names itself on each change.
+  It can only fill what's empty on the accounts it is for, which for a rule of every account includes
+  accounts created later, it is audited, and it names itself on each change. A run by hand is different:
+  it stops at its next batch once its token is revoked.
 - **A staging seed restored on a real server.** The staging stack's members sign in with
   private keys committed to this repository. `serve` refuses a database where an admin
   holds the seeded credential unless `COFFER_PUBLIC_URL` is on localhost. That is a guard

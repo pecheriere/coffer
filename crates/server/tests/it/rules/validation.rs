@@ -24,15 +24,15 @@ async fn a_rule_must_say_what_it_looks_for_and_what_it_sets() {
         ),
         (
             json!({"match_kind": "contains", "pattern": "  ", "category": category}),
-            "pattern must be 1 to 200 characters without control characters",
+            "pattern must be 1 to 200 characters without control characters, and not only spaces",
         ),
         (
             json!({"match_kind": "contains", "pattern": "A\u{7}B", "category": category}),
-            "pattern must be 1 to 200 characters without control characters",
+            "pattern must be 1 to 200 characters without control characters, and not only spaces",
         ),
         (
             json!({"match_kind": "contains", "pattern": "x".repeat(201), "category": category}),
-            "pattern must be 1 to 200 characters without control characters",
+            "pattern must be 1 to 200 characters without control characters, and not only spaces",
         ),
         (
             json!({"match_kind": "contains", "pattern": "S", "category": CategoryId::new()}),
@@ -183,4 +183,26 @@ async fn the_rule_list_is_in_running_order_with_an_unknown_account_answered_as_m
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_pattern_is_kept_as_written_spaces_and_all() {
+    let world = world().await;
+    let category = world.category("Tax").await;
+    let rule = world.filing("TAX ", category).await;
+    let (_, view) = world
+        .call(
+            Method::GET,
+            &format!("/api/v1/rules/{rule}"),
+            &world.write,
+            None,
+        )
+        .await;
+    assert_eq!(view["pattern"], "TAX ");
+    let account = world.account("Everyday").await;
+    let feed = world.feed(&account).await;
+    let taxi = world.arrive(&feed, "a", -100, "TAXI RIDE").await;
+    let tax = world.arrive(&feed, "b", -100, "CITY TAX 12").await;
+    assert_eq!(world.stored(taxi).await.splits.len(), 0);
+    assert_eq!(world.stored(tax).await.splits.len(), 1);
 }

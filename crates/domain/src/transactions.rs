@@ -194,8 +194,9 @@ pub fn validate_splits(amount_minor: i64, splits: &[SplitInput]) -> Result<(), S
     }
 }
 
-/// Which fields of a transaction a member or an agent has set. A sync never
-/// discards a transaction holding any of them.
+/// Which fields of a transaction a member or an agent has set, clearing one
+/// being a way of setting it. A sync never discards a transaction holding any
+/// of them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,

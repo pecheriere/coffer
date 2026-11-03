@@ -282,3 +282,34 @@ async fn a_zero_amount_arrives_assigned_but_not_filed() {
     assert_eq!(stored.splits.len(), 0);
     assert_eq!(stored.assignee, Some(bob));
 }
+
+#[tokio::test]
+async fn a_cleared_pending_record_stays_when_its_posted_form_comes_in_unmatched() {
+    let world = world().await;
+    let groceries = world.category("Groceries").await;
+    world.filing("SHOP", groceries).await;
+    let account = world.account("Everyday").await;
+    let feed = world.feed(&account).await;
+    world.sync(&feed, vec![pending("a", -1200, "SHOP")]).await;
+    let cleared = world.holding(&feed, "a").await;
+    world
+        .patch_transaction(cleared, json!({"splits": []}))
+        .await;
+
+    // The bank drops the pending record and posts something nothing ties to it.
+    world
+        .sync_removing(
+            &feed,
+            vec![record("b", -9000, "SHOP OTHER")],
+            vec!["a".to_owned()],
+        )
+        .await;
+
+    let stored = world.stored(cleared).await;
+    assert!(
+        stored.flags.contains(&TransactionFlag::SourceRemoved),
+        "a person's clear is kept, and asks for a look"
+    );
+    assert_eq!(stored.splits.len(), 0);
+    assert_eq!(stored.categorized.unwrap().rule, None);
+}

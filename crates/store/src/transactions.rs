@@ -5,7 +5,7 @@ use coffer_domain::ids::{
 };
 use coffer_domain::money::Currency;
 use coffer_domain::policy::AccountScope;
-use coffer_domain::rules::RuleSubject;
+use coffer_domain::rules::{RuleSubject, TransferLeg};
 use coffer_domain::transactions::{
     Description, Memo, Notes, Payee, ReviewStatus, SplitInput, TransactionFlag, TransactionOrigin,
     UserState,
@@ -100,18 +100,19 @@ pub struct TransactionRecord {
 }
 
 impl TransactionRecord {
-    /// Which user fields are set. What only a rule chose isn't anyone's work, so a
-    /// sync may still discard it and a merge doesn't ask before dropping it.
+    /// Which user fields are set. Clearing a field is someone saying it stays empty, so
+    /// that counts. What only a rule chose isn't anyone's work, so a sync may still
+    /// discard it and a merge doesn't ask before dropping it.
     #[must_use]
     pub fn user_state(&self) -> UserState {
-        let by_rule = |attribution: &Option<Attribution>| {
-            attribution.as_ref().is_some_and(|by| by.rule.is_some())
+        let chosen = |attribution: &Option<Attribution>, filled: bool| {
+            attribution.as_ref().map_or(filled, |by| by.rule.is_none())
         };
         UserState {
-            splits: !self.splits.is_empty() && !by_rule(&self.categorized),
+            splits: chosen(&self.categorized, !self.splits.is_empty()),
             notes: self.notes.is_some(),
             reviewed: self.review == ReviewStatus::Reviewed,
-            assignee: self.assignee.is_some() && !by_rule(&self.assigned),
+            assignee: chosen(&self.assigned, self.assignee.is_some()),
             payee_edited: self.payee_edited,
             transfer_link: self.transfer_link.is_some(),
         }
@@ -129,7 +130,13 @@ impl TransactionRecord {
             assignee_open: self.assignee.is_none() && self.assigned.is_none(),
             splits: self.splits.len(),
             reviewed: self.review == ReviewStatus::Reviewed,
-            transfer_leg: self.transfer_link.is_some(),
+            transfer_leg: match &self.transfer_link {
+                None => TransferLeg::NotALeg,
+                Some(side) if side.one_movement && side.one_movement_in_reports => {
+                    TransferLeg::OneMovement
+                }
+                Some(_) => TransferLeg::OtherLink,
+            },
         }
     }
 }
@@ -237,6 +244,8 @@ pub struct TransactionFilter {
     /// Only transactions with a split in a `transfer` category and in no transfer link;
     /// `false` does not filter.
     pub unmatched_transfer: bool,
+    /// Filled by this rule, category or assignee, and not changed by anyone since.
+    pub rule: Option<RuleId>,
     pub pending: Option<bool>,
     /// With this flag set.
     pub flag: Option<TransactionFlag>,
@@ -342,6 +351,14 @@ fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &TransactionFilter) {
             " AND NOT EXISTS (SELECT 1 FROM transaction_splits s \
              WHERE s.transaction_id = transactions.id)",
         );
+    }
+    if let Some(rule) = filter.rule {
+        query
+            .push(" AND (categorized_by_rule = ")
+            .push_bind(rule.to_string())
+            .push(" OR assigned_by_rule = ")
+            .push_bind(rule.to_string())
+            .push(")");
     }
     if filter.unmatched_transfer {
         query.push(
@@ -786,6 +803,60 @@ impl StoreTx {
             .map_err(StoreError::from_sqlx)?;
         }
         Ok(())
+    }
+
+    /// Takes back what a rule filed: no splits, and nobody having categorized it, so the
+    /// field is open again and a mismatch flag has nothing left to say.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the transaction does not exist; backend failures.
+    pub async fn reopen_category(
+        &mut self,
+        id: TransactionId,
+        at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE transactions SET categorized_by_member = NULL, categorized_by_agent = NULL, \
+             categorized_by_system = NULL, categorized_by_rule = NULL, categorized_at = NULL, \
+             flag_split_mismatch = 0, updated_at = ? WHERE id = ?",
+        )
+        .bind(at.as_millisecond())
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())?;
+        sqlx::query("DELETE FROM transaction_splits WHERE transaction_id = ?")
+            .bind(id.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(StoreError::from_sqlx)?;
+        Ok(())
+    }
+
+    /// Takes back who a rule assigned: nobody, and nobody having chosen, so the field is
+    /// open again.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` if the transaction does not exist; backend failures.
+    pub async fn reopen_assignee(
+        &mut self,
+        id: TransactionId,
+        at: Timestamp,
+    ) -> Result<(), StoreError> {
+        let result = sqlx::query(
+            "UPDATE transactions SET assignee_id = NULL, assigned_by_member = NULL, \
+             assigned_by_agent = NULL, assigned_by_system = NULL, assigned_by_rule = NULL, \
+             assigned_at = NULL, updated_at = ? WHERE id = ?",
+        )
+        .bind(at.as_millisecond())
+        .bind(id.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
+        expect_one(result.rows_affected())
     }
 
     /// Delete a transaction and its splits.

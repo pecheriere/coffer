@@ -32,6 +32,9 @@ CREATE INDEX rules_order ON rules (position, id);
 ALTER TABLE transactions ADD COLUMN categorized_by_rule TEXT
     CHECK (categorized_by_rule IS NULL OR categorized_at IS NOT NULL);
 
+CREATE INDEX transactions_categorized_by_rule ON transactions (categorized_by_rule)
+    WHERE categorized_by_rule IS NOT NULL;
+
 -- Who last set or cleared the assignee, as for the splits. An empty assignee with these set was
 -- cleared by someone, and a rule leaves that alone.
 ALTER TABLE transactions ADD COLUMN assigned_by_member TEXT REFERENCES members (id);
@@ -39,6 +42,8 @@ ALTER TABLE transactions ADD COLUMN assigned_by_agent TEXT REFERENCES agent_toke
 ALTER TABLE transactions ADD COLUMN assigned_by_system TEXT
     CHECK (length(assigned_by_system) BETWEEN 1 AND 100);
 ALTER TABLE transactions ADD COLUMN assigned_by_rule TEXT;
+CREATE INDEX transactions_assigned_by_rule ON transactions (assigned_by_rule)
+    WHERE assigned_by_rule IS NOT NULL;
 ALTER TABLE transactions ADD COLUMN assigned_at INTEGER CHECK (
     (assigned_at IS NULL AND assigned_by_member IS NULL AND assigned_by_agent IS NULL
         AND assigned_by_system IS NULL AND assigned_by_rule IS NULL)

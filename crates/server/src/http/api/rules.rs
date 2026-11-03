@@ -15,6 +15,7 @@ use crate::http::extract::ApiActor;
 use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
 use crate::ledger::rules::run::{RuleApplied, RuleDryRun};
+use crate::ledger::rules::undo::RuleUndone;
 use crate::ledger::rules::{RuleInput, RuleList, RulePatch, RuleView};
 
 /// One rule.
@@ -241,4 +242,33 @@ pub(super) async fn apply(
     TypedPath(path): TypedPath<RulePath>,
 ) -> Result<Json<RuleApplied>, Problem> {
     Ok(Json(state.ledger.apply_rule(&actor, path.rule_id).await?))
+}
+
+/// Takes back what a rule filled.
+#[utoipa::path(
+    post,
+    path = "/api/v1/rules/{rule_id}/undo",
+    operation_id = "undoRule",
+    tag = tags::RULES,
+    description = "Takes back what the rule filled and nobody has changed since, in short \
+                   batches, each audited with its count. Each field becomes empty and open \
+                   again, as if no rule had run, so a corrected rule can fill it, which clearing \
+                   it by hand would prevent. A reviewed transaction is left for a person. List \
+                   what it would touch with `GET /api/v1/transactions?rule=`. It doesn't change \
+                   the rule: turn it off or correct it first, or it files new arrivals again. \
+                   Needs `write`, and write on the rule's account, or on every account for a rule \
+                   without one. A rule since deleted needs write on every account.",
+    security(("bearer" = [])),
+    params(RulePath),
+    responses(
+        (status = 200, description = "What it took back.", body = RuleUndone),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn undo(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<RulePath>,
+) -> Result<Json<RuleUndone>, Problem> {
+    Ok(Json(state.ledger.undo_rule(&actor, path.rule_id).await?))
 }

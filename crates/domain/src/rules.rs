@@ -1,8 +1,9 @@
 //! Rules: what files or assigns a transaction nobody has filled yet (spec §8.13).
 //!
 //! A rule matches on a transaction's description, read as plain text: `contains`
-//! or `starts with`, ignoring case. There are no regular expressions, so neither a
-//! pattern nor a bank's text can make a match slow, and both are only ever data.
+//! or `starts with`, ignoring case character by character. There are no regular
+//! expressions, so neither a pattern nor a bank's text can make a match slow, and
+//! both are only ever data.
 //!
 //! [`decide`] is the one place that says what rules do to a transaction. Rules are
 //! read in order and, for each field, the first match wins. A rule only fills what
@@ -12,7 +13,6 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::identity::label_type;
 use crate::ids::{AccountId, CategoryId, MemberId, RuleId};
 use crate::money::Currency;
 use crate::transactions::{CategoryKind, string_enum};
@@ -32,12 +32,36 @@ pub enum RuleError {
     InvalidAmountRange,
 }
 
-label_type!(
-    /// The text a rule looks for in a description.
-    RulePattern,
-    RuleError::InvalidPattern,
-    max = 200
-);
+/// The text a rule looks for in a description, kept exactly as written: unlike a label it
+/// isn't trimmed, since `"TAX "` is a way of not matching `TAXI`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RulePattern(String);
+
+impl RulePattern {
+    /// The most characters it may have.
+    pub const MAX_CHARS: usize = 200;
+
+    /// 1 to [`Self::MAX_CHARS`] characters, without control characters and not only spaces.
+    ///
+    /// # Errors
+    ///
+    /// [`RuleError::InvalidPattern`] when `input` is none of that.
+    pub fn parse(input: &str) -> Result<Self, RuleError> {
+        let valid = input.chars().count() <= Self::MAX_CHARS
+            && !input.trim().is_empty()
+            && !input.chars().any(char::is_control);
+        if valid {
+            Ok(Self(input.to_owned()))
+        } else {
+            Err(RuleError::InvalidPattern)
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 string_enum!(
     /// How a rule's text is looked for.
@@ -50,7 +74,8 @@ string_enum!(
     }
 );
 
-/// `text` with case folded the same way whatever surrounds each character.
+/// `text` lowercased one character at a time, the same whatever surrounds it. That is
+/// all it does: a composed and a decomposed `é` differ, and `ß` isn't `SS`.
 fn folded(text: &str) -> String {
     text.chars().flat_map(char::to_lowercase).collect()
 }
@@ -182,6 +207,16 @@ pub struct Rule {
     pub assignee: Option<RuleAssignee>,
 }
 
+/// Whether a transaction is one side of a transfer link, and of what kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferLeg {
+    NotALeg,
+    /// One movement between counted accounts, in the forecast and in reports (§8.12 T5).
+    OneMovement,
+    /// Any other link, such as to a brokerage: the money really left (§8.11 B9).
+    OtherLink,
+}
+
 /// What rules read of a transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
@@ -202,8 +237,7 @@ pub struct RuleSubject<'a> {
     pub splits: usize,
     /// A person or an agent has reviewed it, which covers what it held then.
     pub reviewed: bool,
-    /// It is one side of a transfer link.
-    pub transfer_leg: bool,
+    pub transfer_leg: TransferLeg,
 }
 
 impl Rule {
@@ -219,7 +253,7 @@ impl Rule {
     fn category_for(&self, subject: &RuleSubject<'_>) -> Option<CategoryId> {
         self.category
             .filter(|category| !category.archived)
-            .filter(|category| !subject.transfer_leg || category.kind == CategoryKind::Transfer)
+            .filter(|category| refusal(category.kind, subject).is_none())
             .map(|category| category.id)
     }
 
@@ -228,6 +262,23 @@ impl Rule {
         self.assignee
             .filter(|assignee| !assignee.disabled)
             .map(|assignee| assignee.id)
+    }
+}
+
+/// Why a category of `kind` would change what `subject` means, if it would. On a transfer leg
+/// only a `transfer` category is safe, and only on one movement: an `expense` or `income` one
+/// would file a movement as spending or income, and on any other link a `transfer` one would
+/// take real spending out of `actual` and off the uncategorized list. An `income` category on
+/// money going out would leave spending and that list with no caution. The reverse isn't
+/// refused: money coming in under an `expense` category is a refund, which spending nets.
+fn refusal(kind: CategoryKind, subject: &RuleSubject<'_>) -> Option<LeftAlone> {
+    match (subject.transfer_leg, kind) {
+        (TransferLeg::OneMovement, CategoryKind::Transfer) => None,
+        (TransferLeg::OneMovement | TransferLeg::OtherLink, _) => Some(LeftAlone::TransferLeg),
+        (TransferLeg::NotALeg, CategoryKind::Income) if subject.amount_minor < 0 => {
+            Some(LeftAlone::IncomeOnOutflow)
+        }
+        (TransferLeg::NotALeg, _) => None,
     }
 }
 
@@ -259,10 +310,10 @@ impl RuleFills {
 ///
 /// A transaction with several splits is left alone, as is a reviewed one: someone
 /// has divided it or looked at it, and assigning or filing it afterwards would
-/// change what they saw. A zero amount can't take a split. A transfer leg takes only
-/// a `transfer` category, since anything else would file a movement as spending or
-/// income. A rule with an archived category or a disabled member doesn't count as a
-/// match for that field, so the next one may fill it.
+/// change what they saw. A zero amount can't take a split. A category that would change
+/// what the money means isn't one this rule may set ([`refusal`]). A rule like that, or
+/// with an archived category or a disabled member, doesn't count as a match for that
+/// field, so the next one may fill it.
 #[must_use]
 pub fn decide(rules: &[Rule], subject: &RuleSubject<'_>) -> RuleFills {
     let mut fills = RuleFills::default();
@@ -295,8 +346,11 @@ pub enum LeftAlone {
     Reviewed,
     /// It has several splits.
     Split,
-    /// It is a transfer leg, and the rule's category isn't a `transfer` one.
+    /// It is a transfer leg, and the rule's category isn't a `transfer` one, or the link
+    /// isn't one movement.
     TransferLeg,
+    /// Money going out, and the rule's category is an `income` one.
+    IncomeOnOutflow,
     ZeroAmount,
     /// An earlier rule fills that field.
     EarlierRule,
@@ -326,8 +380,8 @@ pub fn left_alone(rules: &[Rule], rule: &Rule, subject: &RuleSubject<'_>) -> Opt
         if subject.amount_minor == 0 {
             return Some(LeftAlone::ZeroAmount);
         }
-        if rule.category_for(subject).is_none() {
-            return Some(LeftAlone::TransferLeg);
+        if let Some(reason) = rule.category.and_then(|c| refusal(c.kind, subject)) {
+            return Some(reason);
         }
     }
     Some(LeftAlone::EarlierRule)

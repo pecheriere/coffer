@@ -37,7 +37,7 @@ fn subject(description: &str) -> RuleSubject<'_> {
         assignee_open: true,
         splits: 0,
         reviewed: false,
-        transfer_leg: false,
+        transfer_leg: TransferLeg::NotALeg,
     }
 }
 
@@ -225,29 +225,101 @@ fn a_zero_amount_takes_no_category_but_may_be_assigned() {
 }
 
 #[test]
-fn a_transfer_leg_takes_only_a_transfer_category() {
-    let leg = RuleSubject {
-        transfer_leg: true,
-        ..subject("SHOP")
-    };
+fn only_one_movement_takes_a_category_and_only_a_transfer_one() {
     let spending = rule("SHOP");
     let moving = Rule {
         category: Some(category(CategoryKind::Transfer)),
         ..rule("SHOP")
     };
-    let rules = std::slice::from_ref(&spending);
-    assert!(decide(rules, &leg).is_empty());
-    assert_eq!(
-        left_alone(rules, &spending, &leg),
-        Some(LeftAlone::TransferLeg)
-    );
     let income = Rule {
         category: Some(category(CategoryKind::Income)),
         ..rule("SHOP")
     };
-    assert!(decide(&[income], &leg).is_empty());
-    let fills = decide(&[spending, moving.clone()], &leg);
+    let movement = RuleSubject {
+        transfer_leg: TransferLeg::OneMovement,
+        ..subject("SHOP")
+    };
+    let rules = std::slice::from_ref(&spending);
+    assert!(decide(rules, &movement).is_empty());
+    assert_eq!(
+        left_alone(rules, &spending, &movement),
+        Some(LeftAlone::TransferLeg)
+    );
+    assert!(decide(std::slice::from_ref(&income), &movement).is_empty());
+    let fills = decide(&[spending.clone(), moving.clone()], &movement);
     assert_eq!(fills.category.map(|(by, _)| by), Some(moving.id));
+
+    let out_of_counted_cash = RuleSubject {
+        transfer_leg: TransferLeg::OtherLink,
+        ..subject("SHOP")
+    };
+    let rules = std::slice::from_ref(&moving);
+    assert!(
+        decide(rules, &out_of_counted_cash).is_empty(),
+        "that money really left, so a person says what it was"
+    );
+    assert_eq!(
+        left_alone(rules, &moving, &out_of_counted_cash),
+        Some(LeftAlone::TransferLeg)
+    );
+}
+
+#[test]
+fn an_income_category_takes_no_money_going_out() {
+    let income = Rule {
+        category: Some(category(CategoryKind::Income)),
+        ..rule("PAYROLL")
+    };
+    let rules = std::slice::from_ref(&income);
+    let fee = RuleSubject {
+        amount_minor: -4500,
+        ..subject("PAYROLL FEE")
+    };
+    assert!(decide(rules, &fee).is_empty());
+    assert_eq!(
+        left_alone(rules, &income, &fee),
+        Some(LeftAlone::IncomeOnOutflow)
+    );
+    let pay = RuleSubject {
+        amount_minor: 450_000,
+        ..subject("PAYROLL")
+    };
+    assert_eq!(
+        decide(rules, &pay).category.map(|(by, _)| by),
+        Some(income.id)
+    );
+}
+
+#[test]
+fn money_coming_in_under_an_expense_category_is_a_refund() {
+    let spending = rule("SHOP");
+    let refund = RuleSubject {
+        amount_minor: 2000,
+        ..subject("SHOP REFUND")
+    };
+    assert!(!decide(&[spending], &refund).is_empty());
+}
+
+#[test]
+fn a_pattern_keeps_its_spaces_as_written() {
+    let tax = text(RuleMatchKind::Contains, "TAX ");
+    assert_eq!(tax.pattern().as_str(), "TAX ");
+    assert!(tax.found_in(&folded("CITY TAX 12")));
+    assert!(!tax.found_in(&folded("TAXI RIDE")));
+    assert!(text(RuleMatchKind::Contains, "TAX").found_in(&folded("TAXI RIDE")));
+    for refused in ["", "   ", "A\u{7}B"] {
+        assert_eq!(RulePattern::parse(refused), Err(RuleError::InvalidPattern));
+    }
+    assert!(RulePattern::parse(&"x".repeat(200)).is_ok());
+    assert!(RulePattern::parse(&"x".repeat(201)).is_err());
+}
+
+#[test]
+fn case_is_folded_a_character_at_a_time_and_nothing_more() {
+    let sharp = text(RuleMatchKind::Contains, "STRASSE");
+    assert!(!sharp.found_in(&folded("STRAßE")), "no full folding");
+    let composed = text(RuleMatchKind::Contains, "caf\u{e9}");
+    assert!(!composed.found_in(&folded("CAFE\u{301}")), "no normalizing");
 }
 
 #[test]

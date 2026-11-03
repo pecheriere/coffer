@@ -311,6 +311,8 @@ pub struct TransactionQueryInput {
     pub uncategorized: bool,
     /// Only those filed in a `transfer` category with no link; `false` does not filter.
     pub unmatched_transfer: bool,
+    /// Filled by this rule, and not changed by anyone since.
+    pub rule: Option<RuleId>,
     pub pending: Option<bool>,
     pub flag: Option<TransactionFlag>,
     /// A signed amount of at least this many minor units.
@@ -852,6 +854,7 @@ impl Ledger {
             categories: query.categories,
             uncategorized: query.uncategorized,
             unmatched_transfer: query.unmatched_transfer,
+            rule: query.rule,
             pending: query.pending,
             flag: query.flag,
             min_minor: query.min_minor,

@@ -11,6 +11,8 @@ mod access;
 mod arrival;
 mod manual;
 mod meeting;
+mod races;
+mod undo;
 mod validation;
 
 use axum::body::Body;
@@ -102,13 +104,17 @@ impl World {
     }
 
     async fn account(&self, name: &str) -> AccountRecord {
+        self.account_of_kind(name, AccountKind::Checking).await
+    }
+
+    async fn account_of_kind(&self, name: &str, kind: AccountKind) -> AccountRecord {
         let view = self
             .ledger
             .create_account(
                 &self.alice,
                 NewAccountInput {
                     name: name.into(),
-                    kind: AccountKind::Checking,
+                    kind,
                     currency: Currency::parse("USD").unwrap(),
                     liquidity: None,
                     include_in_net_worth: Some(true),

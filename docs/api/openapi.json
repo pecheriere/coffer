@@ -5994,6 +5994,114 @@
         ]
       }
     },
+    "/api/v1/rules/{rule_id}/undo": {
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Takes back what a rule filled.",
+        "description": "Takes back what the rule filled and nobody has changed since, in short batches, each audited with its count. Each field becomes empty and open again, as if no rule had run, so a corrected rule can fill it, which clearing it by hand would prevent. A reviewed transaction is left for a person. List what it would touch with `GET /api/v1/transactions?rule=`. It doesn't change the rule: turn it off or correct it first, or it files new arrivals again. Needs `write`, and write on the rule's account, or on every account for a rule without one. A rule since deleted needs write on every account.",
+        "operationId": "undoRule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What it took back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleUndone"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/transactions": {
       "get": {
         "tags": [
@@ -6075,6 +6183,15 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "Only what this rule filled and nobody has changed since, category or assignee. A rule\nsince deleted still counts.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RuleId"
             }
           },
           {
@@ -12356,7 +12473,8 @@
           "would_change",
           "would_categorize",
           "would_assign",
-          "left_alone"
+          "left_alone",
+          "complete"
         ],
         "properties": {
           "changes": {
@@ -12365,6 +12483,10 @@
               "$ref": "#/components/schemas/RuleChangeView"
             },
             "description": "The first of the changes, up to `limit`, oldest transaction first."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether it read every open transaction. `false` past 20,000 of them: the counts then\ncover the oldest 20,000, and running the rule reaches them all."
           },
           "left_alone": {
             "$ref": "#/components/schemas/RuleLeftAlone"
@@ -12458,7 +12580,7 @@
           },
           "pattern": {
             "type": "string",
-            "description": "1 to 200 characters, without control characters. Plain text, matched ignoring\ncase."
+            "description": "1 to 200 characters, without control characters and not only spaces. Plain text,\nmatched ignoring case and kept as written: `\"TAX \"` doesn't match `TAXI`."
           },
           "position": {
             "type": [
@@ -12480,6 +12602,7 @@
           "reviewed",
           "split",
           "transfer_leg",
+          "income_on_outflow",
           "zero_amount",
           "earlier_rule"
         ],
@@ -12488,6 +12611,12 @@
             "type": "integer",
             "format": "int32",
             "description": "An earlier rule fills that field: run that one.",
+            "minimum": 0
+          },
+          "income_on_outflow": {
+            "type": "integer",
+            "format": "int32",
+            "description": "They are money going out, and the rule's category is an `income` one.",
             "minimum": 0
           },
           "reviewed": {
@@ -12505,7 +12634,7 @@
           "transfer_leg": {
             "type": "integer",
             "format": "int32",
-            "description": "They are transfer legs, and the rule's category isn't a `transfer` one.",
+            "description": "They are transfer legs, and the rule's category isn't a `transfer` one, or the link\nisn't one movement: money sent to a brokerage is still spending.",
             "minimum": 0
           },
           "zero_amount": {
@@ -12608,7 +12737,7 @@
               "string",
               "null"
             ],
-            "description": "1 to 200 characters, without control characters."
+            "description": "1 to 200 characters, without control characters and not only spaces."
           },
           "position": {
             "type": [
@@ -12622,6 +12751,42 @@
           }
         },
         "additionalProperties": false
+      },
+      "RuleUndone": {
+        "type": "object",
+        "description": "What taking back a rule's work changed.",
+        "required": [
+          "changed",
+          "categorized",
+          "assigned",
+          "reviewed"
+        ],
+        "properties": {
+          "assigned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many assignees it took back.",
+            "minimum": 0
+          },
+          "categorized": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many categories it took back.",
+            "minimum": 0
+          },
+          "changed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many transactions it changed.",
+            "minimum": 0
+          },
+          "reviewed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many it left, because someone has reviewed them: that is for a person to change.",
+            "minimum": 0
+          }
+        }
       },
       "RuleView": {
         "type": "object",
@@ -12710,7 +12875,7 @@
           },
           "pattern": {
             "type": "string",
-            "description": "The text looked for in the description, ignoring case. Plain text: nothing in\nit is a wildcard."
+            "description": "The text looked for in the description, ignoring case. Plain text, kept as\nwritten with any spaces at its ends: nothing in it is a wildcard."
           },
           "position": {
             "type": "integer",

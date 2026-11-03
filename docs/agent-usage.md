@@ -446,7 +446,7 @@ account and one range of signed amounts, and sets a category, an assignee or bot
 - `GET /api/v1/rules` lists the rules in the order they run. `GET`, `PATCH` and `DELETE`
   `/api/v1/rules/{rule_id}` read, change and delete one.
 - `POST /api/v1/rules` (accepts an `Idempotency-Key`) takes `match_kind` (`contains` or
-  `starts_with`), `pattern`, and optionally `account`, `amount`
+  `starts_with`), `pattern` (kept as written, so `"TAX "` doesn't match `TAXI`), and optionally `account`, `amount`
   (`{currency, min_minor, max_minor}`, either end `null`; negative is money out, so
   `{"currency": "USD", "max_minor": -1}` is any spending in dollars), `category`,
   `assignee`, `position` (lower first; by default after the last) and `enabled`.
@@ -454,7 +454,12 @@ account and one range of signed amounts, and sets a category, an assignee or bot
   and writes nothing: `changes` (up to `limit`), `would_change`, `would_categorize`,
   `would_assign`, and `left_alone`, which counts what it matches but won't fill, and why.
 - `POST /api/v1/rules/{rule_id}/apply` does it and answers the same counts. It is safe to
-  repeat, and if the call is cut short what it did stays, so calling again carries on.
+  repeat, and if the call is cut short what it did stays, so calling again carries on. A
+  dry run reads at most the oldest 20,000 open transactions, and `complete: false` says so.
+- `GET /api/v1/transactions?rule={rule_id}` lists what a rule filled and nobody has changed
+  since. `POST /api/v1/rules/{rule_id}/undo` takes that back and reopens each field, so a
+  corrected rule can fill it. It leaves reviewed transactions for a person and doesn't change
+  the rule, so turn the rule off or correct it first. It needs the same rights as running.
 
 Rules run on their own only when a transaction first arrives from a sync. Nothing already
 held changes until someone runs one. **Try one first:** create it with `enabled: false`,
@@ -471,20 +476,27 @@ What a rule never does:
 - **Review.** A rule never marks anything reviewed, and leaves a reviewed transaction alone
   (`reviewed`), so reviewing is still yours to do with the owner.
 - **Divide or link.** A transaction with several splits is left alone whole (`split`). A
-  transfer leg takes only a `transfer` category, though it can be assigned (`transfer_leg`).
-  A rule's split has no goal, and a transaction with a goal link already has a split.
+  transfer leg can be assigned, but takes a category only if it is `transfer` and the link is one
+  movement (`transfer_leg`): money linked to a brokerage is still spending, so saying what it
+  was is for a person. A rule's split has no goal, and a transaction with a goal link already
+  has a split.
+- **File money going out as income** (`income_on_outflow`), so "PAYROLL" won't catch a
+  "PAYROLL FEE". Money coming in under an `expense` category is filed, as a refund.
 
 To see what a rule did, read `categorized_by.rule` and `assigned_by.rule` on the
 transaction, or the audit log (`transaction.rule_applied`, and `rule.apply` with a count
-for each batch of a run). To undo it, `PATCH` the transaction like any other edit, which
-also clears `rule` and stays. Changing or deleting a rule leaves what it did in place.
+for each batch of a run). To undo one, `PATCH` the transaction like any other edit, which
+also clears `rule` and stays, so no rule fills that field again; to undo many, or to let a
+corrected rule fill them, use `.../undo`. Changing or deleting a rule leaves what it did in place.
 
 A rule whose category gets archived (`category_archived`) or whose member gets disabled
 (`assignee_disabled`) stops doing that part, and a later rule may fill it. A posted record
 keeps what a rule chose for its pending form, even under a new description, and runs no
 rule: one that didn't match while pending shows up in a dry run. What only a rule chose
 doesn't count as someone's work, so a pending record its bank takes back goes with it, and
-a duplicate only a rule filled merges without `discard_duplicate_state`.
+a duplicate only a rule filled merges without `discard_duplicate_state`. A field someone cleared
+does count: that transaction is kept, and a merge asks first. Clearing a field nobody has set
+writes nothing, so it doesn't stop a rule.
 
 ### Money to and from accounts that aren't the household's
 
