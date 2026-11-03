@@ -34,6 +34,7 @@ fn display_currency_not_set_has_sums_but_no_total() {
         [LiquidityLine {
             liquidity: LiquidityClass::Cash,
             amount: None,
+            manual_rate: false,
         }]
     );
     assert_eq!(point.by_currency, [money(200, "EUR"), money(100, "USD")]);
@@ -501,6 +502,7 @@ fn what_an_unlisted_account_brings_changes_nothing() {
         display_minor: None,
         rate_on: None,
         rate_leg: None,
+        manual_rate_leg: None,
         conversion: ConversionState::Missing,
     });
     handed_more.first_on.push((foreign, OCT_26));

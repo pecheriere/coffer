@@ -8,7 +8,7 @@ use coffer_domain::accounts::{BelongsTo, LiquidityClass};
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
-    AccountPoint, AccountSeries, ConversionState, NetWorthBlocker, NetWorthCaution,
+    AccountPoint, AccountSeries, ConversionState, ManualRateUse, NetWorthBlocker, NetWorthCaution,
     RateMissingReason,
 };
 use jiff::civil::Date;
@@ -141,9 +141,15 @@ pub(super) fn bucket_heading(belongs_to: BelongsTo, beneficiary: Option<&str>) -
 fn rate_reason(reason: RateMissingReason) -> &'static str {
     match reason {
         RateMissingReason::NotFetchedYet => "coffer hasn't fetched its rates yet",
-        RateMissingReason::NotPublished => "the source of rates doesn't publish it",
+        RateMissingReason::NotPublished => {
+            "the source of rates doesn't publish it, though an admin can enter a rate on the \
+             household page"
+        }
         RateMissingReason::FetchFailing => "fetching its rates is failing, and coffer will retry",
-        RateMissingReason::ProviderOff => "this server is set up with no source of rates",
+        RateMissingReason::ProviderOff => {
+            "this server is set up with no source of rates, though an admin can enter a rate on \
+             the household page"
+        }
         RateMissingReason::NoneThatEarly => "coffer's rates for it don't go back that far",
     }
 }
@@ -325,6 +331,16 @@ fn closed_owing_sentence(
             .map_or_else(String::new, |date| format!(", on {}", day(date)));
         format!("{name} is closed and owed {amount} {}{when}.", words.last)
     }
+}
+
+/// A note on a rate an admin entered, which isn't a caution: it doesn't stop a number being firm.
+pub(super) fn manual_rate_sentence(used: ManualRateUse) -> String {
+    format!(
+        "The {} rate used {} was entered by hand, not published, so those amounts are only as \
+         good as that entry.",
+        used.currency.as_str(),
+        stretch(used.first_on, used.last_on),
+    )
 }
 
 /// Why one account has no amount for a period, for that period's row of the table.

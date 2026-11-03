@@ -42,6 +42,9 @@ pub struct DailyValue {
     /// Which side `rate_on` is on, or the rate is missing on: present only with
     /// [`ConversionState::Converted`] and [`ConversionState::Missing`].
     pub rate_leg: Option<RateLeg>,
+    /// Which side used a rate an admin entered: present only with
+    /// [`ConversionState::Converted`], and only if one did.
+    pub manual_rate_leg: Option<RateLeg>,
     pub conversion: ConversionState,
 }
 
@@ -81,6 +84,7 @@ pub fn daily_values(
             display_minor: amount.minor,
             rate_on: amount.rate_on,
             rate_leg: amount.leg,
+            manual_rate_leg: amount.manual_leg,
             conversion: amount.state,
         });
     }
@@ -92,6 +96,7 @@ struct DisplayAmount {
     minor: Option<i64>,
     rate_on: Option<Date>,
     leg: Option<RateLeg>,
+    manual_leg: Option<RateLeg>,
     state: ConversionState,
 }
 
@@ -106,6 +111,7 @@ fn display_amount(
         minor: None,
         rate_on: None,
         leg: None,
+        manual_leg: None,
         state,
     };
     let Some(display) = display else {
@@ -120,10 +126,12 @@ fn display_amount(
             minor,
             rate_on,
             leg,
+            manual,
         } => DisplayAmount {
             minor: Some(minor),
             rate_on: Some(rate_on),
             leg: Some(leg),
+            manual_leg: manual,
             state: ConversionState::Converted,
         },
         Conversion::Missing { leg } => DisplayAmount {
