@@ -136,7 +136,8 @@ jobs:
     # so its cache already holds this commit's image and this job compiles nothing.
     if: github.event_name == 'pull_request'
     needs: docker-build
-    runs-on: ubuntu-latest
+    # Named, so that a move of ubuntu-latest can't break what install-deps installs.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -172,6 +173,15 @@ jobs:
           name: e2e-results
           path: staging/e2e/test-results
           retention-days: 7
+      # A seed or health check that fails leaves no test results. All of this is made up.
+      - name: Show what the containers said
+        if: failure()
+        run: |
+          docker ps --all
+          for name in $(docker ps --all --filter name=coffer-staging --format '{{.Names}}'); do
+            echo "--- $name"
+            docker logs "$name" 2>&1
+          done
       - name: Remove the stack
         if: always()
         run: scripts/staging.sh down
