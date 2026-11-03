@@ -298,6 +298,7 @@ impl World {
                 member: Some(self.alice.member),
                 agent: None,
                 system: None,
+                rule: None,
                 at: now,
             },
         )

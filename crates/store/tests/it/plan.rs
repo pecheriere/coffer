@@ -377,6 +377,7 @@ async fn delete_refuses_a_goal_with_a_linked_split() {
             member: None,
             agent: None,
             system: Some("system:test".into()),
+            rule: None,
             at: at(2),
         },
     )
