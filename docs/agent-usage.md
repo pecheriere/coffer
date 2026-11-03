@@ -576,6 +576,14 @@ sign of an old balance. A balance you set with `PUT` may be dated any day.
   contact Plaid or check their Plaid dashboard. The audit log records
   `connection.forget` rather than `connection.remove`. Tell the member this
   instead of retrying.
+- `POST /api/v1/provider-accounts/{provider_account_id}/dismiss` says an unbound
+  provider account is meant to stay unbound, so it raises no forecast caution
+  and is not counted as waiting to be set up; ask a member first. It stays in
+  the list (`unbound=true` included) with `dismissed_at` set, sync keeps
+  tracking it, and binding it later clears the dismissal. `.../restore` takes
+  it back. Both need `write`, are audited as `provider_account.dismiss` and
+  `provider_account.restore`, and answer 409 for a bound account, a state it
+  is already in, or a removed connection.
 - `GET /api/v1/provider-accounts` (`unbound=true` for the unbound ones),
   `POST /api/v1/provider-accounts/{provider_account_id}/bind` with
   `{"account": "<id>"}` (an open account in the same currency), and
