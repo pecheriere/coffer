@@ -359,7 +359,9 @@
 - **A rule outlives the token that made it.** It stays until someone deletes it, as a category does.
   It can only fill what's empty on the accounts it is for, which for a rule of every account includes
   accounts created later, it is audited, and it names itself on each change. A run by hand is different:
-  it stops at its next batch once its token is revoked.
+  it stops at its next batch once its token is revoked. A run started from a session survives that
+  session's logout or expiry, since an `Actor` doesn't name its session, while disabling the member stops
+  it at the next batch, and a changed role applies from the next batch, though both roles today may run a rule.
 - **A staging seed restored on a real server.** The staging stack's members sign in with
   private keys committed to this repository. `serve` refuses a database where an admin
   holds the seeded credential unless `COFFER_PUBLIC_URL` is on localhost. That is a guard
