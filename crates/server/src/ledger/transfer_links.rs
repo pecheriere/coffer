@@ -399,7 +399,7 @@ impl Ledger {
 
     /// What might be the other leg of `transaction`: the same amount the other way, in the same
     /// currency, on another account the actor can read, posted within
-    /// [`CANDIDATE_WINDOW_DAYS`], in no link and split at most once, nearest first. Nothing
+    /// five days, in no link and split at most once, nearest first. Nothing
     /// for a transaction that can't be linked itself. It suggests and changes nothing.
     ///
     /// # Errors
@@ -423,20 +423,18 @@ impl Ledger {
             return Ok(TransferCandidates { items: Vec::new() });
         };
         let window = Span::new().days(CANDIDATE_WINDOW_DAYS);
-        let out_of_range = LedgerError::Internal("a candidate window left the calendar");
-        let from = record.posted_on.checked_sub(window);
+        // At the calendar's edge, a bound that doesn't exist bounds nothing.
+        let from = record.posted_on.checked_sub(window).ok();
         let to = record
             .posted_on
             .checked_add(window)
-            .and_then(Date::tomorrow);
-        let (Ok(from), Ok(to)) = (from, to) else {
-            return Err(out_of_range);
-        };
+            .and_then(Date::tomorrow)
+            .ok();
         let filter = TransactionFilter {
             scope: access.scope(AccountLevel::Transactions),
             accounts: Vec::new(),
-            from: Some(from),
-            to: Some(to),
+            from,
+            to,
             review: None,
             assignee: None,
             categories: Vec::new(),
