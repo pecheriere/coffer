@@ -50,7 +50,7 @@ utoipa = { version = "6.0.0", default-features = false, features = ["macros", "u
 utoipa-axum = "0.3.0"
 # Answers a panicking handler with a 500 (crates/server/src/http/panic_answer.rs).
 # 0.6 is the version reqwest already brings into the tree, so this adds no crate.
-tower-http = { version = "0.6.11", default-features = false, features = ["catch-panic"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic"] }
 # Query string parsing for the typed API extractors (both already in the tree
 # through axum).
 serde_urlencoded = "0.7.1"
