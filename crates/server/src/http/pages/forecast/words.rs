@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
     AccountLine, Blocker, Caution, FeedProblemReason, FeedStatus, HintEffect, LineSource,
-    SettledLine, bills_looked_at_from,
+    RuleFiledTransfers, SettledLine, bills_looked_at_from,
 };
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
@@ -495,6 +495,17 @@ fn uncategorized_sentence(count: u32, total: Money) -> String {
          what is still needed.",
         transactions(count),
         magnitude(total),
+    )
+}
+
+/// What rules filed as `transfer` with no link, which changes no number: a note, not a
+/// caution.
+pub(super) fn rule_filed_transfers_sentence(filed: &RuleFiledTransfers) -> String {
+    format!(
+        "Rules filed {} ({}) as transfers with no link this month. A transfer is not counted \
+         as spending, so if a rule is too broad, a real expense may be hiding there.",
+        transactions(filed.count),
+        magnitude(filed.amount),
     )
 }
 

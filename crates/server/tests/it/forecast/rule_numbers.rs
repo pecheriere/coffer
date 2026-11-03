@@ -276,3 +276,65 @@ async fn a_transfer_rule_keeps_a_link_out_of_counted_cash_on_the_caution() {
     assert_eq!(answer["left_alone"]["transfer_leg"], 2);
     assert_eq!(world.forecast_at(ONE_MONTH).await, before);
 }
+
+fn filed_as_transfer(forecast: &Value) -> Value {
+    forecast["rule_filed_transfers"].clone()
+}
+
+/// A rule's `transfer` filing of an unlinked outflow is reported by currency and moves nothing: the
+/// same filing by a person gives the same forecast without the report.
+#[tokio::test]
+async fn an_unlinked_transfer_a_rule_filed_is_reported_and_changes_nothing() {
+    let world = world().await;
+    let (checking, _food) = world.budgeted().await;
+    let id = world.unfiled(checking, -30_000).await;
+    let moved = world.category("Moved", "transfer").await;
+    assert_eq!(
+        filed_as_transfer(&world.forecast_at(ONE_MONTH).await),
+        json!([])
+    );
+
+    world.rule_run("Purchase", moved).await;
+    let by_rule = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(
+        filed_as_transfer(&by_rule),
+        json!([{"currency": "USD", "count": 1, "amount": usd(30_000)}])
+    );
+
+    let other = world.category("Elsewhere", "transfer").await;
+    world
+        .admin_send(
+            Method::PATCH,
+            &format!("/api/v1/transactions/{id}"),
+            &json!({"splits": [{"category": other, "minor_units": -30_000}]}),
+        )
+        .await;
+    let by_person = world.forecast_at(ONE_MONTH).await;
+    assert_eq!(filed_as_transfer(&by_person), json!([]));
+    let (mut with, mut without) = (by_rule, by_person);
+    with["rule_filed_transfers"] = json!([]);
+    without["rule_filed_transfers"] = json!([]);
+    assert_eq!(with, without, "everything else is the same");
+}
+
+#[tokio::test]
+async fn linking_it_takes_it_off_the_report() {
+    let world = world().await;
+    let (checking, _food) = world.budgeted().await;
+    let savings = world.funded("Savings", 100_000).await;
+    let out = world.unfiled(checking, -30_000).await;
+    let moved = world.category("Moved", "transfer").await;
+    world.rule_run("Purchase", moved).await;
+    let into = world.unfiled(savings, 30_000).await;
+    assert_eq!(
+        filed_as_transfer(&world.forecast_at(ONE_MONTH).await)[0]["count"],
+        1
+    );
+
+    world.link_for_rule(&out, &into).await;
+
+    assert_eq!(
+        filed_as_transfer(&world.forecast_at(ONE_MONTH).await),
+        json!([])
+    );
+}

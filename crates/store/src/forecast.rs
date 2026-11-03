@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use coffer_domain::accounts::ConnectionLabel;
-use coffer_domain::forecast::{bills_looked_at_from, payments_read_from};
+use coffer_domain::forecast::{RuleFiledTransfers, bills_looked_at_from, payments_read_from};
 use coffer_domain::fx::RateBook;
 use coffer_domain::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, TransactionId, TransferLinkId,
@@ -25,6 +25,7 @@ use crate::convert::{corrupt, int, parsed, parsed_opt, text};
 use crate::household::fetch_forecast_settings;
 use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
+use crate::rule_filed_transfers;
 use crate::settlements;
 use crate::transfer_links::{
     after_moved, both_counted, both_counted_when_posted, counted_cash, counted_when_posted,
@@ -66,6 +67,9 @@ pub struct ForecastData {
     pub earliest_transaction: Option<Date>,
     /// Outflows on counted accounts that their balances may not show yet.
     pub newer_spending: Vec<NewerSpendingRow>,
+    /// What rules filed under a `transfer` category with no link, from `as_of`'s month to `as_of`,
+    /// by currency.
+    pub rule_filed_transfers: Vec<RuleFiledTransfers>,
     /// The links between counted accounts with a leg its provider took back and a leg the
     /// look-back reaches, ordered by id.
     pub links_with_leg_removed: Vec<TransferLinkId>,
@@ -803,6 +807,7 @@ impl Store {
             .iter()
             .map(newer_spending_from_row)
             .collect::<Result<_, _>>()?;
+        let rule_filed_transfers = rule_filed_transfers::read(&mut tx, &day, &month_start).await?;
         let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &looked_at_from).await?;
         let (cross_currency_links, rates) =
             transfer_rates::for_forecast(&mut tx, as_of.first_of_month(), as_of).await?;
@@ -835,6 +840,7 @@ impl Store {
             last_month_loose_ends,
             earliest_transaction,
             newer_spending,
+            rule_filed_transfers,
             links_with_leg_removed,
             cross_currency_links,
             rates,

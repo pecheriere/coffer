@@ -439,6 +439,7 @@ household's settings. The first example is a household that has just started:
   ],
   "blockers": [{"kind": "floor_not_set"}, {"kind": "no_counted_accounts"}],
   "cautions": [],
+  "rule_filed_transfers": [],
   "settled": []
 }
 ```
@@ -619,6 +620,7 @@ first entry):
   ],
   "blockers": [],
   "cautions": [],
+  "rule_filed_transfers": [],
   "settled": []
 }
 ```
@@ -687,6 +689,17 @@ pending charges), the cash available is overstated by up to these amounts. It
 covers open accounts with a balance and any closed card you switched in.
 A balance has a date and no time, so a transaction later on the balance's own
 date counts as shown.
+
+`rule_filed_transfers` is not a caution: it never changes `status` or a number. It has a
+row per currency (`currency`, `count`, `amount`) for money out that a rule filed under a
+`transfer` category with no [transfer link](agent-usage.md#transfer-links), from the start of
+`as_of`'s month to `as_of`, and is empty when there is none. A transfer adds nothing to a
+budget's spending and isn't in `uncategorized_spending`, so a rule that is too broad can hide a
+real expense there; the surplus isn't overstated, but the prompt to look is lost. A sweep rule is
+legitimate, so this never makes the forecast `provisional`. When a row is there, mention it, and
+list what it counts with `GET /transactions?unmatched_transfer=true&rule=<rule>` (a rule's id
+from `GET /rules`): link what moved between the household's accounts, and recategorize or
+narrow the rule for the rest. A person's own filing under `transfer` isn't counted.
 
 ### What this month's spending does
 
