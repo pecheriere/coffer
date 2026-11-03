@@ -16,7 +16,7 @@ use coffer_domain::audit::{AuditChanges, AuditEntry};
 use coffer_domain::identity::{Actor, Via};
 use coffer_domain::ids::{AccountId, AgentTokenId, ConnectionId, MemberId, ProviderAccountId};
 use coffer_domain::policy::{
-    AccountAccess, AccountLevel, Action, authorize, authorize_every_account,
+    AccountAccess, AccountLevel, Action, authorize, authorize_every_account, connection_visible,
 };
 use coffer_store::{ConnectionRecord, ConnectionStatus, ProviderAccountRecord, StoreTx};
 use jiff::civil::Date;
@@ -34,6 +34,7 @@ use crate::ledger::LedgerError;
 use crate::ledger::accounts::{AccountView, assert_no_debug};
 
 mod binding;
+mod dismissal;
 mod forget;
 mod held;
 pub(super) mod plaid_budget;
@@ -43,6 +44,8 @@ mod requests;
 mod setup;
 
 const SERIALIZATION_FAILED: &str = "response serialization failed";
+const OLD_BALANCE_NOTE: &str = "The bank sent an old balance that doesn't match what coffer \
+     already has, so it was ignored. The balance kept is still the latest one.";
 const CONNECTION_CHANGED: &str =
     "the connection was reconnected or removed meanwhile; retry the request";
 
@@ -105,7 +108,19 @@ pub struct ProviderAccountView {
     /// The provider's last error for this account, sanitized.
     #[schema(required)]
     pub error: Option<String>,
+    /// A fixed note that the last balance reported was dated more than 31 days ago
+    /// and didn't match what coffer has for that day or later, so it was ignored, or
+    /// `null`. Not an error: the account's balance is still its latest one, and
+    /// transactions still come in. It reflects only the last report, and a newer
+    /// balance clears it.
+    #[schema(required)]
+    pub old_balance_note: Option<String>,
     pub last_seen_at: Timestamp,
+    /// When a member dismissed it, leaving it unbound on purpose: it raises no forecast caution
+    /// and is not counted as waiting to be set up, and can still be bound. `null` unless
+    /// dismissed; binding it clears this.
+    #[schema(required)]
+    pub dismissed_at: Option<Timestamp>,
 }
 
 impl From<ProviderAccountRecord> for ProviderAccountView {
@@ -130,7 +145,11 @@ impl From<ProviderAccountRecord> for ProviderAccountView {
                 amount_raw: balance.amount_raw,
             }),
             error: record.error,
+            old_balance_note: record
+                .old_balance_refused
+                .then(|| OLD_BALANCE_NOTE.to_owned()),
             last_seen_at: record.last_seen_at,
+            dismissed_at: record.dismissed_at,
         }
     }
 }
@@ -333,8 +352,9 @@ impl SyncService {
         Ok(())
     }
 
-    /// Every connection, removed ones included, oldest first, each with the
-    /// provider accounts the actor may see. Its last error is the provider's
+    /// The connections the actor may see ([`connection_visible`]), removed ones
+    /// included, oldest first, each with the provider accounts the actor may
+    /// see. Its last error is the provider's
     /// text and could name any account it serves, so only an actor who sees
     /// every account at [`AccountLevel::Transactions`] gets it, and the same
     /// goes for the held cursor, which names provider accounts; the status
@@ -359,6 +379,9 @@ impl SyncService {
                 .filter(|account| account.connection == connection.id)
                 .cloned()
                 .collect();
+            if !connection_visible(&access, own.iter().filter_map(|account| account.account)) {
+                continue;
+            }
             let held = if sees_errors && connection.status != ConnectionStatus::Removed {
                 held_cursor(&own)
             } else {

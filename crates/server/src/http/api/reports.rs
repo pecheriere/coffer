@@ -81,7 +81,8 @@ pub(super) async fn plan_vs_actual(
                    latest balance on or before `on` counts, so a balance carries forward until a \
                    newer one. A period where nothing counts is left out, and at most 1,000 periods \
                    are answered: a longer range is 422, whatever is stored. `through` is the last \
-                   day with values: no later day, and no day after today, is a point.\n\n\
+                   day with values: no later day, and no day after today, is a point. It is \
+                   `null` while the values are being rebuilt.\n\n\
                    `total` is the sum of the counted accounts' amounts, each converted and rounded \
                    on its own, so every breakdown adds up to it. It is `null`, never a partial sum, \
                    when one of them has no amount: `unconverted` names the accounts, and a caution \

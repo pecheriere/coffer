@@ -589,7 +589,12 @@ credential that sent them (the session or one agent token), so no token
 replays a response another credential earned. Lists of account-scoped
 data (accounts, transactions, bound provider accounts) are filtered to the
 accounts granted at the level they show, and no list, aggregate, audit entry
-or error reveals a hidden account.
+or error reveals a hidden account. A connection's label is a member's free text,
+which could name who an account is for, so a connection follows what it serves:
+a token sees it, at whatever level, only if it serves an account the token sees,
+or with an `all` grant, which is also the only way to see one serving no account
+yet. Otherwise it is left out of the list, and the routes naming a connection,
+which all need an `all` grant, refuse it as they refuse a missing one.
 
 ### 8.3 Provider credentials
 
@@ -689,6 +694,32 @@ reason (too large) is left out and noted on the provider account, while its
 records still apply and the cursor can move. Transaction amounts are never
 rounded: a record that does not convert exactly is unusable.
 
+A provider chooses the day of the balance it reports, and a balance's date may
+honestly be when it last changed, so an old date alone doesn't lose the amount. What
+must not happen is a report rewriting or extending history backward. A date within
+31 days of the household's today (§8.7) is believed; a later one is dated today. For
+an older date on a bound account:
+
+1. **No snapshot yet, or the latest is before the reported day:** the amount is
+   taken, dated 31 days back. This dates it later than reported, on purpose: a date
+   in 1970 adds no history and a long-past row can't change a year of carried net
+   worth, and the account has a balance, so the forecast isn't blocked for want of
+   one. So a dormant account's history starts on that day, and the age shown for its
+   balance can be less than its real age. The audit entry gives `reported_on`.
+2. **The amount of the latest snapshot, or the day and amount of any snapshot:**
+   nothing is written and nothing said. The first is needed as well as the second,
+   because an account taken under rule 1 goes on reporting its real, earlier date.
+3. **Anything else** would add or change history at or before the latest snapshot.
+   It is refused, and the provider account shows a fixed note, `old_balance_note`.
+
+A bind judges the balance last reported the same way, never over a snapshot already
+there. An unbound account's balance is kept only if its date is believed, as #77 set.
+A refused report's records still apply and the cursor can move. The note is not
+`error`, because the bank reported no error: it raises no forecast caution, and the
+age of the balance kept stays the only signal (`balance_stale`). A report not refused
+clears it, and so does a balance set by hand on or after the latest day. A balance a
+member or a token sets by hand is no report, and none of this limits it.
+
 ### 8.7 Household timezone
 
 Provider timestamps become calendar days in `COFFER_TIMEZONE` (IANA name,
@@ -746,8 +777,8 @@ is an accepted risk, and hinting the item hides it.
 `floor_not_set`, `no_counted_accounts`, `balance_missing`. Everything else is a
 `caution`, which keeps the number but makes it not firm, including stale
 balances and unbound provider accounts. A counted account without any balance
-could hold anything; an unbound account cannot be dismissed yet, so blocking on
-it could block forever.
+could hold anything; an unbound account never blocks, since a member can leave it
+unbound on purpose by dismissing it (§8.11 B12a), and then it raises no caution either.
 
 **R5. The floor must be set.** An unset floor blocks the number, because a silent
 floor of 0 overstates what can be invested. An explicit fixed floor of 0 is
@@ -1038,12 +1069,29 @@ changing them needs no rebuild.
 A changed snapshot rebuilds its account from that date up to its next snapshot, and a bind
 bringing in an unbound account's kept balances rebuilds it from the earliest of them. A new or
 corrected rate rebuilds the accounts it converts, from that date. A changed display
-currency rebuilds everything. Each happens in the same transaction as the change. The
+currency rebuilds everything. Each happens in the same transaction as the change, unless a
+rate or the display currency would rewrite more than 25,000 rows. Then that transaction only
+asks for a full rebuild, and until it has run the read answers `rebuild_needed`. One account's
+whole history always fits, so a back-dated balance or a bind stays in its own transaction. The
 daily job fills days forward up to today. Where a row can't exist yet the read says so
 instead of serving an old number: `through` names the last day filled, later dates aren't
-answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table) answers no number
+answered and `to_date_not_yet_filled` says so when the range's end or today is later, and `rebuild_needed` (set by the migration creating the table, or by a change too large for its own transaction) answers no number
 at all until the rebuild has run. `coffer rebuild-net-worth` rebuilds the whole table, and
 a test holds that incremental updates match it.
+
+A full rebuild runs in batches of whole accounts in id order, at most 25,000 rows unless one
+account alone holds more, each in its own transaction, with a pause between them, so other
+writers get the lock whatever the table's size. One process runs it at a time, decided by an
+operating system lock on a file beside the database, so two can't fill each other's pauses and
+one that died blocks nobody. The daily fill takes as many days as fit in the same limit at a
+time, with the same pause, and the table can answer between them, with `through` saying how far
+it has come. `rebuild_needed` stays set throughout, so a
+read never sees old and new rows together. `rebuilt_up_to` records the last account done and
+the day the rebuild runs up to is held in `filled_through`, so a crash or a failure resumes
+where the last batch committed. A write between two batches rewrites its rows as usual if its account's turn
+has passed, and otherwise leaves them to the rebuild, so none is lost. A display currency
+change, or a rate past the limit, starts the rebuild over, since the rows done so far no
+longer hold.
 
 Rows start no earlier than 1970-01-01, so a snapshot dated in the distant past can't make
 hundreds of thousands of rows, and never run past `through`, so a future-dated snapshot has
@@ -1285,6 +1333,22 @@ kind, as its select shows it, when that kind leaves the account out of net worth
 refused doesn't put the guess back in its row, which may be what the member rejected: only a
 provider's own hint is preselected there. Plaid's subtypes `529`, `education savings account`,
 `utma` and `ugma` become `kind_hint`s.
+
+**B12a. A member can dismiss an unbound provider account (#75).** Someone who means to keep one
+unbound, such as a custodial or charity account, dismisses it and the forecast stops warning about
+it. `provider_accounts.dismissed_at` holds when, and a CHECK keeps it NULL on a bound one. A
+dismissed account is still an unbound one in every other way: it stays on `/connections` under its
+connection, marked as dismissed, with an undo; sync keeps tracking its last report, holds its records
+and keeps its balances exactly as for any unbound account, and writes nothing more; if the provider
+drops it, it is treated as an unbound one is. It raises no `unbound_provider_account` caution and
+isn't counted among the accounts to set up (the navigation notice), and `suggested_kind` is
+unchanged. It can still be bound, by either route, and binding clears the dismissal. Dismissing and
+restoring (`POST /provider-accounts/{id}/dismiss` and `/restore`, and forms on the page, on the same
+service) need `ManageConnections` and write access to every account, as binding does; an actor who
+without write access to every account is refused before any lookup, so a real id and a missing one get the same answer. A dismissal stands even if real money later appears on the account: no caution until a member restores it. Both are audited
+(`provider_account.dismiss`, `provider_account.restore`), with the agent named as ever. Asking for
+a state it is already in, or for a bound account or a removed connection, is a 409, which also
+answers a page or form older than the change.
 
 **B13. Not in this plan:** target allocation (#3), holdings (#42), transfer links (#72), an account
 page for manual accounts (#49), and an effective date for `belongs_to`.

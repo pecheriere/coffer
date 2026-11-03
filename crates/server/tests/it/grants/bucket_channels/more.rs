@@ -523,49 +523,17 @@ async fn a_connection_shows_only_the_provider_accounts_of_what_the_token_sees() 
     );
 }
 
-/// A connection is household data, shown to any reading token whether or not it serves an account
-/// the token sees: this is what that shows, so it can't grow unnoticed.
+/// Twins with a connection serving only the hidden account and none at all: every read answers
+/// alike, so a label a member wrote on it reaches no token that can't see what it serves.
 #[tokio::test]
-async fn a_connection_serving_only_a_hidden_account_shows_no_more_than_itself() {
-    let held = family().await;
+async fn a_connection_serving_only_a_hidden_account_is_not_there() {
+    let (bare, held) = (family().await, family().await);
     let hidden = held.world.held_for(HIDDEN_LABEL, HIDDEN_MINOR).await;
     held.world.connection(&[("Noah bank", Some(hidden))]).await;
+    assert_twins(&bare, &held).await;
     let (status, body) = held.world.get("/api/v1/connections", &held.token).await;
     assert_eq!(status, StatusCode::OK);
-    let connection = &body["items"][0];
-    assert_eq!(connection["accounts"], json!([]));
-    assert_eq!(connection["last_error"], Value::Null);
-    assert_eq!(connection["held_cursor"], Value::Null);
-    let fields: Vec<&str> = connection
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(
-        fields,
-        [
-            "accounts",
-            "held_cursor",
-            "id",
-            "label",
-            "last_attempt_at",
-            "last_error",
-            "last_success_at",
-            "next_sync_at",
-            "owner",
-            "provider",
-            "status",
-        ]
-    );
-    assert!(!body.to_string().contains(HIDDEN_LABEL));
-    assert_eq!(
-        held.world
-            .get("/api/v1/provider-accounts", &held.token)
-            .await
-            .1["items"],
-        json!([])
-    );
-    let answers = held.answers(&held.token).await;
-    assert!(answers.iter().all(|answer| !answer.3.contains(HIDDEN_NAME)));
+    assert_eq!(body["items"], json!([]));
+    let (_, everything) = held.world.get("/api/v1/connections", &held.admin).await;
+    assert_eq!(everything["items"][0]["label"], "Family bank");
 }

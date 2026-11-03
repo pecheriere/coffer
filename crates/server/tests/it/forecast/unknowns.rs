@@ -16,7 +16,7 @@ use coffer_server::testkit::{FakeProvider, TestServer};
 use coffer_store::{ConnectionStatus, ConnectionStatusChange, NewSyncRun};
 use serde_json::{Value, json};
 
-use super::{FORECAST, World, caution, kinds, usd, world, world_on};
+use super::{AS_OF, FORECAST, World, caution, goal_schedule, kinds, outflow, usd, world, world_on};
 
 const LABEL: &str = "Family bank";
 const PROVIDER_ERROR: &str = "the bank says account 4242 is frozen";
@@ -157,6 +157,31 @@ async fn unbound_provider_account_is_a_caution() {
 }
 
 #[tokio::test]
+async fn a_dismissed_unbound_account_raises_no_caution_until_restored() {
+    let fed = fed().await;
+    fed.sync(reported("USD")).await;
+    let id = fed.provider_account().await;
+    let sync = &fed.world.server.sync;
+    let alice = &fed.world.alice;
+
+    sync.dismiss_provider_account(alice, id).await.unwrap();
+    let dismissed = fed.world.forecast().await;
+    assert!(
+        !kinds(&dismissed, "cautions").contains(&"unbound_provider_account".to_owned()),
+        "dismissed: no caution"
+    );
+    assert_eq!(dismissed["surplus"], usd(1_000), "the number is the same");
+
+    sync.restore_provider_account(alice, id).await.unwrap();
+    let restored = fed.world.forecast().await;
+    assert_eq!(
+        kinds(&restored, "cautions"),
+        ["unbound_provider_account"],
+        "restored: the caution is back"
+    );
+}
+
+#[tokio::test]
 async fn unsupported_currency_on_an_unbound_account_says_so() {
     let fed = fed().await;
     fed.sync(reported("ZZZ")).await;
@@ -244,6 +269,8 @@ async fn connection_needing_reauth_is_a_caution() {
         (ConnectionStatus::Error, "error"),
     ] {
         let fed = fed().await;
+        let checking = fed.checking().await;
+        fed.bound(checking).await;
         fed.set_status(status).await;
 
         let (_, text) = fed
@@ -258,6 +285,93 @@ async fn connection_needing_reauth_is_a_caution() {
         assert_eq!(attention["label"], LABEL);
         assert_eq!(attention["status"], reported_as);
     }
+}
+
+/// A connection that feeds only money outside the household is failing on the connections
+/// page, and cannot change the forecast's number, so the forecast does not say so.
+#[tokio::test]
+async fn failing_connection_serving_only_a_held_account_is_not_a_caution() {
+    let fed = fed().await;
+    let held = fed
+        .world
+        .account_with(
+            "For a child",
+            "savings",
+            "USD",
+            json!({"belongs_to": "someone_else"}),
+        )
+        .await;
+    fed.bound(held).await;
+    fed.set_status(ConnectionStatus::Error).await;
+
+    let forecast = fed.world.forecast().await;
+
+    assert_eq!(forecast["status"], "firm");
+    assert_eq!(forecast["cautions"], json!([]));
+}
+
+/// A connection whose only provider accounts a member dismissed has nothing that could change
+/// the number: a dismissed account is not an unbound one here, though the connection has accounts.
+#[tokio::test]
+async fn failing_connection_with_only_dismissed_accounts_is_not_a_caution() {
+    let fed = fed().await;
+    fed.sync(reported("USD")).await;
+    let id = fed.provider_account().await;
+    fed.set_status(ConnectionStatus::Error).await;
+
+    let before = fed.world.forecast().await;
+    assert_eq!(
+        kinds(&before, "cautions"),
+        ["unbound_provider_account", "connection_needs_attention"],
+        "undismissed, the unbound account makes the failure matter"
+    );
+
+    fed.world
+        .server
+        .sync
+        .dismiss_provider_account(&fed.world.alice, id)
+        .await
+        .unwrap();
+    let after = fed.world.forecast().await;
+
+    assert_eq!(after["status"], "firm");
+    assert_eq!(after["cautions"], json!([]));
+}
+
+/// Spending linked to a goal lowers its need on a held account too, so a feed that stalls
+/// there can leave the need overstated: the forecast says so.
+#[tokio::test]
+async fn failing_connection_serving_a_held_account_paying_a_goal_is_a_caution() {
+    let fed = fed().await;
+    let held = fed
+        .world
+        .account_with(
+            "For a child",
+            "savings",
+            "USD",
+            json!({"belongs_to": "someone_else"}),
+        )
+        .await;
+    let tuition = fed.world.expense("Tuition").await;
+    let goal = fed
+        .world
+        .item(&outflow(
+            "First year",
+            60_000,
+            tuition,
+            &goal_schedule("2026-06-01", "2027-01-31"),
+        ))
+        .await;
+    fed.world
+        .spend_linked(held, AS_OF, 10_000, tuition, &goal)
+        .await;
+    fed.bound(held).await;
+    fed.set_status(ConnectionStatus::Error).await;
+
+    let forecast = fed.world.forecast().await;
+
+    assert_eq!(forecast["status"], "provisional");
+    caution(&forecast, "connection_needs_attention");
 }
 
 #[tokio::test]

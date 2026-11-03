@@ -129,6 +129,23 @@ jobs:
           # release.yml's publish job uses no cache at all.
           cache-from: type=gha,scope=docker-build
           cache-to: ${{ github.ref_type != 'tag' && 'type=gha,mode=max,scope=docker-build' || '' }}
+          # The image's files, one folder per platform, for the check below.
+          outputs: type=local,dest=${{ runner.temp }}/image
+      # A panic report names the file and line of coffer's own code only if
+      # the release binary keeps its line tables and symbols. The image never
+      # runs here and has no command that panics, so read the binaries: each
+      # must resolve a known function to its source file and line. Restoring
+      # `strip = true`, or a linker flag the symbolizer cannot read, fails
+      # this step (rust-toolchain.toml pins the toolchain the component joins).
+      - name: Check the backtrace names lines
+        env:
+          IMAGE_DIR: ${{ runner.temp }}/image
+        run: |
+          rustup component add llvm-tools
+          for platform in linux_amd64 linux_arm64; do
+            echo "$platform"
+            scripts/check-backtrace-lines.sh "$IMAGE_DIR/$platform/coffer"
+          done
 
   e2e:
     # The built image against mock providers, its API and its pages. Pull requests only:
