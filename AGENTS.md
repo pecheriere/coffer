@@ -13,7 +13,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   triggers and statuses, clock; `accounts`, with whose money an account is
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
   forecast settings), `forecast` and `plan_report`, the pure calculations
-  behind the cash forecast and plan versus actual; `fx`, exchange rates held
+  behind the cash forecast and plan versus actual (`forecast.rs` computes it; its
+  `book.rs`, `lines.rs` and `cautions.rs` hold the running amounts, the line each
+  account, item and goal gets, and what makes the answer provisional); `fx`, exchange rates held
   exactly and conversion through the euro; `transfer_rate`, the check of a transfer link's legs in
   two currencies against a rate, which changes no amount; `net_worth`, the daily values, the
   periods and the report). No I/O.
@@ -27,7 +29,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   last day changes it in its own transaction,
   or, past 25,000 rows, asks for a rebuild that runs in short transactions,
   and a test fails for a new writer of `balance_snapshots` until it refreshes the table), and the one read
-  transaction that gathers a forecast's or a report's data.
+  transaction that gathers a forecast's (`forecast.rs`) or a report's (`plan_report.rs`) data,
+  with the SQL fragments both share in `spending_sql.rs`.
 - `coffer-server` (`crates/server`): `config` and `secrets`; `household_time`
   (the household's zone and day, read from its settings at each asking); `auth` (passkey
   ceremonies, identity, sessions, agent tokens); `http` (router, request
