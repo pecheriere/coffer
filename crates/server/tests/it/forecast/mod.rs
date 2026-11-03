@@ -12,6 +12,7 @@ pub(crate) mod answer;
 mod belonging;
 mod budget_month;
 mod charges;
+mod rule_numbers;
 pub(crate) mod settled;
 mod settlement_changes;
 mod too_large;

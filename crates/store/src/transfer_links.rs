@@ -236,6 +236,7 @@ fn link_from_row(row: &SqliteRow) -> Result<TransferLinkRecord, StoreError> {
             member: Some(parsed(row, "created_by_member")?),
             agent: parsed_opt(row, "created_by_agent")?,
             system: None,
+            rule: None,
             at,
         },
     })

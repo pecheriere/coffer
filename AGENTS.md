@@ -42,7 +42,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
   `manual_rates` (exchange rates an admin enters: validated, audited and marked),
-  transactions and their splits, merging, un-merging and dismissing possible duplicates, `transfer_links` (two
+  transactions and their splits, merging, un-merging and dismissing possible duplicates, `rules` (keeping them, with `run.rs` trying one and running it by hand in short batches; `coffer_domain::rules::decide` alone says what they fill), `transfer_links` (two
   transactions that are one movement of money); `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates and transfer links with a side in
   accounts it can't read and goal links it can't see); `fx` (the `RateProvider` interface,
@@ -185,6 +185,8 @@ a throwaway server and seed. What holds it together:
   `impl From<Denied> for Problem`. Whether a planned item exists for an actor
   is decided only by `plan_item_visible`, whose hidden answer is the missing one, and
   whether a connection does only by `connection_visible`.
+- A rule only fills what nobody has set, decided only by `coffer_domain::rules::decide`, and
+  never reviews. What only a rule chose isn't user state (spec §8.13 U5, U7).
 - **An account that isn't the household's is out of every count through its flags,
   held by a CHECK, and anything reading by class alone must also read `belongs_to`**
   (spec §8.11 B4, B8). Net worth reports it in buckets, and nothing adds a bucket to

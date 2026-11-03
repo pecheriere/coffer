@@ -92,6 +92,7 @@ impl From<SyncRunRecord> for SyncRunView {
                 member: Some(member),
                 agent,
                 system: None,
+                rule: None,
                 at: run.queued_at,
             }),
             queued_at: run.queued_at,

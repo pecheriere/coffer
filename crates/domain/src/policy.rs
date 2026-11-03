@@ -29,6 +29,7 @@
 //! | Read FX rates and coverage               | `Balances`                    |
 //! | Change the display currency              | `Balances`                    |
 //! | Settle a planned item for a month        | `Write`                       |
+//! | Change or run a rule for every account   | `Write`                       |
 //!
 //! The safety floor is not refused without it: the settings answer with `floor: null`.
 //!
@@ -46,6 +47,11 @@
 //! on at least one account, named or through an `all` grant. An actor holding
 //! only `Balances` sees no planned items: an empty list, not a refusal. A split
 //! linked to an item the actor can't see reads as linked to nothing.
+//!
+//! A rule for one account is that account's business, at `Transactions` to see it
+//! and `Write` to change or run it ([`rule_visible`], [`authorize_rule_change`]). A
+//! rule for every account follows a planned item without a hint when reading, and
+//! the table above when changing.
 //!
 //! Net worth needs no `all` grant: it sums what
 //! `AccountAccess::scope(AccountLevel::Balances)` holds, unmarked, and answers
@@ -559,6 +565,41 @@ pub fn plan_item_visible(access: &AccountAccess, hint: Option<AccountId>) -> boo
             .level_for(account)
             .is_some_and(|level| level >= AccountLevel::Transactions),
         None => access.some_account_at(AccountLevel::Transactions),
+    }
+}
+
+/// Whether an actor holding `access` may know a rule for `account` (every account
+/// when `None`) exists. A rule's text is a member's free text about what an account's
+/// money goes on, so it needs `Transactions`: on its account, or for a rule of every
+/// account on at least one account. That shows a rule to anyone who can see a
+/// transaction it could fill, so an attribution never names one they can't read.
+/// Below that the rule is treated as missing.
+#[must_use]
+pub fn rule_visible(access: &AccountAccess, account: Option<AccountId>) -> bool {
+    match account {
+        Some(account) => access
+            .level_for(account)
+            .is_some_and(|level| level >= AccountLevel::Transactions),
+        None => access.some_account_at(AccountLevel::Transactions),
+    }
+}
+
+/// Decides whether `actor`, holding `access`, may create, change, delete or run a
+/// rule for `account`: household data, with write on the one account it can fill, or
+/// on every account when it is for all of them.
+///
+/// # Errors
+/// Returns the [`Denied`] of [`authorize`], [`authorize_account`] or
+/// [`authorize_every_account`].
+pub fn authorize_rule_change(
+    actor: &Actor,
+    access: &AccountAccess,
+    account: Option<AccountId>,
+) -> Result<(), Denied> {
+    authorize(actor, Action::WriteHousehold)?;
+    match account {
+        Some(account) => authorize_account(actor, access, account, AccountLevel::Write),
+        None => authorize_every_account(actor, access, AccountLevel::Write),
     }
 }
 
