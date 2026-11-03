@@ -84,7 +84,8 @@ assert_no_debug!(NewLinkedAccountRequest);
     operation_id = "listProviderAccounts",
     tag = tags::CONNECTIONS,
     description = "The accounts every connection reports, oldest first; only those not yet \
-                   bound to an account with `unbound=true`. Needs `read`. A token with account \
+                   bound to an account with `unbound=true` (dismissed ones included, with \
+                   `dismissed_at` set). Needs `read`. A token with account \
                    grants sees the bound ones whose account it sees, and the unbound ones only \
                    with `all` at `transactions`.",
     security(("bearer" = [])),
@@ -190,4 +191,73 @@ pub(super) async fn create_account(
         .create_account_and_bind(&actor, path.provider_account_id, input)
         .await?;
     Ok((StatusCode::CREATED, Json(linked)))
+}
+
+/// Dismisses an unbound provider account.
+#[utoipa::path(
+    post,
+    path = "/api/v1/provider-accounts/{provider_account_id}/dismiss",
+    operation_id = "dismissProviderAccount",
+    tag = tags::CONNECTIONS,
+    description = "Says an unbound provider account is meant to stay unbound, such as a custodial \
+                   or charity account: it then raises no forecast caution and is not counted as \
+                   waiting to be set up. It stays listed, with `dismissed_at` set, and syncs and \
+                   holds its records as any unbound account does. It can still be bound, which \
+                   clears the dismissal, and `restoreProviderAccount` takes it back. Audited. \
+                   Needs `write`; a token with account grants also needs `all` at `write`.",
+    security(("bearer" = [])),
+    params(ProviderAccountPath),
+    responses(
+        (status = 200, description = "The provider account, now dismissed.",
+         body = ProviderAccountView),
+        (status = 409, description = "`conflict` when the provider account is bound, already \
+                                      dismissed or its connection is removed.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn dismiss(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<ProviderAccountPath>,
+) -> Result<Json<ProviderAccountView>, Problem> {
+    Ok(Json(
+        state
+            .sync
+            .dismiss_provider_account(&actor, path.provider_account_id)
+            .await?,
+    ))
+}
+
+/// Takes back the dismissal of a provider account.
+#[utoipa::path(
+    post,
+    path = "/api/v1/provider-accounts/{provider_account_id}/restore",
+    operation_id = "restoreProviderAccount",
+    tag = tags::CONNECTIONS,
+    description = "Takes back `dismissProviderAccount`: an unbound provider account raises its \
+                   forecast caution again and counts as waiting to be set up. Audited. \
+                   Needs `write`; a token with account grants also needs `all` at `write`.",
+    security(("bearer" = [])),
+    params(ProviderAccountPath),
+    responses(
+        (status = 200, description = "The provider account, no longer dismissed.",
+         body = ProviderAccountView),
+        (status = 409, description = "`conflict` when the provider account is not dismissed or \
+                                      its connection is removed.",
+         body = ProblemBody, content_type = "application/problem+json"),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn restore(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+    TypedPath(path): TypedPath<ProviderAccountPath>,
+) -> Result<Json<ProviderAccountView>, Problem> {
+    Ok(Json(
+        state
+            .sync
+            .restore_provider_account(&actor, path.provider_account_id)
+            .await?,
+    ))
 }

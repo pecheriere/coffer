@@ -157,6 +157,31 @@ async fn unbound_provider_account_is_a_caution() {
 }
 
 #[tokio::test]
+async fn a_dismissed_unbound_account_raises_no_caution_until_restored() {
+    let fed = fed().await;
+    fed.sync(reported("USD")).await;
+    let id = fed.provider_account().await;
+    let sync = &fed.world.server.sync;
+    let alice = &fed.world.alice;
+
+    sync.dismiss_provider_account(alice, id).await.unwrap();
+    let dismissed = fed.world.forecast().await;
+    assert!(
+        !kinds(&dismissed, "cautions").contains(&"unbound_provider_account".to_owned()),
+        "dismissed: no caution"
+    );
+    assert_eq!(dismissed["surplus"], usd(1_000), "the number is the same");
+
+    sync.restore_provider_account(alice, id).await.unwrap();
+    let restored = fed.world.forecast().await;
+    assert_eq!(
+        kinds(&restored, "cautions"),
+        ["unbound_provider_account"],
+        "restored: the caution is back"
+    );
+}
+
+#[tokio::test]
 async fn unsupported_currency_on_an_unbound_account_says_so() {
     let fed = fed().await;
     fed.sync(reported("ZZZ")).await;
@@ -283,6 +308,34 @@ async fn failing_connection_serving_only_a_held_account_is_not_a_caution() {
 
     assert_eq!(forecast["status"], "firm");
     assert_eq!(forecast["cautions"], json!([]));
+}
+
+/// A connection whose only provider accounts a member dismissed has nothing that could change
+/// the number: a dismissed account is not an unbound one here, though the connection has accounts.
+#[tokio::test]
+async fn failing_connection_with_only_dismissed_accounts_is_not_a_caution() {
+    let fed = fed().await;
+    fed.sync(reported("USD")).await;
+    let id = fed.provider_account().await;
+    fed.set_status(ConnectionStatus::Error).await;
+
+    let before = fed.world.forecast().await;
+    assert_eq!(
+        kinds(&before, "cautions"),
+        ["unbound_provider_account", "connection_needs_attention"],
+        "undismissed, the unbound account makes the failure matter"
+    );
+
+    fed.world
+        .server
+        .sync
+        .dismiss_provider_account(&fed.world.alice, id)
+        .await
+        .unwrap();
+    let after = fed.world.forecast().await;
+
+    assert_eq!(after["status"], "firm");
+    assert_eq!(after["cautions"], json!([]));
 }
 
 /// Spending linked to a goal lowers its need on a held account too, so a feed that stalls
