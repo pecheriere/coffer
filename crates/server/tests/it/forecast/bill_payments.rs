@@ -359,7 +359,10 @@ async fn bills_before_the_first_transaction_are_one_caution_and_no_hold() {
     assert_eq!(said["amount"], usd(600_000));
     assert_eq!(line(&forecast, "A")["unpaid"], usd(0));
     assert_eq!(forecast["surplus"], usd(400_000), "only 20 November's");
-    assert!(kinds(&forecast, "cautions").len() == 1);
+    assert_eq!(
+        kinds(&forecast, "cautions"),
+        ["bill_history_missing".to_owned()]
+    );
 }
 
 /// October's uncategorized payment pays nothing yet, so a caution looks at October and says file it.
