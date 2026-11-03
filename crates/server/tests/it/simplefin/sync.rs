@@ -18,6 +18,8 @@ use coffer_server::ledger::categories::{CategoryGroupInput, CategoryInput};
 use coffer_server::ledger::transactions::TransactionPatch;
 use coffer_store::{AuditFilter, ConnectionStatus, PageRequest};
 use jiff::civil::date;
+use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp};
 use serde_json::json;
 
 async fn category(world: &World) -> CategoryId {
@@ -121,6 +123,103 @@ async fn posted_date_uses_household_timezone() {
     let transactions = world.transactions(account).await;
     assert_eq!(transactions.len(), 1);
     assert_eq!(transactions[0].posted_on, date(2026, 10, 30));
+}
+
+/// Each instant has a different day in UTC, so counting either end in UTC moves
+/// the limit by a day: (zone, now, the hour there of the reported instant).
+const PLACES: [(&str, &str, i8); 2] = [
+    // Still the 14th in Los Angeles, and 20:00 there is the next day in UTC.
+    ("America/Los_Angeles", "2027-02-15T03:00:00Z", 20),
+    // Already the 16th in Auckland, and 08:00 there is the day before in UTC.
+    ("Pacific/Auckland", "2027-02-15T12:00:00Z", 8),
+];
+
+/// The age of a `balance-date` is counted in the household's days at both ends:
+/// the instant becomes a day there, and today is today there.
+#[tokio::test]
+async fn balance_age_is_counted_in_the_household_time_zone() {
+    for (zone, now, hour) in PLACES {
+        for (age, written) in [(31, true), (32, false)] {
+            let world = world_with_env(&[("COFFER_TIMEZONE", zone)]).await;
+            let now: Timestamp = now.parse().unwrap();
+            world.server.clock.set(now);
+            let connection = world.seeded().await;
+            let household = TimeZone::get(zone).unwrap();
+            let today = now.to_zoned(household.clone()).date();
+            world
+                .script
+                .bridge_reply(Reply::ok(&balance_dated(now.as_second(), "12.34")));
+            world.sync(connection).await;
+            let account = world.bind("ACT-0001", AccountKind::Checking).await;
+            let day = today.checked_sub(Span::new().days(age)).unwrap();
+            let moment = day.at(hour, 0, 0, 0).to_zoned(household).unwrap();
+            world.script.bridge_reply(Reply::ok(&balance_dated(
+                moment.timestamp().as_second(),
+                "56.78",
+            )));
+
+            world.sync(connection).await;
+
+            let mut tx = world.server.store.begin().await.unwrap();
+            let snapshot = tx.balance_on(account, day).await.unwrap();
+            drop(tx);
+            assert_eq!(snapshot.is_some(), written, "{zone}, {age} days");
+            assert_eq!(
+                world.provider_account("ACT-0001").await.old_balance_refused,
+                !written,
+                "{zone}, {age} days"
+            );
+        }
+    }
+}
+
+/// The epoch's `balance-date`, on an account with nothing yet: the amount lands on
+/// the household's day 31 days back, and repeating the report changes nothing.
+#[tokio::test]
+async fn a_date_from_1970_lands_at_the_edge_in_the_household_time_zone() {
+    for (zone, now, _) in PLACES {
+        let world = world_with_env(&[("COFFER_TIMEZONE", zone)]).await;
+        let now: Timestamp = now.parse().unwrap();
+        world.server.clock.set(now);
+        let connection = world.seeded().await;
+        let today = now.to_zoned(TimeZone::get(zone).unwrap()).date();
+        let edge = today.checked_sub(Span::new().days(31)).unwrap();
+        world
+            .script
+            .bridge_reply(Reply::ok(&balance_dated(0, "12.34")));
+        world.sync(connection).await;
+
+        let account = world.bind("ACT-0001", AccountKind::Checking).await;
+
+        let latest = world.server.store.latest_balance(account).await.unwrap();
+        assert_eq!(latest.unwrap().on, edge, "{zone}");
+        world
+            .script
+            .bridge_reply(Reply::ok(&balance_dated(0, "12.34")));
+        world.sync(connection).await;
+        let latest = world.server.store.latest_balance(account).await.unwrap();
+        assert_eq!(latest.unwrap().on, edge, "{zone}");
+        assert!(
+            !world.provider_account("ACT-0001").await.old_balance_refused,
+            "{zone}"
+        );
+    }
+}
+
+/// One account whose balance is dated `seconds` after the epoch.
+fn balance_dated(seconds: i64, balance: &str) -> String {
+    json!({
+        "errors": [],
+        "accounts": [{
+            "id": "ACT-0001",
+            "name": "Checking",
+            "currency": "USD",
+            "balance": balance,
+            "balance-date": seconds,
+            "transactions": [],
+        }],
+    })
+    .to_string()
 }
 
 #[tokio::test]

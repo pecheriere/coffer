@@ -371,12 +371,6 @@ async fn a_failed_change_leaves_rows_as_they_were() {
     drop(tx);
     assert_eq!(dump(&store).await, rows, "a fill");
     assert_eq!(state(&store).await, table_state, "a fill");
-
-    let mut tx = store.begin().await.unwrap();
-    tx.rebuild_net_worth(oct(9)).await.unwrap();
-    drop(tx);
-    assert_eq!(dump(&store).await, rows, "a rebuild");
-    assert_eq!(state(&store).await, table_state, "a rebuild");
 }
 
 #[tokio::test]

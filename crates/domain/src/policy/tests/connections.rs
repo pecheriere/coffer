@@ -1,9 +1,30 @@
-//! Who may forget a connection or release its cursor.
+//! Who may see a connection, forget one or release its cursor.
 
 use super::{agent, session};
 use crate::identity::{Role, Scope};
-use crate::ids::MemberId;
-use crate::policy::{Action, Denied, DenyReason, authorize};
+use crate::ids::{AccountId, MemberId};
+use crate::policy::{
+    AccountAccess, AccountLevel, Action, Denied, DenyReason, GrantTarget, TokenGrant,
+    account_access_with_grants, authorize, connection_visible,
+};
+
+#[test]
+fn a_connection_shows_through_an_account_it_serves_or_an_all_grant() {
+    let holder = agent(Role::Member, Scope::Read);
+    let (seen, unseen) = (AccountId::new(), AccountId::new());
+    let granted =
+        |target, level| account_access_with_grants(&holder, &[TokenGrant { target, level }]);
+    let named = granted(GrantTarget::Account(seen), AccountLevel::Balances);
+    assert!(connection_visible(&named, [seen]), "at any level");
+    assert!(connection_visible(&named, [unseen, seen]), "one is enough");
+    assert!(!connection_visible(&named, [unseen]));
+    assert!(!connection_visible(&named, []), "unattached");
+    let every = granted(GrantTarget::All, AccountLevel::Balances);
+    assert!(connection_visible(&every, [unseen]));
+    assert!(connection_visible(&every, []), "unattached");
+    let uniform = AccountAccess::Uniform(AccountLevel::Balances);
+    assert!(connection_visible(&uniform, []), "no grants hide nothing");
+}
 
 #[test]
 fn forgetting_a_connection_needs_a_session_and_removals_role() {

@@ -138,8 +138,9 @@ impl Ledger {
     }
 
     /// Changes the household's settings. A patch that changes nothing writes
-    /// nothing, audit included, and only a new display currency rebuilds the daily
-    /// values, in this transaction. The answer shows the floor as
+    /// nothing, audit included, and only a new display currency rewrites the daily
+    /// values: in this transaction, or if there are too many for one, in a rebuild the
+    /// daily job runs, while reports answer as rebuilding. The answer shows the floor as
     /// [`Self::household_settings`] does, so it can't confirm a guess at it.
     ///
     /// # Errors
