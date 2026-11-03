@@ -290,6 +290,10 @@ pub struct Forecast {
     /// What a person settled, and so what counts as nothing above: in input order, then
     /// by month. Settling raises no caution of its own, since a person decided.
     pub settled: Vec<SettledLine>,
+    /// Budgets lowered by spending that a bill settled as paid may have claimed: informational,
+    /// since a settled bill is a person's decision, so it never changes `status`. Empty when no
+    /// budget was lowered that way.
+    pub settled_budgets: Vec<SettledBudget>,
 }
 
 /// How far to trust the number.
@@ -458,6 +462,23 @@ pub struct SettledLine {
     pub occurrences: u32,
     /// The whole amount of `occurrences`. A bill spending had already covered wasn't in
     /// the number, so the number may differ by less than this.
+    pub amount: Money,
+}
+
+/// A budget that spending reduced where a bill settled as paid shares its category, and nothing
+/// says what paid that bill. Settled as paid, the bill's own amount already came out of the
+/// category's spending; what reduced the budget is the rest, which may be the bill's too, as with
+/// a charge past the tolerance of the bill. If it was, the budget needs up to `amount` more.
+/// Only `as_of`'s month is reduced by spending, so it is the one named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SettledBudget {
+    pub source: LineSource,
+    pub name: String,
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub category: Option<CategoryId>,
+    pub month: CalendarMonth,
+    /// What came off the budget's need: its `reduced_by`, a positive amount.
     pub amount: Money,
 }
 

@@ -25,7 +25,7 @@ use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
     Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
-    settled_sentence,
+    settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -154,6 +154,13 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup 
                                 (settle::undo_form(line, csrf))
                             }
                         }
+                    }
+                }
+            }
+            @if !forecast.settled_budgets.is_empty() {
+                ul.reasons id="settled-budgets" {
+                    @for line in &forecast.settled_budgets {
+                        li { (settled_budget_sentence(line)) }
                     }
                 }
             }
@@ -363,6 +370,7 @@ mod tests {
             }],
             rule_filed_transfers: Vec::new(),
             settled: Vec::new(),
+            settled_budgets: Vec::new(),
         };
         let names = Names::of_accounts(&[]);
 
@@ -398,6 +406,7 @@ mod tests {
             cautions: Vec::new(),
             rule_filed_transfers: Vec::new(),
             settled: Vec::new(),
+            settled_budgets: Vec::new(),
         };
         let names = Names::of_accounts(&[]);
         assert!(

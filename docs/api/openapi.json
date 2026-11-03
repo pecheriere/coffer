@@ -9808,7 +9808,8 @@
           "blockers",
           "cautions",
           "rule_filed_transfers",
-          "settled"
+          "settled",
+          "settled_budgets"
         ],
         "properties": {
           "accounts": {
@@ -9883,6 +9884,13 @@
               "$ref": "#/components/schemas/SettledLine"
             },
             "description": "What a person settled, and so what counts as nothing above: in input order, then\nby month. Settling raises no caution of its own, since a person decided."
+          },
+          "settled_budgets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettledBudget"
+            },
+            "description": "Budgets lowered by spending that a bill settled as paid may have claimed: informational,\nsince a settled bill is a person's decision, so it never changes `status`. Empty when no\nbudget was lowered that way."
           },
           "stale_after_days": {
             "type": "integer",
@@ -13414,6 +13422,42 @@
           "write",
           "admin"
         ]
+      },
+      "SettledBudget": {
+        "type": "object",
+        "description": "A budget that spending reduced where a bill settled as paid shares its category, and nothing\nsays what paid that bill. Settled as paid, the bill's own amount already came out of the\ncategory's spending; what reduced the budget is the rest, which may be the bill's too, as with\na charge past the tolerance of the bill. If it was, the budget needs up to `amount` more.\nOnly `as_of`'s month is reduced by spending, so it is the one named.",
+        "required": [
+          "source",
+          "name",
+          "category",
+          "month",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What came off the budget's need: its `reduced_by`, a positive amount."
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "month": {
+            "$ref": "#/components/schemas/CalendarMonth"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineSource"
+          }
+        }
       },
       "SettledLine": {
         "type": "object",
