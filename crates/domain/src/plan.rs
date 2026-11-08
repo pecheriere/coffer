@@ -18,6 +18,7 @@ mod schedule;
 mod settings;
 mod settlement;
 pub mod strict_date;
+mod tier;
 
 pub use emergency_fund::{EmergencyFund, EmergencyFundTarget, EmergencyFunds};
 pub(crate) use goal::div_half_even;
@@ -28,6 +29,7 @@ pub use settlement::{
     MAX_ITEM_SETTLEMENTS, SETTLEMENT_WINDOW_MONTHS, occurrences_in, settlement_applies,
     validate_settlement_month,
 };
+pub use tier::{PlanTier, default_tier, resolved_tier};
 
 /// The largest amount of a planned item or a fixed emergency fund, in minor units.
 pub const MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000;
@@ -95,6 +97,14 @@ pub enum PlanError {
     SettlementOutOfWindow,
     #[error("unknown settlement kind")]
     UnknownSettlementKind,
+    #[error("unknown plan tier")]
+    UnknownTier,
+    #[error("income has no tier")]
+    IncomeHasNoTier,
+    #[error("a goal is always saving toward")]
+    GoalIsSavingToward,
+    #[error("only a goal is saving toward")]
+    OnlyGoalSavesToward,
 }
 
 string_enum!(

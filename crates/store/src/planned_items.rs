@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlannedItemName,
-    spending_applies, validate_amount,
+    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlanTier,
+    PlannedItemName, spending_applies, validate_amount,
 };
 use coffer_domain::transactions::Notes;
 use jiff::Timestamp;
@@ -24,7 +24,7 @@ macro_rules! columns {
     () => {
         "id, name, category_id, amount_minor, currency, direction, account_hint_id, notes, \
          active, item_type, every, unit, anchor_on, end_on, one_off_on, goal_start_on, \
-         goal_due_on, goal_completed, spending, created_at, updated_at"
+         goal_due_on, goal_completed, spending, tier, created_at, updated_at"
     };
 }
 
@@ -43,6 +43,8 @@ pub struct PlannedItemRecord {
     pub schedule: PlanSchedule,
     /// Set on a recurring outflow, and only there.
     pub spending: Option<PlanSpending>,
+    /// Set on every outflow, and only there: saving toward on a goal, and on nothing else.
+    pub tier: Option<PlanTier>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -60,6 +62,9 @@ pub struct NewPlannedItem {
     pub schedule: PlanSchedule,
     /// Set on a recurring outflow, and only there: the table refuses others.
     pub spending: Option<PlanSpending>,
+    /// Set on every outflow: the table refuses one on income, and saving toward on anything
+    /// but a goal or anything else on a goal.
+    pub tier: Option<PlanTier>,
     pub created_at: Timestamp,
 }
 
@@ -79,6 +84,8 @@ pub struct PlannedItemChanges {
     pub schedule: Option<PlanSchedule>,
     /// `Some(None)` clears it.
     pub spending: Option<Option<PlanSpending>>,
+    /// `Some(None)` clears it, as an item becoming income must in the same change.
+    pub tier: Option<Option<PlanTier>>,
 }
 
 /// The schedule columns of one row, each `None` where its type has none.
@@ -172,6 +179,12 @@ pub(crate) fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError>
     if spending.is_some() != spending_applies(direction, &schedule) {
         return Err(corrupt("planned item spending does not fit its type"));
     }
+    // The table's CHECK allows a NULL tier on any row (migration 0031), so an outflow
+    // without one is refused here.
+    let tier: Option<PlanTier> = parsed_opt(row, "tier")?;
+    if tier.is_some() != (direction == PlanDirection::Outflow) {
+        return Err(corrupt("planned item tier does not fit its direction"));
+    }
     Ok(PlannedItemRecord {
         id: parsed(row, "id")?,
         name: PlannedItemName::parse(&text(row, "name")?).map_err(StoreError::backend)?,
@@ -186,6 +199,7 @@ pub(crate) fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError>
         active: row.try_get("active").map_err(StoreError::from_sqlx)?,
         schedule,
         spending,
+        tier,
         created_at: time(row, "created_at")?,
         updated_at: time(row, "updated_at")?,
     })
@@ -250,7 +264,7 @@ impl StoreTx {
         sqlx::query(concat!(
             "INSERT INTO planned_items (",
             columns!(),
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(id.to_string())
         .bind(new.name.as_str())
@@ -271,6 +285,7 @@ impl StoreTx {
         .bind(columns.goal_due_on)
         .bind(columns.goal_completed)
         .bind(new.spending.map(PlanSpending::as_str))
+        .bind(new.tier.map(PlanTier::as_str))
         .bind(new.created_at.as_millisecond())
         .bind(new.created_at.as_millisecond())
         .execute(&mut *self.tx)
@@ -287,6 +302,7 @@ impl StoreTx {
             active: new.active,
             schedule: new.schedule,
             spending: new.spending,
+            tier: new.tier,
             created_at: new.created_at,
             updated_at: new.created_at,
         })
@@ -364,6 +380,11 @@ impl StoreTx {
             query
                 .push(", spending = ")
                 .push_bind(spending.map(PlanSpending::as_str));
+        }
+        if let Some(tier) = changes.tier {
+            query
+                .push(", tier = ")
+                .push_bind(tier.map(PlanTier::as_str));
         }
         query.push(" WHERE id = ").push_bind(id.to_string());
         let result = query
