@@ -293,6 +293,20 @@ const ROWS: &[Row] = &[
         },
     },
     Row {
+        name: "count_review_queue",
+        title: "How much waits for review",
+        operation: "countReviewQueue",
+        needs: Needs::Read,
+        lead: "How many transactions wait to be reviewed. `list_review_queue` lists them.",
+        input: as_operation,
+        call: |call| {
+            Box::pin(async move {
+                call.arguments.finish()?;
+                reply(transactions::review_count(State(call.state), call.actor).await)
+            })
+        },
+    },
+    Row {
         name: "get_transaction",
         title: "One transaction",
         operation: "getTransaction",
