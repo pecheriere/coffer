@@ -186,8 +186,8 @@ fn the_window_ends_on_the_thirtieth_day() {
     let other = CategoryId::new();
     let answer = free(&ForecastInput {
         items: vec![
-            one_off("In", usd(1_000), date(2027, 2, 9), other),
-            one_off("Out", usd(2_000), date(2027, 2, 10), other),
+            one_off("Inside", usd(1_000), date(2027, 2, 9), other),
+            one_off("Outside", usd(2_000), date(2027, 2, 10), other),
         ],
         ..on(today, usd(1_000_000))
     });

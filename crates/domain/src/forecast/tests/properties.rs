@@ -18,7 +18,7 @@ use crate::ids::{CategoryId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanDirection, PlanItemType,
-    PlanSchedule, SettlementKind,
+    PlanSchedule, PlanTier, SettlementKind,
 };
 
 mod oracle;
@@ -108,24 +108,40 @@ fn item(categories: Vec<CategoryId>) -> impl Strategy<Value = ItemInput> {
         0..6,
         0..MAX_AMOUNT,
         settled_months(),
+        0..3,
     )
-        .prop_map(move |(amount, schedule, category, kind, spent, settled)| {
-            let is_goal = matches!(schedule, PlanSchedule::Goal { .. });
-            let base = ItemInput {
-                category: categories.get(category).copied(),
-                goal_spent_minor: if is_goal { spent } else { 0 },
-                ..stored("Item", amount, schedule)
-            };
-            let is_recurring = matches!(base.schedule, PlanSchedule::Recurring { .. });
-            match kind {
-                0 if !is_goal => inflow(base),
-                1 => hypothetical(0, base),
-                2 | 3 if is_recurring => budget(base),
-                // Only a stored bill or one-off going out may be settled.
-                _ if !is_goal => ItemInput { settled, ..base },
-                _ => base,
-            }
-        })
+        .prop_map(
+            move |(amount, schedule, category, kind, spent, settled, tier)| {
+                let is_goal = matches!(schedule, PlanSchedule::Goal { .. });
+                let base = ItemInput {
+                    category: categories.get(category).copied(),
+                    goal_spent_minor: if is_goal { spent } else { 0 },
+                    ..stored("Item", amount, schedule)
+                };
+                let is_recurring = matches!(base.schedule, PlanSchedule::Recurring { .. });
+                let item = match kind {
+                    0 if !is_goal => inflow(base),
+                    1 => hypothetical(0, base),
+                    2 | 3 if is_recurring => budget(base),
+                    // Only a stored bill or one-off going out may be settled.
+                    _ if !is_goal => ItemInput { settled, ..base },
+                    _ => base,
+                };
+                // Any outflow but a goal may sit in any of the three tiers, bills and budgets alike.
+                if item.direction == PlanDirection::Outflow && !is_goal {
+                    ItemInput {
+                        tier: Some(match tier {
+                            0 => PlanTier::MustPay,
+                            1 => PlanTier::Essentials,
+                            _ => PlanTier::Flexible,
+                        }),
+                        ..item
+                    }
+                } else {
+                    item
+                }
+            },
+        )
 }
 
 /// Dates where a month's length matters, and ordinary ones around them.

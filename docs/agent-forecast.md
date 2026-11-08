@@ -1001,7 +1001,9 @@ shortfall  = −before, never below 0
   needs what it plans less what was spent on it, never below 0: an overspent budget needs 0
   and takes nothing from another item, since the money is simply gone from the cash.
 - A bill paid (matched by a transaction, up to 7 days early), or settled for its month,
-  needs nothing; one dated earlier and still unpaid is still needed. This is the same
+  needs nothing; one dated earlier and still unpaid is still needed, back to the first of
+  last month. So `must_pay_this_month` holds this month's unpaid must pay occurrences and
+  last month's. This is the same
   reduction the forecast uses, so the two agree: on the first day of a 31-day month,
   `still_need.total` equals a one-month forecast's `planned_outflows`.
 - **Planned income never counts**, whatever `include_income` says: free money is about cash

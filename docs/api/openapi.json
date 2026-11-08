@@ -14385,7 +14385,7 @@
           },
           "must_pay_this_month": {
             "$ref": "#/components/schemas/Money",
-            "description": "Must pay occurrences in this calendar month not yet paid, from before today too."
+            "description": "Must pay occurrences not yet paid that fall in this calendar month, or in the month before\nit (an unpaid bill from last month is still needed)."
           },
           "total": {
             "$ref": "#/components/schemas/Money",

@@ -194,7 +194,11 @@ fn headline(forecast: &Forecast) -> Markup {
             Some(surplus) => {
                 h2.answer-label { "Surplus" }
                 p.answer-number { (money(surplus)) }
-                p.fine { "What could be invested once the planned outflows, goals and emergency fund are covered." }
+                @if forecast.cautions.iter().any(|caution| matches!(caution, Caution::EmergencyFundNotSet { .. })) {
+                    p.fine { "What is left once the planned outflows and goals are covered. Set an emergency fund target before treating any of it as money to invest." }
+                } @else {
+                    p.fine { "What could be invested once the planned outflows, goals and emergency fund are covered." }
+                }
             }
             None => {
                 h2.answer-label { "No number yet" }
@@ -394,6 +398,44 @@ mod tests {
         assert!(!reading.contains("<form"));
         let writing = content(&forecast, &names, Some("token"), true).into_string();
         assert!(writing.contains("paid for all of November 2026"));
+    }
+
+    /// Only a plan with an emergency fund target may suggest investing the surplus.
+    #[test]
+    fn the_surplus_suggests_investing_only_once_a_target_is_set() {
+        let usd = Money {
+            minor_units: 100_000,
+            currency: Currency::parse("USD").unwrap(),
+        };
+        let mut forecast = Forecast {
+            as_of: date(2026, 11, 15),
+            end_exclusive: date(2026, 12, 15),
+            horizon_months: 1,
+            include_income: false,
+            emergency_funds: Vec::new(),
+            stale_after_days: 7,
+            status: ForecastStatus::Firm,
+            surplus: Some(usd),
+            totals: Vec::new(),
+            accounts: Vec::new(),
+            items: Vec::new(),
+            months: Vec::new(),
+            blockers: Vec::new(),
+            cautions: Vec::new(),
+            rule_filed_transfers: Vec::new(),
+            settled: Vec::new(),
+            settled_budgets: Vec::new(),
+        };
+        let names = Names::of_accounts(&[]);
+        let with_target = content(&forecast, &names, None, false).into_string();
+        assert!(with_target.contains("could be invested"));
+
+        forecast.cautions = vec![Caution::EmergencyFundNotSet {
+            currency: usd.currency,
+        }];
+        let without = content(&forecast, &names, None, false).into_string();
+        assert!(!without.contains("could be invested"));
+        assert!(without.contains("Set an emergency fund target"));
     }
 
     /// A note with no number behind it: it shows when rules filed a transfer with no link, and

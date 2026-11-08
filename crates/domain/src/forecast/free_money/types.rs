@@ -62,7 +62,8 @@ pub struct FreeMoneyCurrency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct StillNeed {
-    /// Must pay occurrences in this calendar month not yet paid, from before today too.
+    /// Must pay occurrences not yet paid that fall in this calendar month, or in the month before
+    /// it (an unpaid bill from last month is still needed).
     pub must_pay_this_month: Money,
     /// Must pay occurrences after this month, through `must_pay_through`, not yet paid.
     pub must_pay_coming: Money,

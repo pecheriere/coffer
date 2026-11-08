@@ -18,7 +18,7 @@ use crate::forecast::{
 };
 use crate::ids::CategoryId;
 use crate::money::{Currency, Money};
-use crate::plan::{IntervalUnit, PlanDirection, PlanSchedule, PlanTier};
+use crate::plan::{IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlanTier};
 
 fn wide(money: Money) -> i128 {
     i128::from(money.minor_units)
@@ -334,5 +334,39 @@ fn first_of_month_households_cover_the_cases() {
         ("two currencies", euros),
     ] {
         assert!(count >= 10, "{name}: {count} of 512");
+    }
+}
+
+/// The general generator puts bills and budgets in every tier, so that the split between must
+/// pay and essentials or flexible is exercised.
+#[test]
+fn general_households_cover_every_tier() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = input();
+    let mut counts = [[0_usize; 3]; 2];
+    for _ in 0..512 {
+        let input = strategy.new_tree(&mut runner).unwrap().current();
+        for item in input
+            .items
+            .iter()
+            .filter(|item| item.direction == PlanDirection::Outflow)
+        {
+            let row = usize::from(item.spending == Some(PlanSpending::Budget));
+            let column = match item.tier {
+                Some(PlanTier::MustPay) => 0,
+                Some(PlanTier::Essentials) => 1,
+                Some(PlanTier::Flexible) => 2,
+                _ => continue,
+            };
+            counts[row][column] += 1;
+        }
+    }
+    for (row, kind) in ["bills", "budgets"].into_iter().enumerate() {
+        for (column, tier) in ["must pay", "essentials", "flexible"]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(counts[row][column] >= 10, "{kind} in {tier}: {counts:?}");
+        }
     }
 }
