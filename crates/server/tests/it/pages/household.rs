@@ -1,5 +1,8 @@
 //! The household page's emergency fund and forecast settings cards: each form goes through
 //! the ledger call the API makes, so what it saves reads back the same through the API.
+//! The forecast settings card is in `forecast_settings`.
+
+mod forecast_settings;
 
 use axum::http::{StatusCode, header};
 use coffer_domain::identity::Role;

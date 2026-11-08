@@ -26,7 +26,8 @@ UUIDs; `$BASE` is the server's address.
    `{"group": "<group>", "name": "Rent", "kind": "expense"}`. A household starts
    with no categories, and every planned item needs one.
 4. An emergency fund for each currency in use, which the forecast is blocked without
-   (`emergency_fund_not_set`):
+   (`emergency_fund_not_set`). An admin can also set one, and the forecast settings, on
+   the Household page (`/admin/household`):
 
    ```sh
    curl -X PUT -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \

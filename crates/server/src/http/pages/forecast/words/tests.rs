@@ -222,7 +222,9 @@ fn every_blocker_kind_has_a_sentence() {
     let samples = blockers();
     assert_eq!(sampled_kinds(&samples), kinds);
     for blocker in &samples {
-        assert_worded(&blocker_sentence(blocker), &kinds);
+        for can_manage in [true, false] {
+            assert_worded(&blocker_sentence(blocker, can_manage), &kinds);
+        }
     }
 }
 
@@ -399,10 +401,29 @@ fn a_dip_below_the_emergency_fund_says_when_and_how_low() {
 
 #[test]
 fn a_missing_emergency_fund_names_its_currency() {
-    let sentence = blocker_sentence(&Blocker::EmergencyFundNotSet {
-        currency: Currency::parse("EUR").unwrap(),
-    });
+    let sentence = blocker_sentence(
+        &Blocker::EmergencyFundNotSet {
+            currency: Currency::parse("EUR").unwrap(),
+        },
+        true,
+    );
     assert!(sentence.contains("No emergency fund is set for EUR."));
+}
+
+/// An admin gets a link after the sentence, so the sentence itself says nothing of where;
+/// anyone else learns who can set one. Neither is sent to the API.
+#[test]
+fn a_missing_emergency_fund_says_who_can_set_one() {
+    let missing = Blocker::EmergencyFundNotSet {
+        currency: Currency::parse("EUR").unwrap(),
+    };
+    let for_admin = blocker_sentence(&missing, true);
+    let for_member = blocker_sentence(&missing, false);
+    assert!(!for_admin.contains("An admin can"));
+    assert!(for_member.ends_with("An admin can set one on the Household page."));
+    for sentence in [for_admin, for_member] {
+        assert!(!sentence.contains("API"));
+    }
 }
 
 #[test]
