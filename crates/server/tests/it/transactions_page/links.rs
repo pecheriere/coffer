@@ -71,7 +71,7 @@ async fn a_suggested_leg_is_linked_and_the_link_removed() {
     );
 
     let reply = world
-        .post(&format!("{}/unlink", detail(outflow)), &[("link", &link)])
+        .post(&format!("{}/unlink", detail(outflow)), &[])
         .await;
     assert_redirect(&reply, &detail(outflow));
     assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
@@ -91,7 +91,7 @@ async fn any_other_leg_is_linked_by_its_address_and_the_difference_said() {
     let page = world.page(&detail(outflow)).await;
     assert!(
         page.body
-            .contains("coffer sees nothing that looks like its other leg.")
+            .contains("No transaction you can see looks like its other leg.")
     );
 
     let address = format!("https://coffer.example/transactions/{inflow}");
@@ -147,9 +147,10 @@ async fn a_link_the_service_refuses_is_said_in_its_words() {
     assert_refused(
         &reply,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "must be money into its account",
+        "Link money out with money in: these two go the same way.",
         "xyzzy",
     );
+    assert!(!reply.body.contains("`inflow`"), "no API field names");
     let reply = world.post(&path, &[("other", "xyzzy")]).await;
     assert_refused(
         &reply,
@@ -162,15 +163,68 @@ async fn a_link_the_service_refuses_is_said_in_its_words() {
         .await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
     let reply = world
-        .post(&format!("{}/unlink", detail(outflow)), &[("link", "xyzzy")])
+        .post(&format!("{}/unlink", detail(outflow)), &[])
         .await;
-    assert_refused(
-        &reply,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "the form could not be read",
-        "xyzzy",
-    );
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "no link to remove");
     assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
+}
+
+/// The unlink form names no link: the one removed is the path's transaction's, whatever is
+/// posted, so a crafted form can't end another transaction's link.
+#[tokio::test]
+async fn unlinking_removes_only_the_paths_own_link() {
+    let mut world = world().await;
+    let (outflow, inflow, savings) = legs(&mut world, -50_000, 50_000).await;
+    let brokerage = account(&world.server, &world.alice, "Brokerage", "USD").await;
+    let other_out = world
+        .manual_in(savings, -7_000, "To brokerage", date(2026, 10, 5))
+        .await;
+    let other_in = world
+        .manual_in(brokerage, 7_000, "From savings", date(2026, 10, 5))
+        .await;
+    for (from, to) in [(outflow, inflow), (other_in, other_out)] {
+        let reply = world
+            .post(
+                &format!("{}/link", detail(from)),
+                &[("other", &to.to_string())],
+            )
+            .await;
+        assert_redirect(&reply, &detail(from));
+    }
+    let other_link = world.read(other_out).await["transfer_link"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let reply = world
+        .post(
+            &format!("{}/unlink", detail(outflow)),
+            &[("link", &other_link)],
+        )
+        .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "no such field"
+    );
+    let reply = world
+        .post(&format!("{}/unlink", detail(outflow)), &[])
+        .await;
+    assert_redirect(&reply, &detail(outflow));
+
+    assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
+    assert_eq!(
+        world.read(other_out).await["transfer_link"]["id"],
+        other_link
+    );
+    let reply = world
+        .post(&format!("{}/unlink", detail(TransactionId::new())), &[])
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        world.read(other_in).await["transfer_link"]["id"],
+        other_link
+    );
 }
 
 /// A member links on this page as the API lets a member do: on every account, as themselves.
@@ -200,25 +254,29 @@ async fn the_link_forms_need_the_sessions_token_and_refuse_unknown_fields() {
     let mut world = world().await;
     let (outflow, inflow, _) = legs(&mut world, -50_000, 50_000).await;
     let inflow = inflow.to_string();
-    let forms = [
-        (
-            format!("{}/link", detail(outflow)),
-            [("other", inflow.as_str())],
-        ),
-        (
-            format!("{}/unlink", detail(outflow)),
-            [("link", "0190f000-0000-7000-8000-000000000000")],
-        ),
-    ];
-    for (path, fields) in &forms {
-        let mut forged = vec![("csrf", "forged")];
-        forged.extend_from_slice(fields);
-        let reply = world.browser.post_form(path, &forged).await;
-        assert_eq!(reply.status, StatusCode::FORBIDDEN);
-        let mut extra = fields.to_vec();
-        extra.push(("admin", "yes"));
-        let reply = world.post(path, &extra).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-    }
+    let link: &[(&str, &str)] = &[("other", &inflow)];
+    let link_path = format!("{}/link", detail(outflow));
+    let unlink_path = format!("{}/unlink", detail(outflow));
+    refuses_forged_and_extra(&mut world, &link_path, link).await;
     assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
+
+    assert_redirect(&world.post(&link_path, link).await, &detail(outflow));
+    refuses_forged_and_extra(&mut world, &unlink_path, &[]).await;
+    assert_eq!(
+        world.read(outflow).await["transfer_link"]["other_transaction"],
+        inflow
+    );
+}
+
+/// `fields` posted to `path` with a forged token are refused, and with the session's token and
+/// a field the form doesn't have.
+async fn refuses_forged_and_extra(world: &mut World, path: &str, fields: &[(&str, &str)]) {
+    let mut forged = vec![("csrf", "forged")];
+    forged.extend_from_slice(fields);
+    let reply = world.browser.post_form(path, &forged).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    let mut extra = fields.to_vec();
+    extra.push(("admin", "yes"));
+    let reply = world.post(path, &extra).await;
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
 }

@@ -23,11 +23,12 @@ use crate::ledger::transactions::TransactionView;
 const MERGE_FINE: &str = "Merging moves the other's bank records into the one kept and deletes the \
     other. The one kept keeps its own category, parts, review, notes, assignee and payee, so keep \
     the one that holds them.";
-const DISCARD: &str = "If the one deleted holds any of those, or a transfer link, discard them";
+const DISCARD: &str = "If the one deleted holds any of those, or a transfer link, discard them.";
 /// The service's conflict when the box wasn't ticked, in the page's words: it names the API's
 /// field, which the page doesn't show.
 const MERGE_HOLDS: &str = "The one to delete holds a category, parts, a review, notes, an \
     assignee, a payee of its own or a transfer link. To merge anyway, tick the box to discard them.";
+const CANDIDATES_GONE: &str = "The ones it may duplicate are gone.";
 const UNMERGE_FINE: &str = "Moving a record out makes it a transaction of its own, with nothing \
     filed or reviewed. This one keeps what it holds. Later syncs keep them apart.";
 
@@ -56,8 +57,8 @@ pub(super) async fn candidates(
     Ok(found)
 }
 
-/// The possible duplicates and the merged records, each with its forms; nothing when there are
-/// neither.
+/// The possible duplicates and the merged records, each with the forms the actor may use;
+/// nothing when there are neither.
 pub(super) fn card(
     transaction: &TransactionView,
     candidates: &[TransactionView],
@@ -71,26 +72,35 @@ pub(super) fn card(
     if !flagged && !merged {
         return html! {};
     }
+    let writes = names.may_write(transaction.account);
     html! {
         section.card id="duplicates" {
             h2 { "Duplicates" }
             @if flagged {
-                p { "This may be the same purchase as:" }
-                @for candidate in candidates {
-                    (candidate_item(transaction, candidate, names, csrf))
-                }
-                form method="post" action={ (detail_path(transaction.id)) "/dismiss-duplicate" } {
-                    (csrf_field(csrf))
-                    p.fine {
-                        "Saying it isn't a duplicate clears the mark and forgets these, here and on "
-                        "their side. Nothing else changes."
+                @if candidates.is_empty() {
+                    p { (CANDIDATES_GONE) }
+                } @else {
+                    p { "This may be the same purchase as:" }
+                    @for candidate in candidates {
+                        (candidate_item(transaction, candidate, names, csrf))
                     }
-                    button.btn type="submit" { "It isn't a duplicate" }
+                }
+                @if writes {
+                    form method="post" action={ (detail_path(transaction.id)) "/dismiss-duplicate" } {
+                        (csrf_field(csrf))
+                        p.fine {
+                            "Saying it isn't a duplicate clears the mark and forgets these, here and "
+                            "on their side. Nothing else changes."
+                        }
+                        button.btn type="submit" { "It isn't a duplicate" }
+                    }
                 }
             }
             @if merged {
                 h3 { "Bank records merged into it" }
-                p.fine { (UNMERGE_FINE) }
+                @if writes {
+                    p.fine { (UNMERGE_FINE) }
+                }
                 table.sums {
                     tbody {
                         @for source in &transaction.sources {
@@ -100,11 +110,13 @@ pub(super) fn card(
                                     @if source.pending { ", pending" }
                                 }
                                 td { (source.amount_raw) " as the bank wrote it" }
-                                td {
-                                    form method="post" action={ (detail_path(transaction.id)) "/unmerge" } {
-                                        (csrf_field(csrf))
-                                        input type="hidden" name="source" value=(source.id);
-                                        button.btn type="submit" { "Move it out" }
+                                @if writes {
+                                    td {
+                                        form method="post" action={ (detail_path(transaction.id)) "/unmerge" } {
+                                            (csrf_field(csrf))
+                                            input type="hidden" name="source" value=(source.id);
+                                            button.btn type="submit" { "Move it out" }
+                                        }
                                     }
                                 }
                             }
@@ -116,6 +128,8 @@ pub(super) fn card(
     }
 }
 
+/// A possible duplicate, with the forms that merge the two either way for an actor who can change
+/// both accounts.
 fn candidate_item(
     transaction: &TransactionView,
     candidate: &TransactionView,
@@ -132,11 +146,13 @@ fn candidate_item(
                     @if candidate.pending { ", pending" }
                 }
             }
-            details.item-detail {
-                summary { "Merge" }
-                p.fine { (MERGE_FINE) }
-                (merge_form(transaction.id, candidate.id, "Keep this one, delete that one", csrf))
-                (merge_form(candidate.id, transaction.id, "Keep that one, delete this one", csrf))
+            @if names.may_write(transaction.account) && names.may_write(candidate.account) {
+                details.item-detail {
+                    summary { "Merge" }
+                    p.fine { (MERGE_FINE) }
+                    (merge_form(transaction.id, candidate.id, "Keep this one, delete that one", csrf))
+                    (merge_form(candidate.id, transaction.id, "Keep that one, delete this one", csrf))
+                }
             }
         }
     }
@@ -252,3 +268,6 @@ pub(super) async fn dismiss(
         .map_err(refused)?;
     Ok(Redirect::to(&detail_path(id)))
 }
+
+#[cfg(test)]
+mod tests;

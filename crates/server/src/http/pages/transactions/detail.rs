@@ -52,7 +52,14 @@ pub(super) async fn render(
         current: Some(Nav::Transactions),
         narrow: false,
     };
-    let content = content(&transaction, &link, &candidates, &names, &viewer.csrf, notice);
+    let content = content(
+        &transaction,
+        &link,
+        &candidates,
+        &names,
+        &viewer.csrf,
+        notice,
+    );
     let page = frame_page(&frame, title(&transaction), &content);
     Ok(match notice {
         Some(_) => (StatusCode::CONFLICT, page).into_response(),

@@ -14,7 +14,7 @@ use coffer_store::{AccountRecord, NewConnection, ProviderAccountRecord, Provider
 use jiff::civil::date;
 use serde_json::json;
 
-use super::{World, account, assert_redirect, assert_refused, detail, signed_in, world};
+use super::{World, account, assert_redirect, assert_refused, detail, member, signed_in, world};
 
 /// A connection whose provider account feeds "Checking".
 struct Feed {
@@ -281,6 +281,52 @@ async fn saying_it_isnt_a_duplicate_clears_the_mark() {
             .await
             .body
             .contains("id=\"duplicates\"")
+    );
+}
+
+/// A member merges, moves a record out and dismisses on this page as the API lets a member do:
+/// on every account, as themselves.
+#[tokio::test]
+async fn a_member_settles_duplicates_as_themselves() {
+    let mut world = world().await;
+    let (pending, posted) = flagged_pair(&mut world).await;
+    let (mut bob, bob_actor) = member(&world).await;
+    let page = bob.get(&detail(posted)).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains("Keep this one, delete that one"));
+    let csrf = page.csrf();
+
+    let reply = bob
+        .post_form(
+            &format!("{}/merge", detail(posted)),
+            &[("csrf", &csrf), ("duplicate", &pending.to_string())],
+        )
+        .await;
+    assert_redirect(&reply, &detail(posted));
+    let merged = world.audit(posted).await;
+    assert!(
+        merged.iter().any(
+            |event| event.action == "transaction.merge" && event.actor == signed_in(&bob_actor)
+        )
+    );
+
+    let source = world.read(posted).await["sources"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reply = bob
+        .post_form(
+            &format!("{}/unmerge", detail(posted)),
+            &[("csrf", &csrf), ("source", &source)],
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
+    let unmerged = world.audit(posted).await;
+    assert!(
+        unmerged
+            .iter()
+            .any(|event| event.action == "transaction.unmerge"
+                && event.actor == signed_in(&bob_actor))
     );
 }
 

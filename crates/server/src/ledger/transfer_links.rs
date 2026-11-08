@@ -37,8 +37,10 @@ const CANDIDATE_WINDOW_DAYS: i64 = 5;
 const CANDIDATES_READ: u32 = 200;
 
 const SAME_ACCOUNT: &str = "a transfer link joins transactions on two different accounts";
-const OUTFLOW_SIGN: &str = "`outflow` must be money out of its account";
-const INFLOW_SIGN: &str = "`inflow` must be money into its account";
+/// An outflow that isn't money out; the pages say it in their own words.
+pub(crate) const OUTFLOW_SIGN: &str = "`outflow` must be money out of its account";
+/// An inflow that isn't money in; the pages say it in their own words.
+pub(crate) const INFLOW_SIGN: &str = "`inflow` must be money into its account";
 const SPLIT_LEG: &str = "a transaction with more than one split can't be one leg of a transfer link: part of it may \
      be spending";
 const GOAL_LEG: &str =

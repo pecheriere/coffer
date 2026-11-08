@@ -9,6 +9,8 @@ mod detail;
 mod duplicates;
 mod edit;
 mod filters;
+#[cfg(test)]
+mod fixtures;
 mod links;
 mod list;
 mod manual;
