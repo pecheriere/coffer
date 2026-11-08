@@ -39,7 +39,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   a tool's schemas read from the OpenAPI document), `health`,
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
   with a content security policy of their own, whose `forecast.rs` is the
-  forecast page, read-only but for settling a bill it asks about, and whose `net_worth.rs` is the read-only net worth page
+  forecast page, read-only but for settling a bill it asks about, whose `categories.rs` is the
+  categories page (groups and categories created, changed and archived, its handlers in
+  `categories/forms.rs`), and whose `net_worth.rs` is the read-only net worth page
   and its `chart.rs`, an SVG drawn in integers; `browser_reports/`, the
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the

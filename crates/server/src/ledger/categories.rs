@@ -20,7 +20,8 @@ const GROUP_NAME_INVALID: &str =
 const NAME_INVALID: &str = "category name must be 1 to 100 characters without control characters";
 const POSITION_INVALID: &str = "position must be at most 10000";
 const UNKNOWN_GROUP: &str = "the category group does not exist";
-const KIND_IN_USE: &str =
+/// Why a category's kind can't change; pages match on it to say it in their own words.
+pub(crate) const KIND_IN_USE: &str =
     "a category used by a planned item or a goal-linked split cannot change kind";
 
 /// A category.
