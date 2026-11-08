@@ -9,7 +9,7 @@ use jiff::civil::Date;
 
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
-use crate::plan::{EmergencyFund, EmergencyFundTarget, PlanDirection, PlanSchedule};
+use crate::plan::{EmergencyFund, EmergencyFundTarget, PlanSchedule, PlanTier};
 use book::{Book, Bucket, Window, buckets};
 use cautions::cautions;
 use lines::{account_line, dated_line, goal_line, not_counted};
@@ -198,7 +198,8 @@ fn add_emergency_funds(input: &ForecastInput, book: &mut Book) -> Result<(), For
     Ok(())
 }
 
-/// What `currency`'s recurring outflows come to over the `months` from `as_of`.
+/// What `currency`'s recurring must pay and essentials outflows come to over the `months`
+/// from `as_of`: flexible spending can stop when money is short, so it isn't held for.
 fn months_of_outflows(
     input: &ForecastInput,
     currency: Currency,
@@ -208,10 +209,8 @@ fn months_of_outflows(
     let mut held = 0;
     for item in &input.items {
         let recurring = matches!(item.schedule, PlanSchedule::Recurring { .. });
-        if !recurring
-            || item.direction != PlanDirection::Outflow
-            || item.amount.currency != currency
-        {
+        let held_for = matches!(item.tier, Some(PlanTier::MustPay | PlanTier::Essentials));
+        if !recurring || !held_for || item.amount.currency != currency {
             continue;
         }
         let dates = item.schedule.occurrences(input.as_of, end_exclusive);

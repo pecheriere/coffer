@@ -64,8 +64,10 @@ pub struct SettlementPath {
                    `include_inactive=true`. Needs `read`. A token with account grants sees an \
                    item with an account hint only if it holds `transactions` on that account, \
                    and one without a hint only if it holds `transactions` on some account: a \
-                   token holding only `balances` gets an empty list. A goal and a one-off \
-                   describing the same expense are both counted; nothing de-duplicates them.",
+                   token holding only `balances` gets an empty list. Each outflow carries its \
+                   `tier` (`must_pay`, `essentials`, `flexible` or `saving_toward`), and income \
+                   none. A goal and a one-off describing the same expense are both counted; \
+                   nothing de-duplicates them.",
     security(("bearer" = [])),
     params(PlannedItemListQuery),
     responses(
@@ -96,10 +98,13 @@ pub(super) async fn list(
                    outflow. A recurring outflow is a `bill`, counted in full, unless `spending` \
                    makes it a `budget`, which counts all of this month's occurrences, those \
                    already past too, less what was spent in its category so far this month; \
-                   nothing else takes `spending`. A goal and a one-off describing the \
+                   nothing else takes `spending`. Every outflow has a `tier`, which pages call \
+                   its bucket: a bill and a one-off are `must_pay` and a budget `flexible` \
+                   unless `tier` says otherwise, and a goal is always `saving_toward`, which \
+                   nothing else may be. Income has no tier. A goal and a one-off describing the \
                    same expense are both counted, so the expense counts twice: nothing \
-                   de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs \
-                   `all` at `write`. With an `Idempotency-Key`, a retry of the same request \
+                   de-duplicates them. Its type never changes once it exists. Needs `write`; a \
+                   token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request \
                    within 24 hours returns the first response instead of creating again.",
     security(("bearer" = [])),
     params(
@@ -174,7 +179,10 @@ pub(super) async fn get(
                    schedule, and its `type` must stay the item's own. `spending` is refused unless \
                    the item is left a recurring outflow. Changing `direction` to `inflow` drops \
                    its kind; changing it to `outflow` makes it a `bill` unless `spending` says \
-                   otherwise. Changing `amount`, its currency included, or `schedule` removes the \
+                   otherwise. An outflow keeps its `tier` unless one is sent, a bill made a \
+                   budget included; changing `direction` to `inflow` drops it, and to `outflow` \
+                   gives the default for its kind unless `tier` is sent. Changing `amount`, its \
+                   currency included, or `schedule` removes the \
                    item's settlements from the household's current month on, since nobody said \
                    that was paid: the answer shows what is left, the audit entry says which went, \
                    and earlier months stay. Any other change keeps them, and a settled item can't \

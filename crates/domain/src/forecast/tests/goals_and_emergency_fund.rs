@@ -7,7 +7,9 @@ use super::{currency, months_fund};
 use super::{has_line, monthly, one_off, run, stored, totals_of, usd, usd_totals};
 use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
-use crate::plan::{EmergencyFund, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanSchedule};
+use crate::plan::{
+    EmergencyFund, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanSchedule, PlanTier,
+};
 
 #[test]
 fn completed_goal_not_counted() {
@@ -197,7 +199,10 @@ fn months_target_sums_unreduced_recurring_per_currency() {
         emergency_funds: months_fund(2),
         items: vec![
             monthly("Rent", usd(200_000), date(2026, 1, 1), home),
-            super::budget(monthly("Groceries", usd(60_000), date(2026, 1, 20), food)),
+            ItemInput {
+                tier: Some(PlanTier::Essentials),
+                ..super::budget(monthly("Groceries", usd(60_000), date(2026, 1, 20), food))
+            },
             monthly("Miete", eur(1_000), date(2026, 1, 28), home),
         ],
         category_spent: vec![crate::forecast::CategorySpent {
@@ -260,6 +265,61 @@ fn months_target_counts_its_own_currency() {
         totals_of(&forecast, "EUR").emergency_fund,
         eur(5_000),
         "Nov 20 of euro rent only"
+    );
+}
+
+/// Must pay and essentials are held for; flexible spending can stop when money is short.
+#[test]
+fn months_target_counts_must_pay_and_essentials() {
+    let home = CategoryId::new();
+    let food = CategoryId::new();
+    let out = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        emergency_funds: months_fund(3),
+        items: vec![
+            monthly("Rent", usd(100_000), date(2026, 1, 20), home),
+            ItemInput {
+                tier: Some(PlanTier::Essentials),
+                ..super::budget(monthly("Groceries", usd(40_000), date(2026, 1, 20), food))
+            },
+            super::budget(monthly("Restaurants", usd(20_000), date(2026, 1, 20), out)),
+        ],
+        ..household()
+    });
+    // Nov 20, Dec 20 and Jan 20 of rent and groceries; restaurants are flexible.
+    assert_eq!(
+        usd_totals(&forecast).emergency_fund,
+        usd(420_000),
+        "3 × (1,000.00 + 400.00)"
+    );
+}
+
+#[test]
+fn only_flexible_makes_a_zero_months_target() {
+    let out = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        emergency_funds: months_fund(3),
+        items: vec![super::budget(monthly(
+            "Restaurants",
+            usd(20_000),
+            date(2026, 1, 20),
+            out,
+        ))],
+        ..household()
+    });
+    assert_eq!(
+        usd_totals(&forecast).emergency_fund,
+        usd(0),
+        "flexible spending isn't held for"
+    );
+    assert!(
+        forecast
+            .cautions
+            .contains(&Caution::EmergencyFundMonthsIsZero {
+                currency: currency("USD"),
+                months: 3,
+            }),
+        "an emergency fund that came to 0 is not silent"
     );
 }
 

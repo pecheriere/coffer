@@ -11,6 +11,7 @@ mod identity;
 mod ledger;
 mod net_worth;
 mod plan;
+mod plan_tiers;
 mod provider_dismissal;
 mod review_count;
 mod rules;

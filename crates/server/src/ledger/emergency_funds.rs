@@ -1,6 +1,6 @@
 //! The emergency fund (money redesign §4.4, §10.4): one target per currency, a fixed amount
-//! in it or some months of its recurring outflows. Setting or removing one is an admin's,
-//! audited with the old and new canonical text. Reading one takes the forecast's access, as
+//! in it or some months of its recurring must pay and essentials outflows. Setting or
+//! removing one is an admin's, audited with the old and new canonical text. Reading one takes the forecast's access, as
 //! [`super::settings`] says, so both answer the settings as that actor may see them.
 
 use coffer_domain::audit::AuditChanges;
