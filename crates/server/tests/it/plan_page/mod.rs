@@ -10,6 +10,7 @@
 mod forms;
 mod notes;
 mod refusals;
+mod tiers;
 
 use axum::http::{Method, StatusCode};
 use coffer_domain::identity::Role;

@@ -45,6 +45,15 @@ code { font: 500 .9em/1.4 var(--font-mono); overflow-wrap: anywhere; }
 .item-detail summary { cursor: pointer; color: var(--muted); font-size: .8125rem; font-weight: 700; margin-bottom: .75rem; }
 .chip { display: inline-flex; align-items: center; gap: .3rem; font: var(--weight-button) .78rem/1 var(--font-body); padding: .4rem .6rem; border-radius: var(--radius-chip); background: var(--accent-soft); color: var(--text); white-space: nowrap; }
 .chip-quiet { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+/* A tier's colour: a square before its word in HTML, the fill of a shape in SVG. The word
+   always goes with it, so the colour is never the only signal. */
+.tier-mark { display: inline-block; flex: none; width: .75rem; height: .75rem; border-radius: 3px; background: currentColor; vertical-align: baseline; }
+.tier-heading { display: flex; align-items: center; gap: .5rem; }
+.tier-must-pay { color: var(--tier-must-pay); fill: var(--tier-must-pay); }
+.tier-essentials { color: var(--tier-essentials); fill: var(--tier-essentials); }
+.tier-flexible { color: var(--tier-flexible); fill: var(--tier-flexible); }
+.tier-saving { color: var(--tier-saving); fill: var(--tier-saving); }
+.tier-emergency { color: var(--tier-emergency); fill: var(--tier-emergency); }
 
 button, .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 44px; padding: 0 1rem; font: var(--weight-button) .9375rem/1.1 var(--font-body); border-radius: var(--radius-btn); border: 1px solid var(--button-secondary-border); background: var(--button-secondary-bg); color: var(--button-secondary-fg); cursor: pointer; text-decoration: none; }
 .btn-primary { background: var(--button-primary-bg); color: var(--button-primary-fg); border-color: var(--button-primary-bg); box-shadow: var(--button-primary-shadow); }
@@ -60,6 +69,7 @@ button:disabled { opacity: .6; cursor: progress; }
 .choices legend { font-size: .8125rem; font-weight: 700; color: var(--muted); margin-bottom: .375rem; padding: 0; }
 .choice { display: flex; align-items: center; gap: .6rem; min-height: 44px; font-weight: 600; color: var(--text); }
 .choice input { accent-color: var(--accent); width: 1.25rem; height: 1.25rem; margin: 0; }
+.choice-hint { display: block; font-weight: 400; }
 
 #result { min-height: 1.5em; font-weight: 700; }
 #result.ok { color: var(--positive); }

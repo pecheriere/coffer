@@ -23,6 +23,13 @@
   --control-border: light-dark(#7D8991, #63717A);
   --shadow: light-dark(rgba(24, 39, 48, .10), rgba(0, 0, 0, .4));
 
+  /* Tiers: calm hues, none near negative; Must pay the deepest, the emergency fund neutral. */
+  --tier-must-pay: light-dark(#57337A, #BBA3E8);
+  --tier-essentials: light-dark(#556F2A, #A9CC7A);
+  --tier-flexible: light-dark(#16827D, #70CDC7);
+  --tier-saving: light-dark(#937A00, #F0CE65);
+  --tier-emergency: light-dark(#46515D, #A6B6C6);
+
   --font-head: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-body: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-num: "Manrope", ui-sans-serif, system-ui, sans-serif;

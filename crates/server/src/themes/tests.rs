@@ -4,7 +4,7 @@ use coffer_domain::identity::ThemeName;
 
 use super::contract::{
     COLOUR_TOKENS, Declaration, NEGATIVE_ACCENT_MIN_DISTANCE, OTHER_TOKENS, PAIRS, Rgb, Scheme,
-    Tokens, contrast_ratio, declarations, oklab_distance, parse_theme,
+    TIER_TOKENS, Tokens, contrast_ratio, declarations, oklab_distance, parse_theme,
 };
 use super::{DEFAULT, THEMES, Theme};
 use crate::assets::{ALL, CSS_BASE_CSS};
@@ -265,6 +265,40 @@ fn negative_amounts_stand_apart_from_the_accent() {
     }
     // The mockup's terracotta negative sits too close to the raspberry accent.
     assert!(oklab_distance(rgb("#B3410C"), rgb("#C2386A")) < NEGATIVE_ACCENT_MIN_DISTANCE);
+}
+
+/// Tiers are calm: none sits near the colour of an overspend, in either scheme.
+#[test]
+fn tier_colours_are_not_read_as_negative() {
+    for tier in TIER_TOKENS {
+        assert!(COLOUR_TOKENS.contains(tier), "{tier} is in the contract");
+        for (fg, bg) in [(*tier, "card-bg"), (*tier, "surface")] {
+            assert!(
+                PAIRS.iter().any(|(f, b, _)| (*f, *b) == (fg, bg)),
+                "{fg} on {bg} is AA-checked"
+            );
+        }
+    }
+    for theme in THEMES {
+        let tokens = tokens_of(theme);
+        for scheme in SCHEMES {
+            let colour = |token: &str| {
+                tokens
+                    .resolve(token, scheme)
+                    .ok()
+                    .and_then(|value| Rgb::parse(&value))
+                    .unwrap_or_else(|| panic!("{} {token} {scheme:?} is not #RRGGBB", theme.name))
+            };
+            for tier in TIER_TOKENS {
+                let distance = oklab_distance(colour(tier), colour("negative"));
+                assert!(
+                    distance >= NEGATIVE_ACCENT_MIN_DISTANCE,
+                    "{} {scheme:?}: {tier} is {distance:.3} from negative",
+                    theme.name
+                );
+            }
+        }
+    }
 }
 
 /// The line carries the chart: a graphic against what's behind it needs 3:1 (WCAG 1.4.11).
