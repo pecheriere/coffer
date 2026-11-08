@@ -5,7 +5,7 @@ family's accounts, balances, transactions and spending plan, and that AI agents
 (and later a UI) query to answer questions and help plan. Its motivating
 question is periodic: over the next N months, how much cash does the household
 actually need (recurring bills, known big expenses, money set aside for later,
-plus a safety floor), so that everything above that can be invested.
+plus an emergency fund in each currency), so that everything above that can be invested.
 
 > [!WARNING]
 > **Work in progress.** coffer is pre-alpha and not ready for real use. It has

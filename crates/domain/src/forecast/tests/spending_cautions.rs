@@ -1,15 +1,15 @@
-//! R4: what this month's unsettled spending and a dip below the floor raise, which keeps the
+//! R4: what this month's unsettled spending and a dip below the emergency fund raise, which keeps the
 //! number but stops it being firm.
 
 use jiff::civil::date;
 
-use super::{assert_provisional, cash, fixed_floor, household, inflow};
-use super::{currency, eur, monthly, one_off, run, usd};
+use super::{assert_provisional, cash, fixed_fund, household, inflow};
+use super::{currency, eur, monthly, months_fund, one_off, run, usd};
 use crate::forecast::{
     CategorySpent, Caution, ForecastInput, ForecastStatus, ItemInput, LooseEnds,
 };
 use crate::ids::CategoryId;
-use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, SafetyFloor};
+use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule};
 
 fn loose(uncategorized_count: u32, possible_duplicates: u32) -> LooseEnds {
     LooseEnds {
@@ -167,14 +167,14 @@ fn settled_loose_ends_do_not_warn() {
     assert_eq!(forecast.cautions, [], "nothing is loose");
 }
 
-/// Cash 1,000,000 with a floor of 500,000. A bill of 700,000 on Nov 20 leaves
+/// Cash 1,000,000 with an emergency fund of 500,000. A bill of 700,000 on Nov 20 leaves
 /// 300,000 at November's end; pay of 800,000 only arrives on Dec 1, and a second
 /// bill of 1,000,000 on Jan 2 leaves 100,000 at January's end.
 fn dipping(include_income: bool) -> ForecastInput {
     let other = CategoryId::new();
     ForecastInput {
         include_income,
-        floor: Some(fixed_floor(usd(500_000))),
+        emergency_funds: fixed_fund(usd(500_000)),
         items: vec![
             one_off("Bill", usd(700_000), date(2026, 11, 20), other),
             inflow(one_off("Pay", usd(800_000), date(2026, 12, 1), other)),
@@ -189,7 +189,7 @@ fn cash_dip_warns_only_with_income() {
     let forecast = run(&dipping(true));
     assert_eq!(
         forecast.cautions,
-        [Caution::CashDipsBelowFloor {
+        [Caution::CashDipsBelowEmergencyFund {
             month: "2026-11".parse::<CalendarMonth>().unwrap(),
             currency: currency("USD"),
             projected_cash: usd(300_000),
@@ -204,11 +204,11 @@ fn cash_dip_warns_only_with_income() {
 }
 
 #[test]
-fn cash_exactly_on_the_floor_is_no_dip() {
+fn cash_exactly_on_the_emergency_fund_is_no_dip() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
         include_income: true,
-        floor: Some(fixed_floor(usd(300_000))),
+        emergency_funds: fixed_fund(usd(300_000)),
         items: vec![one_off("Bill", usd(700_000), date(2026, 11, 20), other)],
         ..household()
     });
@@ -216,12 +216,12 @@ fn cash_exactly_on_the_floor_is_no_dip() {
 }
 
 #[test]
-fn a_dip_reads_each_currencys_own_floor() {
+fn a_dip_reads_each_currencys_own_emergency_fund() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
         include_income: true,
         accounts: vec![cash("Checking", usd(1_000)), cash("Konto", eur(1_000))],
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![
             one_off("Rechnung", eur(5_000), date(2026, 12, 1), other),
             monthly("Miete", eur(100), date(2026, 1, 20), other),
@@ -232,7 +232,7 @@ fn a_dip_reads_each_currencys_own_floor() {
         .cautions
         .iter()
         .filter_map(|caution| match caution {
-            Caution::CashDipsBelowFloor {
+            Caution::CashDipsBelowEmergencyFund {
                 month,
                 currency,
                 projected_cash,
@@ -246,7 +246,11 @@ fn a_dip_reads_each_currencys_own_floor() {
         "900 after November, then less 5,100 in December; dollars stay clear"
     );
     let totals = super::totals_of(&forecast, "EUR");
-    assert_eq!(totals.floor, eur(100), "only Nov 20 is within one month");
+    assert_eq!(
+        totals.emergency_fund,
+        eur(100),
+        "only Nov 20 is within one month"
+    );
 }
 
 #[test]

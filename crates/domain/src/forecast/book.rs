@@ -61,7 +61,8 @@ pub(super) struct Tally {
     /// Every planned inflow in the window, counted or not, but for one expected in an account
     /// that isn't the household's.
     pub(super) inflows: i128,
-    pub(super) floor: i128,
+    /// The emergency fund to keep untouched, from the currency's target.
+    pub(super) emergency_fund: i128,
     pub(super) months: Vec<MonthTally>,
 }
 
@@ -110,7 +111,7 @@ impl Book {
             outflows: 0,
             goals: 0,
             inflows: 0,
-            floor: 0,
+            emergency_fund: 0,
             months: (0..bucket_count).map(|_| MonthTally::default()).collect(),
         })
     }

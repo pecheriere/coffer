@@ -577,7 +577,7 @@ settings answer shows all of them:
 
 ```json
 {
-  "floor": null,
+  "emergency_funds": [],
   "include_income": false,
   "default_horizon_months": 3,
   "stale_after_days": 7,

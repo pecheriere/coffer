@@ -116,7 +116,8 @@ async fn a_read_token_is_shown_no_tool_that_writes_and_each_tool_says_which_it_i
         .filter(|tool| tool["annotations"]["readOnlyHint"] != true)
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(writing, BTreeSet::from(["review_transactions".to_owned()]));
+    let both = ["review_transactions", "set_emergency_fund"].map(str::to_owned);
+    assert_eq!(writing, BTreeSet::from(both));
     assert_eq!(
         names(&read),
         names(&write).difference(&writing).cloned().collect()
@@ -124,11 +125,10 @@ async fn a_read_token_is_shown_no_tool_that_writes_and_each_tool_says_which_it_i
     for tool in &read {
         assert_eq!(tool["annotations"]["destructiveHint"], false);
     }
-    let review = write
-        .iter()
-        .find(|tool| tool["name"] == "review_transactions")
-        .unwrap();
-    assert_eq!(review["annotations"]["destructiveHint"], true);
+    for name in &writing {
+        let tool = write.iter().find(|tool| tool["name"] == *name).unwrap();
+        assert_eq!(tool["annotations"]["destructiveHint"], true, "{name}");
+    }
 }
 
 #[tokio::test]

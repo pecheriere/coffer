@@ -83,9 +83,10 @@ token's access.
   named in an error (a batch names the failing operation by index only) or
   in another transaction's `duplicate_candidates` or `transfer_link`. A planned item
   hinted at one answers likewise, and a split linked to such a goal reads `goal: null`.
-- `GET /api/v1/household/settings`, and a patch's answer, say `floor: null` below
-  `all` at `transactions`, the same as no floor set. The other settings read the
-  same for every token. A patch naming `display_currency` also needs `all` at
+- `GET /api/v1/household/settings`, and the answer of a settings patch or of setting an
+  emergency fund, say `emergency_funds: null` below `all` at `transactions`, whether or
+  not any is set. Removing an emergency fund needs that access too. The other settings
+  read the same for every token. A patch naming `display_currency` also needs `all` at
   `balances`, whatever it names, even with `admin`: a 403 whose detail is "this
   action needs balances access to every account". A patch of other settings doesn't.
 - `GET /api/v1/reports/net-worth` needs only `read`, and sums the accounts the token
@@ -582,13 +583,17 @@ short:
 - `GET`, `POST`, `PATCH` and `DELETE /api/v1/plan-items` keep the plan:
   recurring items (a `bill`, or a `budget` that this month's spending
   reduces), one-offs and goals (sinking funds). `GET` and `PATCH
-  /api/v1/household/settings` hold the safety floor, whether income counts, the
-  default horizon and when a balance is stale (changing them needs `admin`).
+  /api/v1/household/settings` hold each currency's emergency fund, whether income
+  counts, the default horizon and when a balance is stale (changing them needs `admin`).
+  `PUT` and `DELETE /api/v1/household/emergency-funds/{currency}` set and remove one
+  currency's emergency fund, a fixed amount or some months of its recurring outflows
+  (`admin`); the MCP tool `set_emergency_fund` sets one.
 - `PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` mark one month of a
   bill or one-off `paid` or `skipped`, for one paid with no transaction to
   categorize; the forecast then counts it as nothing and lists it in `settled`.
 - `GET /api/v1/forecast` answers `cash_needed` (planned outflows, plus goals,
-  plus the floor, minus income when counted) against `cash_available`, as a
+  plus each currency's emergency fund, minus income when counted) against
+  `cash_available`, as a
   `surplus`. `POST /api/v1/forecast/what-if` answers the same for imagined
   items and settings; it writes nothing, so `read` may call it.
 - `GET /api/v1/reports/plan-vs-actual` compares the plan with what happened per

@@ -10,6 +10,8 @@ use axum::http::{Method, StatusCode};
 use coffer_domain::accounts::AccountKind;
 use coffer_domain::identity::{Actor, Role, Scope, Via};
 use coffer_domain::ids::{AccountId, ConnectionId, PlannedItemId, TransactionId};
+use coffer_domain::money::Currency;
+use coffer_domain::plan::EmergencyFundTarget;
 use coffer_domain::policy::{
     AccountLevel, AccountScope, DenyReason, GrantTarget, TokenGrant, authorize_account,
     grant_ceiling,
@@ -222,7 +224,7 @@ fn read_uris(
 
 /// A goal hinted at each account, named after it, on its first transaction and on
 /// the second of the account before, so a visible split links to a goal that may be
-/// hidden; one without a hint; and a safety floor. What the token may not see of them
+/// hidden; one without a hint; and an emergency fund. What the token may not see of them
 /// goes in `hidden`.
 async fn seed_plan(
     world: &World,
@@ -269,22 +271,21 @@ async fn seed_plan(
         hidden.push(s(unhinted));
         hidden.push(unhinted_name);
     }
-    let floor_minor = 7_346_198_000_i64;
+    let fund_minor = 7_346_198_000_i64;
     world
         .server
         .ledger
-        .update_forecast_settings(
+        .set_emergency_fund(
             &world.alice,
-            serde_json::from_value(serde_json::json!({"floor": {
-                "kind": "fixed",
-                "amount": {"minor_units": floor_minor, "currency": "USD"},
-            }}))
-            .unwrap(),
+            Currency::parse("USD").unwrap(),
+            EmergencyFundTarget::Fixed {
+                minor_units: fund_minor,
+            },
         )
         .await
         .unwrap();
     if household.all < Some(AccountLevel::Transactions) {
-        hidden.push(floor_minor.to_string());
+        hidden.push(fund_minor.to_string());
     }
     goals
 }

@@ -119,7 +119,7 @@ async fn a_new_cadence_ends_the_settlement() {
 async fn new_years_eve_in_los_angeles() -> (World, Value) {
     let server = TestServer::with_env(&[("COFFER_TIMEZONE", "America/Los_Angeles")]).await;
     let world = world_on(server).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let home = world.expense("Home").await;
     let item = world
         .item(&outflow("Rent", 10_000, home, &monthly("2020-01-20")))

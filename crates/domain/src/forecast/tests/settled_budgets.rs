@@ -1,6 +1,6 @@
 //! R9a: the note on a budget that spending lowered beside a bill settled as paid. Worked by hand
 //! from the dates and amounts here: as of 15 November 2026, a month's window to 15 December, cash
-//! 1,000,000 and a floor of 0, a bill on 5 November and a budget on the 20th.
+//! 1,000,000 and an emergency fund of 0, a bill on 5 November and a budget on the 20th.
 
 use jiff::civil::date;
 

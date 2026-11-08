@@ -148,9 +148,11 @@ pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
                 listed(&codes)
             )
         }
-        Blocker::FloorNotSet => "No safety floor is set. Without one, coffer would overstate \
-                                 what could be invested. It is set through the API."
-            .to_owned(),
+        Blocker::EmergencyFundNotSet { currency } => format!(
+            "No emergency fund is set for {}. Without one, coffer would overstate what could be \
+             invested. It is set through the API.",
+            currency.as_str()
+        ),
         Blocker::NoCountedAccounts => {
             "No account counts as cash yet, so there is nothing to measure the plan against."
                 .to_owned()
@@ -263,10 +265,10 @@ fn overdue_sentence(goal: &str, due_on: Date) -> String {
     )
 }
 
-/// The first month whose closing cash is below the floor.
-fn floor_dip_sentence(month: CalendarMonth, projected_cash: Money) -> String {
+/// The first month whose closing cash is below the currency's emergency fund.
+fn emergency_fund_dip_sentence(month: CalendarMonth, projected_cash: Money) -> String {
     format!(
-        "In {}, cash is projected to fall to {}, below the safety floor. Income arriving \
+        "In {}, cash is projected to fall to {}, below the emergency fund. Income arriving \
          later can't pay for that month.",
         month_name(month),
         money(projected_cash),
@@ -319,13 +321,13 @@ fn hint_sentence(
     }
 }
 
-/// A floor of some months of recurring outflows that came to 0.
-fn zero_floor_sentence(floor_months: u8, currency: Currency) -> String {
+/// An emergency fund of some months of recurring outflows that came to 0.
+fn zero_emergency_fund_sentence(fund_months: u8, currency: Currency) -> String {
     format!(
-        "The safety floor is {} of recurring outflows, and that comes to 0 in {}, since none are \
-         planned. Nothing is held back in that currency, so what could be invested may be \
-         overstated.",
-        months(floor_months),
+        "The emergency fund in {1} is {0} of recurring outflows, and that comes to 0, since none \
+         are planned in {1}. Nothing is held back in that currency, so what could be invested \
+         may be overstated.",
+        months(fund_months),
         currency.as_str(),
     )
 }
@@ -590,10 +592,10 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         Caution::ClosedLiabilityOwing { account, balance } => {
             closed_owing_sentence(names.account_first(*account), *balance)
         }
-        Caution::MonthsFloorIsZero {
+        Caution::EmergencyFundMonthsIsZero {
             currency,
-            months: floor_months,
-        } => zero_floor_sentence(*floor_months, *currency),
+            months: fund_months,
+        } => zero_emergency_fund_sentence(*fund_months, *currency),
         Caution::LiabilityBalancePositive { account, balance } => {
             positive_liability_sentence(names.account_first(*account), *balance)
         }
@@ -623,11 +625,11 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         Caution::SpendingNewerThanBalance { total, pending, .. } => {
             newer_spending_sentence(*total, *pending)
         }
-        Caution::CashDipsBelowFloor {
+        Caution::CashDipsBelowEmergencyFund {
             month,
             projected_cash,
             ..
-        } => floor_dip_sentence(*month, *projected_cash),
+        } => emergency_fund_dip_sentence(*month, *projected_cash),
     }
 }
 

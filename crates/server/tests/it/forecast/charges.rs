@@ -32,7 +32,7 @@ fn charge(id: &str, on: &str, amount: &str) -> ProviderTransaction {
 }
 
 impl Fed {
-    /// A linked Checking holding 5,000,000 at the end of `BALANCE_ON`, and a floor of 0.
+    /// A linked Checking holding 5,000,000 at the end of `BALANCE_ON`, and an emergency fund of 0.
     async fn linked_checking(&self) -> AccountId {
         let checking = self.checking().await;
         self.bound(checking).await;
@@ -94,7 +94,7 @@ async fn a_goal_linked_transfer_is_not_goal_spending() {
     let world = world().await;
     let checking = world.funded("Checking", 2_000_000).await;
     world.funded("Savings", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let moved = world.expense("Moved").await;
     let home = world.expense("Home").await;
     let roof = world
@@ -262,7 +262,7 @@ async fn removed_and_revised_charges_no_longer_lower_a_goal() {
 async fn a_possible_duplicate_does_not_lower_a_goal() {
     let world = world().await;
     let checking = world.funded("Checking", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let home = world.expense("Home").await;
     let roof = world
         .item(&outflow(
@@ -303,7 +303,7 @@ async fn known_spending_newer_than_the_balance_is_a_caution() {
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
     world.balance(checking, "2026-11-10", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let car = world.expense("Car").await;
     world.spend(checking, "2026-11-14", 1_000_000, car).await;
     world.manual(checking, "2026-11-13", -700_000).await;
@@ -331,7 +331,7 @@ async fn a_bill_past_its_date_stays_unpaid_with_the_caution() {
         .await;
     world.balance(checking, "2026-11-10", 5_000_000).await;
     world.with_history(checking).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let power = world.expense("Power").await;
     world
         .item(&outflow("Power", 200_000, power, &monthly("2026-11-12")))
@@ -353,7 +353,7 @@ async fn a_bill_past_its_date_stays_unpaid_with_the_caution() {
 async fn a_goal_purchase_on_a_closed_card_without_a_balance_changes_nothing() {
     let world = world().await;
     world.funded("Checking", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let home: CategoryId = world.expense("Home").await;
     let roof = world
         .item(&outflow(
@@ -489,7 +489,7 @@ async fn a_revised_refund_keeps_a_goal_s_need() {
 async fn a_refund_flagged_as_a_possible_duplicate_keeps_counting() {
     let world = world().await;
     let checking = world.funded("Checking", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let home = world.expense("Home").await;
     let roof = world
         .item(&outflow(
@@ -526,7 +526,7 @@ async fn a_refund_flagged_as_a_possible_duplicate_keeps_counting() {
 async fn closing_a_card_keeps_the_warning() {
     let world = world().await;
     world.funded("Checking", 1_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let card = world
         .account_with("Card", "credit_card", "USD", json!({}))
         .await;
@@ -552,7 +552,7 @@ async fn closing_a_card_keeps_the_warning() {
 async fn a_closed_card_without_a_balance_warns() {
     let world = world().await;
     world.funded("Checking", 1_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let card = world
         .account_with("Card", "credit_card", "USD", json!({}))
         .await;
@@ -574,7 +574,7 @@ async fn a_closed_card_without_a_balance_warns() {
 async fn a_pending_charge_alone_is_a_caution() {
     let world = world().await;
     let checking = world.funded("Checking", 5_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let food = world.expense("Food").await;
     insert_pending(&world, checking, food, 1_000).await;
 
