@@ -7,7 +7,7 @@
 )]
 
 mod admin_grants;
-mod forecast;
+pub(crate) mod forecast;
 mod members;
 mod net_worth;
 mod rendering;

@@ -36,6 +36,7 @@ mod plaid_forget;
 mod plaid_link;
 mod plaid_sync;
 mod plan_items;
+mod plan_page;
 mod plan_vs_actual;
 mod rules;
 mod scheduler_clock;

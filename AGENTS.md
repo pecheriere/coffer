@@ -41,7 +41,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, whose `categories.rs` is the
   categories page (groups and categories created, changed and archived, its handlers in
-  `categories/forms.rs`), and whose `net_worth.rs` is the read-only net worth page
+  `categories/forms.rs`), whose `plan.rs` is the plan page (planned items listed, added,
+  changed, paused and deleted after a page that asks, in `plan/edit.rs`, `plan/delete.rs`,
+  the shared form in `plan/form.rs` and its words in `plan/words.rs`), whose `net_worth.rs` is the read-only net worth page
   and its `chart.rs`, an SVG drawn in integers, and whose `accounts/` is the accounts list and each
   account's page with its balances, with forms to create, change, close and reopen an account and
   record a balance (`fields.rs` holds the words and fields every account form uses, Connections'
