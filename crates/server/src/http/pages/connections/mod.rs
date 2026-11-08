@@ -33,8 +33,8 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 use self::card::{Permissions, Shared, connection_card};
-use super::account::viewer;
-use super::layout::{Frame, Nav, Viewer, csrf_field, empty_state, page};
+use super::account::viewer_setting_up;
+use super::layout::{Frame, Nav, csrf_field, empty_state, page};
 use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
 use crate::http::AppState;
@@ -124,11 +124,7 @@ async fn render(
     notice: Option<Notice>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
-    // This page lists the bank accounts to set up itself: no notice pointing at it.
-    let viewer = Viewer {
-        setup_needed: 0,
-        ..viewer(state, session).await
-    };
+    let viewer = viewer_setting_up(state, session).await;
     let look = session.look(state).await;
     let connections = state
         .sync
