@@ -9,6 +9,7 @@ mod appearance;
 mod assets;
 mod browser_reports;
 mod categories;
+mod categories_page;
 mod cli;
 mod connections;
 mod connections_api;
