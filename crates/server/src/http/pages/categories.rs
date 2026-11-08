@@ -17,11 +17,16 @@ use super::layout::{Frame, Nav, csrf_field, empty_state, page};
 use super::{PageError, PageSession};
 use crate::http::AppState;
 use crate::http::problem::Problem;
+use crate::ledger::LedgerError;
 use crate::ledger::categories::{CategoryGroupView, CategoryTree, CategoryView};
 use crate::themes::Look;
 
 const PAGE: &str = "/categories";
 const GROUPS: &str = "/category-groups";
+/// When a category's kind is locked: the hint on its form, and the refusal when a change is
+/// tried anyway.
+const KIND_LOCKED: &str =
+    "Its kind can't change while a planned item uses it or spending in it is linked to a goal.";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -51,13 +56,13 @@ async fn categories_page(
         current: Some(Nav::Categories),
         narrow: false,
     };
-    // None for a viewer who couldn't change them, who sees the list and no forms.
-    let csrf = state
-        .ledger
-        .authorize_category_write(&actor)
-        .await
-        .is_ok()
-        .then_some(viewer.csrf.as_str());
+    // None for a viewer who couldn't change them, who sees the list and no forms. Any other
+    // failure fails the page rather than passing for a refusal.
+    let csrf = match state.ledger.authorize_category_write(&actor).await {
+        Ok(()) => Some(viewer.csrf.as_str()),
+        Err(LedgerError::Denied(_)) => None,
+        Err(err) => return Err(PageError(Problem::from(err))),
+    };
     Ok(page(&frame, "Categories", &content(look, &tree, csrf)).into_response())
 }
 
@@ -87,7 +92,7 @@ fn content(look: Look, tree: &CategoryTree, csrf: Option<&str>) -> Markup {
 }
 
 /// What a kind is called on a page.
-pub(super) fn kind_label(kind: CategoryKind) -> &'static str {
+fn kind_label(kind: CategoryKind) -> &'static str {
     match kind {
         CategoryKind::Expense => "Spending",
         CategoryKind::Income => "Income",
@@ -256,8 +261,8 @@ fn category_item(
                         (group_field("Group", groups, Some(group)))
                         (position_field(category.position))
                         p.fine {
-                            "Its kind can't change while a planned item uses it. An archived "
-                            "category takes no new transactions; those it has stay."
+                            (KIND_LOCKED)
+                            " An archived category takes no new transactions; those it has stay."
                         }
                         button.btn.btn-primary type="submit" { "Save category" }
                     }
