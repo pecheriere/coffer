@@ -6,7 +6,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use coffer_domain::accounts::{BalanceSource, BelongsTo};
 use coffer_domain::ids::AccountId;
-use coffer_domain::policy::{AccountLevel, authorize_account};
+use coffer_domain::policy::AccountLevel;
 use coffer_store::PageRequest;
 use maud::{Markup, html};
 use serde::Deserialize;
@@ -21,6 +21,7 @@ use crate::http::pages::amounts::{day, money};
 use crate::http::pages::layout::{Frame, Nav, page};
 use crate::http::pages::net_worth::liquidity_name;
 use crate::http::pages::{PageError, PageSession};
+use crate::ledger::LedgerError;
 use crate::ledger::accounts::{AccountSource, AccountView, BalancePage};
 
 /// Where in the balances to start. Anything else in the address is refused.
@@ -71,8 +72,16 @@ pub(super) async fn render_account(
         )
         .await
         .map_err(page_error)?;
-    let access = state.access.resolve(&actor).await?;
-    let may_change = authorize_account(&actor, &access, id, AccountLevel::Write).is_ok();
+    // The ledger decides, as for the API: a refusal only leaves the forms out.
+    let may_change = match state
+        .ledger
+        .authorize_account_access(&actor, id, AccountLevel::Write)
+        .await
+    {
+        Ok(()) => true,
+        Err(LedgerError::Denied(_)) => false,
+        Err(err) => return Err(page_error(err)),
+    };
     // The forms' day and the labels their `Held for` offers, only for an actor who has them.
     let forms = if may_change {
         let today = state.ledger.today().await.map_err(page_error)?;
