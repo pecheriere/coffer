@@ -48,9 +48,9 @@ pub const MAX_PLAN_YEAR: i16 = 2200;
 const MAX_EVERY: u16 = 999;
 
 /// The most months of outflows an emergency fund may hold.
-const MAX_EMERGENCY_FUND_MONTHS: u8 = 60;
+pub const MAX_EMERGENCY_FUND_MONTHS: u8 = 60;
 /// The longest a balance may be allowed to go unrefreshed, in days.
-const MAX_STALE_AFTER_DAYS: u16 = 365;
+pub const MAX_STALE_AFTER_DAYS: u16 = 365;
 
 const SECONDS_PER_DAY: i64 = 86_400;
 
