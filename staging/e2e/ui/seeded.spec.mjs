@@ -8,10 +8,13 @@ test('a seeded member signs in with the key in the fixture', async ({
   authenticator,
 }) => {
   await signInSeeded(page, server, authenticator, 'sam');
+  await expect(page).toHaveURL(`${server.base}/`);
+  await expect(page.getByRole('heading', { name: 'Home', level: 1 })).toBeVisible();
 
   await page.goto(`${server.base}/account`);
   await expect(page.getByRole('heading', { name: 'Create a token' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Forecast' })).toBeVisible();
+  await page.goto(`${server.base}/more`);
+  await expect(page.getByRole('link', { name: 'Cash forecast' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Members' })).toHaveCount(0);
 });
 

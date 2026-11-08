@@ -190,7 +190,7 @@ async fn render_list(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Accounts),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(answer(page(&frame, "Accounts", &content), notice.as_ref()))

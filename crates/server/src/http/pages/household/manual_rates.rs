@@ -213,7 +213,7 @@ async fn enter(
             let frame = Frame {
                 look: session.look(&state).await,
                 viewer: Some(&viewer),
-                current: Some(Nav::Household),
+                current: Some(Nav::More),
                 narrow: false,
             };
             let content = confirm_page(&viewer.csrf, &err.to_string(), currency, on, rate);

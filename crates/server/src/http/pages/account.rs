@@ -153,7 +153,7 @@ async fn render(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Account),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(page(&frame, "Account", &content))

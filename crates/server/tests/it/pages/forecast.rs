@@ -788,7 +788,7 @@ async fn a_bill_unpaid_from_last_month_says_how_to_settle_it() {
 }
 
 #[tokio::test]
-async fn nav_links_to_the_forecast_for_every_member() {
+async fn more_links_to_the_forecast_for_every_member() {
     let Golden { world, .. } = golden().await;
     let invite = world
         .server
@@ -802,18 +802,14 @@ async fn nav_links_to_the_forecast_for_every_member() {
     let mut alice = signed_in(&world).await;
 
     for browser in [&mut alice, &mut bob] {
-        let elsewhere = browser.get("/account").await;
-        assert!(
-            elsewhere
-                .body
-                .contains("<a href=\"/forecast\">Forecast</a>")
-        );
+        let more = browser.get("/more").await;
+        assert!(more.body.contains("href=\"/forecast\">Cash forecast<"));
         let forecast = browser.get(PAGE).await;
         assert_eq!(forecast.status, StatusCode::OK);
         assert!(
             forecast
                 .body
-                .contains("<a href=\"/forecast\" aria-current=\"page\">Forecast</a>")
+                .contains("<a href=\"/more\" aria-current=\"page\">More</a>")
         );
         assert_eq!(amount(&forecast.body, "Cash available"), 6_850_000);
     }

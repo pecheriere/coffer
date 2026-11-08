@@ -1,4 +1,3 @@
-
 //! What the tools look like: their words, schemas and annotations, and how a refused argument
 //! is answered.
 
@@ -131,7 +130,6 @@ async fn a_read_token_is_shown_no_tool_that_writes_and_each_tool_says_which_it_i
         .unwrap();
     assert_eq!(review["annotations"]["destructiveHint"], true);
 }
-
 
 #[tokio::test]
 async fn a_refused_argument_is_named_and_what_was_sent_is_not_echoed() {

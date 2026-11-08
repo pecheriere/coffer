@@ -105,7 +105,7 @@ async fn frame<'a>(state: &AppState, session: &PageSession, viewer: &'a Viewer) 
     Frame {
         look: session.look(state).await,
         viewer: Some(viewer),
-        current: Some(Nav::Plan),
+        current: Some(Nav::Money),
         narrow: false,
     }
 }

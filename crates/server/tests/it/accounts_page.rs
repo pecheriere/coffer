@@ -191,7 +191,7 @@ async fn an_empty_list_offers_the_form() {
     let page = world.admin.get("/accounts").await;
     assert_eq!(page.status, StatusCode::OK);
     assert_inline_free(&page);
-    assert!(page.body.contains("aria-current=\"page\">Accounts<"));
+    assert!(page.body.contains("aria-current=\"page\">More<"));
     assert!(page.body.contains("illustration-empty"));
     assert!(page.body.contains("New account kept by hand"));
 }
@@ -275,7 +275,7 @@ async fn an_account_s_page_says_what_it_is_and_pages_its_balances() {
     assert_eq!(page.status, StatusCode::OK);
     assert_inline_free(&page);
     assert!(page.body.contains("<h1>Everyday</h1>"));
-    assert!(page.body.contains("aria-current=\"page\">Accounts<"));
+    assert!(page.body.contains("aria-current=\"page\">More<"));
     assert!(page.body.contains("Counts as cash in the forecast"));
     let history = section(&page.body, "id=\"balances\"", "</section>");
     assert!(history.contains(">24 February 2026<"), "newest first");

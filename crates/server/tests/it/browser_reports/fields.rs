@@ -293,6 +293,7 @@ async fn every_page_of_coffer_has_a_template() {
         "/admin/members",
         "/admin/invites",
         "/admin/household",
+        "/more",
     ]
     .into_iter()
     .enumerate()
@@ -496,6 +497,7 @@ async fn the_pages_named_in_the_table_exist() {
         "/admin/members",
         "/admin/invites",
         "/admin/household",
+        "/more",
     ] {
         assert_ne!(
             browser.get(page).await.status,

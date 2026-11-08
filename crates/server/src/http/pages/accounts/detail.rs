@@ -112,7 +112,7 @@ pub(super) async fn render_account(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Accounts),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(answer(page(&frame, &view.name, &content), notice.as_ref()))
