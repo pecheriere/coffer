@@ -377,8 +377,9 @@
   the figures from a stored copy. `/net-worth` also shows the buckets a member can see.
   The count stays at two: `/connections` holds no such figures, but its bind forms now
   hold a beneficiary label, so it stays in that table with its rejections withheld, as
-  the accepted risks below describe. `/admin/household` gains two forms, for the
-  display currency and the time zone: admins only (checked before the form is read), the
+  the accepted risks below describe. `/admin/household` gains forms for the display
+  currency, the time zone, each currency's emergency fund and the forecast settings: admins
+  only (checked before the form is read), the
   anti-forgery token and the `Origin` rule like every page form, and the same
   service as the API, so it is audited the same and every refusal is fixed text.
 - Every mutation is written with its audit entry in one transaction; entries

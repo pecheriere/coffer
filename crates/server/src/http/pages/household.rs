@@ -1,7 +1,10 @@
 //! Household settings: the theme everyone sees unless they choose their
-//! own, the display currency, the time zone and the exchange rates entered by hand.
-//! Admin-only; a denial renders as a 403 page.
+//! own, the display currency, each currency's emergency fund, the cash forecast's settings,
+//! the time zone and the exchange rates entered by hand. Admin-only; a denial renders as a
+//! 403 page.
 
+mod emergency_fund;
+mod forecast_settings;
 mod manual_rates;
 
 use axum::Router;
@@ -35,6 +38,8 @@ pub fn routes() -> Router<AppState> {
         .route(HOUSEHOLD, get(household).post(set_theme))
         .route(DISPLAY_CURRENCY, post(set_display_currency))
         .route(TIME_ZONE, post(set_time_zone))
+        .merge(emergency_fund::routes())
+        .merge(forecast_settings::routes())
         .merge(manual_rates::routes())
 }
 
@@ -93,6 +98,12 @@ async fn household(
             }
         }
         (display_currency_card(&viewer.csrf, &settings))
+        (emergency_fund::card(
+            &viewer.csrf,
+            settings.emergency_funds.as_deref().unwrap_or_default(),
+            settings.display_currency,
+        ))
+        (forecast_settings::card(&viewer.csrf, &settings))
         (time_zone_card(&viewer.csrf, &settings, state.ledger.default_zone_name()))
         (manual_rates::card(&viewer.csrf, &rates, rates_from, settings.display_currency, today))
     };
