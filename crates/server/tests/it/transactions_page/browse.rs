@@ -145,7 +145,7 @@ async fn a_transactions_page_says_what_it_is_and_a_missing_one_is_not_found() {
 
     for path in [detail(TransactionId::new()), format!("{LIST}/not-an-id")] {
         let reply = world.browser.get(&path).await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
     }
 }
 
@@ -156,7 +156,7 @@ async fn the_pages_need_a_session() {
     world.browser.cookie = None;
     for path in [LIST.to_owned(), detail(id)] {
         let reply = world.browser.get(&path).await;
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{path}");
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
     }
 }
 
