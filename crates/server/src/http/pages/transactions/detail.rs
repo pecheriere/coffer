@@ -1,6 +1,6 @@
 //! One transaction's page: what `GET /api/v1/transactions/{id}` answers, in words, with the
-//! forms that review it, file or split it, edit its payee, notes and assignee, and delete one
-//! entered by hand.
+//! forms that review it, file or split it, edit its payee, notes and assignee, link it with its
+//! other leg, merge or dismiss its possible duplicates, and delete one entered by hand.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -9,8 +9,11 @@ use coffer_domain::ids::TransactionId;
 use coffer_domain::transactions::{ReviewStatus, TransactionOrigin};
 use maud::{Markup, html};
 
+use super::links::LinkState;
 use super::splits::{category_form, splits_form};
-use super::{LIST, Names, chips, detail_path, filed_as, refused, title, transaction_id};
+use super::{
+    LIST, Names, chips, detail_path, duplicates, filed_as, links, refused, title, transaction_id,
+};
 use crate::http::AppState;
 use crate::http::pages::account::viewer;
 use crate::http::pages::amounts::{day, money};
@@ -40,6 +43,8 @@ pub(super) async fn render(
         .await
         .map_err(refused)?;
     let names = Names::read(state, &actor).await?;
+    let link = LinkState::read(state, session, &transaction).await?;
+    let candidates = duplicates::candidates(state, session, &transaction).await?;
     let viewer = viewer(state, session).await;
     let frame = Frame {
         look: session.look(state).await,
@@ -47,7 +52,14 @@ pub(super) async fn render(
         current: Some(Nav::Transactions),
         narrow: false,
     };
-    let content = content(&transaction, &names, &viewer.csrf, notice);
+    let content = content(
+        &transaction,
+        &link,
+        &candidates,
+        &names,
+        &viewer.csrf,
+        notice,
+    );
     let page = frame_page(&frame, title(&transaction), &content);
     Ok(match notice {
         Some(_) => (StatusCode::CONFLICT, page).into_response(),
@@ -55,10 +67,13 @@ pub(super) async fn render(
     })
 }
 
-/// The page. Forms the service would refuse, for an actor who can't change the transaction's
-/// account, are left out, and what they hold is shown as text.
+/// The page, with `candidates` the transactions it may duplicate. Forms the service would
+/// refuse, for an actor who can't change the transaction's account, are left out, and what they
+/// hold is shown as text.
 fn content(
     transaction: &TransactionView,
+    link: &LinkState,
+    candidates: &[TransactionView],
     names: &Names,
     csrf: &str,
     notice: Option<&str>,
@@ -92,6 +107,8 @@ fn content(
         } @else {
             (details_text(transaction, names))
         }
+        (links::card(transaction, link, names, csrf))
+        (duplicates::card(transaction, candidates, names, csrf))
         @if writes && transaction.origin == TransactionOrigin::Manual {
             (delete_card(transaction, csrf))
         }

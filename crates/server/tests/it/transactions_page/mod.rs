@@ -1,6 +1,7 @@
 //! The transactions pages through the real router: the list and its filters, the review queue,
-//! one transaction's page and its forms, batch review, and transactions entered by hand. Every
-//! write is read back through the API and found in the audit log.
+//! one transaction's page and its forms, transfer links, possible duplicates, batch review, and
+//! transactions entered by hand. Every write is read back through the API and found in the audit
+//! log.
 
 #![expect(
     clippy::unwrap_used,
@@ -8,6 +9,8 @@
 )]
 
 mod browse;
+mod duplicates;
+mod links;
 mod manual;
 mod review;
 mod splits;
@@ -100,12 +103,23 @@ async fn account(server: &TestServer, actor: &Actor, name: &str, currency: &str)
 impl World {
     /// A transaction entered by hand in `cash`, as the API would.
     async fn manual(&self, minor_units: i64, payee: &str, on: Date) -> TransactionId {
+        self.manual_in(self.cash, minor_units, payee, on).await
+    }
+
+    /// A transaction entered by hand in `account`, as the API would.
+    async fn manual_in(
+        &self,
+        account: AccountId,
+        minor_units: i64,
+        payee: &str,
+        on: Date,
+    ) -> TransactionId {
         self.server
             .ledger
             .create_manual_transaction(
                 &self.alice,
                 NewManualTransactionInput {
-                    account: self.cash,
+                    account,
                     posted_on: on,
                     minor_units,
                     description: format!("{payee} purchase"),
