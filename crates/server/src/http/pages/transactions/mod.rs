@@ -17,13 +17,12 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, MemberId, PlannedItemId, TransactionId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::PlanItemType;
-use coffer_domain::policy::{AccountLevel, Action, authorize};
+use coffer_domain::policy::AccountLevel;
 use coffer_domain::transactions::{ReviewStatus, TransactionFlag};
 use maud::{Markup, html};
 use std::collections::BTreeSet;
 
 use super::PageError;
-use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
@@ -152,13 +151,11 @@ impl Names {
                 currency: item.amount.currency,
             })
             .collect();
-        // As `GET /api/v1/members` reads them.
-        authorize(actor, Action::ReadHousehold).map_err(AuthError::from)?;
         let members = state
-            .store
-            .list_members()
+            .ledger
+            .list_members(actor)
             .await
-            .map_err(AuthError::from)?
+            .map_err(refused)?
             .into_iter()
             .map(|member| MemberName {
                 id: member.id,
