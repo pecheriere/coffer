@@ -84,7 +84,9 @@ fn patch_of(form: &SaveForm) -> Result<ForecastSettingsPatch, PageError> {
         .ok()
         .filter(|months| (1..=MAX_HORIZON_MONTHS).contains(months))
         .ok_or_else(|| {
-            PageError::invalid("how far the forecast looks is a whole number of months, 1 to 60")
+            PageError::invalid(&format!(
+                "how far the forecast looks is a whole number of months, 1 to {MAX_HORIZON_MONTHS}"
+            ))
         })?;
     let stale_after_days = form
         .stale_after_days
@@ -93,7 +95,9 @@ fn patch_of(form: &SaveForm) -> Result<ForecastSettingsPatch, PageError> {
         .ok()
         .filter(|days| (1..=MAX_STALE_AFTER_DAYS).contains(days))
         .ok_or_else(|| {
-            PageError::invalid("how old a balance may be is a whole number of days, 1 to 365")
+            PageError::invalid(&format!(
+                "how old a balance may be is a whole number of days, 1 to {MAX_STALE_AFTER_DAYS}"
+            ))
         })?;
     Ok(ForecastSettingsPatch {
         include_income: Some(include_income),

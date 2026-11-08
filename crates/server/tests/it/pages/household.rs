@@ -133,7 +133,11 @@ async fn the_card_offers_every_currency_with_the_display_one_chosen() {
     assert!(card.contains("<option value=\"EUR\" selected>EUR</option>"));
     assert!(card.contains("<option value=\"JPY\">JPY</option>"));
     assert!(card.contains("inputmode=\"decimal\""));
-    assert!(card.contains("min=\"1\" max=\"60\""));
+    assert!(
+        card.contains("name=\"months\" inputmode=\"numeric\""),
+        "a text field the browser never checks, so it can't block a fixed amount"
+    );
+    assert!(card.contains("1 to 60"));
 }
 
 #[tokio::test]
@@ -303,6 +307,12 @@ async fn months_out_of_range_and_unknown_choices_are_refused() {
             ("kind", "months"),
             ("amount", ""),
             ("months", "61"),
+        ],
+        [
+            ("currency", "USD"),
+            ("kind", "months"),
+            ("amount", ""),
+            ("months", "2.5"),
         ],
         [
             ("currency", "USD"),

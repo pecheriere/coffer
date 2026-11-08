@@ -100,10 +100,11 @@ pub(super) fn card(csrf: &str, funds: &[EmergencyFund], display: Option<Currency
                     "Amount, for a fixed amount, such as 10000"
                     input.input type="text" name="amount" inputmode="decimal" autocomplete="off";
                 }
+                // A text field, so the browser never checks it: a stray value here must not
+                // block saving a fixed amount, which ignores it. The server checks it.
                 label.field {
-                    "Months, for months of planned spending"
-                    input.input type="number" name="months" min="1"
-                        max=(MAX_EMERGENCY_FUND_MONTHS) step="1";
+                    "Months, for months of planned spending, 1 to " (MAX_EMERGENCY_FUND_MONTHS)
+                    input.input type="text" name="months" inputmode="numeric" autocomplete="off";
                 }
                 button.btn.btn-primary type="submit" { "Save emergency fund" }
             }
@@ -161,7 +162,11 @@ fn target_of(form: &SetForm, currency: Currency) -> Result<EmergencyFundTarget, 
             .ok()
             .filter(|months| (1..=MAX_EMERGENCY_FUND_MONTHS).contains(months))
             .map(|months| EmergencyFundTarget::MonthsOfOutflows { months })
-            .ok_or_else(|| PageError::invalid("a number of months is a whole number from 1 to 60")),
+            .ok_or_else(|| {
+                PageError::invalid(&format!(
+                    "a number of months is a whole number from 1 to {MAX_EMERGENCY_FUND_MONTHS}"
+                ))
+            }),
         _ => Err(PageError::invalid("not a kind of target the form offers")),
     }
 }
