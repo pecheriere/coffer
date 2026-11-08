@@ -20,6 +20,7 @@ use maud::{Markup, html};
 use super::account::viewer;
 use super::amounts::{magnitude, money};
 use super::layout::{Frame, Nav, page};
+use super::transactions::to_check;
 use super::{PageError, PageSession};
 use crate::http::AppState;
 use crate::http::problem::Problem;
@@ -28,8 +29,6 @@ use crate::ledger::net_worth::NetWorthQuery;
 use crate::ledger::review_count::ReviewCount;
 use sparkline::sparkline;
 
-/// Where the review queue is.
-const QUEUE: &str = "/transactions?review=unreviewed";
 /// What the sparkline shows. A month with nothing to value has no point in it.
 const SPARKLINE_LABEL: &str = "Net worth at the end of each month with a value this past year";
 
@@ -186,11 +185,7 @@ fn to_check_card(count: ReviewCount) -> Markup {
     html! {
         section.card.home-card id="to-check" {
             h2 { "To check" }
-            @match count.unreviewed {
-                0 => p { "Nothing to check." },
-                1 => p { a href=(QUEUE) { "1 transaction to check" } },
-                many => p { a href=(QUEUE) { (many) " transactions to check" } },
-            }
+            p { (to_check(count)) }
         }
     }
 }
