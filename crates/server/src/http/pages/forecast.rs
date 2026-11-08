@@ -104,6 +104,13 @@ fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup
             "From " (day(forecast.as_of)) " up to " (day(forecast.end_exclusive)) ", "
             (months(forecast.horizon_months)) ", on the household's settings."
         }
+        @if forecast.items.is_empty() {
+            p {
+                "No planned bill, budget, income or goal falls in this window yet. "
+                a href="/plan" { "Add them on the plan page" }
+                "."
+            }
+        }
         (answer(forecast, names, csrf))
         // A row without a surplus has a blocker leaving something out of its sums,
         // and a sum that looks whole is what a blocker exists to prevent.

@@ -21,6 +21,7 @@ mod layout;
 mod login;
 mod net_worth;
 mod plaid;
+mod plan;
 mod setup;
 #[cfg(test)]
 mod word_checks;
@@ -74,6 +75,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(connections::routes())
         .merge(household::routes())
         .merge(forecast::routes())
+        .merge(plan::routes())
         .merge(categories::routes())
         .merge(net_worth::routes())
         .merge(plaid)
