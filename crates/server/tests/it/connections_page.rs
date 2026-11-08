@@ -199,6 +199,16 @@ fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// Whether the page shows a provider account bound to the account `name`, linked to its page.
+fn bound_to(body: &str, name: &str) -> bool {
+    body.split("Bound to <a href=\"/accounts/")
+        .skip(1)
+        .any(|rest| {
+            rest.split_once("</a>")
+                .is_some_and(|(link, _)| link.ends_with(&format!("\">{name}")))
+        })
+}
+
 fn assert_inline_free(reply: &Reply) {
     assert_eq!(reply.header(header::CONTENT_SECURITY_POLICY), CSP);
     assert!(!reply.body.contains("style="));
