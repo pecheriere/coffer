@@ -1,5 +1,5 @@
 //! The plan page: the household's planned items (bills, budgets, income, one-offs and goals)
-//! in words, and the forms that add, change, pause and delete them. Every read and write goes
+//! in words, grouped by tier, and the forms that add, change, pause and delete them. Every read and write goes
 //! through the service the API uses, so who may do what, what an item may hold and the audit
 //! stay in one place; the page only leaves out the forms a viewer could not use.
 
@@ -18,6 +18,7 @@ use coffer_domain::forecast::LineSource;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
+use coffer_domain::plan::PlanTier;
 use maud::{Markup, html};
 
 use super::account::viewer;
@@ -31,7 +32,7 @@ use crate::ledger::forecast::ForecastOptions;
 use crate::ledger::plan_items::PlannedItemView;
 use crate::themes::Look;
 use form::Choices;
-use words::{direction_word, schedule_words, type_word};
+use words::{direction_word, schedule_words, tier_class, tier_word, type_word};
 
 const PAGE: &str = "/plan";
 
@@ -160,7 +161,8 @@ async fn plan_page(
         .list_planned_items(&actor, true)
         .await
         .map_err(refused)?;
-    // Paused items last, each part in the order they were added.
+    // Paused items last, each part in the order they were added; the page keeps that order
+    // inside each tier's group.
     items.sort_by_key(|item| !item.active);
     let loaded = Loaded::read(&state, &actor).await?;
     let goals = goal_spent(&state, &actor).await;
@@ -212,13 +214,24 @@ fn content(
             "The bills, budgets, income, one-offs and goals the forecast counts on. "
             a href="/forecast" { "See the forecast" }
         }
-        section.card id="items" {
-            @if items.is_empty() {
+        @if items.is_empty() {
+            section.card id="items" {
                 (empty_state(look, "Nothing planned yet. Add the bills and budgets you expect, so the forecast has them."))
-            } @else {
-                ul.items {
-                    @for item in items {
-                        (item_row(item, names, goals.get(&item.id), csrf))
+            }
+        } @else {
+            div id="items" {
+                @for group in GROUPS {
+                    @let members: Vec<&PlannedItemView> =
+                        items.iter().filter(|item| item.tier == group).collect();
+                    @if !members.is_empty() {
+                        section.card id={ "group-" (group.map_or("income", PlanTier::as_str)) } {
+                            (group_heading(group))
+                            ul.items {
+                                @for item in members {
+                                    (item_row(item, names, goals.get(&item.id), csrf))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -239,6 +252,30 @@ fn content(
                         " first."
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The groups of the page in order: each tier, from the one that must be paid to the one
+/// saved toward, then income, which has none.
+const GROUPS: [Option<PlanTier>; 5] = [
+    Some(PlanTier::MustPay),
+    Some(PlanTier::Essentials),
+    Some(PlanTier::Flexible),
+    Some(PlanTier::SavingToward),
+    None,
+];
+
+/// A group's heading: the tier's mark and word, or Income.
+fn group_heading(group: Option<PlanTier>) -> Markup {
+    html! {
+        h2.tier-heading {
+            @if let Some(tier) = group {
+                span.tier-mark.(tier_class(tier)) aria-hidden="true" {}
+                (tier_word(tier))
+            } @else {
+                "Income"
             }
         }
     }
@@ -298,3 +335,6 @@ fn item_row(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
