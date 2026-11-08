@@ -3,6 +3,7 @@
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
+use coffer_domain::plan::PlanSchedule;
 use maud::{Markup, html};
 use serde::Deserialize;
 
@@ -39,6 +40,12 @@ fn confirm_content(item: &PlannedItemView, csrf: &str) -> Markup {
                 "This deletes " (item.name) " for good, with the months settled for it. The "
                 "forecast stops counting it, and the audit log keeps what it was. Transactions "
                 "stay as they are."
+            }
+            @if matches!(item.schedule, PlanSchedule::Goal { .. }) {
+                p {
+                    "A goal with spending linked to it can't be deleted: mark it completed "
+                    "instead, so it needs no more money."
+                }
             }
             @if item.active {
                 p { "To stop counting it for a while instead, pause it on the plan page." }

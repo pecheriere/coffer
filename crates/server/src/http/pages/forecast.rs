@@ -18,10 +18,8 @@ use maud::{Markup, html};
 use super::account::viewer;
 use super::amounts::{day, grouped, magnitude, money};
 use super::layout::{Frame, Nav, page};
-use super::{PageError, PageSession};
+use super::{PageError, PageSession, refused};
 use crate::http::AppState;
-use crate::http::problem::Problem;
-use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
     Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
@@ -64,10 +62,6 @@ async fn forecast_page(
         .is_ok()
         .then_some(viewer.csrf.as_str());
     Ok(page(&frame, "Forecast", &content(&forecast, &names, csrf)).into_response())
-}
-
-fn refused(err: LedgerError) -> PageError {
-    PageError(Problem::from(err))
 }
 
 /// The names the cautions speak of. Only they need more than the forecast holds, which

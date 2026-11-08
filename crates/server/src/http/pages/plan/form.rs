@@ -135,6 +135,12 @@ impl ItemFields {
     }
 }
 
+/// Notes with every line break as the `\n` the ledger keeps: a browser sends a textarea's
+/// line breaks as `\r\n`, and the ledger refuses a `\r`.
+fn line_breaks(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 fn day_of(text: &str, refusal: &'static str) -> Result<Date, PageError> {
     strict_date::parse(text).ok_or_else(|| PageError::invalid(refusal))
 }
@@ -232,7 +238,7 @@ impl ItemForm {
             },
             direction,
             account_hint,
-            notes: self.notes,
+            notes: line_breaks(&self.notes),
             active: checkbox(&self.active)?,
             schedule,
             spending,
@@ -326,8 +332,10 @@ pub(super) fn fields(choices: &Choices<'_>, item: Option<&PlannedItemView>) -> M
         (account_field(choices, item))
         label.field {
             "Notes"
+            // A browser drops one line break right after the opening tag, so this one goes
+            // and notes that start with a line break keep it.
             textarea.input name="notes" rows="2" maxlength="2000" {
-                (item.and_then(|item| item.notes.as_deref()).unwrap_or_default())
+                "\n" (item.and_then(|item| item.notes.as_deref()).unwrap_or_default())
             }
         }
         label.choice {

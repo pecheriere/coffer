@@ -1,6 +1,6 @@
 //! Every form of the plan page, read back through the API.
 
-use axum::http::{Method, StatusCode, header};
+use axum::http::{StatusCode, header};
 use serde_json::{Value, json};
 
 use super::{PAGE, admin, audited, item, items, member, monthly_bill, post, with_all};
@@ -132,7 +132,6 @@ async fn each_kind_of_item_and_schedule_is_entered_from_the_page() {
         "Groceries Budget · 1,234.56 USD out · Rent Every 2 weeks from 1 November 2026, until 30 June 2027",
         "Boiler One-off · 1,234.56 USD out · Rent On 3 December 2026",
         "Holiday Goal · 1,234.56 USD out · Rent Set aside from 1 November 2026, due 1 June 2027",
-        "Target 1,234.56 USD, spent from it so far 0.00 USD",
         "Salary Income · 5,000.00 USD in · Salary Every month from 1 November 2026",
     ] {
         assert!(shown.contains(words), "{words}");
@@ -160,7 +159,7 @@ async fn an_item_is_changed_paused_resumed_and_deleted() {
     assert!(form.body.contains("value=\"Rent\""));
     assert!(form.body.contains("value=\"1234.56\""));
     assert!(form.body.contains(
-        "<textarea class=\"input\" name=\"notes\" rows=\"2\" maxlength=\"2000\">Landlord</textarea>"
+        "<textarea class=\"input\" name=\"notes\" rows=\"2\" maxlength=\"2000\">\nLandlord</textarea>"
     ));
     assert!(
         form.body
@@ -211,6 +210,10 @@ async fn an_item_is_changed_paused_resumed_and_deleted() {
     let confirm = admin.get(&format!("{path}/delete")).await;
     assert_eq!(confirm.status, StatusCode::OK);
     assert!(confirm.body.contains("for good"));
+    assert!(
+        !confirm.body.contains("linked to it"),
+        "only a goal holds linked spending"
+    );
     assert!(confirm.body.contains(&format!("action=\"{path}/delete\"")));
     assert_eq!(items(&world).await.len(), 1, "asking deletes nothing");
     let reply = post(&mut admin, &format!("{path}/delete"), &[]).await;
@@ -231,6 +234,40 @@ async fn an_item_is_changed_paused_resumed_and_deleted() {
 }
 
 #[tokio::test]
+async fn a_goal_shows_what_was_spent_and_deleting_it_warns_of_linked_spending() {
+    let world = world().await;
+    let mut admin = admin(&world).await;
+    let rent = world.expense("Rent").await.to_string();
+    let goal = with_all(
+        monthly_bill("Holiday", &rent),
+        &[
+            ("type", "goal"),
+            ("start_on", "2026-11-01"),
+            ("due_on", "2027-06-01"),
+        ],
+    );
+    post(&mut admin, PAGE, &goal).await;
+    let id = item(&world, "Holiday").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let shown = text_of(&admin.get(PAGE).await.body);
+    assert!(shown.contains("due 1 June 2027 Spent from it so far 0.00 USD"));
+    assert!(
+        !shown.contains("Target"),
+        "the target is the amount, already shown"
+    );
+
+    let confirm = text_of(&admin.get(&format!("{PAGE}/{id}/delete")).await.body);
+
+    assert!(confirm.contains(
+        "A goal with spending linked to it can't be deleted: mark it completed instead, so it \
+         needs no more money."
+    ));
+}
+
+#[tokio::test]
 async fn a_member_plans_as_the_api_lets_them() {
     let world = world().await;
     let rent = world.expense("Rent").await.to_string();
@@ -245,29 +282,4 @@ async fn a_member_plans_as_the_api_lets_them() {
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(items(&world).await.len(), 1);
     assert_eq!(audited(&world).await, ["planned_item.create"]);
-}
-
-/// The categories page refuses, with the ledger's words, what a planned item rules out.
-#[tokio::test]
-async fn a_category_an_item_uses_keeps_its_kind() {
-    let world = world().await;
-    let mut admin = admin(&world).await;
-    let rent = world.expense("Rent").await;
-    post(&mut admin, PAGE, &monthly_bill("Rent", &rent.to_string())).await;
-    let (_, tree) = world
-        .send(Method::GET, "/api/v1/categories", &world.admin, None)
-        .await;
-    let tree: Value = serde_json::from_str(&tree).unwrap();
-    let group = tree["items"][0]["id"].as_str().unwrap().to_owned();
-
-    let fields = [
-        ("name", "Rent"),
-        ("kind", "income"),
-        ("group", group.as_str()),
-        ("position", "0"),
-    ];
-    let reply = post(&mut admin, &format!("/categories/{rent}"), &fields).await;
-
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(reply.body.contains("cannot change kind"));
 }

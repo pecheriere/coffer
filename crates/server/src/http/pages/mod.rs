@@ -47,6 +47,7 @@ use super::extract::session_cookie_value;
 use super::problem::{Problem, ProblemCode, set_retry_after};
 use crate::auth::{AuthError, session_cookie};
 use crate::config::Config;
+use crate::ledger::LedgerError;
 use crate::themes::Look;
 use layout::Frame;
 
@@ -190,6 +191,11 @@ impl From<AuthError> for PageError {
     fn from(err: AuthError) -> Self {
         Self(Problem::from(err))
     }
+}
+
+/// A ledger refusal as a page error: the problem the API answers, shown as a page.
+fn refused(err: LedgerError) -> PageError {
+    PageError(Problem::from(err))
 }
 
 impl IntoResponse for PageError {

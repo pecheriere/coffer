@@ -12,8 +12,7 @@ use serde::Deserialize;
 
 use super::{KIND_LOCKED, PAGE};
 use crate::http::AppState;
-use crate::http::pages::{PageError, PageForm, PageSession};
-use crate::http::problem::Problem;
+use crate::http::pages::{PageError, PageForm, PageSession, refused};
 use crate::ledger::LedgerError;
 use crate::ledger::categories::{
     CategoryGroupInput, CategoryGroupPatch, CategoryInput, CategoryPatch, KIND_IN_USE,
@@ -79,10 +78,6 @@ pub(super) struct ArchiveForm {
     csrf: String,
     #[serde(default)]
     archived: String,
-}
-
-fn refused(err: LedgerError) -> PageError {
-    PageError(Problem::from(err))
 }
 
 /// The policy check every form makes before it is read.

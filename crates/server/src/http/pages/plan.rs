@@ -14,19 +14,17 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use coffer_domain::forecast::{GoalLine, LineSource};
+use coffer_domain::forecast::LineSource;
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
-use coffer_domain::money::Currency;
+use coffer_domain::money::{Currency, Money};
 use maud::{Markup, html};
 
 use super::account::viewer;
 use super::amounts::magnitude;
 use super::layout::{Frame, Nav, Viewer, csrf_field, empty_state, page};
-use super::{PageError, PageSession};
+use super::{PageError, PageSession, refused};
 use crate::http::AppState;
-use crate::http::problem::Problem;
-use crate::ledger::LedgerError;
 use crate::ledger::accounts::AccountView;
 use crate::ledger::categories::CategoryGroupView;
 use crate::ledger::forecast::ForecastOptions;
@@ -46,10 +44,6 @@ pub fn routes() -> Router<AppState> {
             "/plan/{id}/delete",
             get(delete::confirm_page).post(delete::delete),
         )
-}
-
-fn refused(err: LedgerError) -> PageError {
-    PageError(Problem::from(err))
 }
 
 /// Where a change sends the browser back to.
@@ -131,9 +125,11 @@ async fn csrf_if_writer<'a>(
         .then_some(viewer.csrf.as_str())
 }
 
-/// Each goal's sinking fund figures, from the forecast. They are a courtesy: a forecast that
-/// can't be read costs them, and the page reads without them.
-async fn goal_lines(state: &AppState, actor: &Actor) -> HashMap<PlannedItemId, GoalLine> {
+/// What was spent from each goal, from the forecast's goal lines. Only a goal that still needs
+/// money in the forecast's window has a line, so one that is complete, set aside or past due
+/// shows no figure. The figures are a courtesy: a forecast that can't be read costs them, and
+/// the page reads without them.
+async fn goal_spent(state: &AppState, actor: &Actor) -> HashMap<PlannedItemId, Money> {
     match state
         .ledger
         .forecast(actor, ForecastOptions::default())
@@ -143,7 +139,7 @@ async fn goal_lines(state: &AppState, actor: &Actor) -> HashMap<PlannedItemId, G
             .items
             .iter()
             .filter_map(|line| match (line.source, line.goal) {
-                (LineSource::PlannedItem { id }, Some(goal)) => Some((id, goal)),
+                (LineSource::PlannedItem { id }, Some(goal)) => Some((id, goal.spent)),
                 _ => None,
             })
             .collect(),
@@ -167,7 +163,7 @@ async fn plan_page(
     // Paused items last, each part in the order they were added.
     items.sort_by_key(|item| !item.active);
     let loaded = Loaded::read(&state, &actor).await?;
-    let goals = goal_lines(&state, &actor).await;
+    let goals = goal_spent(&state, &actor).await;
     let viewer = viewer(&state, &session).await;
     let frame = frame(&state, &session, &viewer).await;
     let csrf = csrf_if_writer(&state, &actor, &viewer).await;
@@ -206,7 +202,7 @@ fn content(
     look: Look,
     items: &[PlannedItemView],
     names: &Names<'_>,
-    goals: &HashMap<PlannedItemId, GoalLine>,
+    goals: &HashMap<PlannedItemId, Money>,
     choices: &Choices<'_>,
     csrf: Option<&str>,
 ) -> Markup {
@@ -251,7 +247,7 @@ fn content(
 fn item_row(
     item: &PlannedItemView,
     names: &Names<'_>,
-    goal: Option<&GoalLine>,
+    goal_spent: Option<&Money>,
     csrf: Option<&str>,
 ) -> Markup {
     let category = names
@@ -273,11 +269,8 @@ fn item_row(
                     @if let Some(account) = account { " · on " (account) }
                 }
                 span.item-meta { (schedule_words(&item.schedule)) }
-                @if let Some(goal) = goal {
-                    span.item-meta {
-                        "Target " (magnitude(goal.target)) ", spent from it so far "
-                        (magnitude(goal.spent))
-                    }
+                @if let Some(spent) = goal_spent {
+                    span.item-meta { "Spent from it so far " (magnitude(*spent)) }
                 }
                 @if let Some(notes) = &item.notes {
                     span.item-meta { (notes) }
