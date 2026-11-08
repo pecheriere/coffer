@@ -251,7 +251,7 @@ fn the_floor_keeps_only_what_the_budget_could_use() {
             paid_on(home, usd(500), date(2026, 11, 9)),
         ],
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     };
     assert_eq!(need(&unsettled(&input)), 1_000);

@@ -7,7 +7,7 @@
 use jiff::civil::{Date, date};
 
 use super::{
-    budget, every, fixed_floor, household, line, monthly, one_off, paid_on, run_as_given, spent,
+    budget, every, fixed_fund, household, line, monthly, one_off, paid_on, run_as_given, spent,
     stored, usd, usd_totals,
 };
 use crate::forecast::{Forecast, ForecastInput, ItemInput, SpentTransaction};
@@ -17,15 +17,15 @@ use crate::plan::{CalendarMonth, IntervalUnit, SettlementKind};
 const JAN_30: Date = date(2027, 1, 30);
 const FEB_1: Date = date(2027, 2, 1);
 
-/// As of `as_of`, with a window of `horizon_months` and a floor of 0. The balance from November
-/// isn't stale, so the only cautions are the bills'.
+/// As of `as_of`, with a window of `horizon_months` and an emergency fund of 0. The balance from
+/// November isn't stale, so the only cautions are the bills'.
 fn on(as_of: Date, horizon_months: u8) -> ForecastInput {
     ForecastInput {
         today: as_of,
         as_of,
         horizon_months,
         stale_after_days: 365,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     }
 }
