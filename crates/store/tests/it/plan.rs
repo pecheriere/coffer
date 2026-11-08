@@ -11,7 +11,8 @@ use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClas
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, spending_applies,
+    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, default_tier,
+    spending_applies,
 };
 use coffer_domain::transactions::{
     CategoryGroupName, CategoryKind, CategoryName, Description, Notes, SplitInput,
@@ -104,6 +105,11 @@ impl World {
             schedule,
             spending: spending_applies(PlanDirection::Outflow, &schedule)
                 .then_some(PlanSpending::Bill),
+            tier: default_tier(
+                PlanDirection::Outflow,
+                &schedule,
+                spending_applies(PlanDirection::Outflow, &schedule).then_some(PlanSpending::Bill),
+            ),
             created_at: at(1),
         }
     }
@@ -254,13 +260,14 @@ async fn spending_roundtrips_and_changes() {
         .await
         .unwrap();
     assert_eq!(record.spending, Some(PlanSpending::Bill));
-    // An inflow has none, so the two change together.
+    // An inflow has neither, so the three change together.
     let record = tx
         .update_planned_item(
             id,
             PlannedItemChanges {
                 direction: Some(PlanDirection::Inflow),
                 spending: Some(None),
+                tier: Some(None),
                 ..PlannedItemChanges::default()
             },
             at(4),

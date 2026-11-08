@@ -3,7 +3,7 @@
 use axum::http::{Method, StatusCode};
 use coffer_domain::ids::{AccountId, CategoryId};
 use coffer_domain::money::{Currency, Money};
-use coffer_domain::plan::{MAX_PLAN_ITEMS, PlanDirection, PlanSchedule, PlannedItemName};
+use coffer_domain::plan::{MAX_PLAN_ITEMS, PlanDirection, PlanSchedule, PlanTier, PlannedItemName};
 use coffer_domain::time::Clock as _;
 use coffer_domain::transactions::CategoryKind;
 use coffer_server::ledger::categories::{CategoryGroupPatch, CategoryPatch};
@@ -533,6 +533,7 @@ async fn item_limit_is_409() {
                 on: date(2027, 1, 1),
             },
             spending: None,
+            tier: Some(PlanTier::MustPay),
             created_at: now,
         })
         .await

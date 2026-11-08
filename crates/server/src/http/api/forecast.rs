@@ -48,7 +48,8 @@ pub struct ForecastQuery {
                    `cash_needed` is the planned outflows, plus the goals, plus the emergency \
                    fund, minus any income counted. Each currency has its own emergency fund \
                    target (`setEmergencyFund`), applied only to that currency's totals: a fixed \
-                   amount, or some months of that currency's recurring outflows, from `as_of`, \
+                   amount, or some months of that currency's recurring `must_pay` and `essentials` \
+                   outflows, from `as_of`, \
                    whatever the horizon. `emergency_funds` lists the targets of the currencies in \
                    `totals`.\n\n\
                    `status` says how far to trust it. `firm` is a number with nothing to warn \

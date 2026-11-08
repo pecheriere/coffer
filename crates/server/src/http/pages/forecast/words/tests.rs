@@ -414,7 +414,9 @@ fn an_emergency_fund_of_months_at_zero_names_its_currency() {
         },
         &Names::of_accounts(&[]),
     );
-    assert!(sentence.contains("The emergency fund in EUR is 3 months of recurring outflows"));
+    assert!(sentence.contains(
+        "The emergency fund in EUR is 3 months of recurring must pay and essentials outflows"
+    ));
     assert!(sentence.contains("none are planned in EUR"));
 }
 

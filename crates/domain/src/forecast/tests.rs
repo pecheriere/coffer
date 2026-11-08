@@ -17,7 +17,7 @@ use crate::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
     EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanDirection, PlanSchedule, PlanSpending,
-    spending_applies,
+    PlanTier, default_tier, spending_applies,
 };
 
 mod account_cautions;
@@ -139,6 +139,11 @@ fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
         account_hint: None,
         schedule,
         spending: spending_applies(direction, &schedule).then_some(PlanSpending::Bill),
+        tier: default_tier(
+            direction,
+            &schedule,
+            spending_applies(direction, &schedule).then_some(PlanSpending::Bill),
+        ),
         goal_spent_minor: 0,
         goal_linked_both_sides: false,
         settled: BTreeMap::new(),
@@ -191,6 +196,7 @@ fn inflow(item: ItemInput) -> ItemInput {
     ItemInput {
         direction: PlanDirection::Inflow,
         spending: None,
+        tier: None,
         ..item
     }
 }
@@ -198,6 +204,7 @@ fn inflow(item: ItemInput) -> ItemInput {
 fn budget(item: ItemInput) -> ItemInput {
     ItemInput {
         spending: Some(PlanSpending::Budget),
+        tier: Some(PlanTier::Flexible),
         ..item
     }
 }

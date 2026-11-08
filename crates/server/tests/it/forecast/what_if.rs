@@ -393,3 +393,54 @@ async fn hypothetical_hint_at_an_excluded_account_cautions() {
     assert_eq!(kinds(&forecast, "cautions"), ["item_hint_not_counted"]);
     assert_eq!(forecast["surplus"], usd(3_999_999));
 }
+
+/// A hypothetical outflow takes a tier by the stored items' rules, so a months emergency
+/// fund counts it only when it is must pay or essentials.
+#[tokio::test]
+async fn hypothetical_items_take_a_tier() {
+    let (world, _, _) = funded_world().await;
+    let gym = json!({
+        "name": "Gym",
+        "amount": usd(10_000),
+        "direction": "outflow",
+        "schedule": monthly("2026-01-20"),
+    });
+    let bill = |tier: &str| with(gym.clone(), "tier", json!(tier));
+    let months =
+        json!([{"currency": "USD", "target": {"kind": "months_of_outflows", "months": 2}}]);
+    let fund_with = async |items: Value| {
+        let forecast = world
+            .what_if(&json!({"items": items, "emergency_funds": months}))
+            .await;
+        forecast["totals"][0]["emergency_fund"].clone()
+    };
+
+    assert_eq!(fund_with(json!([])).await, usd(0), "nothing to hold for");
+    assert_eq!(
+        fund_with(json!([bill("essentials")])).await,
+        usd(20_000),
+        "Nov 20 and Dec 20 of an essentials bill"
+    );
+    assert_eq!(
+        fund_with(json!([gym])).await,
+        usd(20_000),
+        "a bill is must pay by default"
+    );
+    assert_eq!(
+        fund_with(json!([bill("flexible")])).await,
+        usd(0),
+        "a flexible one isn't held for"
+    );
+
+    let (status, text) = world
+        .send(
+            Method::POST,
+            WHAT_IF,
+            &world.admin,
+            Some(&json!({"items": [bill("saving_toward")]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(answer["detail"], "only a goal is saving toward");
+}

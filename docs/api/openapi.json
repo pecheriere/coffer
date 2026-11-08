@@ -2300,7 +2300,7 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the emergency fund, minus any income counted. Each currency has its own emergency fund target (`setEmergencyFund`), applied only to that currency's totals: a fixed amount, or some months of that currency's recurring outflows, from `as_of`, whatever the horizon. `emergency_funds` lists the targets of the currencies in `totals`.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a currency in use with no emergency fund (`emergency_fund_not_set`, naming it) or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the emergency fund, minus any income counted. Each currency has its own emergency fund target (`setEmergencyFund`), applied only to that currency's totals: a fixed amount, or some months of that currency's recurring `must_pay` and `essentials` outflows, from `as_of`, whatever the horizon. `emergency_funds` lists the targets of the currencies in `totals`.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a currency in use with no emergency fund (`emergency_fund_not_set`, naming it) or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
@@ -3112,7 +3112,7 @@
           "household"
         ],
         "summary": "Sets one currency's emergency fund.",
-        "description": "Sets how much cash to keep untouched in this currency, replacing any target it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows, counted from a forecast's `as_of`. A forecast applies it to that currency's totals only, and has no number while a currency in use has none. A currency the household doesn't use yet may have one; it changes no answer until it is in use. Audited with the old and new target; the same target again writes nothing. A target out of range is 422; an unknown code, or a code not written as three capital letters, is 400.\n\nNeeds `admin`, whatever the token's account grants. The answer is the settings as `getHouseholdSettings` shows them to that token, so a token below `all` at `transactions` reads `emergency_funds` as `null`.",
+        "description": "Sets how much cash to keep untouched in this currency, replacing any target it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows whose `tier` is `must_pay` or `essentials`, counted from a forecast's `as_of`. A forecast applies it to that currency's totals only, and has no number while a currency in use has none. A currency the household doesn't use yet may have one; it changes no answer until it is in use. Audited with the old and new target; the same target again writes nothing. A target out of range is 422; an unknown code, or a code not written as three capital letters, is 400.\n\nNeeds `admin`, whatever the token's account grants. The answer is the settings as `getHouseholdSettings` shows them to that token, so a token below `all` at `transactions` reads `emergency_funds` as `null`.",
         "operationId": "setEmergencyFund",
         "parameters": [
           {
@@ -3756,7 +3756,7 @@
           "plan"
         ],
         "summary": "Every planned item the token may see.",
-        "description": "The planned items, ordered by id. Inactive items are listed only with `include_inactive=true`. Needs `read`. A token with account grants sees an item with an account hint only if it holds `transactions` on that account, and one without a hint only if it holds `transactions` on some account: a token holding only `balances` gets an empty list. A goal and a one-off describing the same expense are both counted; nothing de-duplicates them.",
+        "description": "The planned items, ordered by id. Inactive items are listed only with `include_inactive=true`. Needs `read`. A token with account grants sees an item with an account hint only if it holds `transactions` on that account, and one without a hint only if it holds `transactions` on some account: a token holding only `balances` gets an empty list. Each outflow carries its `tier` (`must_pay`, `essentials`, `flexible` or `saving_toward`), and income none. A goal and a one-off describing the same expense are both counted; nothing de-duplicates them.",
         "operationId": "listPlanItems",
         "parameters": [
           {
@@ -3862,7 +3862,7 @@
           "plan"
         ],
         "summary": "Creates a planned item.",
-        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A recurring outflow is a `bill`, counted in full, unless `spending` makes it a `budget`, which counts all of this month's occurrences, those already past too, less what was spent in its category so far this month; nothing else takes `spending`. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
+        "description": "Creates a recurring item, a one-off or a goal (a sinking fund). An outflow needs an `expense` category and an inflow an `income` one; a goal must be an outflow. A recurring outflow is a `bill`, counted in full, unless `spending` makes it a `budget`, which counts all of this month's occurrences, those already past too, less what was spent in its category so far this month; nothing else takes `spending`. Every outflow has a `tier`, which pages call its bucket: a bill and a one-off are `must_pay` and a budget `flexible` unless `tier` says otherwise, and a goal is always `saving_toward`, which nothing else may be. Income has no tier. A goal and a one-off describing the same expense are both counted, so the expense counts twice: nothing de-duplicates them. Its type never changes once it exists. Needs `write`; a token with account grants also needs `all` at `write`. With an `Idempotency-Key`, a retry of the same request within 24 hours returns the first response instead of creating again.",
         "operationId": "createPlanItem",
         "parameters": [
           {
@@ -4208,7 +4208,7 @@
           "plan"
         ],
         "summary": "Changes a planned item.",
-        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. `spending` is refused unless the item is left a recurring outflow. Changing `direction` to `inflow` drops its kind; changing it to `outflow` makes it a `bill` unless `spending` says otherwise. Changing `amount`, its currency included, or `schedule` removes the item's settlements from the household's current month on, since nobody said that was paid: the answer shows what is left, the audit entry says which went, and earlier months stay. Any other change keeps them, and a settled item can't become a budget or income until they are deleted. Needs `write`; a token with account grants also needs `all` at `write`.",
+        "description": "Changes the fields given and checks them against the item they would leave. `null` clears `account_hint` and `notes`. `schedule` replaces the whole schedule, and its `type` must stay the item's own. `spending` is refused unless the item is left a recurring outflow. Changing `direction` to `inflow` drops its kind; changing it to `outflow` makes it a `bill` unless `spending` says otherwise. An outflow keeps its `tier` unless one is sent, a bill made a budget included; changing `direction` to `inflow` drops it, and to `outflow` gives the default for its kind unless `tier` is sent. Changing `amount`, its currency included, or `schedule` removes the item's settlements from the household's current month on, since nobody said that was paid: the answer shows what is left, the audit entry says which went, and earlier months stay. Any other change keeps them, and a settled item can't become a budget or income until they are deleted. Needs `write`; a token with account grants also needs `all` at `write`.",
         "operationId": "updatePlanItem",
         "parameters": [
           {
@@ -9582,7 +9582,7 @@
           },
           {
             "type": "object",
-            "description": "This currency's emergency fund of some months of recurring outflows came to 0:\na silent emergency fund of 0 would overstate the surplus.",
+            "description": "This currency's emergency fund of some months of recurring must pay and essentials\noutflows came to 0:\na silent emergency fund of 0 would overstate the surplus.",
             "required": [
               "currency",
               "months",
@@ -10128,7 +10128,7 @@
           },
           {
             "type": "object",
-            "description": "This many months, 1 to 60, of the currency's planned recurring outflows.",
+            "description": "This many months, 1 to 60, of the currency's planned recurring outflows whose tier is\nmust pay or essentials.",
             "required": [
               "months",
               "kind"
@@ -10749,6 +10749,17 @@
               {
                 "$ref": "#/components/schemas/PlanSpending",
                 "description": "Only on a recurring outflow, where it is `bill` by default. This month's spending\nreduces no hypothetical item, whichever it is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanTier",
+                "description": "The tier of an outflow, by the same rules and defaults as a planned item's: a\nmonths emergency fund counts recurring `must_pay` and `essentials` outflows only."
               },
               {
                 "type": "null"
@@ -12492,6 +12503,16 @@
           "budget"
         ]
       },
+      "PlanTier": {
+        "type": "string",
+        "description": "Which bucket a planned outflow's money is set in, deciding what may cover an\noverspend: never from must pay, and from saving toward only when a person chooses.",
+        "enum": [
+          "must_pay",
+          "essentials",
+          "flexible",
+          "saving_toward"
+        ]
+      },
       "PlannedItemId": {
         "type": "string",
         "format": "uuid",
@@ -12558,6 +12579,17 @@
               {
                 "$ref": "#/components/schemas/PlanSpending",
                 "description": "Only on a recurring outflow, where it is `bill` by default: a `budget`\ncounts all of this month's occurrences, those already past too, less\nwhat was spent in its category so far this month; a `bill` counts in\nfull."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanTier",
+                "description": "The tier of an outflow, which pages call its bucket: `must_pay`, `essentials` or\n`flexible`, and `saving_toward` on a goal, which can be nothing else. Income has none.\nBy default a bill and a one-off are `must_pay`, a budget is `flexible` and a goal\n`saving_toward`."
               },
               {
                 "type": "null"
@@ -12671,6 +12703,17 @@
                 "type": "null"
               }
             ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanTier",
+                "description": "Only on an item left an outflow: `saving_toward` on a goal and nothing else, and\n`must_pay`, `essentials` or `flexible` on anything else. Absent, an outflow keeps its\ntier, even from bill to budget; an item that becomes income loses it, and one that\nbecomes an outflow takes its kind's default."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -12689,6 +12732,7 @@
           "active",
           "schedule",
           "spending",
+          "tier",
           "settlements",
           "created_at",
           "updated_at"
@@ -12750,6 +12794,17 @@
               {
                 "$ref": "#/components/schemas/PlanSpending",
                 "description": "A recurring outflow's kind; `null` on anything else. A `budget` counts\nall of this month's occurrences, those already past too, less what was\nspent in its category so far this month; a `bill` counts in full."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanTier",
+                "description": "Which tier an outflow's money is set in, which pages call its bucket; `null` for\nincome. A goal is always `saving_toward`, and nothing else is."
               },
               {
                 "type": "null"

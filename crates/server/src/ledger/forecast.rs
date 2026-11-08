@@ -17,8 +17,8 @@ use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
     CalendarMonth, EmergencyFund, EmergencyFunds, ForecastSettings, MAX_HYPOTHETICAL_ITEMS,
-    PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, SettlementKind, strict_date,
-    validate_amount, validate_as_of,
+    PlanDirection, PlanSchedule, PlanSpending, PlanTier, PlannedItemName, SettlementKind,
+    resolved_tier, strict_date, validate_amount, validate_as_of,
 };
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
@@ -69,6 +69,9 @@ pub struct HypotheticalItem {
     /// Only on a recurring outflow, where it is `bill` by default. This month's spending
     /// reduces no hypothetical item, whichever it is.
     pub spending: Option<PlanSpending>,
+    /// The tier of an outflow, by the same rules and defaults as a planned item's: a
+    /// months emergency fund counts recurring `must_pay` and `essentials` outflows only.
+    pub tier: Option<PlanTier>,
 }
 
 /// A forecast with other settings, and with items that are not in the plan.
@@ -181,6 +184,8 @@ impl Ledger {
                 item.direction,
                 &item.schedule,
             )?;
+            let tier = resolved_tier(item.tier, item.direction, &item.schedule, spending)
+                .map_err(plan_items::invalid)?;
             if let Some(category) = item.category {
                 check_hypothetical_category(&groups, category, item.direction)?;
             }
@@ -196,6 +201,7 @@ impl Ledger {
                 account_hint: item.account_hint,
                 schedule: item.schedule,
                 spending,
+                tier,
                 goal_spent_minor: 0,
                 goal_linked_both_sides: false,
                 settled: BTreeMap::new(),
@@ -513,6 +519,7 @@ fn stored_item(
         account_hint: item.account_hint,
         schedule: item.schedule,
         spending: item.spending,
+        tier: item.tier,
         goal_spent_minor: goal_spent.get(&item.id).copied().unwrap_or(0),
         goal_linked_both_sides: both_sides.contains(&item.id),
         settled,

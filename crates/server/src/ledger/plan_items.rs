@@ -14,23 +14,26 @@ use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Money;
 use coffer_domain::plan::{
     CalendarMonth, InvalidMonth, MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule,
-    PlanSpending, PlannedItemName, settlement_applies, spending_applies, validate_amount,
+    PlanSpending, PlanTier, PlannedItemName, resolved_tier, spending_applies, validate_amount,
 };
 use coffer_domain::policy::{Action, authorize, plan_item_visible};
 use coffer_domain::transactions::{CategoryKind, Notes};
 use coffer_store::{
-    AccountRecord, CategoryRecord, NewPlannedItem, PlannedItemChanges, PlannedItemRecord,
-    SettlementRecord, StoreError, StoreTx,
+    AccountRecord, CategoryRecord, NewPlannedItem, PlannedItemRecord, SettlementRecord, StoreError,
+    StoreTx,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use self::patch::CheckedPatch;
 use super::settlements::{SettlementView, settlements_value};
 use super::transactions::{Patch, notes};
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 use crate::http::problem::ProblemCode;
+
+mod patch;
 
 const ENTITY: &str = "planned_item";
 const HINT_INVALID: &str = "the account hint names no open account";
@@ -70,6 +73,10 @@ pub struct PlannedItemView {
     /// spent in its category so far this month; a `bill` counts in full.
     #[schema(required)]
     pub spending: Option<PlanSpending>,
+    /// Which tier an outflow's money is set in, which pages call its bucket; `null` for
+    /// income. A goal is always `saving_toward`, and nothing else is.
+    #[schema(required)]
+    pub tier: Option<PlanTier>,
     /// The months it is settled for, ordered by month: its occurrences in them count as
     /// nothing in a forecast.
     pub settlements: Vec<SettlementView>,
@@ -90,6 +97,7 @@ impl PlannedItemView {
             active: record.active,
             schedule: record.schedule,
             spending: record.spending,
+            tier: record.tier,
             settlements,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -126,6 +134,11 @@ pub struct PlannedItemInput {
     /// what was spent in its category so far this month; a `bill` counts in
     /// full.
     pub spending: Option<PlanSpending>,
+    /// The tier of an outflow, which pages call its bucket: `must_pay`, `essentials` or
+    /// `flexible`, and `saving_toward` on a goal, which can be nothing else. Income has none.
+    /// By default a bill and a one-off are `must_pay`, a budget is `flexible` and a goal
+    /// `saving_toward`.
+    pub tier: Option<PlanTier>,
 }
 
 /// Changes to a planned item. An absent field stays as it is.
@@ -159,6 +172,11 @@ pub struct PlannedItemPatch {
     /// outflow loses its kind; one that becomes an outflow is a `bill` unless
     /// this says otherwise.
     pub spending: Option<PlanSpending>,
+    /// Only on an item left an outflow: `saving_toward` on a goal and nothing else, and
+    /// `must_pay`, `essentials` or `flexible` on anything else. Absent, an outflow keeps its
+    /// tier, even from bill to budget; an item that becomes income loses it, and one that
+    /// becomes an outflow takes its kind's default.
+    pub tier: Option<PlanTier>,
 }
 
 fn views_of(settlements: &[SettlementRecord]) -> Vec<SettlementView> {
@@ -181,6 +199,9 @@ pub(super) fn invalid(error: PlanError) -> LedgerError {
         PlanError::GoalDatesInverted => "a goal's due date must be after its start date",
         PlanError::GoalMustBeOutflow => "a goal must be an outflow",
         PlanError::SettlementOutOfWindow => "a settlement must fall within 12 months of today",
+        PlanError::IncomeHasNoTier => "income has no tier",
+        PlanError::GoalIsSavingToward => "a goal is always saving toward",
+        PlanError::OnlyGoalSavesToward => "only a goal is saving toward",
         // `PlanError` is non-exhaustive, and no other variant arises here.
         _ => "the planned item is not valid",
     })
@@ -260,171 +281,6 @@ async fn check_category(
     check_item_category(&category, group.archived_at.is_some(), direction)
 }
 
-/// `audited` with what differs between the amounts `from` and `to`.
-fn amount_audited(mut audited: AuditChanges, from: Money, to: Money) -> AuditChanges {
-    if to.minor_units != from.minor_units {
-        audited = audited.change("amount_minor", from.minor_units, to.minor_units);
-    }
-    if to.currency != from.currency {
-        audited = audited.change("currency", from.currency.as_str(), to.currency.as_str());
-    }
-    audited
-}
-
-/// A patch's text and amount, validated before the write lock is taken.
-struct CheckedPatch {
-    name: Option<PlannedItemName>,
-    amount: Option<Money>,
-    notes: Patch<Notes>,
-    category: Option<CategoryId>,
-    direction: Option<PlanDirection>,
-    account_hint: Patch<AccountId>,
-    active: Option<bool>,
-    schedule: Option<PlanSchedule>,
-    spending: Option<PlanSpending>,
-}
-
-impl CheckedPatch {
-    fn new(patch: PlannedItemPatch) -> Result<Self, LedgerError> {
-        let name = patch
-            .name
-            .as_deref()
-            .map(PlannedItemName::parse)
-            .transpose()
-            .map_err(invalid)?;
-        if let Some(amount) = patch.amount {
-            validate_amount(amount).map_err(invalid)?;
-        }
-        // Empty notes clear them.
-        let notes = match &patch.notes {
-            Patch::Absent => Patch::Absent,
-            Patch::Clear => Patch::Clear,
-            Patch::Set(value) => notes(value)?.map_or(Patch::Clear, Patch::Set),
-        };
-        Ok(Self {
-            name,
-            amount: patch.amount,
-            notes,
-            category: patch.category,
-            direction: patch.direction,
-            account_hint: patch.account_hint,
-            active: patch.active,
-            schedule: patch.schedule,
-            spending: patch.spending,
-        })
-    }
-
-    /// Checks what this patch changes against the item it would leave, and
-    /// returns what differs from `current` with its audit record. What it
-    /// leaves alone isn't checked again: an item whose category has since been
-    /// archived can still be renamed.
-    async fn changes(
-        self,
-        tx: &mut StoreTx,
-        current: &PlannedItemRecord,
-    ) -> Result<(PlannedItemChanges, AuditChanges), LedgerError> {
-        let direction = self.direction.unwrap_or(current.direction);
-        let category = self.category.unwrap_or(current.category);
-        let schedule = self.schedule.unwrap_or(current.schedule);
-        if schedule.item_type() != current.schedule.item_type() {
-            return Err(LedgerError::Invalid(TYPE_CHANGED));
-        }
-        let direction_changed = direction != current.direction;
-        if direction_changed || schedule != current.schedule {
-            schedule.validate(direction).map_err(invalid)?;
-        }
-        if direction_changed || category != current.category {
-            check_category(tx, category, direction).await?;
-        }
-
-        let spending = resolved_spending(
-            self.spending,
-            current.spending.unwrap_or(PlanSpending::Bill),
-            direction,
-            &schedule,
-        )?;
-        // A settlement says only what a bill or a one-off can have said of it.
-        if !settlement_applies(direction, &schedule, spending)
-            && settlement_applies(current.direction, &current.schedule, current.spending)
-            && !tx.settlements_of_item(current.id).await?.is_empty()
-        {
-            return Err(LedgerError::Conflict(ProblemCode::Conflict, SETTLED));
-        }
-
-        let mut changes = PlannedItemChanges::default();
-        let mut audited = AuditChanges::new();
-        if let Some(name) = self.name.filter(|name| *name != current.name) {
-            audited = audited.change("name", current.name.as_str(), name.as_str());
-            changes.name = Some(name);
-        }
-        if category != current.category {
-            audited = audited.change("category", current.category, category);
-            changes.category = Some(category);
-        }
-        if let Some(amount) = self.amount.filter(|amount| *amount != current.amount) {
-            // A link promises the goal's currency is the transaction's.
-            if amount.currency != current.amount.currency && tx.goal_has_links(current.id).await? {
-                return Err(LedgerError::Conflict(
-                    ProblemCode::Conflict,
-                    GOAL_LINKED_CURRENCY,
-                ));
-            }
-            audited = amount_audited(audited, current.amount, amount);
-            changes.amount = Some(amount);
-        }
-        if direction_changed {
-            audited = audited.change("direction", current.direction.as_str(), direction.as_str());
-            changes.direction = Some(direction);
-        }
-        let hint = match self.account_hint {
-            Patch::Absent => current.account_hint,
-            Patch::Clear => None,
-            Patch::Set(account) => Some(account),
-        };
-        if hint != current.account_hint {
-            if let Some(account) = hint {
-                check_hint(tx.get_account(account).await)?;
-            }
-            audited = audited.change("account_hint", current.account_hint, hint);
-            changes.account_hint = Some(hint);
-        }
-        let new_notes = match self.notes {
-            Patch::Absent => current.notes.clone(),
-            Patch::Clear => None,
-            Patch::Set(notes) => Some(notes),
-        };
-        if new_notes != current.notes {
-            audited = audited.change(
-                "notes",
-                current.notes.as_ref().map(Notes::as_str),
-                new_notes.as_ref().map(Notes::as_str),
-            );
-            changes.notes = Some(new_notes);
-        }
-        if let Some(active) = self.active.filter(|active| *active != current.active) {
-            audited = audited.change("active", current.active, active);
-            changes.active = Some(active);
-        }
-        if schedule != current.schedule {
-            audited = audited.change(
-                "schedule",
-                schedule_text(&current.schedule)?,
-                schedule_text(&schedule)?,
-            );
-            changes.schedule = Some(schedule);
-        }
-        if spending != current.spending {
-            audited = audited.change(
-                "spending",
-                current.spending.map(PlanSpending::as_str),
-                spending.map(PlanSpending::as_str),
-            );
-            changes.spending = Some(spending);
-        }
-        Ok((changes, audited))
-    }
-}
-
 impl Ledger {
     /// Whether `actor` may create, change or delete planned items: the plan
     /// is shared by every account, so an `all` grant at write is needed.
@@ -463,6 +319,8 @@ impl Ledger {
             input.direction,
             &input.schedule,
         )?;
+        let tier = resolved_tier(input.tier, input.direction, &input.schedule, spending)
+            .map_err(invalid)?;
         let new_notes = input.notes.as_deref().map(notes).transpose()?.flatten();
         let schedule = schedule_text(&input.schedule)?;
         let now = self.clock.now();
@@ -486,6 +344,7 @@ impl Ledger {
                 active: input.active.unwrap_or(true),
                 schedule: input.schedule,
                 spending,
+                tier,
                 created_at: now,
             })
             .await?;
@@ -499,7 +358,8 @@ impl Ledger {
             .set("notes", record.notes.as_ref().map(Notes::as_str))
             .set("active", record.active)
             .set("schedule", schedule)
-            .set("spending", record.spending.map(PlanSpending::as_str));
+            .set("spending", record.spending.map(PlanSpending::as_str))
+            .set("tier", record.tier.map(PlanTier::as_str));
         audit(
             &mut tx,
             now,
@@ -608,7 +468,8 @@ impl Ledger {
             .unset("notes", current.notes.as_ref().map(Notes::as_str))
             .unset("active", current.active)
             .unset("schedule", schedule_text(&current.schedule)?)
-            .unset("spending", current.spending.map(PlanSpending::as_str));
+            .unset("spending", current.spending.map(PlanSpending::as_str))
+            .unset("tier", current.tier.map(PlanTier::as_str));
         if !settlements.is_empty() {
             changes = changes.unset("settlements", settlements_value(&settlements)?);
         }
@@ -700,6 +561,9 @@ mod tests {
             PlanError::GoalDatesInverted,
             PlanError::GoalMustBeOutflow,
             PlanError::SettlementOutOfWindow,
+            PlanError::IncomeHasNoTier,
+            PlanError::GoalIsSavingToward,
+            PlanError::OnlyGoalSavesToward,
         ] {
             assert_eq!(invalid(error).to_string(), error.to_string());
         }
