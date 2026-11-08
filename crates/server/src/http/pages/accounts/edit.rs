@@ -48,6 +48,7 @@ pub(super) fn card(view: &AccountView, csrf: &str) -> Markup {
             form method="post" action=(account_path(view)) {
                 (csrf_field(csrf))
                 (shown_fields(view))
+                input type="hidden" name="shown_name" value=(view.name);
                 input type="hidden" name="shown_liquidity" value=(view.liquidity.as_str());
                 input type="hidden" name="shown_liquidity_chosen" value=(view.liquidity_overridden);
                 input type="hidden" name="shown_net_worth" value=(view.include_in_net_worth);
@@ -166,6 +167,8 @@ pub(super) struct EditForm {
     #[serde(default)]
     shown_beneficiary: String,
     #[serde(default)]
+    shown_name: String,
+    #[serde(default)]
     shown_liquidity: String,
     #[serde(default)]
     shown_liquidity_chosen: String,
@@ -211,13 +214,15 @@ impl EditForm {
             beneficiary: &self.shown_beneficiary,
         };
         shown.matches(current)
+            && self.shown_name == current.name
             && self.shown_liquidity == current.liquidity.as_str()
             && self.shown_liquidity_chosen == current.liquidity_overridden.to_string()
             && self.shown_net_worth == current.include_in_net_worth.to_string()
             && self.shown_forecast == current.include_in_forecast.to_string()
     }
 
-    /// The change asked of `current`, which the page showed: only what differs from that.
+    /// The change asked of `current`, which the page showed: only what differs from that. The
+    /// name is asked only when it differs from the one the page showed.
     fn patch(self, current: &AccountView) -> Result<AccountPatch, &'static str> {
         let kind = parse_kind(&self.kind).map_err(|_| KIND_UNKNOWN)?;
         let liquidity = match self.liquidity.as_str() {
@@ -230,7 +235,7 @@ impl EditForm {
         let belongs_to = parse_belongs_to(&self.belongs_to).map_err(|_| BELONGS_TO_UNKNOWN)?;
         let changed = |ticked: bool, shown: bool| (ticked != shown).then_some(ticked);
         Ok(AccountPatch {
-            name: Some(self.name).filter(|name| name.trim() != current.name),
+            name: Some(self.name).filter(|name| name.trim() != self.shown_name),
             kind: kind.filter(|kind| *kind != current.kind),
             liquidity: liquidity
                 .filter(|class| !(current.liquidity_overridden && *class == current.liquidity)),

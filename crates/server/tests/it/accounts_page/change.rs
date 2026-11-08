@@ -19,6 +19,7 @@ impl World {
             _ => String::new(),
         };
         let shown = [
+            ("shown_name", text("name")),
             ("shown_kind", text("kind")),
             ("shown_belongs_to", text("belongs_to")),
             ("shown_chosen", text("belongs_to_overridden")),
@@ -163,6 +164,7 @@ async fn a_form_older_than_the_account_changes_nothing() {
             &format!("/accounts/{id}"),
             &[
                 ("csrf", &csrf),
+                ("shown_name", "Everyday"),
                 ("shown_kind", "savings"),
                 ("shown_belongs_to", "household"),
                 ("shown_chosen", "false"),
@@ -179,6 +181,42 @@ async fn a_form_older_than_the_account_changes_nothing() {
     assert_eq!(reply.status, StatusCode::CONFLICT);
     assert!(reply.body.contains("changed after the page opened"));
     assert_eq!(world.account(&id.to_string()).await["name"], "Everyday");
+
+    // Renamed since the page opened, which showed the old name: unticking a box sends the old
+    // name back, and must neither apply nor rename it back.
+    world
+        .server
+        .ledger
+        .update_account(
+            &world.alice,
+            id,
+            coffer_server::ledger::accounts::AccountPatch {
+                name: Some("Joint".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let audited = world.audited(&id.to_string(), "account.update").await.len();
+    let reply = world
+        .change(
+            id,
+            &[
+                ("shown_name", "Everyday"),
+                ("name", "Everyday"),
+                ("forecast", ""),
+            ],
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(reply.body.contains("changed after the page opened"));
+    let account = world.account(&id.to_string()).await;
+    assert_eq!(account["name"], "Joint");
+    assert_eq!(account["include_in_forecast"], true);
+    assert_eq!(
+        world.audited(&id.to_string(), "account.update").await.len(),
+        audited
+    );
 }
 
 #[tokio::test]
