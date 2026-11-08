@@ -2,11 +2,6 @@
 //! the default for its kind and keeps settlements, and the store refuses an outflow read
 //! without one, since the table's CHECK allows a NULL tier.
 
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration test: helpers outside #[test] functions panic to fail the test"
-)]
-
 use std::borrow::Cow;
 
 use coffer_domain::ids::{CategoryId, MemberId, PlannedItemId};

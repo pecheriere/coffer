@@ -104,15 +104,7 @@ impl CheckedPatch {
             direction,
             &schedule,
         )?;
-        // An item staying an outflow keeps its tier unless one is sent; one becoming an
-        // outflow takes its kind's default, and one becoming income loses it.
-        let kept = if direction == current.direction {
-            current.tier
-        } else {
-            None
-        };
-        let tier =
-            resolved_tier(self.tier.or(kept), direction, &schedule, spending).map_err(invalid)?;
+        let tier = tier_left(self.tier, current, direction, &schedule, spending)?;
         // A settlement says only what a bill or a one-off can have said of it.
         if !settlement_applies(direction, &schedule, spending)
             && settlement_applies(current.direction, &current.schedule, current.spending)
@@ -183,22 +175,53 @@ impl CheckedPatch {
             );
             changes.schedule = Some(schedule);
         }
-        if spending != current.spending {
-            audited = audited.change(
-                "spending",
-                current.spending.map(PlanSpending::as_str),
-                spending.map(PlanSpending::as_str),
-            );
-            changes.spending = Some(spending);
-        }
-        if tier != current.tier {
-            audited = audited.change(
-                "tier",
-                current.tier.map(PlanTier::as_str),
-                tier.map(PlanTier::as_str),
-            );
-            changes.tier = Some(tier);
-        }
+        audited = kinds_audited(audited, &mut changes, current, spending, tier);
         Ok((changes, audited))
     }
+}
+
+/// The tier an item is left with. One staying an outflow keeps its tier unless one is sent;
+/// one becoming an outflow takes its kind's default unless one is sent, and one becoming
+/// income loses it.
+fn tier_left(
+    sent: Option<PlanTier>,
+    current: &PlannedItemRecord,
+    direction: PlanDirection,
+    schedule: &PlanSchedule,
+    spending: Option<PlanSpending>,
+) -> Result<Option<PlanTier>, LedgerError> {
+    let kept = if direction == current.direction {
+        current.tier
+    } else {
+        None
+    };
+    resolved_tier(sent.or(kept), direction, schedule, spending).map_err(invalid)
+}
+
+/// `audited`, and `changes`, with the spending kind and the tier where they differ from
+/// `current`'s.
+fn kinds_audited(
+    mut audited: AuditChanges,
+    changes: &mut PlannedItemChanges,
+    current: &PlannedItemRecord,
+    spending: Option<PlanSpending>,
+    tier: Option<PlanTier>,
+) -> AuditChanges {
+    if spending != current.spending {
+        audited = audited.change(
+            "spending",
+            current.spending.map(PlanSpending::as_str),
+            spending.map(PlanSpending::as_str),
+        );
+        changes.spending = Some(spending);
+    }
+    if tier != current.tier {
+        audited = audited.change(
+            "tier",
+            current.tier.map(PlanTier::as_str),
+            tier.map(PlanTier::as_str),
+        );
+        changes.tier = Some(tier);
+    }
+    audited
 }
