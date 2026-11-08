@@ -9,7 +9,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use coffer_domain::forecast::{CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
+use coffer_domain::forecast::{Blocker, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{Action, authorize};
@@ -61,7 +61,10 @@ async fn forecast_page(
     let csrf = authorize(&actor, Action::WriteHousehold)
         .is_ok()
         .then_some(viewer.csrf.as_str());
-    Ok(page(&frame, "Forecast", &content(&forecast, &names, csrf)).into_response())
+    // Only who may set an emergency fund is sent to the page where it's set.
+    let can_manage = authorize(&actor, Action::ManageHousehold).is_ok();
+    let content = content(&forecast, &names, csrf, can_manage);
+    Ok(page(&frame, "Forecast", &content).into_response())
 }
 
 /// The names the cautions speak of. Only they need more than the forecast holds, which
@@ -91,7 +94,7 @@ async fn names<'a>(state: &AppState, actor: &Actor, forecast: &'a Forecast) -> N
     names
 }
 
-fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup {
+fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage: bool) -> Markup {
     html! {
         h1 { "Forecast" }
         p {
@@ -105,7 +108,7 @@ fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup
                 "."
             }
         }
-        (answer(forecast, names, csrf))
+        (answer(forecast, names, csrf, can_manage))
         // A row without a surplus has a blocker leaving something out of its sums,
         // and a sum that looks whole is what a blocker exists to prevent.
         @for totals in forecast.totals.iter().filter(|totals| totals.surplus.is_some()) {
@@ -115,7 +118,7 @@ fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup
 }
 
 /// The answer, how far to trust it and why, all together.
-fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup {
+fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage: bool) -> Markup {
     let blocked = !forecast.blockers.is_empty();
     html! {
         section.card id="answer" {
@@ -125,7 +128,16 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup 
                 h3 { "Why there's no number" }
                 ul.reasons {
                     @for blocker in &forecast.blockers {
-                        li { (blocker_sentence(blocker)) }
+                        li {
+                            (blocker_sentence(blocker, can_manage))
+                            @if can_manage && matches!(blocker, Blocker::EmergencyFundNotSet { .. }) {
+                                " "
+                                a href="/admin/household#emergency-fund" {
+                                    "Set one on the Household page"
+                                }
+                                "."
+                            }
+                        }
                     }
                 }
             }
@@ -375,10 +387,10 @@ mod tests {
         };
         let names = Names::of_accounts(&[]);
 
-        let reading = content(&forecast, &names, None).into_string();
+        let reading = content(&forecast, &names, None, false).into_string();
         assert!(reading.contains("dated earlier this month"));
         assert!(!reading.contains("<form"));
-        let writing = content(&forecast, &names, Some("token")).into_string();
+        let writing = content(&forecast, &names, Some("token"), true).into_string();
         assert!(writing.contains("paid for all of November 2026"));
     }
 
@@ -411,7 +423,7 @@ mod tests {
         };
         let names = Names::of_accounts(&[]);
         assert!(
-            !content(&forecast, &names, None)
+            !content(&forecast, &names, None, false)
                 .into_string()
                 .contains("as transfers")
         );
@@ -421,7 +433,7 @@ mod tests {
             count: 1,
             amount: usd,
         }];
-        let reading = content(&forecast, &names, None).into_string();
+        let reading = content(&forecast, &names, None, false).into_string();
         assert!(
             reading.contains("Rules filed 1 transaction (45.00 USD) as transfers with no link")
         );

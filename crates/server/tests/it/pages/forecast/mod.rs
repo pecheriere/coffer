@@ -2,6 +2,7 @@
 //! `GET /api/v1/forecast` answers, in words, and changes nothing.
 //! Settling a month from it is in `settling`.
 
+mod blocker_link;
 mod settling;
 
 use axum::body::Body;
