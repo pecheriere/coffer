@@ -54,7 +54,7 @@ async fn forecast_page(
     let frame = Frame {
         look: session.look(&state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::Forecast),
+        current: Some(Nav::More),
         narrow: false,
     };
     // None for a role that couldn't settle, which sees the words and no buttons.
@@ -175,12 +175,12 @@ fn headline(forecast: &Forecast) -> Markup {
             Some(surplus) if surplus.minor_units < 0 => {
                 h2.answer-label { "Shortfall" }
                 p.answer-number.answer-short { (magnitude(surplus)) }
-                p.fine { "What's missing to cover the planned outflows, goals and safety floor." }
+                p.fine { "What's missing to cover the planned outflows, goals and emergency fund." }
             }
             Some(surplus) => {
                 h2.answer-label { "Surplus" }
                 p.answer-number { (money(surplus)) }
-                p.fine { "What could be invested once the planned outflows, goals and safety floor are covered." }
+                p.fine { "What could be invested once the planned outflows, goals and emergency fund are covered." }
             }
             None => {
                 h2.answer-label { "No number yet" }
@@ -226,7 +226,7 @@ fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
                     (sum_row("", "Cash needed", &bare(totals.cash_needed)))
                     (sum_row("sum-part", "Planned outflows", &bare(totals.planned_outflows)))
                     (sum_row("sum-part", "Goals", &bare(totals.goals)))
-                    (sum_row("sum-part", "Safety floor", &bare(totals.floor)))
+                    (sum_row("sum-part", "Emergency fund", &bare(totals.emergency_fund)))
                     (sum_row("sum-part", "Income counted, taken off", &bare(totals.planned_inflows)))
                     @if let Some(surplus) = totals.surplus {
                         @if surplus.minor_units < 0 {
@@ -247,7 +247,7 @@ fn currency_section(forecast: &Forecast, totals: &CurrencyTotals) -> Markup {
             (months_table(forecast.include_income, &forecast.months, totals.currency, several))
             p.fine {
                 "Projected cash is what's left at the end of the month, or of the forecast, after "
-                "planned outflows and any income counted. It doesn't set aside goals or the safety floor. "
+                "planned outflows and any income counted. It doesn't set aside goals or the emergency fund. "
                 "Goal accrual is what goals add to the need that month, and the first month holds "
                 "all they had built up before it. The first month also holds what a budget's "
                 "days earlier that month have left unspent, since it may still go."
@@ -353,7 +353,7 @@ mod tests {
             end_exclusive: date(2026, 12, 15),
             horizon_months: 1,
             include_income: false,
-            floor: None,
+            emergency_funds: Vec::new(),
             stale_after_days: 7,
             status: ForecastStatus::Provisional,
             surplus: None,
@@ -395,7 +395,7 @@ mod tests {
             end_exclusive: date(2026, 12, 15),
             horizon_months: 1,
             include_income: false,
-            floor: None,
+            emergency_funds: Vec::new(),
             stale_after_days: 7,
             status: ForecastStatus::Firm,
             surplus: None,

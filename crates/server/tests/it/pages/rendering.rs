@@ -196,7 +196,7 @@ fn current_nav_links(body: &str) -> Vec<String> {
 #[tokio::test]
 async fn nav_marks_the_current_page() {
     let (_server, mut admin, _) = with_admin().await;
-    for (path, current) in [("/account", "Account"), ("/admin/invites", "Invites")] {
+    for (path, current) in [("/account", "More"), ("/admin/invites", "More")] {
         let page = admin.get(path).await;
         assert_eq!(
             current_nav_links(&page.body),
@@ -223,7 +223,7 @@ fn assert_themed_error(reply: &Reply, status: StatusCode) {
             .contains(&format!("href=\"{}\"", themes::DEFAULT.stylesheet.url))
     );
     assert!(reply.body.contains("illustration-error"));
-    assert!(reply.body.contains("href=\"/account\""));
+    assert!(reply.body.contains("href=\"/\">Back to coffer<"));
 }
 
 #[tokio::test]

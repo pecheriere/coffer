@@ -1,8 +1,8 @@
 //! The household's settings (spec §6.8, §8.9, §8.10 N8).
 //!
-//! A safety floor is a figure of the plan over every account, so it takes the
-//! forecast's access (R2) to read: below that it reads as `null`, the same as none
-//! set, on a read and in a patch's answer alike. The other settings say how a forecast
+//! An emergency fund is a figure of the plan over every account, so it takes the
+//! forecast's access (R2) to read: below that the list reads as `null`, whether or not any
+//! is set, on a read and in a change's answer alike. The other settings say how a forecast
 //! is worked out and how numbers are shown, not what the household holds or plans.
 //!
 //! The display currency starts unset and is never guessed: a guess from the accounts
@@ -18,11 +18,12 @@
 use coffer_domain::audit::AuditChanges;
 use coffer_domain::identity::Actor;
 use coffer_domain::money::Currency;
-use coffer_domain::plan::{ForecastSettings, PlanError, SafetyFloor};
+use coffer_domain::plan::{EmergencyFund, EmergencyFunds, ForecastSettings, PlanError};
 use coffer_domain::policy::{
     AccountAccess, AccountLevel, Action, authorize, authorize_every_account,
 };
 use coffer_domain::time::IanaZone;
+use coffer_store::StoreTx;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -35,15 +36,12 @@ const ENTITY: &str = "household";
 /// The message for a time zone that isn't one; never echoes the input.
 const UNKNOWN_ZONE: &str = "the time zone must be an IANA name, such as America/Los_Angeles";
 
-/// The settings to change. A field left out stays as it is. A floor or a display
-/// currency can be replaced but never unset: `null` leaves it. Only a time zone can be
-/// cleared.
+/// The settings to change. A field left out stays as it is. A display currency can be
+/// replaced but never unset: `null` leaves it. Only a time zone can be cleared. Emergency
+/// funds have their own operations.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ForecastSettingsPatch {
-    /// A new safety floor; `null` or absent keeps the current one.
-    #[serde(default)]
-    pub floor: Option<SafetyFloor>,
     #[serde(default)]
     pub include_income: Option<bool>,
     /// 1 to 60 months.
@@ -70,11 +68,12 @@ pub struct ForecastSettingsPatch {
 /// The household's settings: those of a forecast, the display currency and the time zone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct HouseholdSettings {
-    /// The safety floor. Until one is set a forecast has no number: a silent
-    /// floor of 0 would overstate what can be invested. A token without the access a
-    /// forecast needs reads `null` whether or not one is set.
+    /// Each currency's emergency fund target, sorted by currency; a currency missing has
+    /// none. A forecast has no number while a currency in use lacks one: a silent target of
+    /// 0 would overstate what can be invested. A token without the access a forecast needs
+    /// reads `null` whether or not any is set.
     #[schema(required)]
-    pub floor: Option<SafetyFloor>,
+    pub emergency_funds: Option<Vec<EmergencyFund>>,
     /// Whether planned inflows reduce the cash needed.
     pub include_income: bool,
     /// The horizon of a forecast that names none: 1 to 60 months.
@@ -99,18 +98,18 @@ pub struct HouseholdSettings {
 impl HouseholdSettings {
     fn new(
         settings: ForecastSettings,
+        emergency_funds: Option<Vec<EmergencyFund>>,
         display_currency: Option<Currency>,
         timezone: String,
         timezone_setting: Option<&IanaZone>,
     ) -> Self {
         let ForecastSettings {
-            floor,
             include_income,
             default_horizon_months,
             stale_after_days,
         } = settings;
         Self {
-            floor,
+            emergency_funds,
             include_income,
             default_horizon_months,
             stale_after_days,
@@ -124,37 +123,37 @@ impl HouseholdSettings {
 /// The message for a rejected setting; never echoes the input.
 pub(super) fn invalid(error: PlanError) -> LedgerError {
     LedgerError::Invalid(match error {
-        PlanError::InvalidFloor => "a fixed floor must be between 0 and 10^15 minor units",
-        PlanError::InvalidFloorMonths => "floor months must be 1 to 60",
+        PlanError::InvalidEmergencyFund => {
+            "a fixed emergency fund must be between 0 and 10^15 minor units"
+        }
+        PlanError::InvalidEmergencyFundMonths => "emergency fund months must be 1 to 60",
         PlanError::InvalidHorizon => "the horizon must be 1 to 60 months",
         PlanError::InvalidStaleDays => "stale after must be 1 to 365 days",
         // `PlanError` is non-exhaustive, and no other variant arises here.
-        _ => "the forecast settings are not valid",
+        _ => "the settings are not valid",
     })
 }
 
-/// `settings` as `actor` may have them: without the floor unless it may have a
-/// forecast.
-fn as_shown(actor: &Actor, access: &AccountAccess, settings: ForecastSettings) -> ForecastSettings {
-    match authorize_every_account(actor, access, AccountLevel::Transactions) {
-        Ok(()) => settings,
-        Err(_) => ForecastSettings {
-            floor: None,
-            ..settings
-        },
-    }
+/// `funds` as `actor` may have them: listed by currency if it may have a forecast, and
+/// `None` otherwise, whether or not any is set.
+fn as_shown(
+    actor: &Actor,
+    access: &AccountAccess,
+    funds: EmergencyFunds,
+) -> Option<Vec<EmergencyFund>> {
+    authorize_every_account(actor, access, AccountLevel::Transactions)
+        .ok()
+        .map(|()| {
+            funds
+                .into_iter()
+                .map(|(currency, target)| EmergencyFund { currency, target })
+                .collect()
+        })
 }
 
 /// What differs between two sets of forecast settings, for the audit log.
-fn forecast_changes(current: &ForecastSettings, next: &ForecastSettings) -> AuditChanges {
+fn forecast_changes(current: ForecastSettings, next: ForecastSettings) -> AuditChanges {
     let mut changes = AuditChanges::new();
-    if next.floor != current.floor {
-        changes = changes.change(
-            "floor",
-            current.floor.map(|floor| floor.canonical()),
-            next.floor.map(|floor| floor.canonical()),
-        );
-    }
     if next.include_income != current.include_income {
         changes = changes.change(
             "include_income",
@@ -180,8 +179,29 @@ fn forecast_changes(current: &ForecastSettings, next: &ForecastSettings) -> Audi
 }
 
 impl Ledger {
-    /// The household's settings: the defaults until some are set. The floor reads as
-    /// none without the forecast's access.
+    /// The settings as `tx` sees them, shown as [`Self::household_settings`] shows them to
+    /// `actor`.
+    pub(super) async fn household_settings_in(
+        &self,
+        tx: &mut StoreTx,
+        actor: &Actor,
+        access: &AccountAccess,
+    ) -> Result<HouseholdSettings, LedgerError> {
+        let forecast = tx.forecast_settings().await?;
+        let funds = tx.emergency_funds().await?;
+        let display_currency = tx.display_currency().await?;
+        let zone = tx.household_zone().await?;
+        Ok(HouseholdSettings::new(
+            forecast,
+            as_shown(actor, access, funds),
+            display_currency,
+            self.time.applying_name(zone.as_ref()),
+            zone.as_ref(),
+        ))
+    }
+
+    /// The household's settings: the defaults until some are set. The emergency funds read
+    /// as `None` without the forecast's access.
     ///
     /// # Errors
     ///
@@ -195,7 +215,8 @@ impl Ledger {
         let access = self.access.resolve(actor).await?;
         let stored = self.store.household_settings().await?;
         Ok(HouseholdSettings::new(
-            as_shown(actor, &access, stored.forecast),
+            stored.forecast,
+            as_shown(actor, &access, stored.emergency_funds),
             stored.display_currency,
             self.time.applying_name(stored.timezone.as_ref()),
             stored.timezone.as_ref(),
@@ -207,8 +228,8 @@ impl Ledger {
     /// transaction, or if there are too many for one, in a rebuild the daily job runs, while
     /// reports answer as rebuilding. A new time zone that puts today before the table's last
     /// day cuts the table back to today in this transaction (see
-    /// [`coffer_store::StoreTx::set_household_zone`]). The answer shows the floor as
-    /// [`Self::household_settings`] does, so it can't confirm a guess at it.
+    /// [`coffer_store::StoreTx::set_household_zone`]). The answer shows the emergency funds
+    /// as [`Self::household_settings`] does, so it can't confirm a guess at them.
     ///
     /// # Errors
     ///
@@ -239,6 +260,7 @@ impl Ledger {
         // between this read and the no-op check below.
         let mut tx = self.store.begin().await?;
         let current = tx.forecast_settings().await?;
+        let funds = tx.emergency_funds().await?;
         let current_display = tx.display_currency().await?;
         let new_display = patch
             .display_currency
@@ -246,7 +268,6 @@ impl Ledger {
         let current_zone = tx.household_zone().await?;
         let new_zone = requested_zone.filter(|chosen| *chosen != current_zone);
         let next = ForecastSettings {
-            floor: patch.floor.or(current.floor),
             include_income: patch.include_income.unwrap_or(current.include_income),
             default_horizon_months: patch
                 .default_horizon_months
@@ -256,7 +277,7 @@ impl Ledger {
         next.validate().map_err(invalid)?;
 
         let forecast_changed = next != current;
-        let mut changes = forecast_changes(&current, &next);
+        let mut changes = forecast_changes(current, next);
         if let Some(chosen) = new_display {
             changes = changes.change(
                 "display_currency",
@@ -273,7 +294,8 @@ impl Ledger {
         }
         if changes.is_empty() {
             return Ok(HouseholdSettings::new(
-                as_shown(actor, &access, current),
+                current,
+                as_shown(actor, &access, funds),
                 current_display,
                 self.time.applying_name(current_zone.as_ref()),
                 current_zone.as_ref(),
@@ -302,7 +324,8 @@ impl Ledger {
         tx.commit().await?;
         let zone_now = new_zone.unwrap_or(current_zone);
         Ok(HouseholdSettings::new(
-            as_shown(actor, &access, next),
+            next,
+            as_shown(actor, &access, funds),
             new_display.or(current_display),
             self.time.applying_name(zone_now.as_ref()),
             zone_now.as_ref(),

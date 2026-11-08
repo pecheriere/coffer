@@ -3,8 +3,8 @@
 use jiff::civil::date;
 
 use super::{
-    AS_OF, budget, cash, eur, fixed_floor, household, hypothetical, line, monthly, one_off,
-    paid_on, run, run_as_given, spent,
+    AS_OF, budget, cash, eur, fixed_fund, household, hypothetical, line, monthly, one_off, paid_on,
+    run, run_as_given, spent,
 };
 use super::{assert_provisional, currency, usd};
 use crate::forecast::{CategorySpent, ForecastInput, ForecastStatus, ItemInput};
@@ -296,7 +296,7 @@ fn pools_of_each_currency_stay_apart() {
     let food = CategoryId::new();
     let forecast = run(&ForecastInput {
         accounts: vec![cash("Checking", usd(100)), cash("Konto", eur(100))],
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         items: vec![
             budget(monthly("Dollars", usd(10_000), date(2026, 1, 20), food)),
             budget(monthly("Euros", eur(10_000), date(2026, 1, 21), food)),

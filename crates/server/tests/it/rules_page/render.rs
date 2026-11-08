@@ -16,7 +16,7 @@ async fn an_empty_list_says_so_and_offers_the_form() {
     assert!(page.body.contains(r#"action="/rules""#));
     assert!(
         page.body
-            .contains(r#"<a href="/rules" aria-current="page">Rules</a>"#)
+            .contains(r#"<a href="/more" aria-current="page">More</a>"#)
     );
 }
 

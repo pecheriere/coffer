@@ -33,7 +33,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 use self::card::{Permissions, Shared, connection_card};
-use super::account::viewer;
+use super::account::viewer_setting_up;
 use super::layout::{Frame, Nav, csrf_field, empty_state, page};
 use super::{PageError, PageForm, PageSession};
 use crate::auth::AuthError;
@@ -124,7 +124,7 @@ async fn render(
     notice: Option<Notice>,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
-    let viewer = viewer(state, session).await;
+    let viewer = viewer_setting_up(state, session).await;
     let look = session.look(state).await;
     let connections = state
         .sync
@@ -209,7 +209,7 @@ async fn render(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Connections),
+        current: Some(Nav::More),
         narrow: false,
     };
     let markup = page(&frame, "Connections", &content);

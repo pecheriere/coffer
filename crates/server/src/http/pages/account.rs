@@ -72,6 +72,14 @@ pub async fn viewer(state: &AppState, session: &PageSession) -> Viewer {
     }
 }
 
+/// [`viewer`] for a page that sets bank accounts up: no notice points at what it shows.
+pub async fn viewer_setting_up(state: &AppState, session: &PageSession) -> Viewer {
+    Viewer {
+        setup_needed: 0,
+        ..viewer(state, session).await
+    }
+}
+
 async fn account(
     State(state): State<AppState>,
     session: PageSession,
@@ -153,7 +161,7 @@ async fn render(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Account),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(page(&frame, "Account", &content))

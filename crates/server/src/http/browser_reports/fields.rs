@@ -48,7 +48,7 @@ const LINK_RECONNECT: &str = "/connections/{id}/plaid/reconnect";
 /// on the page, a browser extension's say, quoting one by accident. It can't stop one that means
 /// to forge a report, which anyone can post with any kind and text: every report is logged as
 /// `trust="untrusted"`.
-const PAGES: [&str; 10] = [
+const PAGES: [&str; 11] = [
     "/login",
     "/setup/{token}",
     "/invite/{token}",
@@ -59,6 +59,7 @@ const PAGES: [&str; 10] = [
     "/admin/members",
     "/admin/invites",
     "/admin/household",
+    "/more",
 ];
 
 /// CSP directives by name. Anything else is logged as [`OTHER`].

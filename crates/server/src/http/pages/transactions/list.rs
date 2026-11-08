@@ -1,6 +1,7 @@
 //! The list: one page of what `GET /api/v1/transactions` answers for the filters chosen, newest
-//! first, with the form that marks the ticked ones reviewed and the one that enters a transaction
-//! by hand. The review queue is the list of what is still to review.
+//! first, under how many transactions wait to be checked, with the form that confirms the guesses
+//! rules made on the page, the one that marks the ticked ones reviewed and the one that enters a
+//! transaction by hand. The review queue is the list of what is still to review.
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Response};
@@ -8,17 +9,18 @@ use coffer_domain::transactions::ReviewStatus;
 use maud::{Markup, html};
 
 use super::filters::{CategoryChoice, FLAGS, Filters};
-use super::{LIST, Names, chips, detail_path, filed_as, flag_words, manual, refused, title};
+use super::{
+    LIST, Names, QUEUE, chips, detail_path, filed_as, flag_words, guesses, manual, refused, title,
+    to_check,
+};
 use crate::http::AppState;
 use crate::http::pages::account::viewer;
 use crate::http::pages::amounts::{day, money};
 use crate::http::pages::layout::{Frame, Nav, csrf_field, empty_state, page as frame_page};
 use crate::http::pages::{PageError, PageSession};
+use crate::ledger::review_count::ReviewCount;
 use crate::ledger::transactions::{TransactionPage, TransactionView};
 use crate::themes::Look;
-
-/// The review queue: what nobody has reviewed yet.
-const QUEUE: &str = "/transactions?review=unreviewed";
 
 pub(super) async fn page(
     State(state): State<AppState>,
@@ -32,19 +34,25 @@ pub(super) async fn page(
         .list_transactions(&actor, filters.input(after.clone())?)
         .await
         .map_err(refused)?;
+    let to_check = state
+        .ledger
+        .count_transactions_to_review(&actor)
+        .await
+        .map_err(refused)?;
     let names = Names::read(&state, &actor).await?;
     let viewer = viewer(&state, &session).await;
     let look = session.look(&state).await;
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Transactions),
+        current: Some(Nav::Activity),
         narrow: false,
     };
     let view = ListView {
         filters: &filters,
         first_page: after.is_none(),
         found: &found,
+        to_check,
         names: &names,
         csrf: &viewer.csrf,
         look,
@@ -56,6 +64,8 @@ struct ListView<'a> {
     filters: &'a Filters,
     first_page: bool,
     found: &'a TransactionPage,
+    /// The review queue's length, whatever the filters.
+    to_check: ReviewCount,
     names: &'a Names,
     csrf: &'a str,
     look: Look,
@@ -65,6 +75,7 @@ fn content(view: &ListView<'_>) -> Markup {
     let queue = view.filters.review == Some(ReviewStatus::Unreviewed);
     html! {
         h1 { (if queue { "To review" } else { "Transactions" }) }
+        p #to-check { (to_check(view.to_check)) }
         p.ranges {
             a href=(LIST) aria-current=[(view.filters == &Filters::default()).then_some("page")] { "All" }
             " "
@@ -79,6 +90,7 @@ fn content(view: &ListView<'_>) -> Markup {
                     "No transactions match."
                 }))
             } @else {
+                (guesses::form(&view.found.items, view.names, view.csrf, &view.filters.query()))
                 (table(view))
             }
             @if let Some(next) = &view.found.next {

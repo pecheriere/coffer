@@ -1,5 +1,5 @@
 //! The cash forecast (spec §6.8, §8.9): what is free once the window's planned
-//! spending, goals and the safety floor are covered. Pure and exact: amounts add
+//! spending, goals and the emergency fund are covered. Pure and exact: amounts add
 //! up in `i128`, and any total that does not fit in `i64` refuses the answer.
 
 use std::collections::BTreeSet;
@@ -9,7 +9,7 @@ use jiff::civil::Date;
 
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
-use crate::plan::{PlanDirection, PlanSchedule, SafetyFloor};
+use crate::plan::{EmergencyFund, EmergencyFundTarget, PlanDirection, PlanSchedule};
 use book::{Book, Bucket, Window, buckets};
 use cautions::cautions;
 use lines::{account_line, dated_line, goal_line, not_counted};
@@ -87,7 +87,7 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         };
         items.extend(line);
     }
-    add_floor(input, &mut book)?;
+    add_emergency_funds(input, &mut book)?;
 
     let blockers = blockers(input, &accounts, &book);
     let no_surplus = blockers
@@ -112,7 +112,18 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         end_exclusive,
         horizon_months: input.horizon_months,
         include_income: input.include_income,
-        floor: input.floor,
+        emergency_funds: totals
+            .iter()
+            .filter_map(|row| {
+                input
+                    .emergency_funds
+                    .get(&row.currency)
+                    .map(|&target| EmergencyFund {
+                        currency: row.currency,
+                        target,
+                    })
+            })
+            .collect(),
         stale_after_days: input.stale_after_days,
         status,
         surplus,
@@ -172,30 +183,41 @@ fn count(dates: &[Date]) -> Result<u32, ForecastError> {
     u32::try_from(dates.len()).map_err(|_| ForecastError::OutOfRange)
 }
 
-fn add_floor(input: &ForecastInput, book: &mut Book) -> Result<(), ForecastError> {
-    match input.floor {
-        None => {}
-        Some(SafetyFloor::Fixed { amount }) => {
-            book.tally(amount.currency).floor = i128::from(amount.minor_units);
-        }
-        Some(SafetyFloor::MonthsOfOutflows { months }) => {
-            let end_exclusive = months_after(input.as_of, months);
-            for item in &input.items {
-                let recurring = matches!(item.schedule, PlanSchedule::Recurring { .. });
-                if !recurring || item.direction != PlanDirection::Outflow {
-                    continue;
-                }
-                let dates = item.schedule.occurrences(input.as_of, end_exclusive);
-                let held = i128::from(item.amount.minor_units) * i128::from(count(&dates)?);
-                // A row exists only where this holds money: an item with no
-                // occurrence in these months puts no currency in use.
-                if held != 0 {
-                    book.tally(item.amount.currency).floor += held;
-                }
+/// Sets each currency's emergency fund from its target. A target applies only to its own
+/// currency, and only to one the book already has: it never puts a currency in use.
+fn add_emergency_funds(input: &ForecastInput, book: &mut Book) -> Result<(), ForecastError> {
+    for (currency, tally) in &mut book.tallies {
+        tally.emergency_fund = match input.emergency_funds.get(currency) {
+            None => 0,
+            Some(&EmergencyFundTarget::Fixed { minor_units }) => i128::from(minor_units),
+            Some(&EmergencyFundTarget::MonthsOfOutflows { months }) => {
+                months_of_outflows(input, *currency, months)?
             }
-        }
+        };
     }
     Ok(())
+}
+
+/// What `currency`'s recurring outflows come to over the `months` from `as_of`.
+fn months_of_outflows(
+    input: &ForecastInput,
+    currency: Currency,
+    months: u8,
+) -> Result<i128, ForecastError> {
+    let end_exclusive = months_after(input.as_of, months);
+    let mut held = 0;
+    for item in &input.items {
+        let recurring = matches!(item.schedule, PlanSchedule::Recurring { .. });
+        if !recurring
+            || item.direction != PlanDirection::Outflow
+            || item.amount.currency != currency
+        {
+            continue;
+        }
+        let dates = item.schedule.occurrences(input.as_of, end_exclusive);
+        held += i128::from(item.amount.minor_units) * i128::from(count(&dates)?);
+    }
+    Ok(held)
 }
 
 fn blockers(input: &ForecastInput, accounts: &[AccountLine], book: &Book) -> Vec<Blocker> {
@@ -205,9 +227,12 @@ fn blockers(input: &ForecastInput, accounts: &[AccountLine], book: &Book) -> Vec
             currencies: book.tallies.keys().copied().collect(),
         });
     }
-    if input.floor.is_none() {
-        blockers.push(Blocker::FloorNotSet);
-    }
+    blockers.extend(
+        book.tallies
+            .keys()
+            .filter(|currency| !input.emergency_funds.contains_key(currency))
+            .map(|&currency| Blocker::EmergencyFundNotSet { currency }),
+    );
     // A closed card's debt counts, but it is no cash to forecast from.
     let open_account_counts = input
         .accounts
@@ -251,13 +276,13 @@ fn settle(
         } else {
             0
         };
-        let needed = tally.outflows + tally.goals + tally.floor - inflows_counted;
+        let needed = tally.outflows + tally.goals + tally.emergency_fund - inflows_counted;
         totals.push(CurrencyTotals {
             currency,
             cash_available: money(tally.cash, currency)?,
             planned_outflows: money(tally.outflows, currency)?,
             goals: money(tally.goals, currency)?,
-            floor: money(tally.floor, currency)?,
+            emergency_fund: money(tally.emergency_fund, currency)?,
             planned_inflows: money(inflows_counted, currency)?,
             excluded_inflows: money(tally.inflows - inflows_counted, currency)?,
             cash_needed: money(needed, currency)?,
@@ -268,6 +293,7 @@ fn settle(
             },
         });
 
+        let has_target = input.emergency_funds.contains_key(&currency);
         let mut projected = tally.cash;
         let mut dipped = false;
         for (bucket, month) in months.iter_mut().zip(tally.months) {
@@ -276,9 +302,9 @@ fn settle(
                 projected += month.inflows;
             }
             let projected_cash = money(projected, currency)?;
-            if input.include_income && input.floor.is_some() && !dipped && projected < tally.floor {
+            if input.include_income && has_target && !dipped && projected < tally.emergency_fund {
                 dipped = true;
-                cautions.push(Caution::CashDipsBelowFloor {
+                cautions.push(Caution::CashDipsBelowEmergencyFund {
                     month: bucket.month,
                     currency,
                     projected_cash,

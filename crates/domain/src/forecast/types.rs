@@ -18,8 +18,8 @@ use crate::ids::{
 };
 use crate::money::{Currency, Money};
 use crate::plan::{
-    CalendarMonth, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, SafetyFloor,
-    SettlementKind,
+    CalendarMonth, EmergencyFund, EmergencyFunds, PlanDirection, PlanItemType, PlanSchedule,
+    PlanSpending, SettlementKind,
 };
 use crate::transfer_rate::CrossCurrencyLink;
 
@@ -33,8 +33,8 @@ pub struct ForecastInput {
     pub horizon_months: u8,
     /// Whether planned inflows reduce the cash needed.
     pub include_income: bool,
-    /// `None` until the household sets one, which blocks the number.
-    pub floor: Option<SafetyFloor>,
+    /// Each currency's emergency fund target. A currency in use without one blocks the number.
+    pub emergency_funds: EmergencyFunds,
     /// A counted balance older than this many days is flagged.
     pub stale_after_days: u16,
     /// Every account, closed and excluded ones too.
@@ -265,8 +265,9 @@ pub struct Forecast {
     pub end_exclusive: Date,
     pub horizon_months: u8,
     pub include_income: bool,
-    #[cfg_attr(feature = "openapi", schema(required))]
-    pub floor: Option<SafetyFloor>,
+    /// The emergency fund targets of the currencies in `totals`, sorted by currency. A
+    /// currency in use without one has none here and an `emergency_fund_not_set` blocker.
+    pub emergency_funds: Vec<EmergencyFund>,
     pub stale_after_days: u16,
     pub status: ForecastStatus,
     /// Cash available minus cash needed; negative is a shortfall. Null exactly
@@ -319,13 +320,15 @@ pub struct CurrencyTotals {
     /// Planned outflows in the window, after this month's reduction.
     pub planned_outflows: Money,
     pub goals: Money,
-    pub floor: Money,
+    /// The cash to keep untouched in this currency, from its emergency fund target: 0 while
+    /// it has none.
+    pub emergency_fund: Money,
     /// Planned inflows counted: 0 unless `include_income`.
     pub planned_inflows: Money,
     /// Planned inflows left out because `include_income` is off. Income expected in an account
     /// that doesn't count isn't among them, since turning it on wouldn't add it.
     pub excluded_inflows: Money,
-    /// `planned_outflows + goals + floor - planned_inflows`.
+    /// `planned_outflows + goals + emergency_fund - planned_inflows`.
     pub cash_needed: Money,
     /// `cash_available - cash_needed`. Null when a blocker other than
     /// `mixed_currencies` applies.
@@ -519,7 +522,7 @@ pub struct MonthCurrency {
     /// had accrued before it.
     pub goal_accrual: Money,
     /// Cash at the end of the month or the window: `cash_available` plus inflows
-    /// counted minus outflows so far, without goals or the floor.
+    /// counted minus outflows so far, without goals or the emergency fund.
     pub projected_cash: Money,
     /// What each item contributes, in input order, without zeros.
     pub items: Vec<MonthItem>,
@@ -541,8 +544,9 @@ pub struct MonthItem {
 pub enum Blocker {
     /// More than one currency is in use; each has its own row in `totals`.
     MixedCurrencies { currencies: Vec<Currency> },
-    /// No safety floor is set. A silent floor of 0 would overstate the surplus.
-    FloorNotSet,
+    /// A currency in use has no emergency fund target. A silent target of 0 would overstate
+    /// the surplus.
+    EmergencyFundNotSet { currency: Currency },
     /// No account counts as cash.
     NoCountedAccounts,
     /// A counted account has no balance, so it could hold anything.
@@ -643,9 +647,9 @@ pub enum Caution {
     },
     /// A closed card still owes money, which counts against cash.
     ClosedLiabilityOwing { account: AccountId, balance: Money },
-    /// A floor of some months of recurring outflows came to 0 in this currency:
-    /// a silent floor of 0 would overstate the surplus.
-    MonthsFloorIsZero { currency: Currency, months: u8 },
+    /// This currency's emergency fund of some months of recurring outflows came to 0:
+    /// a silent emergency fund of 0 would overstate the surplus.
+    EmergencyFundMonthsIsZero { currency: Currency, months: u8 },
     /// A short-term liability shows money in hand, perhaps entered with the
     /// wrong sign. It was added as it stands.
     LiabilityBalancePositive { account: AccountId, balance: Money },
@@ -711,9 +715,9 @@ pub enum Caution {
         total: Money,
         pending: Money,
     },
-    /// The first month whose closing cash is below the floor: income arriving
-    /// later cannot pay for it.
-    CashDipsBelowFloor {
+    /// The first month whose closing cash is below the currency's emergency fund: income
+    /// arriving later cannot pay for it.
+    CashDipsBelowEmergencyFund {
         month: CalendarMonth,
         currency: Currency,
         projected_cash: Money,

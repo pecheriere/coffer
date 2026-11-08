@@ -18,8 +18,8 @@ use crate::forecast::{
 use crate::ids::{CategoryId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
-    CalendarMonth, IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending,
-    SafetyFloor, SettlementKind,
+    CalendarMonth, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanDirection, PlanItemType,
+    PlanSchedule, PlanSpending, SettlementKind,
 };
 
 const MAX_AMOUNT: i64 = 1_000_000_000;
@@ -183,6 +183,25 @@ fn spent_rows(
         .collect()
 }
 
+/// None, a fixed amount or some months.
+fn target() -> impl Strategy<Value = Option<EmergencyFundTarget>> {
+    prop_oneof![
+        Just(None),
+        (0..MAX_AMOUNT).prop_map(|minor_units| Some(EmergencyFundTarget::Fixed { minor_units })),
+        (1_u8..13).prop_map(|months| Some(EmergencyFundTarget::MonthsOfOutflows { months })),
+    ]
+}
+
+/// A target, or none, for each of dollars and euros.
+fn emergency_funds() -> impl Strategy<Value = EmergencyFunds> {
+    (target(), target()).prop_map(|(dollars, euros)| {
+        [("USD", dollars), ("EUR", euros)]
+            .into_iter()
+            .filter_map(|(code, target)| target.map(|target| (currency(code), target)))
+            .collect()
+    })
+}
+
 fn input() -> impl Strategy<Value = ForecastInput> {
     let categories = vec![CategoryId::new(), CategoryId::new(), CategoryId::new()];
     let spent = collection::vec(
@@ -193,11 +212,7 @@ fn input() -> impl Strategy<Value = ForecastInput> {
         collection::vec(account(), 0..5),
         collection::vec(item(categories.clone()), 0..12),
         spent,
-        prop_oneof![
-            Just(None),
-            (0..MAX_AMOUNT).prop_map(|minor| Some(SafetyFloor::Fixed { amount: usd(minor) })),
-            (1_u8..13).prop_map(|months| Some(SafetyFloor::MonthsOfOutflows { months })),
-        ],
+        emergency_funds(),
         1_u8..16,
         any::<bool>(),
         -2..2,
@@ -212,7 +227,7 @@ fn input() -> impl Strategy<Value = ForecastInput> {
                 accounts,
                 items,
                 spent,
-                floor,
+                emergency_funds,
                 horizon_months,
                 include_income,
                 shift,
@@ -223,7 +238,7 @@ fn input() -> impl Strategy<Value = ForecastInput> {
                     today: as_of.checked_add(i64::from(shift).days()).unwrap(),
                     as_of,
                     accounts,
-                    floor,
+                    emergency_funds,
                     horizon_months,
                     include_income,
                     spent_transactions: spent_rows(&picks, &items, as_of),
@@ -569,7 +584,7 @@ proptest! {
     fn totals_explain_themselves(input in input()) {
         let forecast = compute_forecast(&input).unwrap();
         for row in &forecast.totals {
-            let needed = wide(row.planned_outflows) + wide(row.goals) + wide(row.floor)
+            let needed = wide(row.planned_outflows) + wide(row.goals) + wide(row.emergency_fund)
                 - wide(row.planned_inflows);
             prop_assert_eq!(wide(row.cash_needed), needed, "needed adds up");
             if let Some(surplus) = row.surplus {
@@ -703,7 +718,7 @@ proptest! {
     /// what it keeps off a budget is no more than settling saved: the need can only fall,
     /// whatever the plan.
     #[test]
-    fn settling_never_raises_the_need_nor_touches_cash_or_the_floor(input in input()) {
+    fn settling_never_raises_the_need_nor_touches_cash_or_the_emergency_fund(input in input()) {
         let settled = compute_forecast(&input).unwrap();
         let plain = compute_forecast(&unsettled(&input)).unwrap();
         for row in &settled.totals {
@@ -713,13 +728,13 @@ proptest! {
             };
             prop_assert!(row.cash_needed.minor_units <= before.cash_needed.minor_units, "need");
             prop_assert_eq!(row.cash_available, before.cash_available, "cash");
-            prop_assert_eq!(row.floor, before.floor, "floor");
+            prop_assert_eq!(row.emergency_fund, before.emergency_fund, "emergency fund");
         }
         let extra = settled.cautions.iter().filter(|caution| !plain.cautions.contains(caution));
         for caution in extra {
             // What a caution says can change with the need: a gap's amount, as spending moves
             // to another bill, which may then be unclear, how much history is missing, and the
-            // first month cash dips below the floor.
+            // first month cash dips below the emergency fund.
             prop_assert!(
                 matches!(
                     caution,
@@ -727,7 +742,7 @@ proptest! {
                         | Caution::BillPaymentUnclear { .. }
                         | Caution::BillHistoryMissing { .. }
                         | Caution::RefundBesidePaidBill { .. }
-                        | Caution::CashDipsBelowFloor { .. }
+                        | Caution::CashDipsBelowEmergencyFund { .. }
                 ),
                 "settling adds no caution of its own"
             );

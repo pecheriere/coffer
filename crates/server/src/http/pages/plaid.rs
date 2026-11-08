@@ -25,7 +25,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::account::{json_session, viewer};
+use super::account::{json_session, viewer_setting_up};
 use super::layout::{Frame, Nav, Script, page_with_scripts};
 use super::{ApiJson, PageError, PageSession};
 use crate::assets;
@@ -111,7 +111,7 @@ async fn render(
     let Some(plaid) = &state.config.plaid else {
         return Err(PageError::not_found());
     };
-    let viewer = viewer(state, session).await;
+    let viewer = viewer_setting_up(state, session).await;
     let (title, submit) = match link {
         Link::New => ("Connect with Plaid", EXCHANGE_PATH.to_owned()),
         Link::Update(id) => (
@@ -123,7 +123,7 @@ async fn render(
     let frame = Frame {
         look: session.look(state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::Connections),
+        current: Some(Nav::More),
         narrow: false,
     };
     let nonce = mint_nonce();

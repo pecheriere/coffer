@@ -53,7 +53,7 @@ async fn categories_page(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Categories),
+        current: Some(Nav::More),
         narrow: false,
     };
     // None for a viewer who couldn't change them, who sees the list and no forms. Any other

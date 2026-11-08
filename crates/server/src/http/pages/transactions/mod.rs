@@ -1,9 +1,9 @@
 //! The transactions pages: the list with its filters and the review queue, one transaction's
 //! page, and the forms that review, file, split and edit one, link it with its other leg, merge
-//! or dismiss its possible duplicates, mark several reviewed at once, and enter or delete one by
-//! hand. Every read and write goes through the ledger service the API
-//! uses, with the session's actor, so it authorizes and audits as for the API; the pages decide
-//! nothing of their own, and a refusal is the service's fixed words.
+//! or dismiss its possible duplicates, mark several reviewed at once, confirm the guesses rules
+//! made on the list's page, and enter or delete one by hand. Every read and write goes through
+//! the ledger service the API uses, with the session's actor, so it authorizes and audits as for
+//! the API; the pages decide nothing of their own, and a refusal is the service's fixed words.
 
 mod detail;
 mod duplicates;
@@ -11,6 +11,7 @@ mod edit;
 mod filters;
 #[cfg(test)]
 mod fixtures;
+mod guesses;
 mod links;
 mod list;
 mod manual;
@@ -32,10 +33,13 @@ use crate::http::AppState;
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::accounts::AccountView;
+use crate::ledger::review_count::ReviewCount;
 use crate::ledger::transactions::{AttributionView, TransactionView};
 
 /// The list's path.
 const LIST: &str = "/transactions";
+/// The review queue: what nobody has reviewed yet.
+const QUEUE: &str = "/transactions?review=unreviewed";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -55,6 +59,18 @@ pub fn routes() -> Router<AppState> {
             "/transactions/{id}/dismiss-duplicate",
             post(duplicates::dismiss),
         )
+}
+
+/// How many transactions wait in the review queue, in words linking to it, as Home and the list
+/// say it.
+pub(super) fn to_check(count: ReviewCount) -> Markup {
+    html! {
+        @match count.unreviewed {
+            0 => "Nothing to check.",
+            1 => a href=(QUEUE) { "1 transaction to check" },
+            many => a href=(QUEUE) { (many) " transactions to check" },
+        }
+    }
 }
 
 /// A transaction's page.

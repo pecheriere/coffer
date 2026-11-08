@@ -6,8 +6,7 @@
 use jiff::civil::{Date, date};
 
 use super::{
-    budget, fixed_floor, household, hypothetical, line, monthly, one_off, paid_on, run_as_given,
-    usd,
+    budget, fixed_fund, household, hypothetical, line, monthly, one_off, paid_on, run_as_given, usd,
 };
 use crate::forecast::{Caution, Forecast, ForecastInput, ForecastStatus, LooseEnds};
 use crate::ids::CategoryId;
@@ -17,7 +16,7 @@ use crate::plan::{CalendarMonth, SettlementKind};
 fn one_month() -> ForecastInput {
     ForecastInput {
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     }
 }

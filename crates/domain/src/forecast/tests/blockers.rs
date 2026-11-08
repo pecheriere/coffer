@@ -2,11 +2,12 @@
 
 use jiff::civil::date;
 
-use super::{cash, eur, every_month, fixed_floor, household, one_off, run, stored};
+use super::{cash, eur, every_month, fixed_fund, household, months_fund, one_off, run, stored};
 use super::{currency, totals_of, usd};
 use crate::forecast::{AccountInput, Blocker, ForecastInput, ForecastStatus, NotCountedReason};
 use crate::ids::CategoryId;
-use crate::plan::SafetyFloor;
+use crate::money::Money;
+use crate::plan::{EmergencyFund, EmergencyFundTarget, EmergencyFunds};
 
 #[test]
 fn mixed_currencies_block_and_report_each_currency() {
@@ -16,7 +17,10 @@ fn mixed_currencies_block_and_report_each_currency() {
             cash("Checking", usd(1_000_000)),
             cash("Konto", eur(500_000)),
         ],
-        floor: Some(fixed_floor(usd(200_000))),
+        emergency_funds: fixed_fund(usd(200_000))
+            .into_iter()
+            .chain(fixed_fund(eur(0)))
+            .collect(),
         items: vec![
             one_off("Bill", usd(100_000), date(2026, 12, 1), other),
             one_off("Rechnung", eur(50_000), date(2026, 12, 2), other),
@@ -39,12 +43,16 @@ fn mixed_currencies_block_and_report_each_currency() {
 
     let dollars = totals_of(&forecast, "USD");
     assert_eq!(dollars.cash_available, usd(1_000_000), "dollars held");
-    assert_eq!(dollars.cash_needed, usd(300_000), "bill plus floor");
+    assert_eq!(
+        dollars.cash_needed,
+        usd(300_000),
+        "bill plus emergency fund"
+    );
     assert_eq!(dollars.surplus, Some(usd(700_000)), "dollar surplus");
 
     let euros = totals_of(&forecast, "EUR");
     assert_eq!(euros.cash_available, eur(500_000), "euros held");
-    assert_eq!(euros.floor, eur(0), "the fixed floor is in dollars");
+    assert_eq!(euros.emergency_fund, eur(0), "the euro target is 0");
     assert_eq!(euros.cash_needed, eur(50_000), "the euro bill");
     assert_eq!(euros.surplus, Some(eur(450_000)), "euro surplus");
 
@@ -91,46 +99,84 @@ fn foreign_uncounted_account_is_not_mixed() {
     assert_eq!(forecast.totals.len(), 1, "no row for it");
 }
 
+/// A target in a currency the household doesn't use is allowed, since a household may plan
+/// a new account, and it changes no answer.
 #[test]
-fn foreign_fixed_floor_is_mixed() {
-    let forecast = run(&ForecastInput {
-        floor: Some(fixed_floor(eur(100))),
+fn an_unused_currency_target_changes_nothing() {
+    let input = ForecastInput {
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
+    };
+    let plain = run(&input);
+    let pounds = Money {
+        minor_units: 1,
+        currency: currency("GBP"),
+    };
+    let with_pounds = run(&ForecastInput {
+        emergency_funds: fixed_fund(usd(0))
+            .into_iter()
+            .chain(fixed_fund(pounds))
+            .collect(),
+        ..input
     });
+    assert_eq!(with_pounds, plain, "the same answer");
     assert_eq!(
-        forecast.surplus, None,
-        "a euro floor cannot net with dollars"
-    );
-    assert_eq!(forecast.blockers.len(), 1, "mixed");
-    assert_eq!(
-        totals_of(&forecast, "EUR").surplus,
-        Some(eur(-100)),
-        "euros"
+        with_pounds.emergency_funds,
+        [EmergencyFund {
+            currency: currency("USD"),
+            target: EmergencyFundTarget::Fixed { minor_units: 0 },
+        }],
+        "only the targets of currencies in use are listed"
     );
 }
 
-/// The item falls outside the one-month window but inside the floor's twelve
-/// months. Leaving that floor out of the number would hide money the household
-/// must hold, and it cannot be netted with dollars, so it is a second currency.
+/// With dollars targeted and euros not, euros' number is blocked, and dollars' target is
+/// never applied to euros.
 #[test]
-fn months_floor_in_another_currency_is_mixed() {
+fn a_target_applies_only_to_its_currency() {
+    let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        horizon_months: 1,
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 12 }),
-        items: vec![stored("Later", eur(70_000), every_month(date(2027, 3, 1)))],
+        accounts: vec![cash("Checking", usd(500_000)), cash("Konto", eur(10_000))],
+        emergency_funds: fixed_fund(usd(100_000)),
+        items: vec![one_off("Bill", usd(20_000), date(2026, 12, 1), other)],
         ..household()
     });
     assert_eq!(
         forecast.blockers,
-        [Blocker::MixedCurrencies {
-            currencies: vec![currency("EUR"), currency("USD")],
-        }],
-        "a floor in euros is a second currency"
+        [
+            Blocker::MixedCurrencies {
+                currencies: vec![currency("EUR"), currency("USD")],
+            },
+            Blocker::EmergencyFundNotSet {
+                currency: currency("EUR"),
+            },
+        ],
+        "euros have no target, dollars do"
     );
-    assert_eq!(forecast.surplus, None, "no single number");
+    let dollars = totals_of(&forecast, "USD");
+    assert_eq!(dollars.emergency_fund, usd(100_000), "dollars' own target");
+    assert_eq!(
+        dollars.cash_needed,
+        usd(120_000),
+        "bill plus emergency fund"
+    );
     let euros = totals_of(&forecast, "EUR");
-    assert_eq!(euros.floor, eur(630_000), "March to November 2027");
-    assert_eq!(euros.surplus, Some(eur(-630_000)), "and none held");
+    assert_eq!(euros.emergency_fund, eur(0), "nothing from dollars' target");
+    assert_eq!(euros.surplus, None, "no number for euros");
+}
+
+/// The item falls outside the one-month window but inside the target's twelve months. A
+/// target never puts a currency in use, so euros get no row and the number stands.
+#[test]
+fn a_target_never_puts_a_currency_in_use() {
+    let forecast = run(&ForecastInput {
+        horizon_months: 1,
+        emergency_funds: months_fund(12),
+        items: vec![stored("Later", eur(70_000), every_month(date(2027, 3, 1)))],
+        ..household()
+    });
+    assert_eq!(forecast.blockers, [], "euros are not in use");
+    assert_eq!(forecast.totals.len(), 1, "dollars only");
     assert_eq!(
         forecast.items.len(),
         0,
@@ -139,14 +185,20 @@ fn months_floor_in_another_currency_is_mixed() {
 }
 
 #[test]
-fn floor_not_set_blocks() {
+fn emergency_fund_not_set_blocks() {
     let forecast = run(&ForecastInput {
-        floor: None,
+        emergency_funds: EmergencyFunds::new(),
         ..household()
     });
     assert_eq!(forecast.status, ForecastStatus::Unavailable, "no number");
-    assert_eq!(forecast.surplus, None, "no silent floor of 0");
-    assert_eq!(forecast.blockers, [Blocker::FloorNotSet], "the reason");
+    assert_eq!(forecast.surplus, None, "no silent emergency fund of 0");
+    assert_eq!(
+        forecast.blockers,
+        [Blocker::EmergencyFundNotSet {
+            currency: currency("USD"),
+        }],
+        "the reason, naming the currency"
+    );
     let totals = totals_of(&forecast, "USD");
     assert_eq!(totals.surplus, None, "nor per currency");
     assert_eq!(
@@ -157,7 +209,7 @@ fn floor_not_set_blocks() {
 }
 
 #[test]
-fn zero_floor_is_firm() {
+fn zero_emergency_fund_is_firm() {
     let forecast = run(&household());
     assert_eq!(
         forecast.status,
@@ -194,13 +246,13 @@ fn no_counted_accounts_blocks() {
 fn an_empty_household_has_no_number() {
     let forecast = run(&ForecastInput {
         accounts: Vec::new(),
-        floor: None,
+        emergency_funds: EmergencyFunds::new(),
         ..household()
     });
     assert_eq!(
         forecast.blockers,
-        [Blocker::FloorNotSet, Blocker::NoCountedAccounts],
-        "both reasons"
+        [Blocker::NoCountedAccounts],
+        "no currency is in use, so none lacks a target"
     );
     assert_eq!(forecast.status, ForecastStatus::Unavailable, "no number");
     assert_eq!(forecast.surplus, None, "not surplus 0");

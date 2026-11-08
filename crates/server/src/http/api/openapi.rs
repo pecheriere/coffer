@@ -58,8 +58,8 @@ fn operation_tags() -> [Tag; 14] {
         tag(tags::MEMBERS, "The household's members."),
         tag(
             tags::HOUSEHOLD,
-            "The household-wide settings: safety floor, income, horizon, stale-balance \
-             threshold and display currency.",
+            "The household-wide settings: emergency funds, income, horizon, stale-balance \
+             threshold, display currency and time zone.",
         ),
         tag(
             tags::ACCOUNTS,

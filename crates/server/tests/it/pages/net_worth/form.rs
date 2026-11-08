@@ -101,7 +101,7 @@ async fn forged_form_fails_whole() {
         &[("display_currency", "usd")][..],
         &[][..],
         &[("display_currency", "USD"), ("extra", "1")][..],
-        &[("display_currency", "USD"), ("floor", "0")][..],
+        &[("display_currency", "USD"), ("emergency_funds", "0")][..],
     ] {
         let reply = set_currency(&mut admin, fields).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{fields:?}");

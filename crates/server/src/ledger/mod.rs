@@ -7,12 +7,14 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod emergency_funds;
 pub mod forecast;
 pub mod manual_rates;
 pub mod members;
 pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;
+pub mod review_count;
 pub mod rules;
 pub mod settings;
 pub mod settlements;

@@ -14,7 +14,7 @@ use super::{AccountInput, Caution, ForecastError, ForecastInput, HintEffect, Ite
 use crate::accounts::LiquidityClass;
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
-use crate::plan::{PlanDirection, PlanSchedule, SafetyFloor};
+use crate::plan::{EmergencyFundTarget, PlanDirection, PlanSchedule};
 use crate::transfer_rate::mismatches;
 
 pub(super) fn cautions(
@@ -101,11 +101,12 @@ pub(super) fn cautions(
         });
     }
     cautions.extend(reduction.bill_cautions.iter().cloned());
-    if let Some(SafetyFloor::MonthsOfOutflows { months }) = input.floor {
-        for (&currency, tally) in &book.tallies {
-            if tally.floor == 0 {
-                cautions.push(Caution::MonthsFloorIsZero { currency, months });
-            }
+    for (&currency, tally) in &book.tallies {
+        if let Some(&EmergencyFundTarget::MonthsOfOutflows { months }) =
+            input.emergency_funds.get(&currency)
+            && tally.emergency_fund == 0
+        {
+            cautions.push(Caution::EmergencyFundMonthsIsZero { currency, months });
         }
     }
     loose_end_cautions(input, reduction, &mut cautions);

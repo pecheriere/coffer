@@ -1,5 +1,8 @@
 //! The read-only forecast page through the real router: it shows what
 //! `GET /api/v1/forecast` answers, in words, and changes nothing.
+//! Settling a month from it is in `settling`.
+
+mod settling;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -10,7 +13,6 @@ use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 
 use crate::forecast::answer::{Golden, golden, insert_pending};
-use crate::forecast::settled::id_of;
 use crate::forecast::unknowns::{fed, reported};
 use crate::forecast::{AS_OF, BALANCE_ON, World, outflow, usd};
 
@@ -162,7 +164,7 @@ async fn page_matches_the_api_on_the_golden_example() {
     assert_sums(&before.body, 6_850_000, 3_014_000);
     assert_eq!(amount(&before.body, "Planned outflows"), 914_000);
     assert_eq!(amount(&before.body, "Goals"), 1_100_000);
-    assert_eq!(amount(&before.body, "Safety floor"), 1_000_000);
+    assert_eq!(amount(&before.body, "Emergency fund"), 1_000_000);
     assert_eq!(amount(&before.body, "Surplus"), 3_836_000);
     assert_months_match(&before.body, &api);
     assert_eq!(row(&before.body, "Cash available"), ["68,500.00"]);
@@ -192,13 +194,17 @@ async fn empty_household_shows_the_reason_and_no_number() {
     let text = words(&world).await;
 
     assert!(text.contains("Unavailable"));
-    assert!(text.contains("No safety floor is set"));
     assert!(text.contains("No account counts as cash"));
+    assert!(
+        !text.contains("No emergency fund"),
+        "no currency is in use, so none lacks one"
+    );
     assert!(!text.contains("0.00"));
     assert!(!text.contains("Surplus"));
 }
 
-/// A floor not set blocks the number, so the sums that would leave it out are not shown.
+/// A currency in use with no emergency fund blocks the number, so the sums that would leave
+/// it out are not shown.
 #[tokio::test]
 async fn blocked_forecast_shows_no_partial_sums() {
     let world = crate::forecast::world().await;
@@ -206,7 +212,7 @@ async fn blocked_forecast_shows_no_partial_sums() {
 
     let text = words(&world).await;
 
-    assert!(text.contains("No safety floor is set"));
+    assert!(text.contains("No emergency fund is set for USD"));
     assert!(!text.contains("1,234.56"));
     assert!(!text.contains("Cash needed"));
 }
@@ -214,7 +220,7 @@ async fn blocked_forecast_shows_no_partial_sums() {
 #[tokio::test]
 async fn blocker_names_what_has_no_balance() {
     let world = crate::forecast::world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world
         .account_with("Rainy day", "savings", "USD", json!({}))
         .await;
@@ -226,12 +232,15 @@ async fn blocker_names_what_has_no_balance() {
 
 async fn mixed() -> World {
     let world = crate::forecast::world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world.funded("Checking", 100_000).await;
     let euro = world
         .account_with("Euro", "checking", "EUR", json!({}))
         .await;
     world.balance(euro, BALANCE_ON, 50_000).await;
+    world
+        .emergency_fund_of("EUR", &json!({"kind": "fixed", "minor_units": 0}))
+        .await;
     world
 }
 
@@ -260,7 +269,7 @@ async fn mixed_currencies_show_each_currency_and_no_total() {
 async fn shortfall_is_called_a_shortfall() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(5_000).await;
+    world.emergency_fund(5_000).await;
 
     let text = words(&world).await;
 
@@ -272,7 +281,8 @@ async fn shortfall_is_called_a_shortfall() {
     );
 }
 
-/// A household holding only `currency`, with `minor_units` in one account and no floor.
+/// A household holding only `currency`, with `minor_units` in one account and an emergency
+/// fund of 0.
 async fn holding(currency: &str, minor_units: i64) -> World {
     let world = crate::forecast::world().await;
     let only = world
@@ -280,8 +290,7 @@ async fn holding(currency: &str, minor_units: i64) -> World {
         .await;
     world.balance(only, BALANCE_ON, minor_units).await;
     world
-        .settings(&json!({"floor": {"kind": "fixed",
-            "amount": {"minor_units": 0, "currency": currency}}}))
+        .emergency_fund_of(currency, &json!({"kind": "fixed", "minor_units": 0}))
         .await;
     world
 }
@@ -345,84 +354,12 @@ async fn a_failed_name_lookup_leaves_the_page_and_its_number() {
 async fn firm_says_what_it_means() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     let answer = text_of(section(&page(&world).await.body, "answer"));
 
     assert!(answer.contains("Firm:"));
     assert!(answer.contains("nothing to warn you about"));
-}
-
-/// The worked example with its water bill settled: the page says so in plain words, and
-/// what it shows is still what the API answers.
-#[tokio::test]
-async fn a_settled_item_is_shown_in_plain_words() {
-    let Golden { world, .. } = golden().await;
-    let water = id_of(&world.forecast().await, "Water");
-    world.settle(&water, "2026-11", "paid").await;
-
-    let body = page(&world).await.body;
-    let answer = text_of(section(&body, "answer"));
-
-    assert!(answer.contains("38,480.00 USD"));
-    assert!(answer.contains("Firm:"));
-    assert!(
-        answer.contains("Water: 120.00 USD for November 2026 isn't counted, marked paid."),
-        "says what was settled"
-    );
-}
-
-/// All a settled item has to press is its undo.
-#[tokio::test]
-async fn a_settled_item_can_only_be_undone() {
-    let Golden { world, .. } = golden().await;
-    let water = id_of(&world.forecast().await, "Water");
-    world.settle(&water, "2026-11", "skipped").await;
-
-    let reply = page(&world).await;
-    let main = &reply.body[reply.body.find("<main").unwrap()..];
-
-    assert!(text_of(main).contains("marked skipped"));
-    assert_eq!(main.matches("<form").count(), 1, "the undo");
-    assert_eq!(main.matches("<button").count(), 1, "the undo");
-    assert!(main.contains("Undo Water for November 2026"));
-}
-
-/// A settled item's name is the household's text, so it stays text.
-#[tokio::test]
-async fn a_settled_items_name_is_escaped() {
-    const MARKUP: &str = "<script>alert(1)</script>";
-    let (world, _) = crate::forecast::settled::holding().await;
-    let home = world.expense("Home").await;
-    let item = world
-        .item(&outflow(
-            MARKUP,
-            1_000,
-            home,
-            &json!({"type": "one_off", "on": "2026-11-20"}),
-        ))
-        .await;
-    world.settle(&item, "2026-11", "paid").await;
-
-    let body = page(&world).await.body;
-
-    assert!(!body.contains(MARKUP), "the markup stays text");
-    assert!(
-        section(&body, "answer").contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
-        "and is shown"
-    );
-}
-
-#[tokio::test]
-async fn nothing_settled_says_nothing_of_it() {
-    let Golden { world, .. } = golden().await;
-
-    let answer = text_of(section(&page(&world).await.body, "answer"));
-
-    assert!(
-        !answer.contains("Settled"),
-        "no heading with nothing under it"
-    );
 }
 
 #[tokio::test]
@@ -473,7 +410,7 @@ async fn cautions_are_shown() {
 async fn spending_newer_than_a_balance_shows_both_amounts() {
     let world = crate::forecast::world().await;
     let checking = world.funded("Checking", 100_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let food = world.expense("Food").await;
     world.spend(checking, AS_OF, 2_500, food).await;
     insert_pending(&world, checking, food, 700).await;
@@ -486,24 +423,24 @@ async fn spending_newer_than_a_balance_shows_both_amounts() {
 }
 
 #[tokio::test]
-async fn a_months_floor_of_zero_is_explained() {
+async fn a_months_emergency_fund_of_zero_is_explained() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
     world
-        .settings(&json!({"floor": {"kind": "months_of_outflows", "months": 2}}))
+        .emergency_fund_of("USD", &json!({"kind": "months_of_outflows", "months": 2}))
         .await;
 
     let answer = text_of(section(&page(&world).await.body, "answer"));
 
-    assert!(answer.contains("2 months of recurring"));
-    assert!(answer.contains("comes to 0 in USD"));
+    assert!(answer.contains("The emergency fund in USD is 2 months of recurring"));
+    assert!(answer.contains("none are planned in USD"));
 }
 
 #[tokio::test]
 async fn a_closed_card_still_owing_is_explained() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 100_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let card = world
         .account_with("Old card", "credit_card", "USD", json!({}))
         .await;
@@ -610,7 +547,7 @@ async fn totals_too_large_show_the_error_page_and_no_number() {
     let world = crate::forecast::world().await;
     let category = world.expense("Everything").await;
     world.funded("Checking", 123_456).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world.settings(&json!({"default_horizon_months": 60})).await;
     let daily = json!({"type": "recurring", "every": 1, "unit": "days", "anchor_on": AS_OF});
     for _ in 0..6 {
@@ -657,138 +594,7 @@ async fn page_is_never_cached_or_sent_as_a_referrer() {
 }
 
 #[tokio::test]
-async fn with_nothing_to_settle_the_page_offers_no_write_action() {
-    let (world, _) = crate::forecast::settled::holding().await;
-
-    let body = page(&world).await.body;
-
-    assert_eq!(body.matches("<form").count(), 1, "only sign-out");
-    assert!(body.contains("<form method=\"post\" action=\"/logout\""));
-    assert_eq!(body.matches("<button").count(), 1, "only sign-out");
-    assert_eq!(body.matches("<input").count(), 1, "only its token");
-    let posted = signed_in(&world).await.post_form(PAGE, &[]).await;
-    assert_eq!(posted.status, StatusCode::METHOD_NOT_ALLOWED);
-}
-
-/// The buttons beside a caution settle what it asks about, as the API would: the caution goes, and
-/// the page says what was settled.
-#[tokio::test]
-async fn a_bill_the_page_asks_about_can_be_settled_from_it() {
-    let Golden { world, .. } = golden().await;
-    let water = id_of(&world.forecast().await, "Water");
-    let mut browser = signed_in(&world).await;
-    let reply = browser.get(PAGE).await;
-    let action = format!(
-        "/forecast/items/{}/settlements/2026-11",
-        water.as_str().unwrap()
-    );
-    assert!(reply.body.contains(&action), "the form is there");
-    let token = reply
-        .body
-        .split(&format!("action=\"{action}\""))
-        .nth(1)
-        .and_then(|form| form.split("value=\"").nth(1))
-        .and_then(|rest| rest.split('"').next())
-        .unwrap()
-        .to_owned();
-
-    let refused = browser
-        .post_form(&action, &[("csrf", "wrong"), ("kind", "paid")])
-        .await;
-    assert_ne!(refused.status, StatusCode::SEE_OTHER, "a forged form fails");
-    assert_eq!(world.forecast().await["status"], "provisional");
-
-    let posted = browser
-        .post_form(&action, &[("csrf", token.as_str()), ("kind", "paid")])
-        .await;
-    assert_eq!(posted.status, StatusCode::SEE_OTHER);
-
-    assert_eq!(world.forecast().await["status"], "firm");
-    assert!(words(&world).await.contains("isn't counted, marked paid"));
-}
-
-/// A settlement is the whole month, so the button says so, and undoing it puts all of it back. A
-/// member who isn't an admin has them too.
-#[tokio::test]
-async fn settling_says_all_of_the_month_and_can_be_undone_by_a_member() {
-    let Golden { world, .. } = golden().await;
-    let invite = world
-        .server
-        .identity
-        .create_invite(&world.alice, Role::Member, None)
-        .await
-        .unwrap();
-    let mut bob = Browser::new(&world.server);
-    let mut key = world.server.authenticator();
-    bob.enroll(&mut key, &invite, "bob", "Bob").await;
-    let water = id_of(&world.forecast().await, "Water");
-    let settle = format!(
-        "/forecast/items/{}/settlements/2026-11",
-        water.as_str().unwrap()
-    );
-    let token = |body: &str, action: &str| {
-        body.split(&format!("action=\"{action}\""))
-            .nth(1)
-            .and_then(|form| form.split("value=\"").nth(1))
-            .and_then(|rest| rest.split('"').next())
-            .unwrap()
-            .to_owned()
-    };
-
-    let before = bob.get(PAGE).await;
-    assert!(
-        before
-            .body
-            .contains("Mark Water paid for all of November 2026")
-    );
-    assert!(before.body.contains("Skip Water for all of November 2026"));
-    let csrf = token(&before.body, &settle);
-    let posted = bob
-        .post_form(&settle, &[("csrf", csrf.as_str()), ("kind", "paid")])
-        .await;
-    assert_eq!(posted.status, StatusCode::SEE_OTHER);
-    assert_eq!(world.forecast().await["status"], "firm");
-
-    let undo = format!("{settle}/undo");
-    let settled = bob.get(PAGE).await;
-    assert!(settled.body.contains("Undo Water for November 2026"));
-    let csrf = token(&settled.body, &undo);
-    let forged = bob.post_form(&undo, &[("csrf", "wrong")]).await;
-    assert_ne!(forged.status, StatusCode::SEE_OTHER, "a forged form fails");
-    let undone = bob.post_form(&undo, &[("csrf", csrf.as_str())]).await;
-    assert_eq!(undone.status, StatusCode::SEE_OTHER);
-    let forecast = world.forecast().await;
-    assert_eq!(forecast["status"], "provisional");
-    assert_eq!(forecast["settled"], json!([]));
-}
-
-/// The sentence says how, for a person and for an agent.
-#[tokio::test]
-async fn a_bill_unpaid_from_last_month_says_how_to_settle_it() {
-    let (world, _) = crate::forecast::settled::holding().await;
-    let home = world.expense("Home").await;
-    let item = world
-        .item(&outflow(
-            "Boiler",
-            1_000,
-            home,
-            &json!({"type": "one_off", "on": "2026-10-20"}),
-        ))
-        .await;
-
-    let said = words(&world).await;
-
-    assert!(said.contains("Boiler was due on 20 October 2026"));
-    assert!(said.contains(&format!(
-        "PUT /api/v1/plan-items/{}/settlements/2026-10",
-        item.as_str().unwrap()
-    )));
-    assert!(said.contains("Mark Boiler paid for all of October 2026"));
-    assert!(said.contains("Settling covers all of October 2026"));
-}
-
-#[tokio::test]
-async fn nav_links_to_the_forecast_for_every_member() {
+async fn more_links_to_the_forecast_for_every_member() {
     let Golden { world, .. } = golden().await;
     let invite = world
         .server
@@ -802,18 +608,14 @@ async fn nav_links_to_the_forecast_for_every_member() {
     let mut alice = signed_in(&world).await;
 
     for browser in [&mut alice, &mut bob] {
-        let elsewhere = browser.get("/account").await;
-        assert!(
-            elsewhere
-                .body
-                .contains("<a href=\"/forecast\">Forecast</a>")
-        );
+        let more = browser.get("/more").await;
+        assert!(more.body.contains("href=\"/forecast\">Cash forecast<"));
         let forecast = browser.get(PAGE).await;
         assert_eq!(forecast.status, StatusCode::OK);
         assert!(
             forecast
                 .body
-                .contains("<a href=\"/forecast\" aria-current=\"page\">Forecast</a>")
+                .contains("<a href=\"/more\" aria-current=\"page\">More</a>")
         );
         assert_eq!(amount(&forecast.body, "Cash available"), 6_850_000);
     }

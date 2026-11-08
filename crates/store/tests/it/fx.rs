@@ -14,7 +14,7 @@ use coffer_domain::fx::{
 };
 use coffer_domain::ids::AccountId;
 use coffer_domain::money::Currency;
-use coffer_domain::plan::{ForecastSettings, SafetyFloor};
+use coffer_domain::plan::ForecastSettings;
 use coffer_store::{AccountChanges, NewAccount, Store};
 use jiff::Timestamp;
 use jiff::civil::{Date, date};
@@ -461,7 +461,6 @@ async fn setting_it_with_no_settings_row_keeps_the_defaults() {
 
 fn custom_settings() -> ForecastSettings {
     ForecastSettings {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 3 }),
         include_income: false,
         default_horizon_months: 12,
         stale_after_days: 30,

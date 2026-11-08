@@ -42,7 +42,7 @@ impl World {
 
     /// A budget of 400.00 in a new category, and Checking holding 2,000.00.
     async fn budgeted(&self) -> (AccountId, CategoryId) {
-        self.floor(0).await;
+        self.emergency_fund(0).await;
         let checking = self.funded("Checking", 200_000).await;
         let food = self.expense("Food").await;
         self.item(&with(

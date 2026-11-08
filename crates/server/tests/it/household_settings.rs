@@ -124,10 +124,6 @@ async fn events(server: &TestServer) -> Vec<AuditEvent> {
         .items
 }
 
-fn fixed(minor_units: i64) -> Value {
-    json!({"kind": "fixed", "amount": {"minor_units": minor_units, "currency": "USD"}})
-}
-
 #[tokio::test]
 async fn unset_settings_read_as_defaults() {
     let world = world().await;
@@ -137,15 +133,15 @@ async fn unset_settings_read_as_defaults() {
 
     assert_eq!(
         settings,
-        json!({"floor": null, "include_income": false,
+        json!({"emergency_funds": [], "include_income": false,
                "default_horizon_months": 3, "stale_after_days": 7, "display_currency": null,
                "timezone": "UTC", "timezone_setting": null}),
-        "no row reads as the defaults, with the floor present and null"
+        "no row reads as the defaults, with no emergency fund"
     );
 }
 
 #[tokio::test]
-async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
+async fn admin_token_changes_settings_and_it_is_audited() {
     let world = world().await;
     let (agent, admin) = token(&world, &world.alice, Scope::Admin).await;
     let (_, read) = token(&world, &world.alice, Scope::Read).await;
@@ -153,13 +149,12 @@ async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
     let (status, answer) = patch(
         &world.server,
         &admin,
-        json!({"floor": fixed(500_000), "include_income": true,
-               "default_horizon_months": 6, "stale_after_days": 14}),
+        json!({"include_income": true, "default_horizon_months": 6, "stale_after_days": 14}),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK, "an admin token may change settings");
-    let expected = json!({"floor": fixed(500_000), "include_income": true,
+    let expected = json!({"emergency_funds": [], "include_income": true,
                           "default_horizon_months": 6, "stale_after_days": 14,
                           "display_currency": null,
                           "timezone": "UTC", "timezone_setting": null});
@@ -190,18 +185,10 @@ async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
         fields,
         [
             "default_horizon_months",
-            "floor",
             "include_income",
             "stale_after_days"
         ],
         "one field per changed setting"
-    );
-    let floor = event.changes.iter().find(|(f, _)| *f == "floor").unwrap().1;
-    assert_eq!(floor.before, AuditValue::Null, "no floor before");
-    assert_eq!(
-        floor.after,
-        AuditValue::from("fixed:USD:500000"),
-        "the floor is recorded in canonical form"
     );
     let horizon = event
         .changes
@@ -211,19 +198,6 @@ async fn admin_token_sets_a_fixed_floor_and_it_is_audited() {
         .1;
     assert_eq!(horizon.before, AuditValue::Int(3), "horizon before");
     assert_eq!(horizon.after, AuditValue::Int(6), "horizon after");
-}
-
-#[tokio::test]
-async fn explicit_zero_floor_differs_from_an_unset_floor() {
-    let world = world().await;
-    let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
-
-    let (status, answer) = patch(&world.server, &admin, json!({"floor": fixed(0)})).await;
-
-    assert_eq!(status, StatusCode::OK, "a floor of 0 is allowed");
-    assert_eq!(answer["floor"], fixed(0), "a stored 0 is not null");
-    let logged = events(&world.server).await;
-    assert_eq!(logged.len(), 1, "setting 0 over no floor is a change");
 }
 
 #[tokio::test]
@@ -287,10 +261,6 @@ async fn invalid_values_are_422() {
     let world = world().await;
     let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
     let invalid = [
-        json!({"floor": fixed(-1)}),
-        json!({"floor": fixed(1_000_000_000_000_001_i64)}),
-        json!({"floor": {"kind": "months_of_outflows", "months": 0}}),
-        json!({"floor": {"kind": "months_of_outflows", "months": 61}}),
         json!({"default_horizon_months": 0}),
         json!({"default_horizon_months": 61}),
         json!({"stale_after_days": 0}),
@@ -306,14 +276,15 @@ async fn invalid_values_are_422() {
         );
     }
     for body in [
-        json!({"floor": {"kind": "percent", "months": 3}}),
+        json!({"floor": {"kind": "fixed", "minor_units": 0}}),
+        json!({"emergency_funds": []}),
         json!({"time_zone": "UTC"}),
     ] {
         let (status, _) = patch(&world.server, &admin, body).await;
         assert_eq!(
             status,
             StatusCode::BAD_REQUEST,
-            "an unknown kind or field is 400"
+            "an unknown field is 400: emergency funds have their own operations"
         );
     }
     assert!(
@@ -322,8 +293,8 @@ async fn invalid_values_are_422() {
     );
     let (_, read) = token(&world, &world.alice, Scope::Read).await;
     assert_eq!(
-        get(&world.server, &read).await["floor"],
-        Value::Null,
+        get(&world.server, &read).await["default_horizon_months"],
+        3,
         "nothing was stored"
     );
 }
@@ -336,8 +307,7 @@ async fn boundary_values_are_accepted() {
     let (status, answer) = patch(
         &world.server,
         &admin,
-        json!({"floor": {"kind": "months_of_outflows", "months": 60},
-               "default_horizon_months": 60, "stale_after_days": 365}),
+        json!({"default_horizon_months": 60, "stale_after_days": 365}),
     )
     .await;
 
@@ -346,19 +316,18 @@ async fn boundary_values_are_accepted() {
     let (status, answer) = patch(
         &world.server,
         &admin,
-        json!({"floor": {"kind": "months_of_outflows", "months": 1},
-               "default_horizon_months": 1, "stale_after_days": 1}),
+        json!({"default_horizon_months": 1, "stale_after_days": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "the lower bounds are valid");
-    assert_eq!(answer["floor"]["months"], 1, "floor months bound");
+    assert_eq!(answer["default_horizon_months"], 1, "horizon bound");
 }
 
 #[tokio::test]
 async fn noop_patch_writes_no_audit() {
     let world = world().await;
     let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
-    let body = json!({"floor": fixed(100), "include_income": true});
+    let body = json!({"default_horizon_months": 4, "include_income": true});
     patch(&world.server, &admin, body.clone()).await;
     assert_eq!(events(&world.server).await.len(), 1, "the first patch");
 
@@ -381,58 +350,12 @@ async fn noop_patch_writes_no_audit() {
 }
 
 #[tokio::test]
-async fn floor_can_be_replaced_not_unset() {
-    let world = world().await;
-    let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
-    patch(&world.server, &admin, json!({"floor": fixed(100)})).await;
-
-    let (status, answer) = patch(
-        &world.server,
-        &admin,
-        json!({"floor": {"kind": "months_of_outflows", "months": 4}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "a floor may be replaced");
-    assert_eq!(
-        answer["floor"],
-        json!({"kind": "months_of_outflows", "months": 4}),
-        "the new floor"
-    );
-    let logged = events(&world.server).await;
-    let replaced = logged
-        .iter()
-        .find(|event| {
-            event
-                .changes
-                .iter()
-                .any(|(_, c)| c.before == AuditValue::from("fixed:USD:100"))
-        })
-        .unwrap();
-    let floor = replaced.changes.iter().next().unwrap().1;
-    assert_eq!(
-        floor.after,
-        AuditValue::from("months_of_outflows:4"),
-        "the replacement is audited before and after"
-    );
-
-    let (status, answer) = patch(&world.server, &admin, json!({"floor": null})).await;
-    assert_eq!(status, StatusCode::OK, "null leaves the floor");
-    assert_eq!(
-        answer["floor"],
-        json!({"kind": "months_of_outflows", "months": 4}),
-        "a null floor changes nothing"
-    );
-    assert_eq!(events(&world.server).await.len(), 2, "no event for null");
-}
-
-#[tokio::test]
 async fn numbers_outside_the_field_type_are_400() {
     let world = world().await;
     let (_, admin) = token(&world, &world.alice, Scope::Admin).await;
 
     for body in [
         json!({"default_horizon_months": 300}),
-        json!({"floor": {"kind": "months_of_outflows", "months": 300}}),
         json!({"stale_after_days": 70_000}),
         json!({"default_horizon_months": -1}),
     ] {

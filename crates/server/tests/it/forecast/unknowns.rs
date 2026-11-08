@@ -35,7 +35,7 @@ pub(crate) async fn fed() -> Fed {
         .server
         .seed_connection(ProviderKind::SimpleFin, LABEL, world.alice.member, "opaque")
         .await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world.funded("Checking", 1_000).await;
     Fed {
         world,
@@ -424,7 +424,7 @@ async fn stale_balance_is_a_caution() {
         .account_with("Old", "checking", "USD", json!({}))
         .await;
     world.balance(account, "2026-11-07", 500).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     let forecast = world.forecast().await;
 
@@ -442,7 +442,7 @@ async fn counted_account_without_balance_blocks() {
     let account = world
         .account_with("Empty", "checking", "USD", json!({}))
         .await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     let forecast = world.forecast().await;
 
@@ -462,7 +462,10 @@ async fn mixed_currencies_answer_200_without_a_surplus() {
         .account_with("Euros", "checking", "EUR", json!({}))
         .await;
     world.balance(euros, super::BALANCE_ON, 2_000).await;
-    world.floor(100).await;
+    world.emergency_fund(100).await;
+    world
+        .emergency_fund_of("EUR", &json!({"kind": "fixed", "minor_units": 0}))
+        .await;
 
     let forecast = world.forecast().await;
 
@@ -474,7 +477,11 @@ async fn mixed_currencies_answer_200_without_a_surplus() {
     assert_eq!(rows.len(), 2, "one row per currency");
     let row = |currency: &str| rows.iter().find(|row| row["currency"] == currency).unwrap();
     assert_eq!(row("EUR")["surplus"]["minor_units"], 2_000, "own number");
-    assert_eq!(row("USD")["surplus"]["minor_units"], 900, "after its floor");
+    assert_eq!(
+        row("USD")["surplus"]["minor_units"],
+        900,
+        "after its emergency fund"
+    );
 }
 
 /// A forecast doesn't convert (spec §8.10 N1): a rate can't lift the blocker. It passes
@@ -487,7 +494,10 @@ async fn rates_don_t_lift_the_mixed_currencies_blocker() {
         .account_with("Euros", "checking", "EUR", json!({}))
         .await;
     world.balance(euros, super::BALANCE_ON, 2_000).await;
-    world.floor(100).await;
+    world.emergency_fund(100).await;
+    world
+        .emergency_fund_of("EUR", &json!({"kind": "fixed", "minor_units": 0}))
+        .await;
     let before = world.forecast().await;
 
     let mut tx = world.server.store.begin().await.unwrap();
@@ -516,7 +526,7 @@ async fn rates_don_t_lift_the_mixed_currencies_blocker() {
 async fn corrupt_account_currency_fails_loudly() {
     let world = world().await;
     let account = world.funded("Checking", 1_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world
         .server
         .store

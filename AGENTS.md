@@ -12,7 +12,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   audit entry types, money, transactions, matching, sync run
   triggers and statuses, clock; `accounts`, with whose money an account is
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
-  forecast settings), `forecast` and `plan_report`, the pure calculations
+  forecast settings, the emergency fund target per currency), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual (`forecast.rs` computes it; its
   `book.rs`, `lines.rs` and `cautions.rs` hold the running amounts, the line each
   account, item and goal gets, and what makes the answer provisional); `fx`, exchange rates held
@@ -22,8 +22,10 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
 - `coffer-store` (`crates/store`): persistence. The only crate that depends on
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate. It holds
-  planned items and their settlements, the household settings (with the
-  display currency), exchange rates and their coverage, the daily net worth
+  transactions, counted without reading them in `transactions/count.rs` with the
+  listing's own filter, planned items and their settlements, the household settings (with the
+  display currency), the emergency fund targets (`emergency_funds.rs`, one row per currency),
+  exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
   a snapshot, a rate, the display currency or a time zone that puts today before its
   last day changes it in its own transaction,
@@ -37,7 +39,11 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   extractors, problem bodies, idempotency keys, `api/` JSON v1 and, in `api/mcp/`, its tools over
   MCP at `/mcp` (`tools.rs`, one row per tool, each calling its operation's handler; `schema.rs`,
   a tool's schemas read from the OpenAPI document), `health`,
-  `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
+  `pages/`, whose `layout.rs` frames every page under one of four tabs (Home, Money,
+  Activity, More: inline links on a wide screen, a bar fixed to the bottom of a phone's),
+  whose `home.rs` is Home at `/`, read-only (net worth with its change this month and
+  `home/sparkline.rs`, a line drawn in integers, and how many transactions wait to be checked),
+  whose `more.rs` links to every page the tabs don't name, whose `plaid.rs` serves the Plaid Link pages, the only ones
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, whose `categories.rs` is the
   categories page (groups and categories created, changed and archived, its handlers in
@@ -48,8 +54,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   account's page with its balances, with forms to create, change, close and reopen an account and
   record a balance (`fields.rs` holds the words and fields every account form uses, Connections'
   too), whose `transactions/` is the transactions list and
-  its review queue (`list.rs`, `filters.rs`) and one transaction's page (`detail.rs`), with the forms
-  that review, file, split (`splits.rs`) and edit one or mark several reviewed (`edit.rs`), link it
+  its review queue (`list.rs`, `filters.rs`, under how many wait to be checked) and one transaction's
+  page (`detail.rs`), with the forms that review, file, split (`splits.rs`) and edit one or mark
+  several reviewed (`edit.rs`), confirm the guesses rules made on the list's page (`guesses.rs`), link it
   with its other leg (`links.rs`), merge or dismiss its possible duplicates (`duplicates.rs`) and enter or
   delete one by hand (`manual.rs`), each through the ledger call its API operation makes, and whose `rules/` is the rules page (the list and
   the add form in `mod.rs` and `form.rs`; in `detail.rs` a rule's page, with what running it would
@@ -60,11 +67,13 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `members` (`Ledger::list_members`, the one read of every member, which the API, its MCP tool and
   every page naming members go through; managing them stays in `auth`), `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
-  household forecast `settings`, the `forecast` and its what-if, the
+  household forecast `settings`, `emergency_funds` (one currency's target set or removed by an
+  admin, audited, and read only with the forecast's access), the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
   `manual_rates` (exchange rates an admin enters: validated, audited and marked),
-  transactions and their splits, merging, un-merging and dismissing possible duplicates, `rules` (keeping them, with `run.rs` trying one and running it by hand in short batches; `coffer_domain::rules::decide` alone says what they fill), `transfer_links` (two
+  transactions and their splits, `review_count` (how many wait for a review, in the accounts
+  the actor reads), merging, un-merging and dismissing possible duplicates, `rules` (keeping them, with `run.rs` trying one and running it by hand in short batches; `coffer_domain::rules::decide` alone says what they fill), `transfer_links` (two
   transactions that are one movement of money); `unseen.rs` holds what a token with grants
   doesn't get of a transaction it can read: duplicate candidates and transfer links with a side in
   accounts it can't read and goal links it can't see); `fx` (the `RateProvider` interface,

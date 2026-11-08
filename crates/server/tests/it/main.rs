@@ -17,6 +17,7 @@ mod connections_page;
 mod duplicates;
 mod egress;
 mod egress_relay;
+mod emergency_funds;
 mod forecast;
 mod fx_ecb;
 mod fx_job;

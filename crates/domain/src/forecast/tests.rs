@@ -16,7 +16,8 @@ use crate::fx::RateBook;
 use crate::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
-    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, SafetyFloor, spending_applies,
+    EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanDirection, PlanSchedule, PlanSpending,
+    spending_applies,
 };
 
 mod account_cautions;
@@ -24,7 +25,7 @@ mod bill_matching;
 mod blockers;
 mod budget_month;
 mod clamp_and_duplicates;
-mod goals_and_floor;
+mod goals_and_emergency_fund;
 mod golden;
 mod inflow_window;
 mod item_cautions;
@@ -59,19 +60,35 @@ fn eur(minor_units: i64) -> Money {
     }
 }
 
-fn fixed_floor(amount: Money) -> SafetyFloor {
-    SafetyFloor::Fixed { amount }
+/// An emergency fund of `amount` in its currency, and none in any other.
+fn fixed_fund(amount: Money) -> EmergencyFunds {
+    EmergencyFunds::from([(
+        amount.currency,
+        EmergencyFundTarget::Fixed {
+            minor_units: amount.minor_units,
+        },
+    )])
+}
+
+/// An emergency fund of `months` of outflows in both dollars and euros.
+fn months_fund(months: u8) -> EmergencyFunds {
+    let target = EmergencyFundTarget::MonthsOfOutflows { months };
+    EmergencyFunds::from([(currency("USD"), target), (currency("EUR"), target)])
 }
 
 /// A firm household: one checking account holding 1,000,000 USD as of
-/// yesterday, a floor of 0, a three-month horizon and nothing planned.
+/// yesterday, an emergency fund of 0 in dollars and in euros, a three-month horizon and
+/// nothing planned.
 fn household() -> ForecastInput {
     ForecastInput {
         today: AS_OF,
         as_of: AS_OF,
         horizon_months: 3,
         include_income: false,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0))
+            .into_iter()
+            .chain(fixed_fund(eur(0)))
+            .collect(),
         stale_after_days: 7,
         accounts: vec![cash("Checking", usd(1_000_000))],
         items: Vec::new(),

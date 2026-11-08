@@ -304,8 +304,8 @@ Minor gaps settled here; each is reversible by changing this list and the unit.
    07b, must pay and essentials from 07e). Removing a target stays REST-only; MCP sets but deletes
    nothing.
 4. **The floor's carry-over:** a fixed floor becomes its currency's target; a months floor becomes a
-   months target for every currency in use (open accounts counted in the forecast, active outflows, the
-   display currency).
+   months target for every currency the forecast may use (accounts in the forecast, closed ones too since
+   a closed card still owing counts, active planned items of either direction, the display currency).
 5. **The API breaks once, deliberately:** `floor` leaves the settings, its patch, the forecast and the
    what-if; `emergency_funds` replaces it (07b), and `CurrencyTotals.floor` becomes `emergency_fund`.
    The owner's agents read the schema through MCP; no deprecation period for a single household.

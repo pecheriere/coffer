@@ -3,6 +3,7 @@
 
 mod account_belonging;
 mod duplicates;
+mod emergency_funds;
 mod forecast;
 mod foundation;
 mod fx;
@@ -11,5 +12,6 @@ mod ledger;
 mod net_worth;
 mod plan;
 mod provider_dismissal;
+mod review_count;
 mod rules;
 mod sync;

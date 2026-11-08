@@ -1,7 +1,7 @@
 //! What a person settled (spec §8.9 R9a): one item's occurrences in one calendar month, paid
 //! some way the forecast can't see, or skipped. They count as nothing: no gross, no gap, and
 //! nothing for a caution to say. One settled as paid may keep money off a budget, in
-//! [`reduction`](super::reduction). A months floor keeps
+//! [`reduction`](super::reduction). An emergency fund of some months keeps
 //! them, since it says how much to hold rather than what is owed. The answer lists them, so
 //! no number silently differs, and they raise no caution of their own, since a person
 //! decided.
