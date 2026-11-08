@@ -208,21 +208,36 @@ async fn changing_the_tier() {
 }
 
 #[tokio::test]
-async fn an_income_item_offers_no_tier_to_change() {
+async fn income_turned_into_an_outflow_takes_the_tier_chosen() {
     let world = world().await;
     let mut admin = admin(&world).await;
     let salary = world.category("Salary", "income").await.to_string();
+    let food = world.expense("Food").await.to_string();
     let income = with(monthly_bill("Salary", &salary), "direction", "inflow");
     post(&mut admin, PAGE, &income).await;
     let id = item(&world, "Salary").await["id"]
         .as_str()
         .unwrap()
         .to_owned();
+    let path = format!("{PAGE}/{id}");
 
-    let form = admin.get(&format!("{PAGE}/{id}")).await.body;
+    let form = admin.get(&path).await.body;
+    assert!(form.contains("Which bucket this money is in"));
+    assert!(form.contains("counts only if it becomes money going out"));
+    assert!(
+        !form.contains("name=\"tier\" value=\"must_pay\" checked"),
+        "income has no tier to preselect"
+    );
+    let outflow = with_all(
+        monthly_bill("Salary", &food),
+        &[("spending", "budget"), ("tier", "essentials")],
+    );
+    let reply = post(&mut admin, &path, &outflow).await;
 
-    assert!(!form.contains("name=\"tier\""));
-    assert!(!form.contains("Which bucket this money is in"));
+    assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    let changed = item(&world, "Salary").await;
+    assert_eq!(changed["direction"], "outflow");
+    assert_eq!(changed["tier"], "essentials");
 }
 
 #[tokio::test]

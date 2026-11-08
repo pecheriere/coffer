@@ -1,7 +1,8 @@
 //! The plan page: the household's planned items (bills, budgets, income, one-offs and goals)
-//! in words, grouped by tier, and the forms that add, change, pause and delete them. Every read and write goes
-//! through the service the API uses, so who may do what, what an item may hold and the audit
-//! stay in one place; the page only leaves out the forms a viewer could not use.
+//! in words, grouped by tier, and the forms that add, change, pause and delete them. Every
+//! read and write goes through the service the API uses, so who may do what, what an item may
+//! hold and the audit stay in one place; the page only leaves out the forms a viewer could not
+//! use.
 
 mod delete;
 mod edit;

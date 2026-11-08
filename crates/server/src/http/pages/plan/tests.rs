@@ -75,4 +75,18 @@ fn a_viewer_sees_tiers_but_no_form() {
     ));
     assert!(!page.contains("<form"), "no form to change anything");
     assert!(!page.contains("name=\"tier\""), "no tier to choose");
+
+    let writer = content(
+        Look::default(),
+        &items,
+        &names,
+        &HashMap::new(),
+        &choices,
+        Some("token"),
+    )
+    .into_string();
+    assert!(
+        writer.contains("<form"),
+        "someone who may write gets the forms"
+    );
 }

@@ -353,8 +353,12 @@ pub(super) fn fields(choices: &Choices<'_>, item: Option<&PlannedItemView>) -> M
                     PlanSchedule::OneOff { .. } => (one_off_fields(Some(item))),
                     PlanSchedule::Goal { .. } => (goal_fields(Some(item))),
                 }
-                @if item.direction == PlanDirection::Outflow
-                    && !matches!(item.schedule, PlanSchedule::Goal { .. }) {
+                // Income may become an outflow here, so it is offered the choice too; the
+                // form's reading drops it while the item stays income.
+                @if !matches!(item.schedule, PlanSchedule::Goal { .. }) {
+                    @if item.direction == PlanDirection::Inflow {
+                        p.fine { "Income has no bucket: the choice below counts only if it becomes money going out." }
+                    }
                     (tier_field(item.tier))
                 }
             }
