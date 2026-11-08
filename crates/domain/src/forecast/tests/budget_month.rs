@@ -5,8 +5,8 @@
 use jiff::civil::{Date, date};
 
 use super::{
-    AS_OF, budget, cash, currency, eur, every, fixed_floor, has_line, household, hypothetical,
-    line, monthly, one_off, paid_on, run, spent, usd,
+    AS_OF, budget, cash, currency, eur, every, fixed_fund, has_line, household, hypothetical, line,
+    monthly, one_off, paid_on, run, spent, usd,
 };
 use crate::forecast::{
     AccountInput, BalanceInput, Blocker, CategorySpent, Forecast, ForecastInput, ForecastStatus,
@@ -37,7 +37,7 @@ fn until(item: ItemInput, anchor_on: Date, end_on: Date) -> ItemInput {
     }
 }
 
-/// Cash of 2,000,000 dated today, a floor of 500,000 and three months from
+/// Cash of 2,000,000 dated today, an emergency fund of 500,000 and three months from
 /// 2026-11-15, up to 2027-02-15. `anchor_on` is a monthly budget of 80,000.
 fn groceries(anchor_on: Date, spent_minor: i64) -> ForecastInput {
     let food = CategoryId::new();
@@ -49,7 +49,7 @@ fn groceries(anchor_on: Date, spent_minor: i64) -> ForecastInput {
             }),
             ..cash("Checking", usd(2_000_000))
         }],
-        floor: Some(fixed_floor(usd(500_000))),
+        emergency_funds: fixed_fund(usd(500_000)),
         items: vec![budget(monthly("Groceries", usd(80_000), anchor_on, food))],
         category_spent: vec![spent(food, spent_minor)],
         ..household()

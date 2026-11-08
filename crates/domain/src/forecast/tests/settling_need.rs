@@ -8,12 +8,14 @@ use proptest::prelude::{Just, Strategy, any, prop_assert, prop_oneof};
 use proptest::{collection, proptest};
 
 use super::{
-    budget, every, fixed_floor, household, monthly, one_off, paid_on, run_as_given, spent, stored,
+    budget, every, fixed_fund, household, monthly, one_off, paid_on, run_as_given, spent, stored,
     usd, usd_totals,
 };
 use crate::forecast::{Caution, ForecastInput, SpentTransaction};
 use crate::ids::CategoryId;
-use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, SafetyFloor, SettlementKind};
+use crate::plan::{
+    CalendarMonth, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanSchedule, SettlementKind,
+};
 
 fn month(text: &str) -> CalendarMonth {
     text.parse().unwrap()
@@ -43,7 +45,7 @@ fn from_november(home: CategoryId, upkeep: i64) -> ForecastInput {
             budget(monthly("Upkeep", usd(upkeep), date(2026, 11, 20), home)),
         ],
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         earliest_transaction: Some(date(2026, 11, 1)),
         ..household()
     }
@@ -64,7 +66,7 @@ fn on_rent_day(home: CategoryId, spent_minor: i64, rows: Vec<SpentTransaction>) 
         category_spent: vec![spent(home, spent_minor)],
         spent_transactions: rows,
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     }
 }
@@ -87,7 +89,7 @@ fn settling_a_month_before_the_history_keeps_the_need_at_the_end_of_february() {
         today: date(2027, 2, 28),
         as_of: date(2027, 2, 28),
         horizon_months: 1,
-        floor: None,
+        emergency_funds: EmergencyFunds::new(),
         accounts: Vec::new(),
         items: vec![bill, budget(allowance)],
         category_spent: vec![spent(home, 1)],
@@ -190,7 +192,7 @@ fn a_settled_bill_costs_a_budget_no_more_than_settling_saved() {
         category_spent: vec![spent(home, 215)],
         spent_transactions: vec![paid_on(home, usd(110), date(2026, 11, 6))],
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     };
     assert_eq!(need(&unsettled(&input)), 100);
@@ -213,7 +215,7 @@ fn a_settled_bill_keeps_all_of_a_charge_that_fits_off_the_budget() {
         category_spent: vec![spent(home, 2_100)],
         spent_transactions: vec![paid_on(home, usd(2_100), date(2026, 11, 5))],
         horizon_months: 1,
-        floor: Some(fixed_floor(usd(0))),
+        emergency_funds: fixed_fund(usd(0)),
         ..household()
     };
     assert_eq!(need(&unsettled(&input)), 500);
@@ -295,13 +297,16 @@ fn crowded_household() -> impl Strategy<Value = ForecastInput> {
             0_i64..6_000,
             1_u8..3,
             prop_oneof![
-                Just(None),
-                Just(Some(fixed_floor(usd(0)))),
-                (1_u8..4).prop_map(|months| Some(SafetyFloor::MonthsOfOutflows { months })),
+                Just(EmergencyFunds::new()),
+                Just(fixed_fund(usd(0))),
+                (1_u8..4).prop_map(|months| EmergencyFunds::from([(
+                    usd(0).currency,
+                    EmergencyFundTarget::MonthsOfOutflows { months },
+                )])),
             ],
         )
             .prop_map(
-                move |(bills, budgets, payments, history, spent_minor, horizon_months, floor)| {
+                move |(bills, budgets, payments, history, spent_minor, horizon_months, funds)| {
                     let this_month = CalendarMonth::of(as_of).unwrap();
                     let last_month =
                         CalendarMonth::of(as_of.first_of_month().checked_sub(1.days()).unwrap())
@@ -343,7 +348,7 @@ fn crowded_household() -> impl Strategy<Value = ForecastInput> {
                         today: as_of,
                         as_of,
                         horizon_months,
-                        floor,
+                        emergency_funds: funds,
                         items,
                         category_spent: vec![spent(home, spent_minor)],
                         spent_transactions: rows,

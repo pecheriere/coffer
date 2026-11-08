@@ -11,6 +11,7 @@ use crate::identity::label_type;
 use crate::money::Money;
 use crate::transactions::string_enum;
 
+mod emergency_fund;
 mod goal;
 mod month;
 mod schedule;
@@ -18,16 +19,17 @@ mod settings;
 mod settlement;
 pub mod strict_date;
 
+pub use emergency_fund::{EmergencyFund, EmergencyFundTarget, EmergencyFunds};
 pub(crate) use goal::div_half_even;
 pub use goal::{goal_accrued, goal_need, goal_remaining};
 pub use month::{CalendarMonth, InvalidMonth};
-pub use settings::{ForecastSettings, SafetyFloor};
+pub use settings::ForecastSettings;
 pub use settlement::{
     MAX_ITEM_SETTLEMENTS, SETTLEMENT_WINDOW_MONTHS, occurrences_in, settlement_applies,
     validate_settlement_month,
 };
 
-/// The largest amount of a planned item or a fixed floor, in minor units.
+/// The largest amount of a planned item or a fixed emergency fund, in minor units.
 pub const MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000;
 /// The most planned items a household may store.
 pub const MAX_PLAN_ITEMS: usize = 500;
@@ -45,8 +47,8 @@ pub const MAX_PLAN_YEAR: i16 = 2200;
 /// The largest `every` of a recurring schedule.
 const MAX_EVERY: u16 = 999;
 
-/// The most months of outflows a floor may hold.
-const MAX_FLOOR_MONTHS: u8 = 60;
+/// The most months of outflows an emergency fund may hold.
+const MAX_EMERGENCY_FUND_MONTHS: u8 = 60;
 /// The longest a balance may be allowed to go unrefreshed, in days.
 const MAX_STALE_AFTER_DAYS: u16 = 365;
 
@@ -73,14 +75,14 @@ pub enum PlanError {
     GoalDatesInverted,
     #[error("a goal must be an outflow")]
     GoalMustBeOutflow,
-    #[error("a fixed floor must be between 0 and {MAX_PLAN_AMOUNT_MINOR} minor units")]
-    InvalidFloor,
+    #[error("a fixed emergency fund must be between 0 and {MAX_PLAN_AMOUNT_MINOR} minor units")]
+    InvalidEmergencyFund,
     #[error("the horizon must be {MIN_HORIZON_MONTHS} to {MAX_HORIZON_MONTHS} months")]
     InvalidHorizon,
     #[error("stale after must be 1 to {MAX_STALE_AFTER_DAYS} days")]
     InvalidStaleDays,
-    #[error("floor months must be 1 to {MAX_FLOOR_MONTHS}")]
-    InvalidFloorMonths,
+    #[error("emergency fund months must be 1 to {MAX_EMERGENCY_FUND_MONTHS}")]
+    InvalidEmergencyFundMonths,
     #[error("unknown plan direction")]
     UnknownDirection,
     #[error("unknown interval unit")]
@@ -288,8 +290,8 @@ mod tests {
     use jiff::civil::date;
 
     use super::{
-        ForecastSettings, IntervalUnit, MAX_PLAN_AMOUNT_MINOR, PlanDirection, PlanError,
-        PlanItemType, PlanSchedule, PlanSpending, PlannedItemName, SafetyFloor, spending_applies,
+        EmergencyFundTarget, ForecastSettings, IntervalUnit, MAX_PLAN_AMOUNT_MINOR, PlanDirection,
+        PlanError, PlanItemType, PlanSchedule, PlanSpending, PlannedItemName, spending_applies,
         validate_amount, validate_as_of,
     };
     use crate::money::{Currency, Money};
@@ -377,8 +379,8 @@ mod tests {
                 PlanError::GoalMustBeOutflow,
             ),
             (
-                SafetyFloor::Fixed { amount: usd(-1) }.validate(),
-                PlanError::InvalidFloor,
+                EmergencyFundTarget::Fixed { minor_units: -1 }.validate(),
+                PlanError::InvalidEmergencyFund,
             ),
             (
                 ForecastSettings {
@@ -397,8 +399,8 @@ mod tests {
                 PlanError::InvalidStaleDays,
             ),
             (
-                SafetyFloor::MonthsOfOutflows { months: 0 }.validate(),
-                PlanError::InvalidFloorMonths,
+                EmergencyFundTarget::MonthsOfOutflows { months: 0 }.validate(),
+                PlanError::InvalidEmergencyFundMonths,
             ),
         ];
         for (result, error) in cases {
@@ -727,8 +729,8 @@ mod tests {
                 "dates must fall in the years 1970 to 2200",
             ),
             (
-                PlanError::InvalidFloor,
-                "a fixed floor must be between 0 and 1000000000000000 minor units",
+                PlanError::InvalidEmergencyFund,
+                "a fixed emergency fund must be between 0 and 1000000000000000 minor units",
             ),
             (
                 PlanError::InvalidHorizon,
@@ -739,8 +741,8 @@ mod tests {
                 "stale after must be 1 to 365 days",
             ),
             (
-                PlanError::InvalidFloorMonths,
-                "floor months must be 1 to 60",
+                PlanError::InvalidEmergencyFundMonths,
+                "emergency fund months must be 1 to 60",
             ),
         ] {
             assert_eq!(error.to_string(), text, "the message states the limit");

@@ -3,6 +3,7 @@
 
 mod account_belonging;
 mod duplicates;
+mod emergency_funds;
 mod forecast;
 mod foundation;
 mod fx;
