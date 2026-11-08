@@ -462,7 +462,7 @@ window does not cover whole. Reading a month's `lines`:
 
 `payments` on a stored recurring bill's or one-off's line says which transaction paid
 which occurrence: one entry per occurrence from the first of last month up to and
-including `as_of`, by date, with `on`, `amount` and `paid_by` (`transaction`, `posted_on`,
+including `as_of`, and one for each later occurrence a payment already paid, by date, with `on`, `amount` and `paid_by` (`transaction`, `posted_on`,
 `amount`, `difference`), or `paid_by: null` for one nothing paid, and `before_history`. See [what pays a
 bill](#what-pays-a-bill). A paid item with nothing else to count still has a line, with
 `counted` 0, so you can see that.
@@ -502,6 +502,11 @@ when:
   link out of counted cash is still a payment);
 - it is within 10% of the amount either way;
 - it posted no more than 7 days before the date.
+
+So a payment can pay a bill not yet due, up to 7 days after `as_of`: a mortgage due on the 1st and
+paid on the 29th needs nothing from the 29th, in `counted`, `occurrences` and `months` alike, and
+its `payments` entry says what paid it. Before the payment posts it still counts in full. An older
+unpaid occurrence the payment fits comes first, so the next one still counts.
 
 A row posted up to 7 days before the first of last month can pay last month's first bill, if it's
 nearer that date than the occurrence before it. What fits nothing goes to a budget in the category,
@@ -718,8 +723,9 @@ narrow the rule for the rest. A person's own filing under `transfer` isn't count
 ### What this month's spending does
 
 Only a budget is reduced by what was spent. A bill or a one-off is a specific
-payment, so it counts in full until its date passes; after that, a transaction [that
-fits](#what-pays-a-bill) pays it, back through last month. Each category and currency has
+payment, so it counts in full until a transaction [that fits](#what-pays-a-bill) pays it, up
+to 7 days early, or until its date passes unpaid; a payment can pay it back through last
+month. Each category and currency has
 one pool of spending:
 
 1. The month's actual spending in the category counts posted `expense` splits on
@@ -754,9 +760,10 @@ one pool of spending:
    raises the need. A budget can then read low with no caution, and only its `reduced_by`
    shows it: rent of 2,000 charged 2,300 doesn't fit, so 300 reduces a budget of 500. Its
    other months are as ever.
-5. A bill or one-off dated `as_of` counts in full even if it was paid that day and
-   the balance already shows it: it is held twice for that day, the safe
-   direction. A hypothetical item neither reduces nor consumes, a hypothetical
+5. A bill or one-off dated `as_of` or within the next 7 days that a payment already
+   paid needs nothing, since the balance already shows the payment: counting it too
+   would hold the money twice. One nothing paid yet counts in full, with no caution,
+   since it isn't due. A hypothetical item neither reduces nor consumes, a hypothetical
    budget counts only inside the window (it doesn't look back), and a goal never
    owes.
 
