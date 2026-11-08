@@ -29,12 +29,14 @@ struct PoolFigures {
     later_budgets: i128,
 }
 
-/// A stored budget, the only item whose window reaches back to the month's start.
+/// A stored budget, the only item whose window reaches back to the month's start. Only a
+/// recurring outflow is one: a one-off or a goal marked as a budget stays what it is.
 pub(super) fn is_stored_budget(item: &ItemInput) -> bool {
     matches!(item.source, LineSource::PlannedItem { .. })
         && item.direction == PlanDirection::Outflow
         && item.category.is_some()
         && item.spending == Some(PlanSpending::Budget)
+        && matches!(item.schedule, PlanSchedule::Recurring { .. })
 }
 
 /// What `item` counts for in `[from, to)`: a settled month's occurrences count as nothing.
@@ -86,6 +88,54 @@ pub(super) fn unsettled(input: &ForecastInput) -> ForecastInput {
         item.settled.clear();
     }
     clear
+}
+
+/// What `line` lists of `item`'s occurrences, checked against the inputs rather than the walk:
+/// one entry per date, each for the item's amount, and each paid by an outflow in the item's
+/// category and currency that the input holds, posted the day it says, for its whole amount. A
+/// refund and a possible duplicate pay nothing (spec §8.9). That a charge a refund undid pays
+/// nothing is pinned only by the example tests, since telling which charge a refund undid would
+/// copy the implementation.
+pub(super) fn check_line_payments(
+    input: &ForecastInput,
+    item: &ItemInput,
+    line: &ItemLine,
+) -> Result<(), String> {
+    let mut dates = BTreeSet::new();
+    for payment in &line.payments {
+        if !dates.insert(payment.on) {
+            return Err("a line lists one occurrence twice".to_owned());
+        }
+        if payment.amount != item.amount {
+            return Err("an occurrence is listed for other than the item's amount".to_owned());
+        }
+        let Some(paid_by) = payment.paid_by else {
+            continue;
+        };
+        let row = input
+            .spent_transactions
+            .iter()
+            .find(|row| {
+                row.transaction == paid_by.transaction
+                    && Some(row.category) == item.category
+                    && row.currency == item.amount.currency
+            })
+            .ok_or("an occurrence was paid by a transaction not in its category and currency")?;
+        if row.spent_minor <= 0 {
+            return Err("a refund paid an occurrence".to_owned());
+        }
+        if row.possible_duplicate {
+            return Err("a possible duplicate paid an occurrence".to_owned());
+        }
+        if paid_by.posted_on != row.posted_on
+            || paid_by.amount.currency != row.currency
+            || paid_by.amount.minor_units != row.spent_minor
+            || wide(paid_by.difference) != wide(paid_by.amount) - wide(item.amount)
+        {
+            return Err("a payment does not say what its transaction spent".to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// What the payments on `lines` say: a transaction pays one occurrence at most, in tolerance.
@@ -193,11 +243,12 @@ pub(super) fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Res
             continue;
         };
         let figures = pools.entry((category, item.amount.currency)).or_default();
-        if item.spending == Some(PlanSpending::Budget) {
+        if is_stored_budget(item) {
             figures.month_budgets += dated(item, month_start, month_end)?;
             figures.later_budgets += dated(item, month_end, window_ends)?;
         } else {
-            // A goal has no occurrences, so this is recurring bills and one-offs.
+            // A goal has no occurrences, so this is recurring bills and one-offs, a one-off
+            // marked as a budget included.
             figures.earlier_bills += evidenced(input, item)?;
             figures.settled_paid |= item
                 .settled
@@ -262,8 +313,9 @@ pub(super) fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Res
 /// What `line` says payments already made paid of `item`'s occurrences dated `as_of` or later
 /// (spec §10.8), each checked apart from the walk, and that only today's is listed unpaid: an unsettled occurrence of the item no more
 /// than [`BILL_EARLY_PAYMENT_DAYS`] after `as_of`, paid by a row posted by `as_of` and no more
-/// than that many days before the occurrence. Tolerance and one row per occurrence are
-/// [`check_payments`]'s.
+/// than that many days before the occurrence. Each paid occurrence comes off for the item's own
+/// amount. Tolerance and one row per occurrence are [`check_payments`]'s, and one entry per date
+/// and the paying row are [`check_line_payments`]'s.
 pub(super) fn paid_ahead(
     input: &ForecastInput,
     item: &ItemInput,
@@ -301,7 +353,7 @@ pub(super) fn paid_ahead(
         {
             return Err("an occurrence was paid ahead by a payment that can't pay it".to_owned());
         }
-        paid += wide(payment.amount);
+        paid += wide(item.amount);
     }
     Ok(paid)
 }
@@ -333,7 +385,10 @@ pub(super) fn check_budget_months(
             input.as_of
         };
         let paid = match line {
-            Some(line) if !is_stored_budget(item) => paid_ahead(input, item, line)?,
+            Some(line) if !is_stored_budget(item) => {
+                check_line_payments(input, item, line)?;
+                paid_ahead(input, item, line)?
+            }
             _ => 0,
         };
         if line.map_or(0, |line| wide(line.gross)) != dated(item, from, window_ends)? - paid {
