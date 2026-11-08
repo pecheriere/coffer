@@ -82,6 +82,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
   equity accounts are tracked by balance only.
 - Moving money, bill pay, any write access to financial institutions.
 - Zero-based / envelope budgeting à la YNAB ("give every dollar a job").
+  The monthly assigning ritual stays a non-goal, but buckets with tiers that adapt live
+  are now in scope: see `2026-11-07-coffer-money-redesign-design.md`.
 - Multiple households per deployment (multi-tenancy).
 - Data sources other than SimpleFin and manual entry (CSV/OFX import later).
   The provider interface (§6.2) is in v1; other implementations are not,
