@@ -9,6 +9,7 @@ mod balances;
 mod categories;
 mod connections;
 mod convert;
+mod emergency_funds;
 mod error;
 mod forecast;
 mod fx;

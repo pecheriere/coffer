@@ -57,7 +57,7 @@ impl World {
             .await;
         }
         self.spend(hidden, "2026-11-02", 3_333, category).await;
-        self.floor(0).await;
+        self.emergency_fund(0).await;
         (visible, hidden)
     }
 }
@@ -66,7 +66,7 @@ impl World {
 async fn read_token_without_grants_gets_a_forecast() {
     let world = world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let token = world.token(Scope::Read, Vec::new()).await;
 
     let (status, text) = world.send(Method::GET, FORECAST, &token, None).await;
@@ -81,7 +81,7 @@ async fn read_token_without_grants_gets_a_forecast() {
 async fn read_token_may_run_what_if() {
     let world = world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let token = world.token(Scope::Read, Vec::new()).await;
 
     let (status, text) = world

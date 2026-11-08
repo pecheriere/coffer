@@ -16,9 +16,9 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    CalendarMonth, ForecastSettings, MAX_HYPOTHETICAL_ITEMS, PlanDirection, PlanSchedule,
-    PlanSpending, PlannedItemName, SafetyFloor, SettlementKind, strict_date, validate_amount,
-    validate_as_of,
+    CalendarMonth, EmergencyFund, EmergencyFunds, ForecastSettings, MAX_HYPOTHETICAL_ITEMS,
+    PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, SettlementKind, strict_date,
+    validate_amount, validate_as_of,
 };
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
@@ -35,15 +35,17 @@ use super::{Ledger, LedgerError, settings};
 
 const TOO_MANY_ITEMS: &str = "a what-if takes at most 50 hypothetical items";
 const TOO_LARGE: &str = "the forecast's totals are too large to represent";
+const FUND_TWICE: &str = "each currency's emergency fund once";
 
 /// What a forecast may say differently from the household's settings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ForecastOptions {
     /// The first day of the window: by default the household's today.
     pub as_of: Option<Date>,
     pub horizon_months: Option<u8>,
     pub include_income: Option<bool>,
-    pub floor: Option<SafetyFloor>,
+    /// Every currency's emergency fund, in place of the household's whole set.
+    pub emergency_funds: Option<EmergencyFunds>,
     pub stale_after_days: Option<u16>,
 }
 
@@ -85,9 +87,11 @@ pub struct WhatIfRequest {
     /// setting.
     #[serde(default)]
     pub include_income: Option<bool>,
-    /// The safety floor to use: by default the household's.
+    /// The emergency funds to use in place of the household's whole set, each currency at
+    /// most once: a currency left out has none for this what-if. By default the
+    /// household's.
     #[serde(default)]
-    pub floor: Option<SafetyFloor>,
+    pub emergency_funds: Option<Vec<EmergencyFund>>,
     /// 1 to 365 days: by default the household's.
     #[serde(default)]
     #[schema(minimum = 1, maximum = 365)]
@@ -139,12 +143,16 @@ impl Ledger {
         if request.items.len() > MAX_HYPOTHETICAL_ITEMS {
             return Err(LedgerError::Invalid(TOO_MANY_ITEMS));
         }
+        let emergency_funds = request
+            .emergency_funds
+            .map(checked_emergency_funds)
+            .transpose()?;
         let items = self.checked_hypothetical_items(request.items).await?;
         let options = ForecastOptions {
             as_of: request.as_of,
             horizon_months: request.horizon_months,
             include_income: request.include_income,
-            floor: request.floor,
+            emergency_funds,
             stale_after_days: request.stale_after_days,
         };
         self.answer(options, items).await
@@ -206,7 +214,7 @@ impl Ledger {
         let today = self.today().await?;
         let as_of = options.as_of.unwrap_or(today);
         validate_as_of(as_of).map_err(plan_items::invalid)?;
-        let data = self
+        let mut data = self
             .store
             .forecast_data(as_of)
             .await
@@ -215,7 +223,6 @@ impl Ledger {
                 other => other.into(),
             })?;
         let chosen = ForecastSettings {
-            floor: options.floor.or(data.settings.floor),
             include_income: options
                 .include_income
                 .unwrap_or(data.settings.include_income),
@@ -227,9 +234,23 @@ impl Ledger {
                 .unwrap_or(data.settings.stale_after_days),
         };
         chosen.validate().map_err(settings::invalid)?;
-        compute_forecast(&input(today, as_of, &chosen, data, hypothetical))
+        let stored_funds = std::mem::take(&mut data.emergency_funds);
+        let funds = options.emergency_funds.unwrap_or(stored_funds);
+        compute_forecast(&input(today, as_of, chosen, funds, data, hypothetical))
             .map_err(|_| LedgerError::Invalid(TOO_LARGE))
     }
+}
+
+/// A what-if's emergency funds, each target checked and each currency named once.
+fn checked_emergency_funds(funds: Vec<EmergencyFund>) -> Result<EmergencyFunds, LedgerError> {
+    let mut checked = EmergencyFunds::new();
+    for fund in funds {
+        fund.target.validate().map_err(settings::invalid)?;
+        if checked.insert(fund.currency, fund.target).is_some() {
+            return Err(LedgerError::Invalid(FUND_TWICE));
+        }
+    }
+    Ok(checked)
 }
 
 /// `Ok` when `category` is one an item going in `direction` may use.
@@ -251,7 +272,8 @@ fn check_hypothetical_category(
 fn input(
     today: Date,
     as_of: Date,
-    chosen: &ForecastSettings,
+    chosen: ForecastSettings,
+    emergency_funds: EmergencyFunds,
     data: ForecastData,
     hypothetical: Vec<ItemInput>,
 ) -> ForecastInput {
@@ -296,7 +318,7 @@ fn input(
         as_of,
         horizon_months: chosen.default_horizon_months,
         include_income: chosen.include_income,
-        floor: chosen.floor,
+        emergency_funds,
         stale_after_days: chosen.stale_after_days,
         accounts: accounts
             .into_iter()

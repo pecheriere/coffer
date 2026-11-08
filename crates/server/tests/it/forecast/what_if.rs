@@ -10,12 +10,12 @@ use super::{
     outflow, usd, with, world,
 };
 
-/// A category, an account of 5,000,000 and a floor of 1,000,000.
+/// A category, an account of 5,000,000 and an emergency fund of 1,000,000.
 async fn funded_world() -> (World, CategoryId, AccountId) {
     let world = world().await;
     let category = world.expense("Home").await;
     let account = world.funded("Checking", 5_000_000).await;
-    world.floor(1_000_000).await;
+    world.emergency_fund(1_000_000).await;
     (world, category, account)
 }
 
@@ -99,7 +99,7 @@ async fn what_if_writes_nothing() {
 }
 
 #[tokio::test]
-async fn what_if_overrides_floor_horizon_and_income() {
+async fn what_if_overrides_emergency_funds_horizon_and_income() {
     let (world, _, _) = funded_world().await;
     let pay = world.category("Pay", "income").await;
     world
@@ -114,7 +114,9 @@ async fn what_if_overrides_floor_horizon_and_income() {
 
     let forecast = world
         .what_if(&json!({
-            "floor": {"kind": "fixed", "amount": usd(2_000_000)},
+            "emergency_funds": [
+                {"currency": "USD", "target": {"kind": "fixed", "minor_units": 2_000_000}},
+            ],
             "horizon_months": 2,
             "include_income": true,
             "stale_after_days": 9,
@@ -122,7 +124,11 @@ async fn what_if_overrides_floor_horizon_and_income() {
         }))
         .await;
 
-    assert_eq!(forecast["floor"]["amount"], usd(2_000_000));
+    assert_eq!(
+        forecast["emergency_funds"],
+        json!([{"currency": "USD", "target": {"kind": "fixed", "minor_units": 2_000_000}}])
+    );
+    assert_eq!(forecast["totals"][0]["emergency_fund"], usd(2_000_000));
     assert_eq!(forecast["horizon_months"], 2);
     assert_eq!(forecast["include_income"], true);
     assert_eq!(forecast["stale_after_days"], 9);
@@ -135,12 +141,23 @@ async fn what_if_settings_out_of_range_are_422() {
     let (world, _, _) = funded_world().await;
     for (body, detail) in [
         (
-            json!({"floor": {"kind": "fixed", "amount": usd(-1)}}),
-            "a fixed floor must be between 0 and 10^15 minor units",
+            json!({"emergency_funds": [
+                {"currency": "USD", "target": {"kind": "fixed", "minor_units": -1}},
+            ]}),
+            "a fixed emergency fund must be between 0 and 10^15 minor units",
         ),
         (
-            json!({"floor": {"kind": "months_of_outflows", "months": 61}}),
-            "floor months must be 1 to 60",
+            json!({"emergency_funds": [
+                {"currency": "USD", "target": {"kind": "months_of_outflows", "months": 61}},
+            ]}),
+            "emergency fund months must be 1 to 60",
+        ),
+        (
+            json!({"emergency_funds": [
+                {"currency": "USD", "target": {"kind": "fixed", "minor_units": 1}},
+                {"currency": "USD", "target": {"kind": "fixed", "minor_units": 2}},
+            ]}),
+            "each currency's emergency fund once",
         ),
         (
             json!({"horizon_months": 61}),

@@ -2,13 +2,13 @@
 
 use jiff::civil::{Date, date};
 
-use super::{cash, fixed_floor, household, inflow, line, one_off, run, stored, usd, usd_totals};
-use super::{every, every_month, goal};
+use super::{cash, fixed_fund, household, inflow, line, one_off, run, stored, usd, usd_totals};
+use super::{currency, every, every_month, goal, months_fund};
 use crate::forecast::{ForecastError, ForecastInput, MonthBucket, compute_forecast};
 use crate::ids::CategoryId;
 use crate::plan::{
-    CalendarMonth, IntervalUnit, MAX_HORIZON_MONTHS, MAX_PLAN_AMOUNT_MINOR, MAX_PLAN_ITEMS,
-    SafetyFloor,
+    CalendarMonth, EmergencyFundTarget, EmergencyFunds, IntervalUnit, MAX_HORIZON_MONTHS,
+    MAX_PLAN_AMOUNT_MINOR, MAX_PLAN_ITEMS,
 };
 
 fn buckets(forecast: &[MonthBucket]) -> Vec<(String, bool)> {
@@ -155,21 +155,21 @@ fn totals_past_i64_are_out_of_range() {
         },
         // Each total fits, the need does not.
         ForecastInput {
-            floor: Some(fixed_floor(usd(1))),
+            emergency_funds: fixed_fund(usd(1)),
             items: vec![one_off("A", usd(i64::MAX), date(2026, 12, 1), other)],
             ..household()
         },
         // The need fits, the surplus does not.
         ForecastInput {
             accounts: vec![cash("A", usd(i64::MIN))],
-            floor: Some(fixed_floor(usd(1))),
+            emergency_funds: fixed_fund(usd(1)),
             ..household()
         },
         // Projected cash leaves i64 in a middle month.
         ForecastInput {
             include_income: true,
             accounts: vec![cash("A", usd(i64::MAX))],
-            floor: Some(fixed_floor(usd(i64::MAX))),
+            emergency_funds: fixed_fund(usd(i64::MAX)),
             items: vec![
                 inflow(one_off("In", usd(1), date(2026, 11, 20), other)),
                 one_off("Out", usd(1), date(2026, 12, 20), other),
@@ -231,9 +231,12 @@ fn totals_at_the_limit_stay_exact() {
 fn most_items(amount: i64) -> ForecastInput {
     ForecastInput {
         horizon_months: MAX_HORIZON_MONTHS,
-        floor: Some(SafetyFloor::MonthsOfOutflows {
-            months: MAX_HORIZON_MONTHS,
-        }),
+        emergency_funds: EmergencyFunds::from([(
+            currency("USD"),
+            EmergencyFundTarget::MonthsOfOutflows {
+                months: MAX_HORIZON_MONTHS,
+            },
+        )]),
         items: (0..MAX_PLAN_ITEMS)
             .map(|_| {
                 stored(
@@ -254,9 +257,9 @@ fn the_largest_household_stays_exact() {
     let totals = usd_totals(&forecast);
     assert_eq!(totals.planned_outflows, usd(2_739_000), "913,000 × 3");
     assert_eq!(
-        totals.floor,
+        totals.emergency_fund,
         usd(2_739_000),
-        "the floor sums the same dates"
+        "the emergency fund sums the same dates"
     );
     assert_eq!(forecast.months.len(), 61, "61 calendar months touched");
     assert_eq!(forecast.items.len(), MAX_PLAN_ITEMS, "one line per item");
@@ -288,9 +291,11 @@ fn the_largest_amounts_are_refused_not_wrapped() {
 /// API clients read these names; each kind of enum keeps its own shape.
 #[test]
 fn json_shapes_are_stable() {
+    let other = CategoryId::new();
     let forecast = run(&ForecastInput {
         accounts: Vec::new(),
-        floor: None,
+        emergency_funds: EmergencyFunds::new(),
+        items: vec![one_off("Bill", usd(5), date(2026, 12, 1), other)],
         ..household()
     });
     let json = serde_json::to_value(&forecast).unwrap();
@@ -298,11 +303,31 @@ fn json_shapes_are_stable() {
     assert!(json["surplus"].is_null(), "no number is an explicit null");
     assert_eq!(
         json["blockers"],
-        serde_json::json!([{"kind": "floor_not_set"}, {"kind": "no_counted_accounts"}]),
+        serde_json::json!([
+            {"kind": "emergency_fund_not_set", "currency": "USD"},
+            {"kind": "no_counted_accounts"},
+        ]),
         "blockers are tagged"
     );
+    assert_eq!(
+        json["totals"][0]["emergency_fund"],
+        serde_json::json!({"minor_units": 0, "currency": "USD"}),
+        "a currency's emergency fund is money"
+    );
 
-    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        emergency_funds: months_fund(2),
+        ..household()
+    });
+    let json = serde_json::to_value(&forecast).unwrap();
+    assert_eq!(
+        json["emergency_funds"],
+        serde_json::json!([
+            {"currency": "USD", "target": {"kind": "months_of_outflows", "months": 2}},
+        ]),
+        "each target names its currency and is tagged"
+    );
+
     let forecast = run(&ForecastInput {
         today: date(2026, 11, 1),
         accounts: vec![crate::forecast::AccountInput {
@@ -393,14 +418,14 @@ fn an_exact_month_is_still_end_exclusive() {
 }
 
 #[test]
-fn a_months_floor_keeps_the_clamped_day_too() {
+fn a_months_target_keeps_the_clamped_day_too() {
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![stored("Bill", usd(1_000), every_month(date(2026, 1, 28)))],
         ..window(date(2027, 1, 30), 1)
     });
     assert_eq!(
-        usd_totals(&forecast).floor,
+        usd_totals(&forecast).emergency_fund,
         usd(1_000),
         "February 28 counts"
     );

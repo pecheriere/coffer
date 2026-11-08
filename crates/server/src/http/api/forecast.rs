@@ -45,12 +45,17 @@ pub struct ForecastQuery {
     tag = tags::FORECAST,
     description = "How much cash the household needs over the window, and how much above that \
                    could be invested: `surplus` is `cash_available` minus `cash_needed`, and \
-                   `cash_needed` is the planned outflows, plus the goals, plus the safety floor, \
-                   minus any income counted.\n\n\
+                   `cash_needed` is the planned outflows, plus the goals, plus the emergency \
+                   fund, minus any income counted. Each currency has its own emergency fund \
+                   target (`setEmergencyFund`), applied only to that currency's totals: a fixed \
+                   amount, or some months of that currency's recurring outflows, from `as_of`, \
+                   whatever the horizon. `emergency_funds` lists the targets of the currencies in \
+                   `totals`.\n\n\
                    `status` says how far to trust it. `firm` is a number with nothing to warn \
                    about. `provisional` is a number with `cautions`, each saying what might \
                    change it. `unavailable` is no number: `surplus` is `null` and `blockers` say \
-                   why, such as a safety floor not yet set or an account without a balance. \
+                   why, such as a currency in use with no emergency fund \
+                   (`emergency_fund_not_set`, naming it) or an account without a balance. \
                    Several currencies are never netted: `surplus` is `null`, with the blocker \
                    `mixed_currencies`, and each row of `totals` has its own.\n\n\
                    A planned amount is a positive magnitude with a `direction`. Balances, \
@@ -112,7 +117,9 @@ pub(super) async fn get(
                    in the plan, such as a new roof: `items` are checked like planned items, but \
                    a category is optional, and each answers in the breakdown as `hypothetical` \
                    with its position in the list. This month's spending neither reduces nor pays \
-                   them.\n\n\
+                   them. `emergency_funds` replaces the household's whole set for this answer, a \
+                   currency left out having none; naming a currency twice is 422, as is a target \
+                   out of range.\n\n\
                    This persists nothing: no item, no setting, no audit entry, no idempotency \
                    key. So it needs only `read`, though it is a `POST`, and the same access as \
                    `getForecast`.",

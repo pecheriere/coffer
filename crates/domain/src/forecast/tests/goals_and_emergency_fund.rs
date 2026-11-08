@@ -1,12 +1,13 @@
-//! Sinking funds in the window, and the two kinds of safety floor.
+//! Sinking funds in the window, and the two kinds of emergency fund target.
 
 use jiff::civil::date;
 
-use super::{cash, eur, every, every_month, fixed_floor, goal, household, inflow, line};
+use super::{cash, eur, every, every_month, fixed_fund, goal, household, inflow, line};
+use super::{currency, months_fund};
 use super::{has_line, monthly, one_off, run, stored, totals_of, usd, usd_totals};
 use crate::forecast::{Caution, ForecastInput, ForecastStatus, ItemInput};
 use crate::ids::CategoryId;
-use crate::plan::{IntervalUnit, PlanSchedule, SafetyFloor};
+use crate::plan::{EmergencyFund, EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanSchedule};
 
 #[test]
 fn completed_goal_not_counted() {
@@ -187,13 +188,13 @@ fn goal_spending_is_never_read_as_negative() {
 }
 
 #[test]
-fn months_floor_sums_unreduced_recurring_per_currency() {
+fn months_target_sums_unreduced_recurring_per_currency() {
     let food = CategoryId::new();
     let home = CategoryId::new();
     let forecast = run(&ForecastInput {
         accounts: vec![cash("Checking", usd(10_000_000)), cash("Konto", eur(5_000))],
         horizon_months: 1,
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 2 }),
+        emergency_funds: months_fund(2),
         items: vec![
             monthly("Rent", usd(200_000), date(2026, 1, 1), home),
             super::budget(monthly("Groceries", usd(60_000), date(2026, 1, 20), food)),
@@ -206,15 +207,15 @@ fn months_floor_sums_unreduced_recurring_per_currency() {
         }],
         ..household()
     });
-    // The floor's window is [Nov 15, Jan 15), whatever the horizon: rent on Dec 1
+    // The target's window is [Nov 15, Jan 15), whatever the horizon: rent on Dec 1
     // and Jan 1, groceries on Nov 20 and Dec 20 with no reduction.
     assert_eq!(
-        totals_of(&forecast, "USD").floor,
+        totals_of(&forecast, "USD").emergency_fund,
         usd(520_000),
         "400,000 + 120,000"
     );
     assert_eq!(
-        totals_of(&forecast, "EUR").floor,
+        totals_of(&forecast, "EUR").emergency_fund,
         eur(2_000),
         "Nov 28 and Dec 28"
     );
@@ -225,11 +226,48 @@ fn months_floor_sums_unreduced_recurring_per_currency() {
     );
 }
 
+/// Each currency's months count only its own outflows, over its own number of months.
 #[test]
-fn months_floor_ignores_one_offs_goals_and_inflows() {
+fn months_target_counts_its_own_currency() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 3 }),
+        accounts: vec![
+            cash("Checking", usd(1_000_000)),
+            cash("Konto", eur(1_000_000)),
+        ],
+        emergency_funds: EmergencyFunds::from([
+            (
+                currency("USD"),
+                EmergencyFundTarget::MonthsOfOutflows { months: 3 },
+            ),
+            (
+                currency("EUR"),
+                EmergencyFundTarget::MonthsOfOutflows { months: 1 },
+            ),
+        ]),
+        items: vec![
+            monthly("Rent", usd(10_000), date(2026, 1, 20), other),
+            monthly("Miete", eur(5_000), date(2026, 1, 20), other),
+        ],
+        ..household()
+    });
+    assert_eq!(
+        totals_of(&forecast, "USD").emergency_fund,
+        usd(30_000),
+        "Nov 20, Dec 20 and Jan 20 of dollar rent"
+    );
+    assert_eq!(
+        totals_of(&forecast, "EUR").emergency_fund,
+        eur(5_000),
+        "Nov 20 of euro rent only"
+    );
+}
+
+#[test]
+fn months_target_ignores_one_offs_goals_and_inflows() {
+    let other = CategoryId::new();
+    let forecast = run(&ForecastInput {
+        emergency_funds: months_fund(3),
         items: vec![
             one_off("Repair", usd(1_000), date(2026, 12, 1), other),
             goal("Fund", usd(2_000), date(2026, 1, 1), date(2026, 12, 1), 0),
@@ -238,17 +276,17 @@ fn months_floor_ignores_one_offs_goals_and_inflows() {
         ..household()
     });
     assert_eq!(
-        usd_totals(&forecast).floor,
+        usd_totals(&forecast).emergency_fund,
         usd(0),
         "only recurring outflows"
     );
     assert_eq!(
         forecast.cautions,
-        [Caution::MonthsFloorIsZero {
-            currency: super::currency("USD"),
+        [Caution::EmergencyFundMonthsIsZero {
+            currency: currency("USD"),
             months: 3,
         }],
-        "a floor that came to 0 is not silent"
+        "an emergency fund that came to 0 is not silent"
     );
     assert_eq!(
         forecast.status,
@@ -263,10 +301,10 @@ fn months_floor_ignores_one_offs_goals_and_inflows() {
 }
 
 #[test]
-fn months_floor_includes_hypothetical_recurring_items() {
+fn months_target_includes_hypothetical_recurring_items() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![super::hypothetical(
             0,
             monthly("What if", usd(5_000), date(2026, 1, 20), other),
@@ -274,16 +312,16 @@ fn months_floor_includes_hypothetical_recurring_items() {
         ..household()
     });
     assert_eq!(
-        usd_totals(&forecast).floor,
+        usd_totals(&forecast).emergency_fund,
         usd(5_000),
         "a recurring outflow"
     );
 }
 
 #[test]
-fn months_floor_respects_schedules() {
+fn months_target_respects_schedules() {
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 12 }),
+        emergency_funds: months_fund(12),
         items: vec![
             stored(
                 "Weekly",
@@ -308,79 +346,84 @@ fn months_floor_respects_schedules() {
     // (Nov 15 itself to Nov 14, 2027): 530. Ends: Nov, Dec, Jan: 3,000. Late start
     // begins on the excluded end.
     assert_eq!(
-        usd_totals(&forecast).floor,
+        usd_totals(&forecast).emergency_fund,
         usd(3_530),
         "each schedule's own"
     );
 }
 
 #[test]
-fn a_fixed_floor_is_taken_as_given() {
+fn a_fixed_fund_is_taken_as_given() {
     let forecast = run(&ForecastInput {
-        floor: Some(fixed_floor(usd(123_456))),
+        emergency_funds: fixed_fund(usd(123_456)),
         ..household()
     });
     assert_eq!(
-        usd_totals(&forecast).floor,
+        usd_totals(&forecast).emergency_fund,
         usd(123_456),
         "the fixed amount"
     );
     assert_eq!(forecast.surplus, Some(usd(876_544)), "taken off the cash");
     assert_eq!(
-        forecast.floor,
-        Some(fixed_floor(usd(123_456))),
+        forecast.emergency_funds,
+        [EmergencyFund {
+            currency: currency("USD"),
+            target: EmergencyFundTarget::Fixed {
+                minor_units: 123_456
+            },
+        }],
         "and echoed"
     );
 }
 
 #[test]
-fn a_months_floor_above_zero_does_not_warn() {
+fn a_months_target_above_zero_does_not_warn() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![monthly("Rent", usd(1_000), date(2026, 1, 20), other)],
         ..household()
     });
     assert_eq!(
         forecast.status,
         ForecastStatus::Firm,
-        "the floor holds money"
+        "the emergency fund holds money"
     );
 }
 
 #[test]
-fn a_months_floor_warns_only_for_the_currency_at_zero() {
+fn a_months_target_warns_only_for_the_currency_at_zero() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
         accounts: vec![cash("Checking", usd(10)), cash("Konto", eur(10))],
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![monthly("Rent", usd(1_000), date(2026, 1, 20), other)],
         ..household()
     });
     assert_eq!(
         forecast.cautions,
-        [Caution::MonthsFloorIsZero {
-            currency: super::currency("EUR"),
+        [Caution::EmergencyFundMonthsIsZero {
+            currency: currency("EUR"),
             months: 1,
         }],
-        "dollars have a floor and euros do not"
+        "dollars have an emergency fund and euros do not"
     );
 }
 
 #[test]
-fn an_explicit_zero_floor_does_not_warn() {
+fn an_explicit_zero_target_does_not_warn() {
     let forecast = run(&household());
     assert_eq!(forecast.cautions, [], "the household said 0");
     assert_eq!(forecast.status, ForecastStatus::Firm, "so it is firm");
 }
 
-/// A recurring item whose first occurrence is beyond the floor's months holds
-/// nothing, so its currency is not in use.
+/// A recurring item whose first occurrence is beyond the window holds nothing, so its
+/// currency is not in use, whatever its months target.
 #[test]
-fn a_foreign_item_outside_the_floor_months_is_not_in_use() {
+fn a_foreign_item_outside_the_window_is_not_in_use() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        floor: Some(SafetyFloor::MonthsOfOutflows { months: 1 }),
+        emergency_funds: months_fund(1),
         items: vec![
             monthly("Rent", usd(1_000), date(2026, 1, 20), other),
             monthly("Miete", eur(1_000), date(2030, 1, 20), other),
@@ -392,17 +435,17 @@ fn a_foreign_item_outside_the_floor_months_is_not_in_use() {
     assert_eq!(forecast.status, ForecastStatus::Firm, "firm");
 }
 
-/// With no floor there is nothing to dip below, however low the cash goes.
+/// With no emergency fund there is nothing to dip below, however low the cash goes.
 #[test]
-fn without_a_floor_no_dip_is_reported() {
+fn without_an_emergency_fund_no_dip_is_reported() {
     let other = CategoryId::new();
     let forecast = run(&ForecastInput {
-        floor: None,
+        emergency_funds: EmergencyFunds::new(),
         include_income: true,
         items: vec![one_off("Big", usd(5_000_000), date(2026, 12, 1), other)],
         ..household()
     });
-    assert_eq!(forecast.cautions, [], "no floor, no dip");
+    assert_eq!(forecast.cautions, [], "no emergency fund, no dip");
     assert_eq!(
         forecast.status,
         ForecastStatus::Unavailable,

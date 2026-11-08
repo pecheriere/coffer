@@ -10,7 +10,7 @@ use coffer_domain::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, TransactionId, TransferLinkId,
 };
 use coffer_domain::money::Currency;
-use coffer_domain::plan::ForecastSettings;
+use coffer_domain::plan::{EmergencyFunds, ForecastSettings};
 use coffer_domain::transfer_rate::CrossCurrencyLink;
 use jiff::civil::Date;
 use sqlx::SqliteConnection;
@@ -19,6 +19,7 @@ use sqlx::sqlite::SqliteRow;
 use crate::accounts::account_from_row;
 use crate::balances::snapshot_from_row;
 use crate::convert::{int, parsed, parsed_opt, text};
+use crate::emergency_funds::fetch_emergency_funds;
 use crate::household::fetch_forecast_settings;
 use crate::planned_items::from_row as planned_item_from_row;
 use crate::provider_accounts::provider_account_from_row;
@@ -42,6 +43,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForecastData {
     pub settings: ForecastSettings,
+    /// Each currency's emergency fund target; a currency missing has none.
+    pub emergency_funds: EmergencyFunds,
     /// Every account, closed ones included, ordered by id, with its latest balance
     /// on or before `as_of`.
     pub accounts: Vec<(AccountRecord, Option<BalanceSnapshot>)>,
@@ -443,6 +446,27 @@ async fn loose_ends(
     Ok((this_month, last_month))
 }
 
+/// Every provider account and every connection, each ordered by id.
+async fn feeds(
+    conn: &mut SqliteConnection,
+) -> Result<(Vec<ProviderAccountRecord>, Vec<ConnectionHealth>), StoreError> {
+    let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(provider_account_from_row)
+        .collect::<Result<_, _>>()?;
+    let connections = sqlx::query("SELECT id, label, status FROM connections ORDER BY id")
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(StoreError::from_sqlx)?
+        .iter()
+        .map(connection_health_from_row)
+        .collect::<Result<_, _>>()?;
+    Ok((provider_accounts, connections))
+}
+
 /// Each account with its latest balance on or before `as_of`.
 async fn accounts_with_balances(
     conn: &mut SqliteConnection,
@@ -491,6 +515,7 @@ impl Store {
         // One read transaction: a sync committing midway can't split a forecast.
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         let settings = fetch_forecast_settings(&mut *tx).await?;
+        let emergency_funds = fetch_emergency_funds(&mut *tx).await?;
         let accounts = accounts_with_balances(&mut tx, &day).await?;
         let items = sqlx::query("SELECT * FROM planned_items WHERE active = 1 ORDER BY id")
             .fetch_all(&mut *tx)
@@ -546,23 +571,11 @@ impl Store {
         let links_with_leg_removed = links_with_leg_removed(&mut tx, &day, &looked_at_from).await?;
         let (cross_currency_links, rates) =
             transfer_rates::for_forecast(&mut tx, as_of.first_of_month(), as_of).await?;
-        let provider_accounts = sqlx::query("SELECT * FROM provider_accounts ORDER BY id")
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(provider_account_from_row)
-            .collect::<Result<_, _>>()?;
-        let connections = sqlx::query("SELECT id, label, status FROM connections ORDER BY id")
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(connection_health_from_row)
-            .collect::<Result<_, _>>()?;
+        let (provider_accounts, connections) = feeds(&mut tx).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(ForecastData {
             settings,
+            emergency_funds,
             accounts,
             items,
             settlements,

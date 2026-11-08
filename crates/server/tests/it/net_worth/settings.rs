@@ -313,7 +313,7 @@ async fn forecast_fields_are_unchanged() {
 
     assert_eq!(
         world.settings_as(&world.admin).await,
-        json!({"floor": null, "include_income": true, "default_horizon_months": 6,
+        json!({"emergency_funds": [], "include_income": true, "default_horizon_months": 6,
                "stale_after_days": 14, "display_currency": "EUR",
                "timezone": "UTC", "timezone_setting": null})
     );

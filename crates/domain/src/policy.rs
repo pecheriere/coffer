@@ -24,14 +24,15 @@
 //! | Create or change a category or group     | `Write`                       |
 //! | Read a forecast or a what-if             | `Transactions`                |
 //! | Read plan versus actual                  | `Transactions`                |
-//! | Read the safety floor                    | `Transactions`                |
+//! | Read the emergency funds                 | `Transactions`                |
 //! | Create, change or delete a planned item  | `Write`                       |
 //! | Read FX rates and coverage               | `Balances`                    |
 //! | Change the display currency              | `Balances`                    |
 //! | Settle a planned item for a month        | `Write`                       |
 //! | Change or run a rule for every account   | `Write`                       |
 //!
-//! The safety floor is not refused without it: the settings answer with `floor: null`.
+//! The emergency funds are not refused without it: the settings answer with
+//! `emergency_funds: null`.
 //!
 //! Using an existing category on a split is a write to the transaction's
 //! account, decided by [`authorize_account`]. A connection's last error is

@@ -321,8 +321,8 @@ impl World {
     }
 
     /// A household a forecast would have something to say about: a hidden
-    /// account with a large and stale balance, a provider account bound to
-    /// nothing, and a safety floor.
+    /// account with a large and stale balance, and a provider account bound to
+    /// nothing.
     async fn hidden_fortune(&self) -> AccountId {
         let hidden = self.account("Fortune").await;
         self.server

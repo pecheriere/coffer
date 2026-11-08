@@ -24,7 +24,7 @@
 use jiff::civil::{Date, date};
 
 use super::{
-    AS_OF, assert_provisional, budget, cash, currency, every, fixed_floor, goal, household, inflow,
+    AS_OF, assert_provisional, budget, cash, currency, every, fixed_fund, goal, household, inflow,
     line, monthly, one_off, run, totals_of, usd, usd_totals,
 };
 use crate::accounts::LiquidityClass;
@@ -44,7 +44,7 @@ fn golden_household() -> ForecastInput {
     let home = CategoryId::new();
     let pay = CategoryId::new();
     ForecastInput {
-        floor: Some(fixed_floor(usd(1_000_000))),
+        emergency_funds: fixed_fund(usd(1_000_000)),
         accounts: vec![
             cash("Checking", usd(2_000_000)),
             cash("Savings", usd(5_000_000)),
@@ -140,7 +140,7 @@ fn golden_three_month_forecast() {
     assert_eq!(totals.cash_available, usd(6_850_000), "cash available");
     assert_eq!(totals.planned_outflows, usd(914_000), "planned outflows");
     assert_eq!(totals.goals, usd(1_100_000), "goals");
-    assert_eq!(totals.floor, usd(1_000_000), "floor");
+    assert_eq!(totals.emergency_fund, usd(1_000_000), "emergency fund");
     assert_eq!(totals.planned_inflows, usd(0), "income is off");
     assert_eq!(totals.excluded_inflows, usd(2_400_000), "income left out");
     assert_eq!(totals.cash_needed, usd(3_014_000), "cash needed");

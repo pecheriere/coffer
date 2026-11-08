@@ -28,7 +28,7 @@ async fn budget(
 async fn a_budget_dated_earlier_this_month_holds_back_what_is_unspent() {
     let world = world().await;
     let checking = world.funded("Checking", 2_000_000).await;
-    world.floor(500_000).await;
+    world.emergency_fund(500_000).await;
     let food = budget(&world, "Groceries", 80_000, "2026-01-01").await;
     world.spend(checking, "2026-11-02", 50_000, food).await;
 
@@ -45,7 +45,7 @@ async fn a_budget_dated_earlier_this_month_holds_back_what_is_unspent() {
 async fn spending_before_a_budgets_first_occurrence_this_month_reduces_it() {
     let world = world().await;
     let checking = world.funded("Checking", 2_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let food = budget(&world, "Groceries", 80_000, "2026-11-20").await;
     world.spend(checking, "2026-11-02", 50_000, food).await;
 
@@ -61,7 +61,7 @@ async fn a_bill_paid_on_as_of_leaves_only_the_rest_to_a_budget() {
     let world = world().await;
     let checking = world.funded("Checking", 2_000_000).await;
     world.balance(checking, AS_OF, 1_795_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let home = budget(&world, "Upkeep", 20_000, "2026-01-20").await;
     world
         .item(&outflow("Rent", 200_000, home, &monthly("2026-11-15")))

@@ -128,7 +128,7 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
             account,
             balance: usd(-30_000),
         },
-        Caution::MonthsFloorIsZero {
+        Caution::EmergencyFundMonthsIsZero {
             currency,
             months: 1,
         },
@@ -175,7 +175,7 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
             total: usd(2_500),
             pending: usd(700),
         },
-        Caution::CashDipsBelowFloor {
+        Caution::CashDipsBelowEmergencyFund {
             month: CalendarMonth::of(ON).unwrap(),
             currency,
             projected_cash: usd(-100),
@@ -192,7 +192,9 @@ fn blockers() -> Vec<Blocker> {
                 Currency::parse("USD").unwrap(),
             ],
         },
-        Blocker::FloorNotSet,
+        Blocker::EmergencyFundNotSet {
+            currency: Currency::parse("EUR").unwrap(),
+        },
         Blocker::NoCountedAccounts,
         Blocker::BalanceMissing {
             account: AccountId::new(),
@@ -381,9 +383,9 @@ fn rule_filed_transfers_say_how_many_and_how_much() {
 }
 
 #[test]
-fn a_dip_below_the_floor_says_when_and_how_low() {
+fn a_dip_below_the_emergency_fund_says_when_and_how_low() {
     let sentence = said(
-        &Caution::CashDipsBelowFloor {
+        &Caution::CashDipsBelowEmergencyFund {
             month: CalendarMonth::of(ON).unwrap(),
             currency: Currency::parse("USD").unwrap(),
             projected_cash: usd(-123_456),
@@ -392,7 +394,28 @@ fn a_dip_below_the_floor_says_when_and_how_low() {
     );
     assert!(sentence.contains("In November 2026"));
     assert!(sentence.contains("fall to -1,234.56 USD"));
-    assert!(sentence.contains("below the safety floor"));
+    assert!(sentence.contains("below the emergency fund"));
+}
+
+#[test]
+fn a_missing_emergency_fund_names_its_currency() {
+    let sentence = blocker_sentence(&Blocker::EmergencyFundNotSet {
+        currency: Currency::parse("EUR").unwrap(),
+    });
+    assert!(sentence.contains("No emergency fund is set for EUR."));
+}
+
+#[test]
+fn an_emergency_fund_of_months_at_zero_names_its_currency() {
+    let sentence = said(
+        &Caution::EmergencyFundMonthsIsZero {
+            currency: Currency::parse("EUR").unwrap(),
+            months: 3,
+        },
+        &Names::of_accounts(&[]),
+    );
+    assert!(sentence.contains("The emergency fund in EUR is 3 months of recurring outflows"));
+    assert!(sentence.contains("none are planned in EUR"));
 }
 
 #[test]

@@ -1,14 +1,15 @@
 //! Household-wide settings.
 
 use coffer_domain::identity::ThemeName;
-use coffer_domain::money::{Currency, Money};
-use coffer_domain::plan::{ForecastSettings, SafetyFloor};
+use coffer_domain::money::Currency;
+use coffer_domain::plan::{EmergencyFunds, ForecastSettings};
 use coffer_domain::time::IanaZone;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteExecutor};
 
-use crate::convert::{corrupt, text_opt};
+use crate::convert::corrupt;
+use crate::emergency_funds::fetch_emergency_funds;
 use crate::members::theme_from_row;
 use crate::{Store, StoreError, StoreTx};
 
@@ -30,57 +31,8 @@ fn small<T: TryFrom<i64>>(row: &SqliteRow, column: &str) -> Result<T, StoreError
     T::try_from(value).map_err(|_| corrupt("setting out of range"))
 }
 
-fn floor_from_row(row: &SqliteRow) -> Result<Option<SafetyFloor>, StoreError> {
-    let kind = text_opt(row, "floor_kind")?;
-    let minor: Option<i64> = row.try_get("floor_minor").map_err(StoreError::from_sqlx)?;
-    let currency = text_opt(row, "floor_currency")?;
-    let months: Option<i64> = row.try_get("floor_months").map_err(StoreError::from_sqlx)?;
-    match (kind.as_deref(), minor, currency, months) {
-        (None, None, None, None) => Ok(None),
-        (Some("fixed"), Some(minor_units), Some(currency), None) => Ok(Some(SafetyFloor::Fixed {
-            amount: Money {
-                minor_units,
-                currency: Currency::parse(&currency).map_err(StoreError::backend)?,
-            },
-        })),
-        (Some("months_of_outflows"), None, None, Some(months)) => {
-            Ok(Some(SafetyFloor::MonthsOfOutflows {
-                months: u8::try_from(months).map_err(|_| corrupt("floor months out of range"))?,
-            }))
-        }
-        _ => Err(corrupt("floor columns do not form a floor")),
-    }
-}
-
-/// The four floor columns of `settings`: all empty for no floor.
-fn floor_columns(
-    settings: &ForecastSettings,
-) -> (
-    Option<&'static str>,
-    Option<i64>,
-    Option<String>,
-    Option<i64>,
-) {
-    match settings.floor {
-        None => (None, None, None, None),
-        Some(SafetyFloor::Fixed { amount }) => (
-            Some("fixed"),
-            Some(amount.minor_units),
-            Some(amount.currency.to_string()),
-            None,
-        ),
-        Some(SafetyFloor::MonthsOfOutflows { months }) => (
-            Some("months_of_outflows"),
-            None,
-            None,
-            Some(i64::from(months)),
-        ),
-    }
-}
-
 fn settings_from_row(row: &SqliteRow) -> Result<ForecastSettings, StoreError> {
     let settings = ForecastSettings {
-        floor: floor_from_row(row)?,
         include_income: match small::<u8>(row, "include_income")? {
             0 => false,
             1 => true,
@@ -140,6 +92,8 @@ pub(crate) async fn fetch_household_zone<'e>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HouseholdSettingsRecord {
     pub forecast: ForecastSettings,
+    /// Each currency's emergency fund target; a currency missing has none.
+    pub emergency_funds: EmergencyFunds,
     /// `None` while none was chosen.
     pub display_currency: Option<Currency>,
     /// `None` while none was chosen, and the server's default applies.
@@ -181,16 +135,19 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Backend failures, including a stored row that is not valid settings, a stored
-    /// code that is not a currency or a stored name that is not a zone.
+    /// Backend failures, including a stored row that is not valid settings or a valid
+    /// emergency fund, a stored code that is not a currency or a stored name that is not a
+    /// zone.
     pub async fn household_settings(&self) -> Result<HouseholdSettingsRecord, StoreError> {
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         let forecast = fetch_forecast_settings(&mut *tx).await?;
+        let emergency_funds = fetch_emergency_funds(&mut *tx).await?;
         let display_currency = fetch_display_currency(&mut *tx).await?;
         let timezone = fetch_household_zone(&mut *tx).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(HouseholdSettingsRecord {
             forecast,
+            emergency_funds,
             display_currency,
             timezone,
         })
@@ -228,21 +185,13 @@ impl StoreTx {
         &mut self,
         settings: &ForecastSettings,
     ) -> Result<(), StoreError> {
-        let (kind, minor, currency, months) = floor_columns(settings);
         sqlx::query(
-            "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
-             floor_months, include_income, default_horizon_months, stale_after_days) \
-             VALUES (1, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (id) DO UPDATE SET floor_kind = excluded.floor_kind, \
-             floor_minor = excluded.floor_minor, floor_currency = excluded.floor_currency, \
-             floor_months = excluded.floor_months, include_income = excluded.include_income, \
+            "INSERT INTO household_settings (id, include_income, default_horizon_months, \
+             stale_after_days) VALUES (1, ?, ?, ?) \
+             ON CONFLICT (id) DO UPDATE SET include_income = excluded.include_income, \
              default_horizon_months = excluded.default_horizon_months, \
              stale_after_days = excluded.stale_after_days",
         )
-        .bind(kind)
-        .bind(minor)
-        .bind(currency)
-        .bind(months)
         .bind(i64::from(settings.include_income))
         .bind(i64::from(settings.default_horizon_months))
         .bind(i64::from(settings.stale_after_days))
@@ -293,16 +242,10 @@ impl StoreTx {
     /// row keeps every value.
     async fn ensure_settings_row(&mut self) -> Result<(), StoreError> {
         let defaults = ForecastSettings::default();
-        let (kind, minor, floor_currency, months) = floor_columns(&defaults);
         sqlx::query(
-            "INSERT INTO household_settings (id, floor_kind, floor_minor, floor_currency, \
-             floor_months, include_income, default_horizon_months, stale_after_days) \
-             VALUES (1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO household_settings (id, include_income, default_horizon_months, \
+             stale_after_days) VALUES (1, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
         )
-        .bind(kind)
-        .bind(minor)
-        .bind(floor_currency)
-        .bind(months)
         .bind(i64::from(defaults.include_income))
         .bind(i64::from(defaults.default_horizon_months))
         .bind(i64::from(defaults.stale_after_days))

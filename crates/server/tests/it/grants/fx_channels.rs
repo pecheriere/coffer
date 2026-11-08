@@ -485,26 +485,28 @@ async fn an_admin_token_with_grants_gets_the_setting_not_the_sum() {
     assert!(answers[0] == answers[1], "byte-identical");
     assert_eq!(
         parsed(&answers[0].1),
-        json!({"floor": null, "include_income": false, "default_horizon_months": 3,
+        json!({"emergency_funds": null, "include_income": false, "default_horizon_months": 3,
                "stale_after_days": 7, "display_currency": "CHF",
                "timezone": "UTC", "timezone_setting": null})
     );
 }
 
 /// `GET` says how numbers are shown to every token, and nothing else differs by token or by
-/// what is hidden. `floor` is the one setting that needs more, and none is set here.
+/// what is hidden. `emergency_funds` is the one setting that needs more: none is set here, which
+/// a token with the forecast's access reads as an empty list and any other as `null`.
 #[tokio::test]
 async fn settings_read_the_same_for_every_token() {
     let (bare, held) = (scene().await, scene().await);
     hide_yen(&held.world).await;
     let wide = held.world.token(Scope::Read, vec![all(Balances)]).await.1;
     let mut tokens = restricted_tokens(&held).await;
+    tokens.push(wide);
     let uniform = held.world.token(Scope::Admin, Vec::new()).await.1;
-    tokens.extend([wide, uniform]);
 
     let answers = for_each(&held, &tokens, SETTINGS).await;
 
     assert_eq!(parsed(&answers[0].3)["display_currency"], "USD");
+    assert_eq!(parsed(&answers[0].3)["emergency_funds"], Value::Null);
     for answer in &answers {
         assert!(answer == &answers[0], "byte-identical");
     }
@@ -512,6 +514,10 @@ async fn settings_read_the_same_for_every_token() {
         bare.whole(SETTINGS, &bare.token).await == answers[0],
         "byte-identical"
     );
+    let mut seen_by_all = parsed(&held.whole(SETTINGS, &uniform).await.3);
+    assert_eq!(seen_by_all["emergency_funds"], json!([]));
+    seen_by_all["emergency_funds"] = Value::Null;
+    assert_eq!(seen_by_all, parsed(&answers[0].3), "nothing else differs");
 }
 
 // What a write token can try.
