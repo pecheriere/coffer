@@ -186,7 +186,7 @@ impl World {
             .body(Body::empty())
             .unwrap();
         let reply = self.browser.send(request).await;
-        assert_eq!(reply.status, expected, "{path}");
+        assert_eq!(reply.status, expected);
         serde_json::from_str(&reply.body).unwrap_or(Value::Null)
     }
 
@@ -199,7 +199,7 @@ impl World {
     /// A page as alice sees it, which must answer 200.
     async fn page(&mut self, path: &str) -> Reply {
         let reply = self.browser.get(path).await;
-        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(reply.status, StatusCode::OK);
         reply
     }
 
@@ -242,14 +242,14 @@ fn detail(id: TransactionId) -> String {
 
 /// A 303 to `location`.
 fn assert_redirect(reply: &Reply, location: &str) {
-    assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.header(header::LOCATION), location);
 }
 
 /// A refusal with this status whose page says `words` and doesn't hold `typed`.
 fn assert_refused(reply: &Reply, status: StatusCode, words: &str, typed: &str) {
-    assert_eq!(reply.status, status, "{}", reply.body);
-    assert!(reply.body.contains(words), "says why: {}", reply.body);
+    assert_eq!(reply.status, status);
+    assert!(reply.body.contains(words), "says why");
     assert!(!reply.body.contains(typed), "never echoes the input");
 }
 

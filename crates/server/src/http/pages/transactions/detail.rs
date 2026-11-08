@@ -157,7 +157,9 @@ fn details_card(transaction: &TransactionView, names: &Names, csrf: &str) -> Mar
                 label.field {
                     "Notes"
                     textarea.input name="notes" maxlength="2000" rows="3" {
-                        (transaction.notes.as_deref().unwrap_or_default())
+                        // A parser drops one line break straight after the tag: this one, so
+                        // notes that start with a line break keep it.
+                        "\n" (transaction.notes.as_deref().unwrap_or_default())
                     }
                 }
                 label.field {

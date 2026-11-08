@@ -78,6 +78,42 @@ async fn filing_in_one_category_replaces_the_parts_and_can_review_with_it() {
     );
 }
 
+/// A browser sends a textarea's line breaks as CR LF, and its parser drops one line break
+/// straight after the tag: notes that start with one are drawn with another before them, so
+/// saving the form unchanged keeps them.
+#[tokio::test]
+async fn notes_keep_their_line_breaks_through_the_form() {
+    let mut world = world().await;
+    let id = world.manual(-900, "Kiosk", date(2026, 10, 1)).await;
+    let path = format!("{}/details", detail(id));
+    let reply = world
+        .post(
+            &path,
+            &[
+                ("payee", "Kiosk"),
+                ("notes", "Line one\r\nLine two"),
+                ("assignee", ""),
+            ],
+        )
+        .await;
+    assert_redirect(&reply, &detail(id));
+    assert_eq!(world.read(id).await["notes"], "Line one\nLine two");
+
+    let reply = world
+        .post(
+            &path,
+            &[
+                ("payee", "Kiosk"),
+                ("notes", "\nIndented"),
+                ("assignee", ""),
+            ],
+        )
+        .await;
+    assert_redirect(&reply, &detail(id));
+    let page = world.page(&detail(id)).await;
+    assert!(page.body.contains("rows=\"3\">\n\nIndented</textarea>"));
+}
+
 #[tokio::test]
 async fn the_payee_notes_and_assignee_change_and_only_what_differs_is_sent() {
     let mut world = world().await;
@@ -222,7 +258,7 @@ async fn a_batch_is_all_or_nothing_and_refuses_what_its_form_does_not_hold() {
         ],
     ] {
         let reply = world.post("/transactions/batch", &fields).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{fields:?}");
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(!reply.body.contains("xyzzy"));
     }
     assert_eq!(world.read(id).await["review"], "unreviewed");
@@ -248,11 +284,11 @@ async fn every_form_needs_the_sessions_token_and_refuses_unknown_fields() {
         let mut forged = vec![("csrf", "forged")];
         forged.extend_from_slice(fields);
         let reply = world.browser.post_form(path, &forged).await;
-        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
         let mut extra = fields.clone();
         extra.push(("admin", "yes"));
         let reply = world.post(path, &extra).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{path}");
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
     let read = world.read(id).await;
     assert_eq!(read["review"], "unreviewed");
