@@ -87,6 +87,17 @@ too, less what was spent in its category this month, floored at 0 (see
 [What this month's spending does](#what-this-months-spending-does)). No other
 item takes `spending`.
 
+Every outflow has a `tier`, which says which bucket its money is set in (pages call these
+buckets "Must pay", "Essentials", "Flexible" and "Saving toward"): `must_pay`,
+`essentials` or `flexible` for a recurring or one-off outflow, and `saving_toward` for a
+goal, which is always that and the only item that may be. Income has none (`null`). Left
+out, a bill and a one-off are `must_pay`, a budget `flexible` and a goal `saving_toward`.
+A `PATCH` changes the tier only when it sends one: a bill made a budget keeps its tier. An
+item made income loses it, and one made an outflow takes its kind's default unless `tier`
+says otherwise. A tier on income, any other than `saving_toward` on a goal and
+`saving_toward` on anything else are each a 422 `invalid` (`income has no tier`, `a goal is
+always saving toward`, `only a goal is saving toward`).
+
 ```sh
 curl -X POST -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: rent-2026" https://coffer.example/api/v1/plan-items -d @rent.json
@@ -104,7 +115,7 @@ curl -X POST -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: applicat
 }
 ```
 
-It answers 201 with the item, which also has `id`, `active`, `spending`,
+It answers 201 with the item, which also has `id`, `active`, `spending`, `tier`,
 `settlements`, `created_at` and `updated_at`, and `end_on: null` in its schedule:
 
 ```json
@@ -115,6 +126,7 @@ It answers 201 with the item, which also has `id`, `active`, `spending`,
   "amount": {"minor_units": 180000, "currency": "USD"},
   "direction": "outflow",
   "spending": "bill",
+  "tier": "must_pay",
   "account_hint": "<checking-account>",
   "notes": "Due on the 28th",
   "active": true,

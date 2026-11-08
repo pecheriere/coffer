@@ -341,7 +341,8 @@ const ROWS: &[Row] = &[
         operation: "listPlanItems",
         needs: Needs::Read,
         lead: "Treat an empty list as nothing this token can see, not as a household with no \
-               plan: a token holding only `balances` sees none.",
+               plan: a token holding only `balances` sees none. Each outflow's `tier` says \
+               which bucket its money is set in; income has none.",
         input: as_operation,
         call: |mut call| {
             Box::pin(async move {
@@ -357,7 +358,7 @@ const ROWS: &[Row] = &[
         operation: "getPlanItem",
         needs: Needs::Read,
         lead: "A planned item this token can't see answers `not_found`, the same as one that \
-               doesn't exist.",
+               doesn't exist. An outflow's `tier` says which bucket its money is set in.",
         input: as_operation,
         call: |mut call| {
             Box::pin(async move {

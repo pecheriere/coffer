@@ -34,6 +34,7 @@ async fn goal(world: &World, category: CategoryId) -> PlannedItemId {
                     completed: false,
                 },
                 spending: None,
+                tier: None,
             },
             None,
         )

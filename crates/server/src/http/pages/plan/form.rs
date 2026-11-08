@@ -115,6 +115,7 @@ impl ItemFields {
             active: Some(self.active),
             schedule: self.schedule,
             spending: self.spending,
+            tier: None,
         }
     }
 
@@ -131,6 +132,7 @@ impl ItemFields {
             active: Some(self.active),
             schedule: Some(self.schedule),
             spending: self.spending,
+            tier: None,
         }
     }
 }
