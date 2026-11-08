@@ -224,7 +224,7 @@ impl World {
         (status, String::from_utf8(bytes.to_vec()).unwrap())
     }
 
-    async fn send(
+    pub(crate) async fn send(
         &self,
         method: Method,
         uri: &str,
@@ -285,7 +285,7 @@ impl World {
     }
 
     /// A category of `kind` in a group of its own.
-    async fn category(&self, name: &str, kind: &str) -> CategoryId {
+    pub(crate) async fn category(&self, name: &str, kind: &str) -> CategoryId {
         let group = self
             .admin_send(
                 Method::POST,

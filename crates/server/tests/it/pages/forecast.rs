@@ -44,7 +44,7 @@ async fn words(world: &World) -> String {
 }
 
 /// `html` without its tags, each tag read as a space, and spaces collapsed.
-pub(super) fn text_of(html: &str) -> String {
+pub(crate) fn text_of(html: &str) -> String {
     let mut text = String::new();
     let mut in_tag = false;
     for c in html.chars() {

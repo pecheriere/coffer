@@ -70,6 +70,8 @@ Owner-specific deployment lives in the owner's own infrastructure repo.
 
 - A real UI (dashboards, transaction lists). Only the auth/admin pages and the
   forecast page, which can settle a bill, and read-only net worth page in §6.4.
+  Since issue #49, pages also keep the categories and the plan (bills, budgets,
+  income, one-offs and goals), through the services the API uses.
 - Per-account visibility permissions (balance-only vs. full). v1: every member
   sees everything. The authorization design (§6.5) must make adding this a
   local change, but no tables or code for it exist in v1 (superseded for agent

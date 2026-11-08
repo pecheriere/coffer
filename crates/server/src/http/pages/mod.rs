@@ -22,8 +22,10 @@ mod layout;
 mod login;
 mod net_worth;
 mod plaid;
+mod plan;
 mod rules;
 mod setup;
+mod transactions;
 #[cfg(test)]
 mod word_checks;
 
@@ -48,6 +50,7 @@ use super::extract::session_cookie_value;
 use super::problem::{Problem, ProblemCode, set_retry_after};
 use crate::auth::{AuthError, session_cookie};
 use crate::config::Config;
+use crate::ledger::LedgerError;
 use crate::themes::Look;
 use layout::Frame;
 
@@ -77,9 +80,11 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(connections::routes())
         .merge(household::routes())
         .merge(forecast::routes())
+        .merge(plan::routes())
         .merge(categories::routes())
         .merge(net_worth::routes())
         .merge(rules::routes())
+        .merge(transactions::routes())
         .merge(plaid)
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -192,6 +197,11 @@ impl From<AuthError> for PageError {
     fn from(err: AuthError) -> Self {
         Self(Problem::from(err))
     }
+}
+
+/// A ledger refusal as a page error: the problem the API answers, shown as a page.
+fn refused(err: LedgerError) -> PageError {
+    PageError(Problem::from(err))
 }
 
 impl IntoResponse for PageError {
