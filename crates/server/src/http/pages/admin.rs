@@ -156,7 +156,7 @@ async fn render_members(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Members),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(page(&frame, "Members", &content))
@@ -313,7 +313,7 @@ async fn render_invites(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Invites),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(page(&frame, "Invites", &content))

@@ -49,7 +49,7 @@ pub(super) async fn render(
     let frame = Frame {
         look: session.look(state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::Transactions),
+        current: Some(Nav::Activity),
         narrow: false,
     };
     let content = content(

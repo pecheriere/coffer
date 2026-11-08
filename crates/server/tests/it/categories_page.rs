@@ -232,9 +232,7 @@ async fn an_empty_household_is_offered_a_group_first() {
         "no group to add it to"
     );
     assert!(
-        reply
-            .body
-            .contains("href=\"/categories\" aria-current=\"page\""),
+        reply.body.contains("href=\"/more\" aria-current=\"page\""),
         "in the navigation"
     );
 }

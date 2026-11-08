@@ -8,7 +8,9 @@
 
 mod admin_grants;
 pub(crate) mod forecast;
+mod home;
 mod members;
+mod navigation;
 mod net_worth;
 mod rendering;
 mod security;

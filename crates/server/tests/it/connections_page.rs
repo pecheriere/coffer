@@ -226,7 +226,7 @@ async fn connections_page_lists_without_balances() {
     let empty = world.admin.get("/connections").await;
     assert_eq!(empty.status, StatusCode::OK);
     assert!(empty.body.contains("illustration-empty"));
-    assert!(empty.body.contains("aria-current=\"page\">Connections<"));
+    assert!(empty.body.contains("aria-current=\"page\">More<"));
 
     let connection = world.seeded(world.alice).await;
     world.sync_fixture(connection).await;

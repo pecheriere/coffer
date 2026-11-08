@@ -1,5 +1,7 @@
 //! Canonical transactions and their splits.
 
+mod count;
+
 use coffer_domain::ids::{
     AccountId, AgentTokenId, CategoryId, MemberId, PlannedItemId, RuleId, SplitId, TransactionId,
 };

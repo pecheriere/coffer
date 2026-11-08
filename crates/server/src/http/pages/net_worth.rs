@@ -149,7 +149,7 @@ async fn net_worth_page(
     let frame = Frame {
         look: session.look(&state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::NetWorth),
+        current: Some(Nav::More),
         narrow: false,
     };
     let content = content(&report, range, viewer.can_manage_household);

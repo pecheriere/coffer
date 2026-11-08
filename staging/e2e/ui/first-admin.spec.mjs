@@ -15,7 +15,8 @@ test('the first admin sets up through the link, makes a token and signs in again
   await page.getByLabel('Username').fill('first');
   await page.getByLabel('Display name').fill('First Admin');
   await page.getByRole('button', { name: 'Create passkey' }).click();
-  await page.waitForURL('**/account');
+  await page.waitForURL(`${server.base}/`);
+  await expect(page.getByRole('heading', { name: 'Home', level: 1 })).toBeVisible();
 
   await page.goto(`${server.base}/account`);
   await page.getByLabel('Name', { exact: true }).fill('from the page');
@@ -34,6 +35,6 @@ test('the first admin sets up through the link, makes a token and signs in again
   await page.waitForURL('**/login');
 
   await signIn(page, server, 'first');
-  await expect(page).toHaveURL(`${server.base}/account`);
-  await expect(page.getByRole('heading', { name: 'Create a token' })).toBeVisible();
+  await expect(page).toHaveURL(`${server.base}/`);
+  await expect(page.getByRole('heading', { name: 'Home', level: 1 })).toBeVisible();
 });

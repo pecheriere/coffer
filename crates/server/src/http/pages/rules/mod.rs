@@ -184,7 +184,7 @@ async fn rules_page(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Rules),
+        current: Some(Nav::More),
         narrow: false,
     };
     // None for a viewer who couldn't add one, who sees the list and no form.

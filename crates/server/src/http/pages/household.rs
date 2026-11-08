@@ -99,7 +99,7 @@ async fn household(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Household),
+        current: Some(Nav::More),
         narrow: false,
     };
     Ok(page(&frame, "Household", &content).into_response())

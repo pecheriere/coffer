@@ -569,10 +569,7 @@ async fn household_page_is_admin_only() {
     );
     assert!(page.body.contains("Save household theme"));
     assert!(checked(&page.body, "theme", "mochi"));
-    assert!(
-        page.body
-            .contains("href=\"/admin/household\" aria-current=\"page\"")
-    );
+    assert!(page.body.contains("href=\"/more\" aria-current=\"page\""));
 
     let saved = alice
         .post_form(

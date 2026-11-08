@@ -13,6 +13,7 @@ pub mod members;
 pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;
+pub mod review_count;
 pub mod rules;
 pub mod settings;
 pub mod settlements;

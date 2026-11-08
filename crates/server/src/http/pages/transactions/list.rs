@@ -38,7 +38,7 @@ pub(super) async fn page(
     let frame = Frame {
         look,
         viewer: Some(&viewer),
-        current: Some(Nav::Transactions),
+        current: Some(Nav::Activity),
         narrow: false,
     };
     let view = ListView {

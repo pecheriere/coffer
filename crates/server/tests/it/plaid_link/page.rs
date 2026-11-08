@@ -197,7 +197,7 @@ async fn link_page_has_no_inline_script() {
     for handler in ["onclick", "onload", "onerror"] {
         assert!(!page.body.contains(handler), "no inline event handler");
     }
-    assert!(page.body.contains("aria-current=\"page\">Connections<"));
+    assert!(page.body.contains("aria-current=\"page\">More<"));
 
     let script = world.admin.get(assets::JS_PLAID_LINK_JS.url).await;
     assert_eq!(script.status, StatusCode::OK);

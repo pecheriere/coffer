@@ -807,6 +807,7 @@ blockers applies word for word.
 | `list_categories` | `GET /api/v1/categories` | `read` |
 | `list_transactions`, `get_transaction` | `GET /api/v1/transactions`, `GET /api/v1/transactions/{transaction_id}` | `read` |
 | `list_review_queue` | `GET /api/v1/transactions?review=unreviewed` | `read` |
+| `count_review_queue` | `GET /api/v1/transactions/review-count` | `read` |
 | `list_plan_items`, `get_plan_item` | `GET /api/v1/plan-items`, `GET /api/v1/plan-items/{item_id}` | `read` |
 | `get_forecast` | `GET /api/v1/forecast` | `read`, and `all` at `transactions` |
 | `what_if_forecast` | `POST /api/v1/forecast/what-if` | `read`, and `all` at `transactions` |
@@ -843,6 +844,8 @@ A typical pass over newly synced transactions with the owner:
 
 1. List what needs a look: `GET /api/v1/transactions?review=unreviewed`,
    and `flag=possible_duplicate` for possible duplicates.
+   `GET /api/v1/transactions/review-count` answers how many there are,
+   `{"unreviewed": 12}`, counting only the accounts the token can see.
 2. Categorize, assign and mark reviewed in batches of up to 200 with
    `POST /api/v1/transactions/batch`; each patch sets `splits`, `assignee`
    and `review: "reviewed"` as needed, and the batch applies atomically.
