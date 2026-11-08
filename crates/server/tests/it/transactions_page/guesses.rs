@@ -228,7 +228,10 @@ async fn no_guesses_no_button() {
             !page.body.contains("type=\"hidden\" name=\"pick_"),
             "{path}"
         );
-        assert!(!page.body.contains("guess"), "{path}");
+        assert!(
+            !page.body.contains("rules made on this page"),
+            "no button, not a disabled one: {path}"
+        );
     }
 }
 

@@ -1,6 +1,6 @@
 //! The form that confirms at once the guesses rules made on the list's page: every transaction
-//! shown that a rule filed or assigned and nobody has changed since (a change clears the rule's
-//! name), that nobody has reviewed, and that the actor may change. It sends their `pick_<id>`
+//! shown that a rule filed or assigned, where nothing set on it is anyone else's choice (a change
+//! clears the rule's name), that nobody has reviewed, and that the actor may change. It sends their `pick_<id>`
 //! to the batch form's handler, which marks them reviewed through the call
 //! `POST /api/v1/transactions/batch` makes and changes nothing else: a rule never reviews, the
 //! person does here. Only the rows shown are sent, never a hidden page.
@@ -39,14 +39,18 @@ pub(super) fn form(items: &[TransactionView], names: &Names, csrf: &str, back: &
     }
 }
 
-/// Whether what a transaction is filed as or assigned to is a rule's, untouched, and nobody has
-/// reviewed it.
+/// Whether nobody has reviewed a transaction and what is set on it is only rules' choice: a rule
+/// filed or assigned it, and whatever else is set a rule set too. A filing or assignee anyone
+/// else chose makes it not a guess, so confirming never reviews a person's change with it.
 fn is_guess(transaction: &TransactionView) -> bool {
-    let by_rule =
-        |by: Option<&AttributionView>| by.is_some_and(|attribution| attribution.rule.is_some());
+    let set = [
+        transaction.categorized_by.as_ref(),
+        transaction.assigned_by.as_ref(),
+    ];
+    let by_rule = |attribution: &AttributionView| attribution.rule.is_some();
     transaction.review == ReviewStatus::Unreviewed
-        && (by_rule(transaction.categorized_by.as_ref())
-            || by_rule(transaction.assigned_by.as_ref()))
+        && set.iter().flatten().any(|attribution| by_rule(attribution))
+        && set.iter().flatten().all(|attribution| by_rule(attribution))
 }
 
 fn button_words(count: usize) -> String {
@@ -113,22 +117,47 @@ mod tests {
             ..transaction(checking, -500)
         };
         let untouched = unreviewed(checking);
+        let both_by_rules = TransactionView {
+            categorized_by: Some(by_rule()),
+            assigned_by: Some(by_rule()),
+            ..unreviewed(checking)
+        };
+        let refiled_by_a_person = TransactionView {
+            categorized_by: Some(by_member()),
+            assigned_by: Some(by_rule()),
+            ..unreviewed(checking)
+        };
+        let reassigned_by_a_person = TransactionView {
+            categorized_by: Some(by_rule()),
+            assigned_by: Some(by_member()),
+            ..unreviewed(checking)
+        };
 
         let page = render(
             &[
                 filed.clone(),
                 assigned.clone(),
+                both_by_rules.clone(),
                 by_a_person.clone(),
+                refiled_by_a_person.clone(),
+                reassigned_by_a_person.clone(),
                 reviewed.clone(),
                 untouched.clone(),
             ],
             &[checking],
         );
 
-        assert!(page.contains("Confirm the 2 guesses rules made on this page"));
-        assert!(page.contains(&format!("name=\"pick_{}\"", filed.id)));
-        assert!(page.contains(&format!("name=\"pick_{}\"", assigned.id)));
-        for left in [&by_a_person, &reviewed, &untouched] {
+        assert!(page.contains("Confirm the 3 guesses rules made on this page"));
+        for guess in [&filed, &assigned, &both_by_rules] {
+            assert!(page.contains(&format!("name=\"pick_{}\"", guess.id)));
+        }
+        for left in [
+            &by_a_person,
+            &refiled_by_a_person,
+            &reassigned_by_a_person,
+            &reviewed,
+            &untouched,
+        ] {
             assert!(!page.contains(&left.id.to_string()));
         }
         assert!(page.contains("name=\"review\" value=\"reviewed\""));
