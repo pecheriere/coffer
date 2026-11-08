@@ -4,14 +4,12 @@ use axum::Json;
 use axum::extract::State;
 use coffer_domain::identity::Role;
 use coffer_domain::ids::MemberId;
-use coffer_domain::policy::{Action, authorize};
 use coffer_store::Member;
 use jiff::Timestamp;
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use super::openapi::tags;
-use crate::auth::AuthError;
 use crate::http::AppState;
 use crate::http::extract::ApiActor;
 use crate::http::problem::{CommonProblems, Problem};
@@ -65,8 +63,7 @@ pub(super) async fn list(
     State(state): State<AppState>,
     ApiActor(actor): ApiActor,
 ) -> Result<Json<MemberList>, Problem> {
-    authorize(&actor, Action::ReadHousehold)?;
-    let members = state.store.list_members().await.map_err(AuthError::from)?;
+    let members = state.ledger.list_members(&actor).await?;
     Ok(Json(MemberList {
         items: members.iter().map(MemberView::from).collect(),
     }))

@@ -23,6 +23,7 @@ mod login;
 mod net_worth;
 mod plaid;
 mod plan;
+mod rules;
 mod setup;
 mod transactions;
 #[cfg(test)]
@@ -82,6 +83,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(plan::routes())
         .merge(categories::routes())
         .merge(net_worth::routes())
+        .merge(rules::routes())
         .merge(transactions::routes())
         .merge(plaid)
         .route("/", get(home))

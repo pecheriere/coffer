@@ -9,10 +9,10 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use coffer_domain::identity::{DisplayName, Role};
+use coffer_domain::identity::{Actor, DisplayName, Role};
 use coffer_domain::ids::{AgentTokenId, InviteId, MemberId};
-use coffer_domain::policy::{Action, authorize};
-use coffer_store::InviteKind;
+use coffer_domain::policy::{Action, TokenGrant, authorize};
+use coffer_store::{AgentTokenRecord, InviteKind};
 use maud::{Markup, html};
 use serde::Deserialize;
 use url::Url;
@@ -44,6 +44,23 @@ async fn members(
         .into_response())
 }
 
+/// Every agent token in the household, with its grants.
+async fn every_token(
+    state: &AppState,
+    actor: &Actor,
+) -> Result<Vec<(AgentTokenRecord, Vec<TokenGrant>)>, PageError> {
+    let mut tokens = Vec::new();
+    for token in state.agent_tokens.list_all(actor).await? {
+        let grants = state
+            .store
+            .token_grants(token.id)
+            .await
+            .map_err(AuthError::from)?;
+        tokens.push((token, grants));
+    }
+    Ok(tokens)
+}
+
 async fn render_members(
     state: &AppState,
     session: &PageSession,
@@ -53,16 +70,12 @@ async fn render_members(
     authorize(&actor, Action::ManageMembers).map_err(AuthError::from)?;
     let viewer = viewer(state, session).await;
     let look = session.look(state).await;
-    let members = state.store.list_members().await.map_err(AuthError::from)?;
-    let mut tokens = Vec::new();
-    for token in state.agent_tokens.list_all(&actor).await? {
-        let grants = state
-            .store
-            .token_grants(token.id)
-            .await
-            .map_err(AuthError::from)?;
-        tokens.push((token, grants));
-    }
+    let members = state
+        .ledger
+        .list_members(&actor)
+        .await
+        .map_err(|err| PageError(err.into()))?;
+    let tokens = every_token(state, &actor).await?;
     let accounts = state
         .ledger
         .list_accounts(&actor, true)
