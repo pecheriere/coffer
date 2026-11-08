@@ -56,7 +56,7 @@ impl World {
 }
 
 fn assert_back_to(reply: &Reply, id: AccountId) {
-    assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.header(header::LOCATION), format!("/accounts/{id}"));
 }
 

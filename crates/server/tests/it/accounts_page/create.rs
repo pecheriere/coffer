@@ -13,7 +13,7 @@ async fn create(world: &mut World, fields: &[(&str, &str)]) -> super::Reply {
 
 /// The id of the account a create answered with, from where it sends the browser.
 fn created_id(reply: &super::Reply) -> String {
-    assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
     reply
         .header(header::LOCATION)
         .strip_prefix("/accounts/")

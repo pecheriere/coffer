@@ -109,7 +109,7 @@ impl World {
             .body(Body::empty())
             .unwrap();
         let reply = self.admin.send(request).await;
-        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(reply.status, StatusCode::OK);
         reply.json()
     }
 

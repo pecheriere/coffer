@@ -33,7 +33,7 @@ async fn a_balance_is_recorded_exactly_and_audited() {
         .holding(input("Everyday", AccountKind::Checking, "USD"))
         .await;
     let reply = world.record(id, "2026-03-04", " 1234.56 ").await;
-    assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.header(header::LOCATION), format!("/accounts/{id}"));
     let balances = world.balances(id).await;
     assert_eq!(balances.len(), 1);
