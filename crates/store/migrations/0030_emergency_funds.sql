@@ -17,13 +17,15 @@ INSERT INTO emergency_funds (currency, kind, minor)
 SELECT floor_currency, 'fixed', floor_minor FROM household_settings
 WHERE floor_kind = 'fixed';
 
--- A months floor applied to every currency; it becomes a target for each one in use: open
--- accounts counted in the forecast, active outflows and the display currency.
+-- A months floor applied to every currency; it becomes a target for each one the forecast may
+-- use: every account in the forecast, closed or not (a closed card still owing counts), every
+-- active planned item, inflows included, and the display currency. A target for a currency
+-- not in use changes nothing, so taking too many is safe and too few would block the number.
 INSERT INTO emergency_funds (currency, kind, months)
 SELECT used.currency, 'months_of_outflows', s.floor_months
 FROM household_settings AS s,
-     (SELECT currency FROM accounts WHERE include_in_forecast = 1 AND closed_at IS NULL
-      UNION SELECT currency FROM planned_items WHERE direction = 'outflow' AND active = 1
+     (SELECT currency FROM accounts WHERE include_in_forecast = 1
+      UNION SELECT currency FROM planned_items WHERE active = 1
       UNION SELECT display_currency FROM household_settings WHERE display_currency IS NOT NULL)
      AS used
 WHERE s.floor_kind = 'months_of_outflows';

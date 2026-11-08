@@ -446,7 +446,6 @@ async fn loose_ends(
     Ok((this_month, last_month))
 }
 
-/// Each account with its latest balance on or before `as_of`.
 /// Every provider account and every connection, each ordered by id.
 async fn feeds(
     conn: &mut SqliteConnection,
@@ -468,6 +467,7 @@ async fn feeds(
     Ok((provider_accounts, connections))
 }
 
+/// Each account with its latest balance on or before `as_of`.
 async fn accounts_with_balances(
     conn: &mut SqliteConnection,
     as_of: &str,

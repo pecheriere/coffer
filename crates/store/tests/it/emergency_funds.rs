@@ -153,14 +153,16 @@ const SETTINGS_INSERT: &str = "INSERT INTO household_settings (id, floor_kind, f
      floor_currency, floor_months, include_income, default_horizon_months, stale_after_days, \
      display_currency, timezone) VALUES (1, ?, ?, ?, ?, 1, 12, 30, ?, 'Europe/Paris')";
 
-/// Accounts and planned items in several currencies, of which only USD (an open account
-/// counted in the forecast) and EUR (an active outflow) are in use. GBP's account is
-/// closed, JPY's isn't counted, SEK's outflow is paused and NOK's item is income.
+/// Accounts and planned items in several currencies. The forecast may use USD (an open
+/// account counted in it), GBP (a closed card still in it, whose debt counts), EUR (an
+/// active outflow) and NOK (active income). It never uses JPY (an account left out of it),
+/// AUD (a closed account left out of it) or SEK (a paused outflow).
 const IN_USE: &str = "
 INSERT INTO accounts (id, name, kind, currency, liquidity, liquidity_overridden,
         include_in_net_worth, include_in_forecast, closed_at, created_at) VALUES
     ('usd', 'Checking', 'checking', 'USD', 'cash', 0, 1, 1, NULL, 1),
-    ('gbp', 'Old', 'checking', 'GBP', 'cash', 0, 1, 1, 5, 1),
+    ('gbp', 'Old card', 'credit_card', 'GBP', 'short_term_liability', 0, 1, 1, 5, 1),
+    ('aud', 'Old', 'checking', 'AUD', 'cash', 0, 1, 0, 5, 1),
     ('jpy', 'Away', 'checking', 'JPY', 'cash', 0, 1, 0, NULL, 1);
 INSERT INTO category_groups (id, name, position, created_at)
     VALUES ('group', 'Home', 0, 1);
@@ -273,9 +275,12 @@ async fn migration_carries_the_floor_over() {
         EmergencyFunds::from([
             (cur("CHF"), months(3)),
             (cur("EUR"), months(3)),
+            (cur("GBP"), months(3)),
+            (cur("NOK"), months(3)),
             (cur("USD"), months(3)),
         ]),
-        "a months floor is a months target for every currency in use, and only those"
+        "a months floor is a months target for every currency the forecast may use, \
+         income and a closed card still in it included"
     );
     assert_settings_kept(&store, Some("CHF")).await;
 
