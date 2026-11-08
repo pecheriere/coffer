@@ -178,7 +178,7 @@ fn caution<'a>(forecast: &'a Value, kind: &str) -> &'a Value {
 
 impl World {
     /// A token of alice's with `scope` and `grants`.
-    async fn token(&self, scope: Scope, grants: Vec<TokenGrant>) -> SecretToken {
+    pub(crate) async fn token(&self, scope: Scope, grants: Vec<TokenGrant>) -> SecretToken {
         self.server
             .agent_tokens
             .create(
@@ -316,9 +316,19 @@ impl World {
         self.admin_send(Method::PATCH, SETTINGS, patch).await;
     }
 
-    /// Sets a fixed safety floor of `minor_units` USD.
-    pub(crate) async fn floor(&self, minor_units: i64) {
-        self.settings(&json!({"floor": {"kind": "fixed", "amount": usd(minor_units)}}))
+    /// Sets `currency`'s emergency fund to `target`.
+    pub(crate) async fn emergency_fund_of(&self, currency: &str, target: &Value) {
+        self.admin_send(
+            Method::PUT,
+            &format!("/api/v1/household/emergency-funds/{currency}"),
+            target,
+        )
+        .await;
+    }
+
+    /// Sets a fixed emergency fund of `minor_units` USD.
+    pub(crate) async fn emergency_fund(&self, minor_units: i64) {
+        self.emergency_fund_of("USD", &json!({"kind": "fixed", "minor_units": minor_units}))
             .await;
     }
 

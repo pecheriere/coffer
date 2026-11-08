@@ -22,7 +22,7 @@ fn described(schema: &Value, property: &str) -> String {
 }
 
 #[test]
-fn a_floor_is_always_answered() {
+fn emergency_funds_are_always_answered() {
     let required = schema("HouseholdSettings")["required"].clone();
 
     assert!(
@@ -30,8 +30,8 @@ fn a_floor_is_always_answered() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|name| name == "floor"),
-        "floor is required"
+            .any(|name| name == "emergency_funds"),
+        "emergency_funds is required"
     );
 }
 

@@ -184,12 +184,14 @@
     its answer and whether it writes are those of a split with no link. What is
     left: such a patch dividing the money into other amounts drops the link,
     which the token cannot know. The audit log records it.
-  - A safety floor is a figure of the whole household's plan, and a fixed one's
-    currency could show money the token isn't granted. So
-    `GET /api/v1/household/settings` and a patch's answer say `floor: null` below
-    `all` at `transactions`, the access a forecast needs, exactly as with none set,
-    and a restricted `admin` token that may replace the floor can't confirm a guess
-    at it by the answer. The other settings (whether income counts, the default
+  - An emergency fund is a figure of the whole household's plan, and which currencies
+    have one could show money the token isn't granted. So
+    `GET /api/v1/household/settings`, a patch's answer and the answer of setting one
+    say `emergency_funds: null` below `all` at `transactions`, the access a forecast
+    needs, whether or not any is set, and a restricted `admin` token that may set one
+    can't confirm a guess by the answer. Removing one needs that access too, decided
+    before anything is read, since a 404 for a missing one would say whether it was
+    set. The other settings (whether income counts, the default
     horizon, when a balance is stale) read the same for every token: they say how
     a forecast is worked out, not what the household holds or plans.
   - A forecast, a what-if and a plan-versus-actual report sum every account's
@@ -644,7 +646,7 @@
   `write`. A connection's last error, the provider's sanitized text, could
   name an account the token cannot see, so it needs `all` at `transactions`;
   without it the token sees only that the status says something is wrong. It also
-  reads the forecast settings other than the floor, and the planned items without
+  reads the forecast settings other than the emergency funds, and the planned items without
   an account hint if it holds `transactions` on any account (below). A connection is
   listed to it even if it serves only hidden accounts, with an empty account list and
   its label, which is free text: a member could name one after a child. Whether to

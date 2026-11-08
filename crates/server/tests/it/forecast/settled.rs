@@ -10,12 +10,12 @@ use super::{
     with, world,
 };
 
-/// A firm household: 10,000.00 in Checking and a floor of 0.
+/// A firm household: 10,000.00 in Checking and an emergency fund of 0.
 pub(crate) async fn holding() -> (World, coffer_domain::ids::AccountId) {
     let world = world().await;
     let checking = world.funded("Checking", 1_000_000).await;
     world.with_history(checking).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     (world, checking)
 }
 
@@ -320,14 +320,14 @@ async fn a_what_if_cannot_settle() {
     }
 }
 
-/// A months floor is how much the household wants held, not this month's bills: settling
-/// November's occurrence leaves it, so settling can't lower the floor or zero it.
+/// An emergency fund of some months is how much the household wants held, not this month's
+/// bills: settling November's occurrence leaves it, so settling can't lower it or zero it.
 #[tokio::test]
-async fn a_months_floor_keeps_a_settled_occurrence() {
+async fn a_months_emergency_fund_keeps_a_settled_occurrence() {
     let world = world().await;
     world.funded("Checking", 1_000_000).await;
     world
-        .settings(&json!({"floor": {"kind": "months_of_outflows", "months": 1}}))
+        .emergency_fund_of("USD", &json!({"kind": "months_of_outflows", "months": 1}))
         .await;
     let housing = world.expense("Housing").await;
     let rent = world
@@ -342,7 +342,7 @@ async fn a_months_floor_keeps_a_settled_occurrence() {
     world.settle(&rent, "2026-11", "paid").await;
 
     let forecast = world.forecast().await;
-    assert_eq!(forecast["totals"][0]["floor"], usd(100_000));
+    assert_eq!(forecast["totals"][0]["emergency_fund"], usd(100_000));
     assert_eq!(forecast["status"], "firm");
 }
 

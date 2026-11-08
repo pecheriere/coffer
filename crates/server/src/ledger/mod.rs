@@ -7,6 +7,7 @@
 pub mod accounts;
 pub mod categories;
 pub mod duplicates;
+pub mod emergency_funds;
 pub mod forecast;
 pub mod manual_rates;
 pub mod members;

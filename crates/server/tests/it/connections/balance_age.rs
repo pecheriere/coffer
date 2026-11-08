@@ -43,17 +43,15 @@ impl World {
         self.provider_account(FEED).await.old_balance_refused
     }
 
-    /// The forecast, with the floor it is blocked without.
+    /// The forecast, with the emergency fund it is blocked without.
     async fn forecast(&self) -> Value {
         let admin = self.token(Scope::Admin).await;
-        let floor =
-            json!({"floor": {"kind": "fixed", "amount": {"minor_units": 0, "currency": "USD"}}});
         let (status, _) = self
             .call(
-                Method::PATCH,
-                "/api/v1/household/settings",
+                Method::PUT,
+                "/api/v1/household/emergency-funds/USD",
                 &admin,
-                Some(floor),
+                Some(json!({"kind": "fixed", "minor_units": 0})),
             )
             .await;
         assert_eq!(status, StatusCode::OK);

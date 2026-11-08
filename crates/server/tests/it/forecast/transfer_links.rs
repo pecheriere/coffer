@@ -51,9 +51,9 @@ impl World {
     }
 
     /// Checking at 2,000.00 and Savings at 1,000.00, both as of the worked example's balances,
-    /// with no floor to hold.
+    /// with no emergency fund to hold.
     async fn two_accounts(&self) -> (AccountId, AccountId) {
-        self.floor(0).await;
+        self.emergency_fund(0).await;
         (
             self.funded("Checking", 200_000).await,
             self.funded("Savings", 100_000).await,
@@ -150,7 +150,7 @@ async fn a_linked_leg_raises_no_uncategorized_spending() {
 #[tokio::test]
 async fn a_paid_bill_stays_paid_when_linked_out_of_counted_cash() {
     let world = world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let checking = world.funded("Checking", 300_000).await;
     let brokerage = world
         .account_with("Brokerage", "brokerage", "USD", json!({}))
@@ -193,7 +193,7 @@ async fn a_paid_bill_stays_paid_when_linked_out_of_counted_cash() {
 #[tokio::test]
 async fn a_link_out_of_the_household_changes_no_number() {
     let world = world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let checking = world.funded("Checking", 200_000).await;
     let fund = world
         .account_with("College fund", "education", "USD", json!({}))
@@ -219,7 +219,7 @@ async fn a_link_out_of_the_household_changes_no_number() {
 async fn a_link_out_of_counted_cash_keeps_uncategorized_spending_until_filed() {
     for kind in ["education", "brokerage"] {
         let world = world().await;
-        world.floor(0).await;
+        world.emergency_fund(0).await;
         let checking = world.funded("Checking", 200_000).await;
         let other = world
             .account_with("Elsewhere", kind, "USD", json!({}))
@@ -353,7 +353,7 @@ async fn a_pending_leg_taken_back_isnt_newer_spending() {
 #[tokio::test]
 async fn a_goal_counts_a_leg_only_while_the_money_leaves() {
     let world = world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let checking = world.funded("Checking", 300_000).await;
     let fund = world
         .account_with("College fund", "education", "USD", json!({}))

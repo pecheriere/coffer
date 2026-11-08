@@ -25,12 +25,13 @@ UUIDs; `$BASE` is the server's address.
    `POST $BASE/api/v1/categories` with
    `{"group": "<group>", "name": "Rent", "kind": "expense"}`. A household starts
    with no categories, and every planned item needs one.
-4. The safety floor, which the forecast is blocked without (`floor_not_set`):
+4. An emergency fund for each currency in use, which the forecast is blocked without
+   (`emergency_fund_not_set`):
 
    ```sh
-   curl -X PATCH -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \
-     $BASE/api/v1/household/settings \
-     -d '{"floor": {"kind": "fixed", "amount": {"minor_units": 300000, "currency": "USD"}}}'
+   curl -X PUT -H "Authorization: Bearer $COFFER_TOKEN" -H "Content-Type: application/json" \
+     $BASE/api/v1/household/emergency-funds/USD \
+     -d '{"kind": "fixed", "minor_units": 300000}'
    ```
 
 5. Planned items: `POST $BASE/api/v1/plan-items`, as in the next section.
@@ -332,38 +333,51 @@ the token's grants) hold the forecast's defaults:
 
 ```json
 {
-  "floor": {"kind": "fixed", "amount": {"minor_units": 300000, "currency": "USD"}},
+  "emergency_funds": [
+    {"currency": "USD", "target": {"kind": "fixed", "minor_units": 300000}}
+  ],
   "include_income": false,
   "default_horizon_months": 3,
   "stale_after_days": 7
 }
 ```
 
-- `floor` is the safety floor: cash that must stay untouched on top of the
-  horizon's planned spending and goals. It is `null` until one is set, and
-  **a forecast has no number while it is unset** (blocker `floor_not_set`): a
-  silent floor of 0 would overstate what can be invested. Two kinds:
-  `{"kind": "fixed", "amount": {...}}` (0 is allowed, and the amount carries
-  its own currency) and `{"kind": "months_of_outflows", "months": 2}` (1 to 60),
-  the recurring outflows, bills and budgets, that fall in that many months
-  from `as_of`, per currency and before any reduction. A budget's earlier days in
-  `as_of`'s month are not in it. One-offs and goals are
-  not in it. A settled occurrence is: the floor says how much to hold, not what is owed. If that comes to 0 in a currency the number stays, with the
-  caution `months_floor_is_zero`.
+- `emergency_funds` lists each currency's emergency fund, sorted by currency: cash
+  that must stay untouched in that currency on top of the horizon's planned spending
+  and goals. A currency missing from it has none, and **a forecast has no number
+  while a currency in use has none** (blocker `emergency_fund_not_set`, naming the
+  currency): a silent emergency fund of 0 would overstate what can be invested. A
+  target applies to its own currency's totals only. Two kinds:
+  `{"kind": "fixed", "minor_units": 300000}` (0 to 10^15, in the currency's minor
+  units; 0 is allowed) and `{"kind": "months_of_outflows", "months": 2}` (1 to 60),
+  that currency's recurring outflows, bills and budgets, that fall in that many months
+  from `as_of`, before any reduction. A budget's earlier days in `as_of`'s month are
+  not in it. One-offs and goals are not in it. A settled occurrence is: the emergency
+  fund says how much to hold, not what is owed. If that comes to 0 in a currency the
+  number stays, with the caution `emergency_fund_months_is_zero`. A currency the
+  household doesn't use yet may have one; it changes nothing until it is in use.
 - `include_income` (default `false`) decides whether planned inflows reduce
   the cash needed.
 - `default_horizon_months` (1 to 60, default 3) and `stale_after_days` (1 to
   365, default 7: how old a balance may be before the forecast flags it).
 
-A `PATCH` takes any of these; a field left out stays. A floor can be
-replaced but never unset (`floor: null` leaves it), and a patch that changes
-nothing writes nothing. A value out of range is a 422, one outside its type
-(300 months) a 400. A change is audited as `household.settings`.
+A `PATCH` takes any of these but the emergency funds; a field left out stays, and a
+patch that changes nothing writes nothing. A value out of range is a 422, one outside
+its type (300 months) a 400. A change is audited as `household.settings`.
 
-Below `all` at `transactions`, `floor` reads `null` (also in a `PATCH`'s
-answer), the same as none set: a fixed floor's currency could show money the
-token isn't granted. Do not conclude from `null` that the household has no
-floor; the forecast will say.
+An emergency fund is set with `PUT /api/v1/household/emergency-funds/{currency}`, its
+body the target (`{"kind": "fixed", "minor_units": 300000}`), and removed with
+`DELETE` on the same path. Both need the `admin` scope, answer the settings, and are
+audited as `household.emergency_fund.set` and `household.emergency_fund.remove`, with
+the target before and after as text (`fixed:300000`, `months_of_outflows:3`). Setting
+the same target again writes nothing; removing one that isn't set is a 404. The MCP
+tool `set_emergency_fund` sets one; no tool removes one.
+
+Below `all` at `transactions`, `emergency_funds` reads `null`, whether or not any is
+set (also in the answer of a `PATCH` or a `PUT`): a target could show what the
+household holds back. Do not conclude from `null` that the household has none; the
+forecast will say. Such a token may still set one, but removing one also needs that
+access, since a 404 would tell whether it was set.
 
 `timezone` is the IANA name of the zone that decides which day "today" is, which is
 `as_of`'s default and which month is the current one. `timezone_setting` is what an
@@ -380,7 +394,7 @@ The motivating question: over the next N months, how much cash does the
 household need, and how much is above that?
 
 ```
-cash_needed = planned_outflows + goals + floor - planned_inflows
+cash_needed = planned_outflows + goals + emergency_fund - planned_inflows
 surplus     = cash_available - cash_needed
 ```
 
@@ -424,7 +438,7 @@ household's settings. The first example is a household that has just started:
   "end_exclusive": "2027-02-15",
   "horizon_months": 3,
   "include_income": false,
-  "floor": null,
+  "emergency_funds": [],
   "stale_after_days": 7,
   "status": "unavailable",
   "surplus": null,
@@ -437,7 +451,7 @@ household's settings. The first example is a household that has just started:
     {"month": "2027-01", "lines": [], "partial": false},
     {"month": "2027-02", "lines": [], "partial": true}
   ],
-  "blockers": [{"kind": "floor_not_set"}, {"kind": "no_counted_accounts"}],
+  "blockers": [{"kind": "no_counted_accounts"}],
   "cautions": [],
   "rule_filed_transfers": [],
   "settled": [],
@@ -546,7 +560,7 @@ guess when the status is `unavailable`; report the blockers and what to do.
 Never sum `surplus` rows of different currencies, and never round a shortfall
 to nothing.
 
-Here is a firm forecast of a household with a floor, three accounts and one
+Here is a firm forecast of a household with an emergency fund, three accounts and one
 bill that falls later (`accounts`, `items` and `months` are shortened to their
 first entry):
 
@@ -556,7 +570,9 @@ first entry):
   "end_exclusive": "2027-02-15",
   "horizon_months": 3,
   "include_income": false,
-  "floor": {"kind": "fixed", "amount": {"minor_units": 300000, "currency": "USD"}},
+  "emergency_funds": [
+    {"currency": "USD", "target": {"kind": "fixed", "minor_units": 300000}}
+  ],
   "stale_after_days": 7,
   "status": "firm",
   "surplus": {"minor_units": 2980000, "currency": "USD"},
@@ -566,7 +582,7 @@ first entry):
       "cash_available": {"minor_units": 3820000, "currency": "USD"},
       "planned_outflows": {"minor_units": 540000, "currency": "USD"},
       "goals": {"minor_units": 0, "currency": "USD"},
-      "floor": {"minor_units": 300000, "currency": "USD"},
+      "emergency_fund": {"minor_units": 300000, "currency": "USD"},
       "planned_inflows": {"minor_units": 0, "currency": "USD"},
       "excluded_inflows": {"minor_units": 0, "currency": "USD"},
       "cash_needed": {"minor_units": 840000, "currency": "USD"},
@@ -643,10 +659,10 @@ first entry):
 
 | `kind` | Means | Do |
 |---|---|---|
-| `floor_not_set` | No safety floor. | Ask the owner what to hold back, then `PATCH /household/settings` (needs `admin`). To explore without setting one, a what-if may carry its own `floor`; say that it is not the household's. |
+| `emergency_fund_not_set` (`currency`) | A currency in use has no emergency fund. | Ask the owner what to hold back in that currency, then `PUT /household/emergency-funds/{currency}` (needs `admin`). To explore without setting one, a what-if may carry its own `emergency_funds`; say that they are not the household's. |
 | `no_counted_accounts` | No open `cash` or card account is in the forecast. | Look at `accounts[].not_counted`. Create or bind the household's accounts, or set `include_in_forecast` on the right ones (`PATCH /accounts/{id}`). A flag doesn't fix this on an account with `not_household`: `true` is a 422, because that money isn't the household's cash. |
 | `balance_missing` (`account`, `name`) | A counted account has no balance on or before `as_of`, so it could hold anything. | Record one (`PUT /accounts/{id}/balances/{on}`), wait for or request a sync of a linked account, or take the account out of the forecast. An account with `not_household` never raises this, and no flag makes a held account's balance count: if this one isn't the household's money, a member says so with `belongs_to`. |
-| `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. A fixed floor belongs to its own currency, so another currency's row has a floor of 0; a months floor is worked out per currency from that currency's recurring outflows. |
+| `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. Each currency has its own emergency fund, applied to its row only: a months target is worked out from that currency's recurring outflows. |
 
 **Cautions** keep the number but make it `provisional`. Each has a `kind`
 and the fields shown:
@@ -665,7 +681,7 @@ and the fields shown:
 | `bill_unpaid_last_month` (`item`, `on`, `amount`) | A recurring bill or a one-off dated last month has no payment that fits and nobody settled it. It still counts as needed. | As for `bill_not_seen`, for that month. |
 | `bill_payment_unclear` (`item`, `on`, `amount`, `transaction`, `transaction_amount`) | That transaction may have paid this occurrence, but it could also be a budget's spending in the same category, so it stays with the budget and the bill still counts. | Ask. If it was the bill, settle the month as `paid`. Filing the bill under its own category stops this recurring. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
-| `months_floor_is_zero` (`currency`, `months`) | A months floor comes to 0 in that currency, since no recurring outflow falls in those months. | The floor is not protecting anything. Ask for a fixed floor. |
+| `emergency_fund_months_is_zero` (`currency`, `months`) | That currency's emergency fund of some months comes to 0, since no recurring outflow in it falls in those months. | The emergency fund is not protecting anything. Ask for a fixed one. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
@@ -676,7 +692,7 @@ and the fields shown:
 | `uncategorized_spending` (`currency`, `count`, `total`) | Uncategorized spending this month might have reduced a budget or paid a bill. What a [transfer link](agent-usage.md#transfer-links) between counted accounts says moved isn't in it. A leg linked anywhere else is, until it is filed. | Categorize it with the [review workflow](agent-usage.md#review-workflow), or link it if the money only moved between counted accounts. |
 | `possible_duplicates` (`count`) | Possible duplicates this month may inflate a category's spending, which could shrink a budget. One pays no bill until it is cleared. | Merge or dismiss them. |
 | `spending_newer_than_balance` (`currency`, `total`, `pending`) | Money went out that a balance may not show yet. | See below. |
-| `cash_dips_below_floor` (`month`, `currency`, `projected_cash`) | With `include_income` on, the first month whose cash at its end is below the floor. A later inflow cannot pay an earlier bill. | Report the month. The surplus nets all the income against all the outflows, and is optimistic. |
+| `cash_dips_below_emergency_fund` (`month`, `currency`, `projected_cash`) | With `include_income` on, the first month whose cash at its end is below that currency's emergency fund. A later inflow cannot pay an earlier bill. | Report the month. The surplus nets all the income against all the outflows, and is optimistic. |
 
 For example, the two cautions the household below ends up with once a fuel
 purchase posts:
@@ -778,7 +794,7 @@ recategorize does until it is settled.
 
 The examples from here on use one household. Today is 2026-11-15 and the
 balances are from the day before: Checking 9,000.00, Savings 30,000.00, a Card
-at -800.00. The floor is a fixed 3,000.00. The plan is the rent bill, the
+at -800.00. The emergency fund in USD is a fixed 3,000.00. The plan is the rent bill, the
 groceries budget, an internet bill of 80.00 on the 10th (Utilities), the
 dentist one-off, the holiday goal and the salary above. Last month's bills were all
 paid. This month 250.00 was spent in Groceries and 500.00 in Travel, linked to the goal. Here is the
@@ -795,7 +811,7 @@ matter:
       "cash_available": {"minor_units": 3820000, "currency": "USD"},
       "planned_outflows": {"minor_units": 772000, "currency": "USD"},
       "goals": {"minor_units": 171436, "currency": "USD"},
-      "floor": {"minor_units": 300000, "currency": "USD"},
+      "emergency_fund": {"minor_units": 300000, "currency": "USD"},
       "planned_inflows": {"minor_units": 0, "currency": "USD"},
       "excluded_inflows": {"minor_units": 1050000, "currency": "USD"},
       "cash_needed": {"minor_units": 1243436, "currency": "USD"},
@@ -838,9 +854,11 @@ entry), so `read` may call it. A token with grants needs `all` at
   neither reduces nor pays them.
 - `as_of`, `horizon_months`, `include_income`, `stale_after_days`: the same
   as the forecast's, overriding the household's.
-- `floor`: a safety floor to use in place of the household's, such as
-  `{"kind": "months_of_outflows", "months": 3}`. Without a stored floor and
-  without this field the blocker `floor_not_set` still applies.
+- `emergency_funds`: the emergency funds to use in place of the household's whole
+  set, such as `[{"currency": "USD", "target": {"kind": "months_of_outflows",
+  "months": 3}}]`. A currency left out has none for this what-if, and a currency in
+  use without one still raises `emergency_fund_not_set`. Naming a currency twice is a
+  422, as is a target out of range.
 
 An item outside the window adds nothing. Choose a horizon that covers the date
 you are testing.
@@ -888,7 +906,7 @@ in full on the day:
       "cash_available": {"minor_units": 3820000, "currency": "USD"},
       "planned_outflows": {"minor_units": 3316000, "currency": "USD"},
       "goals": {"minor_units": 190000, "currency": "USD"},
-      "floor": {"minor_units": 300000, "currency": "USD"},
+      "emergency_fund": {"minor_units": 300000, "currency": "USD"},
       "planned_inflows": {"minor_units": 0, "currency": "USD"},
       "excluded_inflows": {"minor_units": 2100000, "currency": "USD"},
       "cash_needed": {"minor_units": 3806000, "currency": "USD"},
@@ -919,7 +937,7 @@ in full on the day:
 ```
 
 (`items` is cut to the roof's line, and that line to its main fields.) The roof takes the surplus from 18,140.00 to
-**140.00** above the floor: nothing to invest. The same call
+**140.00** above the emergency fund: nothing to invest. The same call
 with the roof as a goal, `{"type": "goal", "start_on": "2026-11-15",
 "due_on": "2027-03-15"}`, gives the same surplus, since the goal is due inside
 the window and holds back its whole target. As a goal it also shows month by month what to set
@@ -930,7 +948,7 @@ because only two of its 36 payments fall inside the window. That answers "what
 do we need before May", not "can we afford the loan": use a `horizon_months`
 that spans the payments, and compare it with the same call without the loan.
 
-What to tell the owner: paying cash in March leaves 140.00 above the floor
+What to tell the owner: paying cash in March leaves 140.00 above the emergency fund
 over the next six months, which is almost nothing, and the figure is
 provisional: an internet bill from the 10th has no payment in Utilities, and a
 60.00 fuel charge may not be in the balance yet. Report those two with the

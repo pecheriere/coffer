@@ -2,13 +2,14 @@
 
 use coffer_domain::identity::ThemeName;
 use coffer_domain::money::Currency;
-use coffer_domain::plan::ForecastSettings;
+use coffer_domain::plan::{EmergencyFunds, ForecastSettings};
 use coffer_domain::time::IanaZone;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteExecutor};
 
 use crate::convert::corrupt;
+use crate::emergency_funds::fetch_emergency_funds;
 use crate::members::theme_from_row;
 use crate::{Store, StoreError, StoreTx};
 
@@ -91,6 +92,8 @@ pub(crate) async fn fetch_household_zone<'e>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HouseholdSettingsRecord {
     pub forecast: ForecastSettings,
+    /// Each currency's emergency fund target; a currency missing has none.
+    pub emergency_funds: EmergencyFunds,
     /// `None` while none was chosen.
     pub display_currency: Option<Currency>,
     /// `None` while none was chosen, and the server's default applies.
@@ -132,16 +135,19 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Backend failures, including a stored row that is not valid settings, a stored
-    /// code that is not a currency or a stored name that is not a zone.
+    /// Backend failures, including a stored row that is not valid settings or a valid
+    /// emergency fund, a stored code that is not a currency or a stored name that is not a
+    /// zone.
     pub async fn household_settings(&self) -> Result<HouseholdSettingsRecord, StoreError> {
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
         let forecast = fetch_forecast_settings(&mut *tx).await?;
+        let emergency_funds = fetch_emergency_funds(&mut *tx).await?;
         let display_currency = fetch_display_currency(&mut *tx).await?;
         let timezone = fetch_household_zone(&mut *tx).await?;
         tx.commit().await.map_err(StoreError::from_sqlx)?;
         Ok(HouseholdSettingsRecord {
             forecast,
+            emergency_funds,
             display_currency,
             timezone,
         })

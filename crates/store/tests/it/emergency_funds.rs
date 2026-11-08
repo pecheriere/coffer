@@ -322,3 +322,20 @@ async fn migration_without_settings_writes_nothing() {
         "and the defaults still apply"
     );
 }
+
+#[tokio::test]
+async fn the_forecast_reads_them() {
+    let (_dir, store) = open().await;
+    let mut tx = store.begin().await.unwrap();
+    tx.put_emergency_fund(cur("EUR"), &months(2)).await.unwrap();
+    tx.commit().await.unwrap();
+    let data = store
+        .forecast_data(jiff::civil::date(2026, 11, 15))
+        .await
+        .unwrap();
+    assert_eq!(
+        data.emergency_funds,
+        EmergencyFunds::from([(cur("EUR"), months(2))]),
+        "in the forecast's one read"
+    );
+}

@@ -7,6 +7,7 @@
     reason = "integration test: helpers outside #[test] functions panic to fail the test"
 )]
 
+mod emergency_fund;
 mod parity;
 mod transport;
 

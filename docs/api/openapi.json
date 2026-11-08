@@ -2300,7 +2300,7 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the safety floor, minus any income counted.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a safety floor not yet set or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the emergency fund, minus any income counted. Each currency has its own emergency fund target (`setEmergencyFund`), applied only to that currency's totals: a fixed amount, or some months of that currency's recurring outflows, from `as_of`, whatever the horizon. `emergency_funds` lists the targets of the currencies in `totals`.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a currency in use with no emergency fund (`emergency_fund_not_set`, naming it) or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
@@ -2430,7 +2430,7 @@
           "forecast"
         ],
         "summary": "The cash forecast with imagined changes.",
-        "description": "The answer of `getForecast` with other settings and with items that are not in the plan, such as a new roof: `items` are checked like planned items, but a category is optional, and each answers in the breakdown as `hypothetical` with its position in the list. This month's spending neither reduces nor pays them.\n\nThis persists nothing: no item, no setting, no audit entry, no idempotency key. So it needs only `read`, though it is a `POST`, and the same access as `getForecast`.",
+        "description": "The answer of `getForecast` with other settings and with items that are not in the plan, such as a new roof: `items` are checked like planned items, but a category is optional, and each answers in the breakdown as `hypothetical` with its position in the list. This month's spending neither reduces nor pays them. `emergency_funds` replaces the household's whole set for this answer, a currency left out having none; naming a currency twice is 422, as is a target out of range.\n\nThis persists nothing: no item, no setting, no audit entry, no idempotency key. So it needs only `read`, though it is a `POST`, and the same access as `getForecast`.",
         "operationId": "whatIfForecast",
         "requestBody": {
           "content": {
@@ -3106,13 +3106,239 @@
         ]
       }
     },
+    "/api/v1/household/emergency-funds/{currency}": {
+      "put": {
+        "tags": [
+          "household"
+        ],
+        "summary": "Sets one currency's emergency fund.",
+        "description": "Sets how much cash to keep untouched in this currency, replacing any target it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows, counted from a forecast's `as_of`. A forecast applies it to that currency's totals only, and has no number while a currency in use has none. A currency the household doesn't use yet may have one; it changes no answer until it is in use. Audited with the old and new target; the same target again writes nothing. A target out of range is 422; an unknown code, or a code not written as three capital letters, is 400.\n\nNeeds `admin`, whatever the token's account grants. The answer is the settings as `getHouseholdSettings` shows them to that token, so a token below `all` at `transactions` reads `emergency_funds` as `null`.",
+        "operationId": "setEmergencyFund",
+        "parameters": [
+          {
+            "name": "currency",
+            "in": "path",
+            "description": "The currency, an ISO 4217 code.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmergencyFundTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings as they now are.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "household"
+        ],
+        "summary": "Removes one currency's emergency fund.",
+        "description": "Removes this currency's emergency fund target: while the currency is in use, a forecast has no number until one is set again. Audited with the old target. With none set it is 404, and writes nothing.\n\nNeeds `admin`; a token with account grants also needs `all` at `transactions`, since whether a target is set is a figure of the whole household's plan. The refusal is the same whatever is set.",
+        "operationId": "removeEmergencyFund",
+        "parameters": [
+          {
+            "name": "currency",
+            "in": "path",
+            "description": "The currency, an ISO 4217 code.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings as they now are.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseholdSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/household/settings": {
       "get": {
         "tags": [
           "household"
         ],
         "summary": "The household's settings.",
-        "description": "The settings: the safety floor (`null` until one is set, and a forecast has no number without it), whether planned income counts, the default horizon, when a balance counts as stale, the display currency net worth is shown in (`null` until an admin sets it: it is never guessed), and the time zone that decides which day is today (`timezone`, always a name) with what an admin chose (`timezone_setting`, `null` while the server's default applies). Needs `read`. A token with account grants below `all` at `transactions` reads `floor` as `null`, the same as none set: a floor is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
+        "description": "The settings: each currency's emergency fund (`setEmergencyFund`; a forecast has no number while a currency in use has none), whether planned income counts, the default horizon, when a balance counts as stale, the display currency net worth is shown in (`null` until an admin sets it: it is never guessed), and the time zone that decides which day is today (`timezone`, always a name) with what an admin chose (`timezone_setting`, `null` while the server's default applies). Needs `read`. A token with account grants below `all` at `transactions` reads `emergency_funds` as `null`, whether or not any is set: an emergency fund is a figure of the whole household's plan, and that is the access a forecast needs. The other settings read the same for every token.",
         "operationId": "getHouseholdSettings",
         "responses": {
           "200": {
@@ -3207,7 +3433,7 @@
           "household"
         ],
         "summary": "Changes the household's settings.",
-        "description": "Changes the settings given; a field left out stays. A floor or a display currency can be replaced but never unset: `floor: null` or `display_currency: null` leaves it. A patch that changes nothing writes nothing. A new display currency recomputes all net worth history before this answers, and is audited with the old and new codes. `timezone` takes an IANA name, and alone among these `null` clears it, returning to the server's default. A new zone applies at once, is audited with the old and new names, and rewrites no day already recorded: only new days use it. If it makes today earlier than the net worth table's last day, the table ends today from this change on. A name that isn't a zone is 422, and so is a number out of range; one outside the field's type (such as 300 months) or an unknown currency code is 400. Needs `admin`, whatever the token's account grants, but the answer shows `floor` only as `getHouseholdSettings` would to that token. A patch naming `display_currency`, whatever it names, also needs `all` at `balances` from a token with account grants: which codes convert at once depends on the currencies in use. The refusal is the same whatever exists.",
+        "description": "Changes the settings given; a field left out stays. A display currency can be replaced but never unset: `display_currency: null` leaves it. Emergency funds change through `setEmergencyFund` and `removeEmergencyFund`. A patch that changes nothing writes nothing. A new display currency recomputes all net worth history before this answers, and is audited with the old and new codes. `timezone` takes an IANA name, and alone among these `null` clears it, returning to the server's default. A new zone applies at once, is audited with the old and new names, and rewrites no day already recorded: only new days use it. If it makes today earlier than the net worth table's last day, the table ends today from this change on. A name that isn't a zone is 422, and so is a number out of range; one outside the field's type (such as 300 months) or an unknown currency code is 400. Needs `admin`, whatever the token's account grants, but the answer shows `emergency_funds` only as `getHouseholdSettings` would to that token. A patch naming `display_currency`, whatever it names, also needs `all` at `balances` from a token with account grants: which codes convert at once depends on the currencies in use. The refusal is the same whatever exists.",
         "operationId": "updateHouseholdSettings",
         "requestBody": {
           "content": {
@@ -8584,15 +8810,19 @@
           },
           {
             "type": "object",
-            "description": "No safety floor is set. A silent floor of 0 would overstate the surplus.",
+            "description": "A currency in use has no emergency fund target. A silent target of 0 would overstate\nthe surplus.",
             "required": [
+              "currency",
               "kind"
             ],
             "properties": {
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "floor_not_set"
+                  "emergency_fund_not_set"
                 ]
               }
             }
@@ -9255,7 +9485,7 @@
           },
           {
             "type": "object",
-            "description": "A floor of some months of recurring outflows came to 0 in this currency:\na silent floor of 0 would overstate the surplus.",
+            "description": "This currency's emergency fund of some months of recurring outflows came to 0:\na silent emergency fund of 0 would overstate the surplus.",
             "required": [
               "currency",
               "months",
@@ -9268,7 +9498,7 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "months_floor_is_zero"
+                  "emergency_fund_months_is_zero"
                 ]
               },
               "months": {
@@ -9541,7 +9771,7 @@
           },
           {
             "type": "object",
-            "description": "The first month whose closing cash is below the floor: income arriving\nlater cannot pay for it.",
+            "description": "The first month whose closing cash is below the currency's emergency fund: income\narriving later cannot pay for it.",
             "required": [
               "month",
               "currency",
@@ -9555,7 +9785,7 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "cash_dips_below_floor"
+                  "cash_dips_below_emergency_fund"
                 ]
               },
               "month": {
@@ -9706,7 +9936,7 @@
           "cash_available",
           "planned_outflows",
           "goals",
-          "floor",
+          "emergency_fund",
           "planned_inflows",
           "excluded_inflows",
           "cash_needed",
@@ -9719,17 +9949,18 @@
           },
           "cash_needed": {
             "$ref": "#/components/schemas/Money",
-            "description": "`planned_outflows + goals + floor - planned_inflows`."
+            "description": "`planned_outflows + goals + emergency_fund - planned_inflows`."
           },
           "currency": {
             "$ref": "#/components/schemas/Currency"
           },
+          "emergency_fund": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash to keep untouched in this currency, from its emergency fund target: 0 while\nit has none."
+          },
           "excluded_inflows": {
             "$ref": "#/components/schemas/Money",
             "description": "Planned inflows left out because `include_income` is off. Income expected in an account\nthat doesn't count isn't among them, since turning it on wouldn't add it."
-          },
-          "floor": {
-            "$ref": "#/components/schemas/Money"
           },
           "goals": {
             "$ref": "#/components/schemas/Money"
@@ -9754,6 +9985,74 @@
             ]
           }
         }
+      },
+      "EmergencyFund": {
+        "type": "object",
+        "description": "One currency's target, as the API lists it.",
+        "required": [
+          "currency",
+          "target"
+        ],
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "description": "The currency the target is kept in and applies to."
+          },
+          "target": {
+            "$ref": "#/components/schemas/EmergencyFundTarget",
+            "description": "How much of it to keep untouched."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EmergencyFundTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A fixed amount in the currency's minor units, 0 to 10^15.",
+            "required": [
+              "minor_units",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              },
+              "minor_units": {
+                "type": "integer",
+                "format": "int64",
+                "maximum": 1000000000000000,
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "This many months, 1 to 60, of the currency's planned recurring outflows.",
+            "required": [
+              "months",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "months_of_outflows"
+                ]
+              },
+              "months": {
+                "type": "integer",
+                "format": "int32",
+                "maximum": 60,
+                "minimum": 1
+              }
+            }
+          }
+        ],
+        "description": "How much cash to keep untouched in one currency."
       },
       "FeedProblemReason": {
         "type": "string",
@@ -9797,7 +10096,7 @@
           "end_exclusive",
           "horizon_months",
           "include_income",
-          "floor",
+          "emergency_funds",
           "stale_after_days",
           "status",
           "surplus",
@@ -9835,19 +10134,16 @@
               "$ref": "#/components/schemas/Caution"
             }
           },
+          "emergency_funds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmergencyFund"
+            },
+            "description": "The emergency fund targets of the currencies in `totals`, sorted by currency. A\ncurrency in use without one has none here and an `emergency_fund_not_set` blocker."
+          },
           "end_exclusive": {
             "type": "string",
             "format": "date"
-          },
-          "floor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SafetyFloor"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "horizon_months": {
             "type": "integer",
@@ -9922,7 +10218,7 @@
       },
       "ForecastSettingsPatch": {
         "type": "object",
-        "description": "The settings to change. A field left out stays as it is. A floor or a display\ncurrency can be replaced but never unset: `null` leaves it. Only a time zone can be\ncleared.",
+        "description": "The settings to change. A field left out stays as it is. A display currency can be\nreplaced but never unset: `null` leaves it. Only a time zone can be cleared. Emergency\nfunds have their own operations.",
         "properties": {
           "default_horizon_months": {
             "type": [
@@ -9939,17 +10235,6 @@
               {
                 "$ref": "#/components/schemas/Currency",
                 "description": "A new display currency, an ISO 4217 code; `null` or absent keeps the current one.\nIt can be replaced but never unset. Changing it recomputes all history in this\nrequest."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "floor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SafetyFloor",
-                "description": "A new safety floor; `null` or absent keeps the current one."
               },
               {
                 "type": "null"
@@ -10254,7 +10539,7 @@
         "type": "object",
         "description": "The household's settings: those of a forecast, the display currency and the time zone.",
         "required": [
-          "floor",
+          "emergency_funds",
           "include_income",
           "default_horizon_months",
           "stale_after_days",
@@ -10281,16 +10566,15 @@
               }
             ]
           },
-          "floor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SafetyFloor",
-                "description": "The safety floor. Until one is set a forecast has no number: a silent\nfloor of 0 would overstate what can be invested. A token without the access a\nforecast needs reads `null` whether or not one is set."
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "emergency_funds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/EmergencyFund"
+            },
+            "description": "Each currency's emergency fund target, sorted by currency; a currency missing has\nnone. A forecast has no number while a currency in use lacks one: a silent target of\n0 would overstate what can be invested. A token without the access a forecast needs\nreads `null` whether or not any is set."
           },
           "include_income": {
             "type": "boolean",
@@ -10884,7 +11168,7 @@
           },
           "projected_cash": {
             "$ref": "#/components/schemas/Money",
-            "description": "Cash at the end of the month or the window: `cash_available` plus inflows\ncounted minus outflows so far, without goals or the floor."
+            "description": "Cash at the end of the month or the window: `cash_available` plus inflows\ncounted minus outflows so far, without goals or the emergency fund."
           }
         }
       },
@@ -13368,52 +13652,6 @@
           }
         }
       },
-      "SafetyFloor": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "A fixed amount, 0 included, in its own currency.",
-            "required": [
-              "amount",
-              "kind"
-            ],
-            "properties": {
-              "amount": {
-                "$ref": "#/components/schemas/Money"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "fixed"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "This many months of planned recurring outflows, per currency: 1 to 60.",
-            "required": [
-              "months",
-              "kind"
-            ],
-            "properties": {
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "months_of_outflows"
-                ]
-              },
-              "months": {
-                "type": "integer",
-                "format": "int32",
-                "maximum": 60,
-                "minimum": 1
-              }
-            }
-          }
-        ],
-        "description": "The cash that must stay untouched on top of the horizon's planned spending\nand goals."
-      },
       "Scope": {
         "type": "string",
         "description": "The rights an agent token or role carries. Ordered `Read < Write < Admin`.",
@@ -14316,16 +14554,15 @@
             "format": "date",
             "description": "The first day of the window, written exactly `YYYY-MM-DD`, in the years 1970 to\n2200: by default the household's today."
           },
-          "floor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SafetyFloor",
-                "description": "The safety floor to use: by default the household's."
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "emergency_funds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/EmergencyFund"
+            },
+            "description": "The emergency funds to use in place of the household's whole set, each currency at\nmost once: a currency left out has none for this what-if. By default the\nhousehold's."
           },
           "horizon_months": {
             "type": [
@@ -14386,7 +14623,7 @@
     },
     {
       "name": "household",
-      "description": "The household-wide settings: safety floor, income, horizon, stale-balance threshold and display currency."
+      "description": "The household-wide settings: emergency funds, income, horizon, stale-balance threshold, display currency and time zone."
     },
     {
       "name": "accounts",

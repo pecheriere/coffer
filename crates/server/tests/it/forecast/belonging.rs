@@ -59,7 +59,7 @@ impl World {
     }
 }
 
-/// On the 10th: Checking at 3,000.00 from before the 5th, and a floor of 0.
+/// On the 10th: Checking at 3,000.00 from before the 5th, and an emergency fund of 0.
 async fn on_the_10th() -> (World, AccountId) {
     let world = world().await;
     world.server.clock.set(noon(THE_10TH));
@@ -68,7 +68,7 @@ async fn on_the_10th() -> (World, AccountId) {
         .await;
     world.balance(checking, BEFORE_THE_CHARGE, 300_000).await;
     world.with_history(checking).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     (world, checking)
 }
 
@@ -154,7 +154,7 @@ async fn a_held_cash_account_with_no_balance_blocks_nothing() {
 #[tokio::test]
 async fn only_held_money_is_no_money_to_forecast_from() {
     let world = world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let held = world.held_savings("Held savings").await;
     world.balance(held, BALANCE_ON, 500_000).await;
 
@@ -453,20 +453,20 @@ async fn the_worked_example_is_the_same_beside_held_accounts() {
     assert_eq!(row["cash_available"], usd(6_850_000));
     assert_eq!(row["planned_outflows"], usd(914_000));
     assert_eq!(row["goals"], usd(1_100_000));
-    assert_eq!(row["floor"], usd(1_000_000));
+    assert_eq!(row["emergency_fund"], usd(1_000_000));
     assert_eq!(row["cash_needed"], usd(3_014_000));
     assert_eq!(forecast["surplus"], usd(3_836_000));
     assert_eq!(kinds(&forecast, "cautions"), ["bill_not_seen"]);
 }
 
-/// A Checking with no balance yet, a floor of 0, and a goal of 1,000.00 due in the window:
+/// A Checking with no balance yet, an emergency fund of 0, and a goal of 1,000.00 due in the window:
 /// the world, the Checking, the goal's category and its id.
 async fn saving_for_a_goal() -> (World, AccountId, CategoryId, Value) {
     let world = world().await;
     let checking = world
         .account_with("Checking", "checking", "USD", json!({}))
         .await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let category = world.expense("College").await;
     let goal = world
         .item(&outflow(

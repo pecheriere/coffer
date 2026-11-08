@@ -162,7 +162,7 @@ async fn page_matches_the_api_on_the_golden_example() {
     assert_sums(&before.body, 6_850_000, 3_014_000);
     assert_eq!(amount(&before.body, "Planned outflows"), 914_000);
     assert_eq!(amount(&before.body, "Goals"), 1_100_000);
-    assert_eq!(amount(&before.body, "Safety floor"), 1_000_000);
+    assert_eq!(amount(&before.body, "Emergency fund"), 1_000_000);
     assert_eq!(amount(&before.body, "Surplus"), 3_836_000);
     assert_months_match(&before.body, &api);
     assert_eq!(row(&before.body, "Cash available"), ["68,500.00"]);
@@ -192,13 +192,17 @@ async fn empty_household_shows_the_reason_and_no_number() {
     let text = words(&world).await;
 
     assert!(text.contains("Unavailable"));
-    assert!(text.contains("No safety floor is set"));
     assert!(text.contains("No account counts as cash"));
+    assert!(
+        !text.contains("No emergency fund"),
+        "no currency is in use, so none lacks one"
+    );
     assert!(!text.contains("0.00"));
     assert!(!text.contains("Surplus"));
 }
 
-/// A floor not set blocks the number, so the sums that would leave it out are not shown.
+/// A currency in use with no emergency fund blocks the number, so the sums that would leave
+/// it out are not shown.
 #[tokio::test]
 async fn blocked_forecast_shows_no_partial_sums() {
     let world = crate::forecast::world().await;
@@ -206,7 +210,7 @@ async fn blocked_forecast_shows_no_partial_sums() {
 
     let text = words(&world).await;
 
-    assert!(text.contains("No safety floor is set"));
+    assert!(text.contains("No emergency fund is set for USD"));
     assert!(!text.contains("1,234.56"));
     assert!(!text.contains("Cash needed"));
 }
@@ -214,7 +218,7 @@ async fn blocked_forecast_shows_no_partial_sums() {
 #[tokio::test]
 async fn blocker_names_what_has_no_balance() {
     let world = crate::forecast::world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world
         .account_with("Rainy day", "savings", "USD", json!({}))
         .await;
@@ -226,12 +230,15 @@ async fn blocker_names_what_has_no_balance() {
 
 async fn mixed() -> World {
     let world = crate::forecast::world().await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world.funded("Checking", 100_000).await;
     let euro = world
         .account_with("Euro", "checking", "EUR", json!({}))
         .await;
     world.balance(euro, BALANCE_ON, 50_000).await;
+    world
+        .emergency_fund_of("EUR", &json!({"kind": "fixed", "minor_units": 0}))
+        .await;
     world
 }
 
@@ -260,7 +267,7 @@ async fn mixed_currencies_show_each_currency_and_no_total() {
 async fn shortfall_is_called_a_shortfall() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(5_000).await;
+    world.emergency_fund(5_000).await;
 
     let text = words(&world).await;
 
@@ -272,7 +279,8 @@ async fn shortfall_is_called_a_shortfall() {
     );
 }
 
-/// A household holding only `currency`, with `minor_units` in one account and no floor.
+/// A household holding only `currency`, with `minor_units` in one account and an emergency
+/// fund of 0.
 async fn holding(currency: &str, minor_units: i64) -> World {
     let world = crate::forecast::world().await;
     let only = world
@@ -280,8 +288,7 @@ async fn holding(currency: &str, minor_units: i64) -> World {
         .await;
     world.balance(only, BALANCE_ON, minor_units).await;
     world
-        .settings(&json!({"floor": {"kind": "fixed",
-            "amount": {"minor_units": 0, "currency": currency}}}))
+        .emergency_fund_of(currency, &json!({"kind": "fixed", "minor_units": 0}))
         .await;
     world
 }
@@ -345,7 +352,7 @@ async fn a_failed_name_lookup_leaves_the_page_and_its_number() {
 async fn firm_says_what_it_means() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     let answer = text_of(section(&page(&world).await.body, "answer"));
 
@@ -473,7 +480,7 @@ async fn cautions_are_shown() {
 async fn spending_newer_than_a_balance_shows_both_amounts() {
     let world = crate::forecast::world().await;
     let checking = world.funded("Checking", 100_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let food = world.expense("Food").await;
     world.spend(checking, AS_OF, 2_500, food).await;
     insert_pending(&world, checking, food, 700).await;
@@ -486,24 +493,24 @@ async fn spending_newer_than_a_balance_shows_both_amounts() {
 }
 
 #[tokio::test]
-async fn a_months_floor_of_zero_is_explained() {
+async fn a_months_emergency_fund_of_zero_is_explained() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 1_000).await;
     world
-        .settings(&json!({"floor": {"kind": "months_of_outflows", "months": 2}}))
+        .emergency_fund_of("USD", &json!({"kind": "months_of_outflows", "months": 2}))
         .await;
 
     let answer = text_of(section(&page(&world).await.body, "answer"));
 
-    assert!(answer.contains("2 months of recurring"));
-    assert!(answer.contains("comes to 0 in USD"));
+    assert!(answer.contains("The emergency fund in USD is 2 months of recurring"));
+    assert!(answer.contains("none are planned in USD"));
 }
 
 #[tokio::test]
 async fn a_closed_card_still_owing_is_explained() {
     let world = crate::forecast::world().await;
     world.funded("Checking", 100_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let card = world
         .account_with("Old card", "credit_card", "USD", json!({}))
         .await;
@@ -610,7 +617,7 @@ async fn totals_too_large_show_the_error_page_and_no_number() {
     let world = crate::forecast::world().await;
     let category = world.expense("Everything").await;
     world.funded("Checking", 123_456).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     world.settings(&json!({"default_horizon_months": 60})).await;
     let daily = json!({"type": "recurring", "every": 1, "unit": "days", "anchor_on": AS_OF});
     for _ in 0..6 {

@@ -1,5 +1,5 @@
 //! Which transaction paid which occurrence, through the real router (spec §8.9 R9b): the numbers
-//! worked by hand, with Checking at 10,000.00, no floor, and one month from 15 November 2026, so
+//! worked by hand, with Checking at 10,000.00, an emergency fund of 0, and one month from 15 November 2026, so
 //! to 15 December.
 
 use axum::http::Method;
@@ -385,7 +385,7 @@ async fn a_row_before_the_look_back_cannot_hide_a_missed_week() {
 async fn bills_before_the_first_transaction_are_one_caution_and_no_hold() {
     let world = super::world().await;
     let checking = world.funded("Checking", 1_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let bills = world.expense("Bills").await;
     for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
         world
@@ -415,7 +415,7 @@ async fn closing_an_account_does_not_let_off_a_missed_bill() {
     let world = super::world().await;
     let old = world.funded("Old", 0).await;
     world.manual(old, "2026-10-01", -1).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let rent = world.expense("Rent").await;
     world
         .item(&outflow("Rent", 200_000, rent, &one_off_on("2026-10-20")))
@@ -439,7 +439,7 @@ async fn closing_an_account_does_not_let_off_a_missed_bill() {
 async fn a_balance_only_household_holds_this_months_bill() {
     let world = super::world().await;
     world.funded("Checking", 1_000_000).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let tyres = world.expense("Tyres").await;
     world
         .item(&outflow("Tyres", 100_000, tyres, &one_off_on("2026-11-05")))

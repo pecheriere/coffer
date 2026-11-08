@@ -12,7 +12,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   audit entry types, money, transactions, matching, sync run
   triggers and statuses, clock; `accounts`, with whose money an account is
   (`belonging.rs`) and the guess at a kind from a provider's name (`suggest.rs`); `plan` (planned items, schedules, goals,
-  forecast settings), `forecast` and `plan_report`, the pure calculations
+  forecast settings, the emergency fund target per currency), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual (`forecast.rs` computes it; its
   `book.rs`, `lines.rs` and `cautions.rs` hold the running amounts, the line each
   account, item and goal gets, and what makes the answer provisional); `fx`, exchange rates held
@@ -23,7 +23,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `sqlx`; its public API speaks domain types only and never exposes an `sqlx`
   type, so a different database backend changes only this crate. It holds
   planned items and their settlements, the household settings (with the
-  display currency), exchange rates and their coverage, the daily net worth
+  display currency), the emergency fund targets (`emergency_funds.rs`, one row per currency), exchange rates and their coverage, the daily net worth
   table (`net_worth.rs`, **the only file that writes `account_daily_values`**:
   a snapshot, a rate, the display currency or a time zone that puts today before its
   last day changes it in its own transaction,
@@ -60,7 +60,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `members` (`Ledger::list_members`, the one read of every member, which the API, its MCP tool and
   every page naming members go through; managing them stays in `auth`), `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
-  household forecast `settings`, the `forecast` and its what-if, the
+  household forecast `settings`, `emergency_funds` (one currency's target set or removed by an
+  admin, audited, and read only with the forecast's access), the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
   `manual_rates` (exchange rates an admin enters: validated, audited and marked),

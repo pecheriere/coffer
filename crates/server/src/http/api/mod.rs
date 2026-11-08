@@ -45,6 +45,10 @@ fn routes() -> ApiRouter {
     ApiRouter::new()
         .op(routes!(me::me))
         .op(routes!(household::get, household::update))
+        .op(routes!(
+            household::set_emergency_fund,
+            household::remove_emergency_fund
+        ))
         .op(routes!(members::list))
         .op(routes!(audit::list))
         .op(routes!(accounts::list, accounts::create))

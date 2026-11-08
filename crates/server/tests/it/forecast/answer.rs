@@ -101,7 +101,7 @@ pub(crate) async fn golden() -> Golden {
         }))
         .await;
 
-    world.floor(1_000_000).await;
+    world.emergency_fund(1_000_000).await;
     // All of it on or before the balance date, so the balances already show it.
     world.spend(checking, "2026-10-01", 200_000, housing).await;
     world.spend(checking, "2026-11-01", 200_000, housing).await;
@@ -132,7 +132,7 @@ pub(crate) async fn golden() -> Golden {
 /// - Outflows: 600,000 + 140,000 + 24,000 + 150,000 = 914,000.
 /// - Vacation is due in the window: 600,000 - 100,000 linked to it = 500,000.
 /// - Roof, 1,200,000 over 730 days, is 365 days along at the window's end: 600,000.
-/// - Goals: 1,100,000. Floor: 1,000,000.
+/// - Goals: 1,100,000. Emergency fund: 1,000,000.
 /// - Needed: 914,000 + 1,100,000 + 1,000,000 = 3,014,000.
 /// - Surplus: 6,850,000 - 3,014,000 = 3,836,000, provisional for the water bill.
 /// - With income, Salary on the 25th three times: needed 3,014,000 - 2,400,000 =
@@ -157,7 +157,7 @@ async fn forecast_over_the_api_matches_the_golden_example() {
     assert_eq!(totals["cash_available"], usd(6_850_000));
     assert_eq!(totals["planned_outflows"], usd(914_000));
     assert_eq!(totals["goals"], usd(1_100_000));
-    assert_eq!(totals["floor"], usd(1_000_000));
+    assert_eq!(totals["emergency_fund"], usd(1_000_000));
     assert_eq!(totals["cash_needed"], usd(3_014_000));
     assert_eq!(kinds(&briefed, "cautions"), ["bill_not_seen"]);
     let not_seen = caution(&briefed, "bill_not_seen");
@@ -269,7 +269,23 @@ async fn empty_household_has_no_number() {
     assert_eq!(forecast["surplus"], Value::Null);
     assert_eq!(
         kinds(&forecast, "blockers"),
-        ["floor_not_set", "no_counted_accounts"]
+        ["no_counted_accounts"],
+        "no currency is in use, so none lacks an emergency fund"
+    );
+}
+
+#[tokio::test]
+async fn a_currency_in_use_without_an_emergency_fund_has_no_number() {
+    let world = world().await;
+    world.funded("Checking", 1_000).await;
+
+    let forecast = world.forecast().await;
+
+    assert_eq!(forecast["status"], "unavailable");
+    assert_eq!(forecast["surplus"], Value::Null);
+    assert_eq!(
+        forecast["blockers"],
+        json!([{"kind": "emergency_fund_not_set", "currency": "USD"}])
     );
 }
 
@@ -278,7 +294,6 @@ async fn settings_supply_the_defaults() {
     let world = world().await;
     world
         .settings(&json!({
-            "floor": {"kind": "months_of_outflows", "months": 2},
             "include_income": true,
             "default_horizon_months": 6,
             "stale_after_days": 30,
@@ -291,10 +306,6 @@ async fn settings_supply_the_defaults() {
     assert_eq!(forecast["end_exclusive"], "2027-05-15");
     assert_eq!(forecast["include_income"], true);
     assert_eq!(forecast["stale_after_days"], 30);
-    assert_eq!(
-        forecast["floor"],
-        json!({"kind": "months_of_outflows", "months": 2})
-    );
 }
 
 #[tokio::test]
@@ -369,7 +380,7 @@ async fn totals_too_large_are_422() {
     let world = world().await;
     let category = world.expense("Everything").await;
     world.funded("Checking", 1).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
     let daily = json!({"type": "recurring", "every": 1, "unit": "days", "anchor_on": AS_OF});
     for _ in 0..6 {
         world
@@ -420,7 +431,7 @@ async fn actuals_ignore_pending_excluded_accounts_and_goal_links() {
             json!("budget"),
         ))
         .await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     world.spend(checking, "2026-11-02", 4_000, food).await;
     world.spend(excluded, "2026-11-03", 2_000, food).await;
@@ -540,7 +551,7 @@ async fn future_dated_snapshot_is_ignored() {
     let world = world().await;
     let checking = world.funded("Checking", 1_000).await;
     world.balance(checking, "2026-12-01", 999_999).await;
-    world.floor(0).await;
+    world.emergency_fund(0).await;
 
     let forecast = world.forecast().await;
 

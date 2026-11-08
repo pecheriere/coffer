@@ -125,6 +125,9 @@ async function seed() {
 
   const api = new Api(base, adminToken);
   await api.patch('/household/settings', data.settings);
+  for (const [currency, target] of Object.entries(data.emergencyFunds)) {
+    await api.put(`/household/emergency-funds/${currency}`, target);
+  }
   const categories = await seedCategories(api, data);
   const accounts = await seedAccounts(api, data);
   await seedTransactions(api, data, accounts.current, categories);
