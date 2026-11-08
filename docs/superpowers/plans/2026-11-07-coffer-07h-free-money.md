@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-07-coffer-money-redesign-design.md` §4.3, §4.4, and §10.1 (window, no income), §10.4 (per currency), §10.5 (no fund set), §10.8 (paid early), §10.9 (goals: set aside so far). Overview: planner's call 8.
 
-**Depends on:** 07e (#144, tiers on `ItemInput`), 07g (#146) merged; start after 07c (#142) so its blocker link moves with the blocker. **Branch / worktree:** `money-07h-free-money`, `../coffer-07h`. No migration.
+**Depends on:** 07c (#142, the blocker's household link this unit moves onto the caution), 07e (#144, tiers on `ItemInput`), 07g (#146) merged. **Branch / worktree:** `money-07h-free-money`, `../coffer-07h`. No migration.
 
 ## Global Constraints
 
@@ -107,12 +107,15 @@
   }
   ```
 - Status: compute `compute_forecast(&ForecastInput { horizon_months: 1, include_income: false, ..input.clone() })` once; keep its blockers except `MixedCurrencies` (free money is per currency), and its cautions except `CashDipsBelowEmergencyFund` (a forecast-horizon statement). `NoCountedAccounts` leaves every `free_money` null; `BalanceMissing { account }` leaves that account's currency's `free_money` null.
+- The reduction: call `reduction::reduce(input, today + 31 days)` once, not with a one-month forecast's `end_exclusive` (from the 30th that is the 28th or 1st of next month, short of the must pay window). `reduce` caps budgets at the first of next month and the paid-ahead window at 7 days on its own, so the longer end changes nothing else; a test pins it (`a_must_pay_due_next_month_is_still_needed` with today on 2027-01-30).
 - Per item still need: `still_needed(item, adjustment, today, until)` with `until` = first day of next month for essentials and flexible, and `today + 31 days` (exclusive) for must pay; split must pay at the first of next month into `must_pay_this_month` and `must_pay_coming`. Goals and inflows contribute nothing to still need.
 
 - [ ] **Step 1: Write the failing tests** (`free_money/tests.rs`; amounts in USD minor units; build inputs with the forecast tests' helpers, made `pub(super)` in `forecast/tests.rs` if needed):
   - `the_formula_in_order` — today 2027-01-15; checking 10,000.00; rent 2,000.00 must pay on the 20th; groceries 600.00 essentials budget with 250.00 spent; restaurants 300.00 flexible budget with 100.00 spent; a goal of 730.00 from 2026-07-15 to 2027-07-15, nothing spent from it (184 of 365 days: set aside exactly 368.00); target Fixed 3,000.00 → still need 2,000 + 350 + 200 = 2,550.00, set aside 368.00, before 7,082.00, held 3,000.00, free 4,082.00, shortfall 0.
   - `a_must_pay_due_next_month_is_still_needed` — today 2027-01-30, mortgage 1,500.00 on the 1st monthly → `must_pay_coming` 1,500.00.
   - `a_bill_paid_early_is_not_needed` — the same, paid 2027-01-29 → 0.
+  - `the_window_ends_on_the_thirtieth_day` — today 2027-01-10: a must pay one-off on 2027-02-09 (today + 30) is in `must_pay_coming`; one on 2027-02-10 is not.
+  - `a_bill_settled_or_paid_this_month_needs_nothing` — rent settled as paid this month needs 0; insurance 100.00 matched by a 108.00 payment (inside ±10%) needs 0 and the 8.00 is not added anywhere (§10.7: the cash is gone, so free money already shows it).
   - `next_months_flexible_budget_is_not_needed` — today 2027-01-30, flexible budget monthly on the 1st → contributes only January's unspent remainder.
   - `an_overspent_budget_needs_nothing_and_takes_nothing` — restaurants 300.00 with 450.00 spent → its need 0; groceries' need unchanged.
   - `no_income_counts` — a salary inflow tomorrow, `include_income: true` → free money unchanged.
@@ -136,7 +139,7 @@
 - Modify: `crates/server/src/ledger/{mod.rs, forecast.rs}` (share `input()` and the store read; make `authorize_forecast` reachable from `free_money.rs`), `crates/server/src/http/api/{mod.rs, openapi.rs}`, `crates/server/src/http/api/mcp/tools.rs` (if it passes about 700 lines, split by area as the overview says), `crates/server/tests/it/mcp/parity.rs`, `crates/server/src/http/pages/forecast/words.rs` (+ tests: the blocker's sentence becomes a caution's, keeping 07c's admin link), `crates/server/tests/it/forecast/*` and `tests/it/pages/forecast.rs` where they expected the blocker, `docs/api/openapi.json`, `docs/agent-forecast.md` (a "Free money" section: the formula, the window, what never counts), `docs/agent-usage.md`
 
 **Interfaces:**
-- Ledger: `pub async fn free_money(&self, actor: &Actor) -> Result<FreeMoney, LedgerError>` — `authorize_forecast`, today from `household_time`, `store.forecast_data(today)`, the forecast's `input(today, today, &settings_with(horizon 1, include_income false), data, Vec::new())`, `compute_free_money`; `OutOfRange` → `LedgerError::Invalid(TOO_LARGE)`.
+- Ledger: `pub async fn free_money(&self, actor: &Actor) -> Result<FreeMoney, LedgerError>` — `authorize_forecast`, today from `self.today()` (`ledger/mod.rs`), `store.forecast_data(today)`, the forecast's `input(today, today, &settings_with(horizon 1, include_income false), data, Vec::new())`, `compute_free_money`; `OutOfRange` → `LedgerError::Invalid(TOO_LARGE)`.
 - API: `GET /api/v1/free-money`, `operation_id = "getFreeMoney"`, tag forecast, needs `read` and the forecast's access; the description gives the formula in words, the window ("must pay through `must_pay_through`; essentials and flexible this month only"), that income and investments never count, that a currency without an emergency fund counts everything as free with a caution, and that currencies are never added together.
 - MCP: `get_free_money`, `Needs::Read`, lead: "How much cash is free now in each currency, after what the plan still needs, what goals have set aside and the emergency fund. " + `MONEY`.
 - Forecast words: `caution_sentence(Caution::EmergencyFundNotSet { currency }, can_manage)` → "No emergency fund is set for {code}, so everything left counts as free." plus 07c's link or "An admin can set one on the Household page."

@@ -24,7 +24,7 @@
 
 ## Review Focus
 
-1. **A viewer without net worth access** (a member whose role or grants can't read balances everywhere): Home must still render, without the net worth card. → Task 3 `home_leaves_out_what_the_viewer_cannot_read`.
+1. **A viewer who sees only some accounts.** `Ledger::net_worth` is scoped, not refused: it sums the accounts the actor sees at `balances` and says nothing of the others (it is `Denied` only without `ReadHousehold`). Home must show exactly what `/net-worth` shows that viewer, never a household total, and a viewer who sees no counted account gets the card's empty state, not an error. → Task 3 `home_net_worth_follows_what_the_viewer_sees`.
 2. **No display currency set**: net worth points have `total: null`. Home must say where to set it, not show 0. → Task 3 `home_without_a_display_currency_says_so`.
 3. **The bottom tab bar covering content** on a 375 px phone: the last form button, the skip link, the setup notice. → Task 2 CSS gives `main` bottom padding equal to the bar's height under the phone media query; check in a real browser at 375 px, both themes, both schemes.
 4. **The count leaking hidden accounts**: a token with grants on one account must count only that account's unreviewed transactions. → Task 1 `review_count_counts_only_readable_accounts`.
@@ -58,7 +58,7 @@ Store: `count_follows_the_filter` — insert 3 transactions in account A (2 unre
 
 API (`transactions_api.rs`): `review_count_counts_only_readable_accounts` — an admin token reads `{"unreviewed": 3}`; a token granted `transactions` on A only reads `{"unreviewed": 2}`; a token without `read` gets 403. `review_count_drops_after_review` — review one through `POST /api/v1/transactions/batch`, the count falls by one.
 
-MCP (`parity.rs`): a row comparing `count_review_queue` with `GET /api/v1/transactions/review-count`.
+MCP (`parity.rs`): a row comparing `count_review_queue` with `GET /api/v1/transactions/review-count`. `parity.rs` is at 755 lines: if this unit merges before the other of 07a/07b, split it by area into `tests/it/mcp/parity/` first (overview, "Order and parallelism").
 
 - [ ] **Step 2: Run them and see them fail**
 
@@ -94,7 +94,7 @@ git -C ../coffer-07a commit -m "Count the transactions waiting for review, in th
 
 - [ ] **Step 1: Write the failing tests** in `pages/navigation.rs`:
   - `every_page_shows_the_four_tabs` — for `/`, `/plan`, `/transactions`, `/more`, `/accounts`, `/account`, the body contains, in order, `href="/">Home<`, `href="/plan">Money<`, `href="/transactions">Activity<`, `href="/more">More<`, and exactly one `aria-current="page"`, on the expected tab (`/accounts` and `/account` → More).
-  - `more_lists_the_rest` — an admin's `/more` links all eleven destinations above; a member's lacks `/admin/household`, `/admin/members`, `/admin/invites`.
+  - `more_lists_the_rest` — an admin's `/more` links all ten destinations above; a member's lacks `/admin/household`, `/admin/members`, `/admin/invites`.
   - `the_brand_goes_home` — `<a class="brand" href="/"`.
 - [ ] **Step 2: Run** `… -p coffer-server … -E 'test(navigation)'`. Expected: FAIL (old links).
 - [ ] **Step 3: Implement** `Nav`, `topbar`, `more.rs` (its own `routes()`), the CSS, and every page's `current`. `error_body`'s "Back to coffer" points at `/`.
@@ -109,14 +109,14 @@ git -C ../coffer-07a commit -m "Count the transactions waiting for review, in th
 - Test: `crates/server/tests/it/pages/home.rs` (new, `mod home;`), `crates/server/tests/it/pages/sign_in.rs:27,118,197` (now `/`); unit tests in `sparkline.rs`
 
 **Interfaces:**
-- Consumes: `Ledger::net_worth(actor, NetWorthQuery { from: Some(first day of the month 12 months before today), to: None, interval: Some(NetWorthInterval::Month), account_points: Some(false) })`; `Ledger::count_transactions_to_review` (Task 1); `household_time` for today.
+- Consumes: `Ledger::net_worth_by_day(actor, |today| NetWorthQuery { from: Some(first day of the month 12 months before today), to: None, interval: Some(NetWorthInterval::Month), account_points: Some(false) })` (the `_by_day` form, so the range and the report use one day, as `pages/net_worth.rs` does); `Ledger::count_transactions_to_review` (Task 1).
 - Produces: `pub(super) fn sparkline(values: &[i64], label: &str) -> Markup` in `home/sparkline.rs`: an `svg.sparkline` with `viewBox="0 0 120 32"`, one `polyline` whose points are integers (x spread evenly with integer division, y scaled from min..max into 2..30, a flat series drawn at 16), `role="img"` and `aria-label` = `label`. Fewer than two values draws nothing.
 - Home content, in order (later units add above and between): a `section.card` "Net worth": the latest total, "up/down $N this month" (latest point minus the previous point; both must be non-null), the sparkline over the points' totals, and a link "See its history" → `/net-worth`; a `section.card` "To check": "N transactions to check" linking `/transactions?review=unreviewed`, or "Nothing to check." at 0.
-- When `net_worth` answers `Denied` or `NotFound`, the net worth card is left out; when the latest total is null because no display currency is set, the card says "Choose a display currency to see net worth in one number." with a link to `/admin/household` for a viewer who can manage the household, and to `/net-worth` otherwise.
+- When `net_worth_by_day` answers `Denied` (no `ReadHousehold`), the net worth card is left out. When the report has the `NoCountedAccounts` blocker (the viewer sees no counted account), the card says "No accounts count towards net worth yet." with a link to `/accounts`. When the latest total is null because no display currency is set, the card says "Choose a display currency to see net worth in one number." with a link to `/admin/household` for a viewer who can manage the household, and to `/net-worth` otherwise.
 
 - [ ] **Step 1: Write the failing tests**
   - `sparkline.rs` unit tests: `points_fit_the_box` (`[0, 50, 100]` → `points="0,30 60,16 120,2"`), `a_flat_series_is_a_flat_line` (`[7, 7, 7]` → every y is 16), `one_value_draws_nothing`, `extreme_values_do_not_overflow` (`[i64::MIN, i64::MAX]` maps into 2..30: use `i128`).
-  - `pages/home.rs`: `root_is_home_not_a_redirect` (GET `/` is 200 with `<h1>Home</h1>`); `sign_in_lands_on_home` (finish answers `{"redirect": "/"}`); `account_page_still_answers` (GET `/account` 200, tab `More` current); `home_shows_net_worth_and_its_change_this_month` (golden household from the net worth tests' world, display currency set: body has the latest total, "this month" with the expected difference, and one `<polyline`); `home_without_a_display_currency_says_so`; `home_leaves_out_what_the_viewer_cannot_read` (a member without balance access: 200, no "Net worth" card, "To check" present); `home_counts_transactions_to_check` (3 unreviewed → "3 transactions to check" linking the queue; 0 → "Nothing to check.").
+  - `pages/home.rs`: `root_is_home_not_a_redirect` (GET `/` is 200 with `<h1>Home</h1>`); `sign_in_lands_on_home` (finish answers `{"redirect": "/"}`); `account_page_still_answers` (GET `/account` 200, tab `More` current); `home_shows_net_worth_and_its_change_this_month` (golden household from the net worth tests' world, display currency set: body has the latest total, "this month" with the expected difference, and one `<polyline`); `home_without_a_display_currency_says_so`; `home_net_worth_follows_what_the_viewer_sees` (a member granted `balances` on one of two accounts: 200, the card's latest total equals that member's `/net-worth` latest total and differs from the admin's; a member granted no account: the empty-state sentence, "To check" present); `home_counts_transactions_to_check` (3 unreviewed → "3 transactions to check" linking the queue; 0 → "Nothing to check.").
 - [ ] **Step 2: Run** `… -E 'test(home) | test(sparkline) | test(sign_in)'`. Expected: FAIL.
 - [ ] **Step 3: Implement** `home.rs` (`routes()` with `.route("/", get(home_page))`, `Frame { current: Some(Nav::Home), .. }`), `sparkline.rs`, the CSS, the sign-in redirect, the e2e specs.
 - [ ] **Step 4: Run** the filtered tests. Expected: PASS.

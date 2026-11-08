@@ -36,7 +36,7 @@
 
 **Files:**
 - Create: `crates/domain/src/plan/tier.rs`, `crates/store/migrations/0031_planned_item_tier.sql`
-- Modify: `crates/domain/src/plan.rs` (module, re-exports, `PlanError::{UnknownTier, IncomeHasNoTier, GoalIsSavingToward, OnlyGoalSavesToward}`), `crates/store/src/planned_items.rs` (`tier` in `PlannedItemRecord`, `NewPlannedItem`, `PlannedItemChanges: Option<Option<PlanTier>>`, the columns, row parsing, insert, update), `crates/store/tests/it/plan.rs`
+- Modify: `crates/domain/src/plan.rs` (module, re-exports, `PlanError::{UnknownTier, IncomeHasNoTier, GoalIsSavingToward, OnlyGoalSavesToward}`), `crates/store/src/planned_items.rs` (`tier` in `PlannedItemRecord`, `NewPlannedItem`, `PlannedItemChanges: Option<Option<PlanTier>>`, the columns, row parsing, insert, update), `crates/store/tests/it/plan.rs`, and every other `NewPlannedItem {` literal (`store/tests/it/forecast/reads.rs:185`, `server/tests/it/grants/plan_channels.rs:597`, `server/tests/it/plan_items/validation.rs:521`; `rg -n 'NewPlannedItem \{' crates`)
 
 **Interfaces:**
 - Produces (`coffer_domain::plan`):
@@ -90,7 +90,7 @@
 ### Task 2: Ledger, API and MCP
 
 **Files:**
-- Modify: `crates/server/src/ledger/plan_items.rs` (if it passes about 780 lines, move `CheckedPatch` and its `changes` into `ledger/plan_items/patch.rs` in this change), `crates/server/src/http/api/plan_items.rs` (descriptions), `crates/server/src/http/api/mcp/tools.rs` (the `list_plan_items`/`get_plan_item` leads mention tiers), `docs/api/openapi.json`, `docs/agent-forecast.md`, `docs/agent-usage.md`
+- Modify: `crates/server/src/http/pages/plan/form.rs` (`into_input` sends `tier: None` until 07f gives the form a field) and `crates/server/tests/it/transactions_page/splits.rs:20` (`PlannedItemInput` literals take `tier: None`), `crates/server/src/ledger/plan_items.rs` (if it passes about 780 lines, move `CheckedPatch` and its `changes` into `ledger/plan_items/patch.rs` in this change), `crates/server/src/http/api/plan_items.rs` (descriptions), `crates/server/src/http/api/mcp/tools.rs` (the `list_plan_items`/`get_plan_item` leads mention tiers), `docs/api/openapi.json`, `docs/agent-forecast.md`, `docs/agent-usage.md`
 - Test: `crates/server/tests/it/plan_items/tiers.rs` (new, `mod tiers;` in `plan_items/mod.rs`), `crates/server/tests/it/plan_items/validation.rs` (refusals)
 
 **Interfaces:**
@@ -106,7 +106,7 @@
 ### Task 3: The forecast carries tiers; months targets count must pay and essentials
 
 **Files:**
-- Modify: `crates/domain/src/forecast/types.rs` (`ItemInput.tier: Option<PlanTier>`), `crates/domain/src/forecast.rs` (`add_emergency_funds`), domain forecast tests' item builders (one helper each, `rg -n 'fn item' crates/domain/src/forecast/tests`), `crates/server/src/ledger/forecast.rs` (`input` maps the record's tier; `HypotheticalItem.tier: Option<PlanTier>` resolved with `resolved_tier`), `crates/server/src/http/api/forecast.rs` (what-if description), `docs/api/openapi.json`, `docs/agent-forecast.md`
+- Modify: `crates/domain/src/forecast/types.rs` (`ItemInput.tier: Option<PlanTier>`), `crates/domain/src/forecast.rs` (`add_emergency_funds`), every `ItemInput {` literal in the domain forecast tests (`tests.rs` helpers, and full literals in `goals_and_floor.rs` (renamed by 07b), `inflow_window.rs`, `clamp_and_duplicates.rs`, `spending_cautions.rs`, `reduction.rs`, `item_cautions.rs`, `properties.rs`, `budget_month.rs`, `golden.rs`: `rg -n 'ItemInput \{' crates/domain`), each given the tier its kind defaults to, so no expectation changes but the months target's, `crates/server/src/ledger/forecast.rs` (`input` maps the record's tier; `HypotheticalItem.tier: Option<PlanTier>` resolved with `resolved_tier`), `crates/server/src/http/api/forecast.rs` (what-if description), `docs/api/openapi.json`, `docs/agent-forecast.md`
 - Test: `crates/domain/src/forecast/tests/goals_and_emergency_fund.rs`, `crates/server/tests/it/forecast/what_if.rs`
 
 **Interfaces:**

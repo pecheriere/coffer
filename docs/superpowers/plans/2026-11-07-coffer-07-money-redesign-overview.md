@@ -68,8 +68,8 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
   count). `/more` lists the rest. Sign-in, the brand and error pages go to `/`. A review-queue count
   in the API (`GET /api/v1/transactions/review-count`) and MCP (`count_review_queue`).
 - Touches: `server/src/http/pages/{layout.rs, mod.rs, home.rs (new), home/sparkline.rs (new), more.rs (new)}`,
-  the `current:` line of every page, `assets/css/base.css`, `ledger/transactions.rs` (or a new
-  `ledger/review_count.rs`), `store/src/review_count.rs` (new), `http/api/transactions.rs`,
+  the `current:` line of every page, `assets/css/base.css`, `ledger/review_count.rs` (new),
+  `store/src/transactions/count.rs` (new, a child of `transactions.rs` to reuse `push_filter`), `http/api/transactions.rs`,
   `mcp/tools.rs`, `docs/api/openapi.json`, `staging/e2e/ui/*.spec.mjs` (landing URL).
 - Depends on: nothing. Parallel with 07b and 07g.
 - Risk: every page's frame changes, so it conflicts textually with any page work in flight; merge it
@@ -152,7 +152,7 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
   `ledger/free_money.rs` (new), `http/api/free_money.rs` (new), `http/api/{mod.rs, openapi.rs}`,
   `mcp/tools.rs`, forecast page words, `tests/it/free_money.rs` (new), `docs/agent-forecast.md`,
   `docs/api/openapi.json`.
-- Depends on: 07e, 07g. Parallel with 07f.
+- Depends on: 07c (its blocker link moves onto the caution), 07e, 07g. Parallel with 07f.
 
 **07i — Home: free money and its breakdown** · #148 · plan `07i-home-free-money`
 - Goal: Home leads with the answer.
@@ -171,7 +171,15 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
   spending)`; migration writes one version per item from its anchor's month (goal: start month;
   one-off: its month); store reads the version for a month; the forecast, free money and plan versus
   actual resolve each occurrence's version; the API's patch takes `effective_from` (`this_month`
-  default, or `next_month`) for versioned fields, and items answer their versions.
+  default, or `next_month`) for versioned fields, and items answer their versions. No past month's
+  version can be written (owner's decision, below): a request for one is 422, and neither the store
+  nor the API offers a way to. "From this month" may lower a bill's amount after this month's
+  occurrence was matched to a payment (owner's decision): the payment stays matched, even if the
+  new amount puts it outside ±10%, and the difference is that bill's saving or overspend (§10.7).
+  So the match of an occurrence already paid is not re-run against the new amount; the plan says
+  how (for example, matching this month's paid occurrences against the amount they were matched
+  at) and pins it with a test: a 1,000 bill paid 1,000, lowered to 800 from this month, still needs
+  0, shows 200 over, and raises no unpaid caution.
 - Why here: the spec's phases put it nowhere; it must precede the Money page (past months, #120) and
   covers (a cover adjusts one month of one version), and it is easier once tiers exist, so the tier
   moves into versions with the rest instead of being designed twice.
@@ -266,7 +274,7 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
 |---|---|---|
 | 1 | 07a, 07b, 07g | — |
 | 2 | 07c, 07d, 07e | 07a (c, d), 07b (c, e) |
-| 3 | 07f, 07h | 07e (f), 07e + 07g (h) |
+| 3 | 07f, 07h | 07e (f), 07c + 07e + 07g (h) |
 | 4 | 07i, 07j | 07a + 07f + 07h (i), 07h (j) |
 | 5 | 07k | 07j |
 | 6 | 07l, 07n, 07q | 07f + 07k (l), 07k (n), 07h + 07j (q) |
@@ -277,7 +285,9 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
 What parallel units still share, and how to merge them: `docs/api/openapi.json` (the second to merge
 regenerates it), `mcp/tools.rs` and `tests/it/mcp/parity.rs` (rows added at different places: keep both;
 a unit pushing `tools.rs` past about 700 lines splits it by area, `tools/{transactions,plan,household}.rs`,
-in the same change), `tests/it/main.rs` (one `mod` line each). 07a touches every page's frame line,
+in the same change; `parity.rs` is already at 755 lines, so the first unit adding a parity row (07a or
+07b, whichever merges first) splits it into `tests/it/mcp/parity/{mod.rs, …}` by area in that change,
+and the other rebases onto the split), `tests/it/main.rs` (one `mod` line each). 07a touches every page's frame line,
 so units starting after it rebase onto it.
 
 At most about three units build at once on the shared Mac (`AGENTS.md`, owner's load limits).
@@ -317,12 +327,11 @@ Minor gaps settled here; each is reversible by changing this list and the unit.
    suggestion exists to replace it (§10.9). Until then it is reached from More and Home's link only.
 12. **Plan history is unit 07j**, between free money and the Money page (see 07j).
 
-## Design questions left to the owner
+## Owner's decisions on plan history
 
-None block phases 1 to 3. For phase 4 onwards, to settle before 07j's plan is written:
+Settled by the owner on 2026-11-07; 07j's plan follows them.
 
-1. Whether "from this month" may lower a bill's amount after its payment was matched this month (it
-   would make the payment an overspend of a smaller bill). Recommended: allowed; the bill's spent is its
-   payment, the difference is a saving or overspend (§10.7).
-2. Whether a past month's version can be edited (correcting history) or only this month's and next.
-   Recommended: only this month and next, as §10.3 says.
+1. **"From this month" may lower a bill's amount after its payment was matched this month.** The
+   payment stays matched; the bill's spent is its payment and the difference is a saving or an
+   overspend (§10.7).
+2. **Past months' plan versions cannot be edited.** Only this month's and next month's (§10.3).
