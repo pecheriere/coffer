@@ -91,8 +91,11 @@ async fn notes_keep_their_line_breaks_through_the_form() {
             &path,
             &[
                 ("payee", "Kiosk"),
+                ("payee_was", "Kiosk"),
                 ("notes", "Line one\r\nLine two"),
+                ("notes_was", ""),
                 ("assignee", ""),
+                ("assignee_was", ""),
             ],
         )
         .await;
@@ -104,8 +107,11 @@ async fn notes_keep_their_line_breaks_through_the_form() {
             &path,
             &[
                 ("payee", "Kiosk"),
+                ("payee_was", "Kiosk"),
                 ("notes", "\nIndented"),
+                ("notes_was", "Line one\r\nLine two"),
                 ("assignee", ""),
+                ("assignee_was", ""),
             ],
         )
         .await;
@@ -127,8 +133,11 @@ async fn the_payee_notes_and_assignee_change_and_only_what_differs_is_sent() {
             &path,
             &[
                 ("payee", "Corner shop"),
+                ("payee_was", "Corner shop"),
                 ("notes", "Milk\r\nand bread"),
+                ("notes_was", ""),
                 ("assignee", &bob.member.to_string()),
+                ("assignee_was", ""),
             ],
         )
         .await;
@@ -149,8 +158,11 @@ async fn the_payee_notes_and_assignee_change_and_only_what_differs_is_sent() {
             &path,
             &[
                 ("payee", "The corner shop"),
+                ("payee_was", "Corner shop"),
                 ("notes", ""),
+                ("notes_was", "Milk\nand bread"),
                 ("assignee", ""),
+                ("assignee_was", &bob.member.to_string()),
             ],
         )
         .await;
@@ -161,7 +173,7 @@ async fn the_payee_notes_and_assignee_change_and_only_what_differs_is_sent() {
     assert_eq!(read["assignee"], json!(null));
 
     let reply = world
-        .post(&path, &[("payee", ""), ("notes", ""), ("assignee", "")])
+        .post(&path, &[("payee", ""), ("payee_was", "The corner shop")])
         .await;
     assert_redirect(&reply, &detail(id));
     assert_eq!(
@@ -172,7 +184,7 @@ async fn the_payee_notes_and_assignee_change_and_only_what_differs_is_sent() {
 
     let long = format!("xyzzy{}", "a".repeat(200));
     let reply = world
-        .post(&path, &[("payee", &long), ("notes", ""), ("assignee", "")])
+        .post(&path, &[("payee", &long), ("payee_was", "Corner shop")])
         .await;
     assert_refused(
         &reply,

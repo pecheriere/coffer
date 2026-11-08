@@ -18,10 +18,8 @@ use maud::{Markup, html};
 use super::account::viewer;
 use super::amounts::{day, grouped, magnitude, money};
 use super::layout::{Frame, Nav, page};
-use super::{PageError, PageSession};
+use super::{PageError, PageSession, refused};
 use crate::http::AppState;
-use crate::http::problem::Problem;
-use crate::ledger::LedgerError;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
     Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
@@ -66,10 +64,6 @@ async fn forecast_page(
     Ok(page(&frame, "Forecast", &content(&forecast, &names, csrf)).into_response())
 }
 
-fn refused(err: LedgerError) -> PageError {
-    PageError(Problem::from(err))
-}
-
 /// The names the cautions speak of. Only they need more than the forecast holds, which
 /// speaks of a category or a planned item by its id. A name is a courtesy: the numbers
 /// are already read, so a lookup that fails costs its names, and the sentences read
@@ -103,6 +97,13 @@ fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>) -> Markup
         p {
             "From " (day(forecast.as_of)) " up to " (day(forecast.end_exclusive)) ", "
             (months(forecast.horizon_months)) ", on the household's settings."
+        }
+        @if forecast.items.is_empty() {
+            p {
+                "No planned bill, budget, income or goal falls in this window yet. "
+                a href="/plan" { "Add them on the plan page" }
+                "."
+            }
         }
         (answer(forecast, names, csrf))
         // A row without a surplus has a blocker leaving something out of its sums,

@@ -105,7 +105,7 @@ fn filter_form(filters: &Filters, names: &Names) -> Markup {
                     "Account"
                     select.input name="account" {
                         option value="" { "Every account" }
-                        @for account in &names.accounts {
+                        @for account in names.transaction_accounts() {
                             option value=(account.id) selected[filters.account == Some(account.id)] {
                                 (account.name)
                             }
@@ -171,9 +171,15 @@ fn filter_form(filters: &Filters, names: &Names) -> Markup {
 }
 
 /// One page of transactions inside the form that marks the ticked ones reviewed. Below the
-/// phone width each row stands alone, so `data-label` repeats its column's heading.
+/// phone width each row stands alone, so `data-label` repeats its column's heading. Only a
+/// transaction the actor may change can be ticked, and with none, the form has no buttons.
 fn table(view: &ListView<'_>) -> Markup {
     let columns = ["Day", "Account", "Amount", "Filed as"];
+    let any_writable = view
+        .found
+        .items
+        .iter()
+        .any(|transaction| view.names.may_write(transaction.account));
     html! {
         form method="post" action="/transactions/batch" {
             (csrf_field(view.csrf))
@@ -194,13 +200,15 @@ fn table(view: &ListView<'_>) -> Markup {
                     }
                 }
             }
-            p.fine {
-                "Marking them reviewed records that you did, and changes nothing else about them. "
-                "All the ticked ones change together, or none do."
+            @if any_writable {
+                p.fine {
+                    "Marking them reviewed records that you did, and changes nothing else about them. "
+                    "All the ticked ones change together, or none do."
+                }
+                button.btn type="submit" name="review" value="reviewed" { "Mark the ticked ones reviewed" }
+                " "
+                button.btn type="submit" name="review" value="unreviewed" { "Mark the ticked ones to review" }
             }
-            button.btn type="submit" name="review" value="reviewed" { "Mark the ticked ones reviewed" }
-            " "
-            button.btn type="submit" name="review" value="unreviewed" { "Mark the ticked ones to review" }
         }
     }
 }
@@ -218,8 +226,10 @@ fn row(transaction: &TransactionView, names: &Names) -> Markup {
             td role="cell" data-label="Amount" { (money(transaction.amount)) }
             td role="cell" data-label="Filed as" { (filed_as(transaction, names)) }
             td role="cell" data-label="Tick" {
-                input type="checkbox" name={ "pick_" (transaction.id) } value="yes"
-                    aria-label={ "Tick " (name) };
+                @if names.may_write(transaction.account) {
+                    input type="checkbox" name={ "pick_" (transaction.id) } value="yes"
+                        aria-label={ "Tick " (name) };
+                }
             }
         }
     }

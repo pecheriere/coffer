@@ -161,7 +161,9 @@ impl Filters {
         if let Some(text) = &self.text {
             pairs.push(("q", text.clone()));
         }
-        serde_urlencoded::to_string(pairs).unwrap_or_default()
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query.extend_pairs(pairs);
+        query.finish()
     }
 
     /// The list with these filters, from its first page.
@@ -176,7 +178,9 @@ impl Filters {
 
     /// The list with these filters, from the page after `cursor`.
     pub(super) fn path_after(&self, cursor: &str) -> String {
-        let after = serde_urlencoded::to_string([("after", cursor)]).unwrap_or_default();
+        let after = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("after", cursor)
+            .finish();
         let query = self.query();
         if query.is_empty() {
             format!("{LIST}?{after}")

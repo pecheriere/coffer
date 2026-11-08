@@ -14,6 +14,7 @@ mod links;
 mod manual;
 mod review;
 mod splits;
+mod stale;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};

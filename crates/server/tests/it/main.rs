@@ -2,12 +2,14 @@
 //! single test binary so a change relinks one program instead of one per file.
 
 mod accounts;
+mod accounts_page;
 mod agent_tokens;
 mod api;
 mod appearance;
 mod assets;
 mod browser_reports;
 mod categories;
+mod categories_page;
 mod cli;
 mod connections;
 mod connections_api;
@@ -34,6 +36,7 @@ mod plaid_forget;
 mod plaid_link;
 mod plaid_sync;
 mod plan_items;
+mod plan_page;
 mod plan_vs_actual;
 mod rules;
 mod scheduler_clock;

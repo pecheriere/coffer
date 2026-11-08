@@ -20,9 +20,10 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, MemberId, PlannedItemId, TransactionId};
 use coffer_domain::money::Currency;
 use coffer_domain::plan::PlanItemType;
-use coffer_domain::policy::{Action, authorize};
+use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_domain::transactions::{ReviewStatus, TransactionFlag};
 use maud::{Markup, html};
+use std::collections::BTreeSet;
 
 use super::PageError;
 use crate::auth::AuthError;
@@ -75,8 +76,18 @@ struct CategoryName {
     id: CategoryId,
     /// `Group: Category`.
     label: String,
-    /// Takes no new splits; named, never offered.
+    /// Takes no new splits: offered only where a transaction is filed in it already.
     archived: bool,
+}
+
+impl CategoryName {
+    /// Its label in a choice, saying when it is archived.
+    fn choice_label(&self) -> Markup {
+        html! {
+            (self.label)
+            @if self.archived { " (archived)" }
+        }
+    }
 }
 
 /// A goal a split may count towards.
@@ -97,6 +108,10 @@ struct MemberName {
 /// only what the actor may see.
 struct Names {
     accounts: Vec<AccountView>,
+    /// The accounts whose transactions the actor may read.
+    readable: BTreeSet<AccountId>,
+    /// The accounts whose transactions the actor may change.
+    writable: BTreeSet<AccountId>,
     categories: Vec<CategoryName>,
     goals: Vec<GoalName>,
     members: Vec<MemberName>,
@@ -109,6 +124,16 @@ impl Names {
             .list_accounts(actor, true)
             .await
             .map_err(refused)?;
+        let mut readable = BTreeSet::new();
+        let mut writable = BTreeSet::new();
+        for account in &accounts {
+            if allowed(state, actor, account.id, AccountLevel::Transactions).await? {
+                readable.insert(account.id);
+                if allowed(state, actor, account.id, AccountLevel::Write).await? {
+                    writable.insert(account.id);
+                }
+            }
+        }
         let tree = state.ledger.list_categories(actor).await.map_err(refused)?;
         let categories = tree
             .items
@@ -154,6 +179,8 @@ impl Names {
             .collect();
         Ok(Self {
             accounts,
+            readable,
+            writable,
             categories,
             goals,
             members,
@@ -188,9 +215,24 @@ impl Names {
             .map_or("a member", |member| member.name.as_str())
     }
 
-    /// The categories a split may name, in the tree's order.
-    fn offered_categories(&self) -> impl Iterator<Item = &CategoryName> {
-        self.categories.iter().filter(|category| !category.archived)
+    /// The accounts whose transactions the list may show, for its filter.
+    fn transaction_accounts(&self) -> impl Iterator<Item = &AccountView> {
+        self.accounts
+            .iter()
+            .filter(|account| self.readable.contains(&account.id))
+    }
+
+    /// Whether the service would take a change to a transaction in `account`.
+    fn may_write(&self, account: AccountId) -> bool {
+        self.writable.contains(&account)
+    }
+
+    /// The categories a split may name, in the tree's order, with `kept` even when archived: a
+    /// part filed there already is sent back unchanged, which the service takes.
+    fn offered_categories(&self, kept: Option<CategoryId>) -> impl Iterator<Item = &CategoryName> {
+        self.categories
+            .iter()
+            .filter(move |category| !category.archived || Some(category.id) == kept)
     }
 
     /// Who made a change, in words: `Alice`, `Alice, through an agent`, `a rule`, `coffer`.
@@ -204,6 +246,25 @@ impl Names {
             (None, Some(_)) => "a rule".to_owned(),
             (None, None) => "coffer".to_owned(),
         }
+    }
+}
+
+/// Whether the ledger lets `actor` use `account` at `level`: its refusal hides a form, any other
+/// failure is the page's.
+async fn allowed(
+    state: &AppState,
+    actor: &Actor,
+    account: AccountId,
+    level: AccountLevel,
+) -> Result<bool, PageError> {
+    match state
+        .ledger
+        .authorize_account_access(actor, account, level)
+        .await
+    {
+        Ok(()) => Ok(true),
+        Err(LedgerError::Denied(_)) => Ok(false),
+        Err(err) => Err(refused(err)),
     }
 }
 

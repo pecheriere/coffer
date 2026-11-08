@@ -17,12 +17,17 @@ use crate::http::pages::{PageError, PageForm, PageSession};
 use crate::ledger::accounts::AccountSource;
 use crate::ledger::transactions::NewManualTransactionInput;
 
-/// The form, on the list, offering the open accounts kept by hand; nothing when there are none.
+/// The form, on the list, offering the open accounts kept by hand that the actor may change;
+/// nothing when there are none.
 pub(super) fn form(names: &Names, csrf: &str) -> Markup {
     let accounts: Vec<_> = names
         .accounts
         .iter()
-        .filter(|account| account.source == AccountSource::Manual && !account.closed)
+        .filter(|account| {
+            account.source == AccountSource::Manual
+                && !account.closed
+                && names.may_write(account.id)
+        })
         .collect();
     if accounts.is_empty() {
         return html! {};

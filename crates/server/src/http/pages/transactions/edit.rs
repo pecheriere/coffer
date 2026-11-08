@@ -6,14 +6,14 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
-use axum::response::Redirect;
+use axum::response::{IntoResponse, Redirect, Response};
 use coffer_domain::ids::{MemberId, TransactionId};
 use coffer_domain::transactions::{ReviewStatus, SplitInput};
 use serde::Deserialize;
 
 use super::filters::Filters;
 use super::splits::{self, NO_CATEGORY};
-use super::{detail_path, refused, transaction_id};
+use super::{detail, detail_path, refused, transaction_id};
 use crate::http::AppState;
 use crate::http::pages::{PageError, PageForm, PageSession};
 use crate::ledger::transactions::{BatchOperation, Patch, TransactionPatch, TransactionView};
@@ -150,7 +150,8 @@ pub(super) async fn splits(
     .await
 }
 
-/// Unknown fields are refused: a forged form fails whole.
+/// Unknown fields are refused: a forged form fails whole. Each `_was` field holds what the page
+/// showed.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct DetailsForm {
@@ -159,47 +160,136 @@ pub(super) struct DetailsForm {
     #[serde(default)]
     payee: String,
     #[serde(default)]
+    payee_was: String,
+    #[serde(default)]
     notes: String,
     #[serde(default)]
+    notes_was: String,
+    #[serde(default)]
     assignee: String,
+    #[serde(default)]
+    assignee_was: String,
 }
 
-/// Sends only what differs from what the page showed: a payee sent unchanged would pin the
-/// bank's one as the member's own, and an assignee who has since left would be refused.
+/// What the details form says when a field it changed has changed since the page opened.
+const DETAILS_CHANGED: &str =
+    "It changed since you opened it, so nothing was saved. Here is what it says now.";
+
+/// A browser sends a textarea's line breaks as CR LF; notes keep LF alone.
+fn plain_lines(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+/// A member picked in the form, or nobody.
+fn picked_member(text: &str) -> Result<Option<MemberId>, PageError> {
+    match text {
+        "" => Ok(None),
+        text => text
+            .parse()
+            .map(Some)
+            .map_err(|_| PageError::invalid("not a member the form offers")),
+    }
+}
+
+/// One field of the details form: what the page showed, what came back, and what it is now.
+struct Field<T> {
+    was: T,
+    sent: T,
+    now: T,
+}
+
+impl<T: PartialEq> Field<T> {
+    /// The value to send, or `None` when it was left as shown. `Err` when it was changed here
+    /// and has changed meanwhile too, so saving would undo a change nobody here saw.
+    fn change(self) -> Result<Option<T>, Stale> {
+        if self.sent == self.was {
+            Ok(None)
+        } else if self.now == self.was {
+            Ok(Some(self.sent))
+        } else {
+            Err(Stale)
+        }
+    }
+}
+
+/// A field changed both in the form and since the page opened.
+struct Stale;
+
+/// The patch for what the form changed, compared with what the page showed, or `None` when a
+/// field it changed has changed meanwhile too. A field left as shown is not sent, so a payee a
+/// sync changed meanwhile isn't pinned, nor an assignee a rule set undone, nor notes someone
+/// else wrote overwritten.
+fn details_patch(
+    form: &DetailsForm,
+    current: &TransactionView,
+) -> Result<Option<TransactionPatch>, PageError> {
+    let assignee = Field {
+        was: picked_member(&form.assignee_was)?,
+        sent: picked_member(&form.assignee)?,
+        now: current.assignee,
+    };
+    let payee = Field {
+        was: form.payee_was.as_str(),
+        sent: form.payee.as_str(),
+        now: current.payee.as_deref().unwrap_or_default(),
+    };
+    let notes = Field {
+        was: plain_lines(&form.notes_was),
+        sent: plain_lines(&form.notes),
+        now: plain_lines(current.notes.as_deref().unwrap_or_default()),
+    };
+    Ok(changes(payee, notes, assignee).ok())
+}
+
+fn changes(
+    payee: Field<&str>,
+    notes: Field<String>,
+    assignee: Field<Option<MemberId>>,
+) -> Result<TransactionPatch, Stale> {
+    Ok(TransactionPatch {
+        payee: match payee.change()? {
+            None => Patch::Absent,
+            Some("") => Patch::Clear,
+            Some(other) => Patch::Set(other.to_owned()),
+        },
+        notes: match notes.change()? {
+            None => Patch::Absent,
+            Some(text) if text.is_empty() => Patch::Clear,
+            Some(text) => Patch::Set(text),
+        },
+        assignee: match assignee.change()? {
+            None => Patch::Absent,
+            Some(None) => Patch::Clear,
+            Some(Some(member)) => Patch::Set(member),
+        },
+        ..TransactionPatch::default()
+    })
+}
+
+/// Sends only what the form changed from what the page showed. A field changed here that also
+/// changed since the page opened is refused whole, and the page shown again as it is now.
 pub(super) async fn details(
     State(state): State<AppState>,
     session: PageSession,
     Path(id): Path<String>,
     PageForm(form): PageForm<DetailsForm>,
-) -> Result<Redirect, PageError> {
-    apply(&state, &session, &form.csrf, &id, |current| {
-        let payee = match form.payee.as_str() {
-            "" => Patch::Clear,
-            same if current.payee.as_deref() == Some(same) => Patch::Absent,
-            other => Patch::Set(other.to_owned()),
-        };
-        // A browser sends a textarea's line breaks as CR LF; notes keep LF alone.
-        let notes = Patch::Set(form.notes.replace("\r\n", "\n"));
-        let chosen: Option<MemberId> = match form.assignee.as_str() {
-            "" => None,
-            text => Some(
-                text.parse()
-                    .map_err(|_| PageError::invalid("not a member the form offers"))?,
-            ),
-        };
-        let assignee = match chosen {
-            same if same == current.assignee => Patch::Absent,
-            None => Patch::Clear,
-            Some(member) => Patch::Set(member),
-        };
-        Ok(TransactionPatch {
-            payee,
-            notes,
-            assignee,
-            ..TransactionPatch::default()
-        })
-    })
-    .await
+) -> Result<Response, PageError> {
+    let actor = session.verify(&state, &form.csrf)?;
+    let id = transaction_id(&id)?;
+    let current = state
+        .ledger
+        .get_transaction(&actor, id)
+        .await
+        .map_err(refused)?;
+    let Some(patch) = details_patch(&form, &current)? else {
+        return detail::render(&state, &session, id, Some(DETAILS_CHANGED)).await;
+    };
+    state
+        .ledger
+        .update_transaction(&actor, id, patch)
+        .await
+        .map_err(refused)?;
+    Ok(Redirect::to(&detail_path(id)).into_response())
 }
 
 /// The batch form: its token, which way to mark, the list to go back to, and a `pick_<id>`

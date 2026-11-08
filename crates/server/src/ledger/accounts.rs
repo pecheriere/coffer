@@ -23,8 +23,6 @@ use utoipa::ToSchema;
 use super::{Ledger, LedgerError, audit, complete_created};
 use crate::http::idempotency::IdempotencySlot;
 
-const NAME_INVALID: &str = "account name must be 1 to 100 characters without control characters";
-
 /// Where an account's data comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -245,7 +243,7 @@ pub(crate) fn parse_beneficiary(asked: Option<&str>) -> Result<BeneficiaryChange
 /// [`LedgerError::Invalid`] unless it is 1 to 100 characters without
 /// control characters.
 pub(crate) fn parse_name(name: &str) -> Result<AccountName, LedgerError> {
-    AccountName::parse(name).map_err(|_| LedgerError::Invalid(NAME_INVALID))
+    AccountName::parse(name).map_err(refused)
 }
 
 /// An account to create whose input has been validated and whose belonging is decided. A
