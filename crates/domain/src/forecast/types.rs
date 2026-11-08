@@ -33,7 +33,8 @@ pub struct ForecastInput {
     pub horizon_months: u8,
     /// Whether planned inflows reduce the cash needed.
     pub include_income: bool,
-    /// Each currency's emergency fund target. A currency in use without one blocks the number.
+    /// Each currency's emergency fund target. A currency in use without one holds nothing back,
+    /// with a caution.
     pub emergency_funds: EmergencyFunds,
     /// A counted balance older than this many days is flagged.
     pub stale_after_days: u16,
@@ -268,7 +269,8 @@ pub struct Forecast {
     pub horizon_months: u8,
     pub include_income: bool,
     /// The emergency fund targets of the currencies in `totals`, sorted by currency. A
-    /// currency in use without one has none here and an `emergency_fund_not_set` blocker.
+    /// currency in use without one has none here, an emergency fund of 0 and an
+    /// `emergency_fund_not_set` caution.
     pub emergency_funds: Vec<EmergencyFund>,
     pub stale_after_days: u16,
     pub status: ForecastStatus,
@@ -546,9 +548,6 @@ pub struct MonthItem {
 pub enum Blocker {
     /// More than one currency is in use; each has its own row in `totals`.
     MixedCurrencies { currencies: Vec<Currency> },
-    /// A currency in use has no emergency fund target. A silent target of 0 would overstate
-    /// the surplus.
-    EmergencyFundNotSet { currency: Currency },
     /// No account counts as cash.
     NoCountedAccounts,
     /// A counted account has no balance, so it could hold anything.
@@ -649,6 +648,9 @@ pub enum Caution {
     },
     /// A closed card still owes money, which counts against cash.
     ClosedLiabilityOwing { account: AccountId, balance: Money },
+    /// A currency in use has no emergency fund target, so nothing is held back in it: all that is
+    /// left counts as free. Set one to have some kept back (spec §10.5).
+    EmergencyFundNotSet { currency: Currency },
     /// This currency's emergency fund of some months of recurring must pay and essentials
     /// outflows came to 0:
     /// a silent emergency fund of 0 would overstate the surplus.

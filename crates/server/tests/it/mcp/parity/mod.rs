@@ -185,13 +185,7 @@ fn cases(household: &Household) -> Vec<Case> {
         item,
         ..
     } = household;
-    let what_if = json!({"horizon_months": 6, "items": [{
-        "name": "A new roof",
-        "amount": {"minor_units": 2_000_000, "currency": "USD"},
-        "direction": "outflow",
-        "schedule": {"type": "one_off", "on": "2027-03-01"},
-    }]});
-    vec![
+    let mut cases = vec![
         get("whoami", json!({}), "/api/v1/me"),
         get(
             "get_household_settings",
@@ -243,19 +237,6 @@ fn cases(household: &Household) -> Vec<Case> {
             json!({"item_id": item}),
             &format!("/api/v1/plan-items/{item}"),
         ),
-        get("get_forecast", json!({}), "/api/v1/forecast"),
-        get(
-            "get_forecast",
-            json!({"horizon_months": 3, "include_income": false}),
-            "/api/v1/forecast?horizon_months=3&include_income=false",
-        ),
-        Case {
-            tool: "what_if_forecast",
-            arguments: what_if.clone(),
-            method: Method::POST,
-            uri: "/api/v1/forecast/what-if".to_owned(),
-            body: Some(what_if),
-        },
         get(
             "get_plan_vs_actual",
             json!({"from": "2026-09"}),
@@ -277,6 +258,34 @@ fn cases(household: &Household) -> Vec<Case> {
             body: Some(json!({"operations": [
                 {"id": transaction, "patch": {"review": "unreviewed"}},
             ]})),
+        },
+    ];
+    cases.extend(forecast_cases());
+    cases
+}
+
+/// The forecast's tools, its what-if's and free money's.
+fn forecast_cases() -> Vec<Case> {
+    let what_if = json!({"horizon_months": 6, "items": [{
+        "name": "A new roof",
+        "amount": {"minor_units": 2_000_000, "currency": "USD"},
+        "direction": "outflow",
+        "schedule": {"type": "one_off", "on": "2027-03-01"},
+    }]});
+    vec![
+        get("get_forecast", json!({}), "/api/v1/forecast"),
+        get(
+            "get_forecast",
+            json!({"horizon_months": 3, "include_income": false}),
+            "/api/v1/forecast?horizon_months=3&include_income=false",
+        ),
+        get("get_free_money", json!({}), "/api/v1/free-money"),
+        Case {
+            tool: "what_if_forecast",
+            arguments: what_if.clone(),
+            method: Method::POST,
+            uri: "/api/v1/forecast/what-if".to_owned(),
+            body: Some(what_if),
         },
     ]
 }

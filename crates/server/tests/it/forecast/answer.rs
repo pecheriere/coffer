@@ -275,16 +275,21 @@ async fn empty_household_has_no_number() {
 }
 
 #[tokio::test]
-async fn a_currency_in_use_without_an_emergency_fund_has_no_number() {
+async fn the_forecast_no_longer_blocks_without_a_target() {
     let world = world().await;
     world.funded("Checking", 1_000).await;
 
     let forecast = world.forecast().await;
 
-    assert_eq!(forecast["status"], "unavailable");
-    assert_eq!(forecast["surplus"], Value::Null);
+    assert_eq!(forecast["status"], "provisional");
     assert_eq!(
-        forecast["blockers"],
+        forecast["surplus"],
+        json!({"minor_units": 1_000, "currency": "USD"}),
+        "nothing held back"
+    );
+    assert_eq!(forecast["blockers"], json!([]));
+    assert_eq!(
+        forecast["cautions"],
         json!([{"kind": "emergency_fund_not_set", "currency": "USD"}])
     );
 }

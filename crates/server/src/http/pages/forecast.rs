@@ -9,7 +9,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use coffer_domain::forecast::{Blocker, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
+use coffer_domain::forecast::{Caution, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{Action, authorize};
@@ -22,8 +22,8 @@ use super::{PageError, PageSession, refused};
 use crate::http::AppState;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
-    Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
-    settled_budget_sentence, settled_sentence,
+    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_sentence, month_name, months,
+    rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -128,16 +128,7 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage
                 h3 { "Why there's no number" }
                 ul.reasons {
                     @for blocker in &forecast.blockers {
-                        li {
-                            (blocker_sentence(blocker, can_manage))
-                            @if can_manage && matches!(blocker, Blocker::EmergencyFundNotSet { .. }) {
-                                " "
-                                a href="/admin/household#emergency-fund" {
-                                    "Set one on the Household page"
-                                }
-                                "."
-                            }
-                        }
+                        li { (blocker_sentence(blocker)) }
                     }
                 }
             }
@@ -147,6 +138,17 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage
                     @for caution in &forecast.cautions {
                         li {
                             (caution_sentence(caution, forecast.as_of, names))
+                            @if matches!(caution, Caution::EmergencyFundNotSet { .. }) {
+                                " "
+                                @if can_manage {
+                                    a href="/admin/household#emergency-fund" {
+                                        "Set one on the Household page"
+                                    }
+                                    "."
+                                } @else {
+                                    (ADMIN_SETS_EMERGENCY_FUND)
+                                }
+                            }
                             @if let Some(csrf) = csrf {
                                 (settle::forms(caution, forecast.as_of, names, csrf))
                             }

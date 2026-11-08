@@ -17,6 +17,7 @@ use lines::{account_line, dated_line, goal_line, not_counted};
 mod bill_matching;
 mod book;
 mod cautions;
+mod free_money;
 mod lines;
 mod reduction;
 mod settled;
@@ -27,6 +28,7 @@ pub use bill_matching::{
     BILL_AMOUNT_TOLERANCE_PERCENT, BILL_EARLY_PAYMENT_DAYS, BILL_LOOK_BACK_MONTHS,
     REFUND_UNDOES_FROM_PERCENT, REFUND_UNDOES_TO_PERCENT, bills_looked_at_from, payments_read_from,
 };
+pub use free_money::{FreeMoney, FreeMoneyCurrency, MUST_PAY_DAYS, StillNeed, compute_free_money};
 pub use lines::{CountingFacts, left_out_of_forecast};
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
@@ -87,13 +89,13 @@ pub fn compute_forecast(input: &ForecastInput) -> Result<Forecast, ForecastError
         };
         items.extend(line);
     }
-    add_emergency_funds(input, &mut book)?;
+    let fund_cautions = add_emergency_funds(input, &mut book)?;
 
     let blockers = blockers(input, &accounts, &book);
     let no_surplus = blockers
         .iter()
         .any(|blocker| !matches!(blocker, Blocker::MixedCurrencies { .. }));
-    let mut cautions = cautions(input, &items, &reduction, &book, &counted)?;
+    let mut cautions = cautions(input, &items, &reduction, fund_cautions, &counted)?;
     let (totals, months) = settle(book, &buckets, input, no_surplus, &mut cautions)?;
 
     let surplus = match (blockers.is_empty(), totals.as_slice()) {
@@ -183,19 +185,57 @@ fn count(dates: &[Date]) -> Result<u32, ForecastError> {
     u32::try_from(dates.len()).map_err(|_| ForecastError::OutOfRange)
 }
 
-/// Sets each currency's emergency fund from its target. A target applies only to its own
-/// currency, and only to one the book already has: it never puts a currency in use.
-fn add_emergency_funds(input: &ForecastInput, book: &mut Book) -> Result<(), ForecastError> {
-    for (currency, tally) in &mut book.tallies {
-        tally.emergency_fund = match input.emergency_funds.get(currency) {
-            None => 0,
-            Some(&EmergencyFundTarget::Fixed { minor_units }) => i128::from(minor_units),
-            Some(&EmergencyFundTarget::MonthsOfOutflows { months }) => {
-                months_of_outflows(input, *currency, months)?
-            }
-        };
+/// Sets each currency's emergency fund from its target, and what to say of any currency in use
+/// with none, or with some months that come to 0. A target applies only to its own currency, and
+/// only to one the book already has: it never puts a currency in use.
+fn add_emergency_funds(
+    input: &ForecastInput,
+    book: &mut Book,
+) -> Result<Vec<Caution>, ForecastError> {
+    let mut said = Vec::new();
+    for (&currency, tally) in &mut book.tallies {
+        let fund = emergency_fund(input, currency)?;
+        tally.emergency_fund = fund.minor_units;
+        said.extend(fund.caution);
     }
-    Ok(())
+    Ok(said)
+}
+
+/// One currency's emergency fund in minor units, and what makes it worth a word.
+pub(super) struct Fund {
+    /// 0 when no target is set.
+    pub(super) minor_units: i128,
+    /// `EmergencyFundNotSet` without a target, `EmergencyFundMonthsIsZero` for some months of
+    /// outflows that come to 0.
+    pub(super) caution: Option<Caution>,
+}
+
+/// `currency`'s emergency fund at `input.as_of`, which the forecast and free money both hold back.
+/// With no target set, nothing is held back: the reason there was once no number without one was
+/// not to overstate what can be invested, and the suggestion to invest is withheld instead
+/// (spec §10.5).
+pub(super) fn emergency_fund(
+    input: &ForecastInput,
+    currency: Currency,
+) -> Result<Fund, ForecastError> {
+    Ok(match input.emergency_funds.get(&currency) {
+        None => Fund {
+            minor_units: 0,
+            caution: Some(Caution::EmergencyFundNotSet { currency }),
+        },
+        Some(&EmergencyFundTarget::Fixed { minor_units }) => Fund {
+            minor_units: i128::from(minor_units),
+            caution: None,
+        },
+        Some(&EmergencyFundTarget::MonthsOfOutflows { months }) => {
+            let minor_units = months_of_outflows(input, currency, months)?;
+            Fund {
+                minor_units,
+                caution: (minor_units == 0)
+                    .then_some(Caution::EmergencyFundMonthsIsZero { currency, months }),
+            }
+        }
+    })
 }
 
 /// What `currency`'s recurring must pay and essentials outflows come to over the `months`
@@ -226,12 +266,6 @@ fn blockers(input: &ForecastInput, accounts: &[AccountLine], book: &Book) -> Vec
             currencies: book.tallies.keys().copied().collect(),
         });
     }
-    blockers.extend(
-        book.tallies
-            .keys()
-            .filter(|currency| !input.emergency_funds.contains_key(currency))
-            .map(|&currency| Blocker::EmergencyFundNotSet { currency }),
-    );
     // A closed card's debt counts, but it is no cash to forecast from.
     let open_account_counts = input
         .accounts

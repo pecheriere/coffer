@@ -130,41 +130,6 @@ fn an_unused_currency_target_changes_nothing() {
     );
 }
 
-/// With dollars targeted and euros not, euros' number is blocked, and dollars' target is
-/// never applied to euros.
-#[test]
-fn a_target_applies_only_to_its_currency() {
-    let other = CategoryId::new();
-    let forecast = run(&ForecastInput {
-        accounts: vec![cash("Checking", usd(500_000)), cash("Konto", eur(10_000))],
-        emergency_funds: fixed_fund(usd(100_000)),
-        items: vec![one_off("Bill", usd(20_000), date(2026, 12, 1), other)],
-        ..household()
-    });
-    assert_eq!(
-        forecast.blockers,
-        [
-            Blocker::MixedCurrencies {
-                currencies: vec![currency("EUR"), currency("USD")],
-            },
-            Blocker::EmergencyFundNotSet {
-                currency: currency("EUR"),
-            },
-        ],
-        "euros have no target, dollars do"
-    );
-    let dollars = totals_of(&forecast, "USD");
-    assert_eq!(dollars.emergency_fund, usd(100_000), "dollars' own target");
-    assert_eq!(
-        dollars.cash_needed,
-        usd(120_000),
-        "bill plus emergency fund"
-    );
-    let euros = totals_of(&forecast, "EUR");
-    assert_eq!(euros.emergency_fund, eur(0), "nothing from dollars' target");
-    assert_eq!(euros.surplus, None, "no number for euros");
-}
-
 /// The item falls outside the one-month window but inside the target's twelve months. A
 /// target never puts a currency in use, so euros get no row and the number stands.
 #[test]
@@ -181,30 +146,6 @@ fn a_target_never_puts_a_currency_in_use() {
         forecast.items.len(),
         0,
         "the item itself is outside the window"
-    );
-}
-
-#[test]
-fn emergency_fund_not_set_blocks() {
-    let forecast = run(&ForecastInput {
-        emergency_funds: EmergencyFunds::new(),
-        ..household()
-    });
-    assert_eq!(forecast.status, ForecastStatus::Unavailable, "no number");
-    assert_eq!(forecast.surplus, None, "no silent emergency fund of 0");
-    assert_eq!(
-        forecast.blockers,
-        [Blocker::EmergencyFundNotSet {
-            currency: currency("USD"),
-        }],
-        "the reason, naming the currency"
-    );
-    let totals = totals_of(&forecast, "USD");
-    assert_eq!(totals.surplus, None, "nor per currency");
-    assert_eq!(
-        totals.cash_available,
-        usd(1_000_000),
-        "the cash is still shown"
     );
 }
 

@@ -13,6 +13,7 @@ mod belonging;
 mod bill_payments;
 mod budget_month;
 mod charges;
+mod free_money;
 mod rule_numbers;
 pub(crate) mod settled;
 mod settlement_changes;

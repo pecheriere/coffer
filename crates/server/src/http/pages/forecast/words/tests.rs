@@ -12,7 +12,7 @@ use coffer_domain::plan::CalendarMonth;
 use jiff::civil::{Date, date};
 
 use super::{
-    Names, blocker_sentence, caution_sentence, newer_spending_sentence,
+    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_sentence, newer_spending_sentence,
     rule_filed_transfers_sentence,
 };
 use crate::http::pages::word_checks::{assert_worded, sampled_kinds, schema_kinds};
@@ -128,6 +128,7 @@ fn cautions_other_than_a_bills() -> Vec<Caution> {
             account,
             balance: usd(-30_000),
         },
+        Caution::EmergencyFundNotSet { currency },
         Caution::EmergencyFundMonthsIsZero {
             currency,
             months: 1,
@@ -192,9 +193,6 @@ fn blockers() -> Vec<Blocker> {
                 Currency::parse("USD").unwrap(),
             ],
         },
-        Blocker::EmergencyFundNotSet {
-            currency: Currency::parse("EUR").unwrap(),
-        },
         Blocker::NoCountedAccounts,
         Blocker::BalanceMissing {
             account: AccountId::new(),
@@ -222,9 +220,7 @@ fn every_blocker_kind_has_a_sentence() {
     let samples = blockers();
     assert_eq!(sampled_kinds(&samples), kinds);
     for blocker in &samples {
-        for can_manage in [true, false] {
-            assert_worded(&blocker_sentence(blocker, can_manage), &kinds);
-        }
+        assert_worded(&blocker_sentence(blocker), &kinds);
     }
 }
 
@@ -399,30 +395,22 @@ fn a_dip_below_the_emergency_fund_says_when_and_how_low() {
     assert!(sentence.contains("below the emergency fund"));
 }
 
+/// It says what free money does without one; the page adds where to set one, or who can.
+/// Neither speaks of the API.
 #[test]
-fn a_missing_emergency_fund_names_its_currency() {
-    let sentence = blocker_sentence(
-        &Blocker::EmergencyFundNotSet {
+fn a_missing_emergency_fund_names_its_currency_and_counts_all_as_free() {
+    let sentence = said(
+        &Caution::EmergencyFundNotSet {
             currency: Currency::parse("EUR").unwrap(),
         },
-        true,
+        &Names::of_accounts(&[]),
     );
-    assert!(sentence.contains("No emergency fund is set for EUR."));
-}
-
-/// An admin gets a link after the sentence, so the sentence itself says nothing of where;
-/// anyone else learns who can set one. Neither is sent to the API.
-#[test]
-fn a_missing_emergency_fund_says_who_can_set_one() {
-    let missing = Blocker::EmergencyFundNotSet {
-        currency: Currency::parse("EUR").unwrap(),
-    };
-    let for_admin = blocker_sentence(&missing, true);
-    let for_member = blocker_sentence(&missing, false);
-    assert!(!for_admin.contains("An admin can"));
-    assert!(for_member.ends_with("An admin can set one on the Household page."));
-    for sentence in [for_admin, for_member] {
-        assert!(!sentence.contains("API"));
+    assert_eq!(
+        sentence,
+        "No emergency fund is set for EUR, so everything left counts as free."
+    );
+    for words in [sentence.as_str(), ADMIN_SETS_EMERGENCY_FUND] {
+        assert!(!words.contains("API"));
     }
 }
 

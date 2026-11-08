@@ -52,11 +52,12 @@ pub struct ForecastQuery {
                    outflows, from `as_of`, \
                    whatever the horizon. `emergency_funds` lists the targets of the currencies in \
                    `totals`.\n\n\
+                   A currency in use without a target holds nothing back, with the caution \
+                   `emergency_fund_not_set` naming it.\n\n\
                    `status` says how far to trust it. `firm` is a number with nothing to warn \
                    about. `provisional` is a number with `cautions`, each saying what might \
                    change it. `unavailable` is no number: `surplus` is `null` and `blockers` say \
-                   why, such as a currency in use with no emergency fund \
-                   (`emergency_fund_not_set`, naming it) or an account without a balance. \
+                   why, such as an account without a balance. \
                    Several currencies are never netted: `surplus` is `null`, with the blocker \
                    `mixed_currencies`, and each row of `totals` has its own.\n\n\
                    A planned amount is a positive magnitude with a `direction`. Balances, \

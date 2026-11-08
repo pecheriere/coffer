@@ -2,7 +2,7 @@
 //! `GET /api/v1/forecast` answers, in words, and changes nothing.
 //! Settling a month from it is in `settling`.
 
-mod blocker_link;
+mod emergency_fund_link;
 mod settling;
 
 use axum::body::Body;
@@ -209,11 +209,15 @@ async fn empty_household_shows_the_reason_and_no_number() {
 #[tokio::test]
 async fn blocked_forecast_shows_no_partial_sums() {
     let world = crate::forecast::world().await;
+    world.emergency_fund(0).await;
     world.funded("Checking", 123_456).await;
+    world
+        .account_with("Rainy day", "savings", "USD", json!({}))
+        .await;
 
     let text = words(&world).await;
 
-    assert!(text.contains("No emergency fund is set for USD"));
+    assert!(text.contains("Rainy day has no balance yet"));
     assert!(!text.contains("1,234.56"));
     assert!(!text.contains("Cash needed"));
 }

@@ -34,7 +34,7 @@ use super::settlements::settled_months;
 use super::{Ledger, LedgerError, settings};
 
 const TOO_MANY_ITEMS: &str = "a what-if takes at most 50 hypothetical items";
-const TOO_LARGE: &str = "the forecast's totals are too large to represent";
+pub(super) const TOO_LARGE: &str = "the forecast's totals are too large to represent";
 const FUND_TWICE: &str = "each currency's emergency fund once";
 
 /// What a forecast may say differently from the household's settings.
@@ -210,6 +210,17 @@ impl Ledger {
         Ok(checked)
     }
 
+    /// What a forecast or free money reads at `as_of`, in one read transaction.
+    pub(super) async fn forecast_data(&self, as_of: Date) -> Result<ForecastData, LedgerError> {
+        self.store
+            .forecast_data(as_of)
+            .await
+            .map_err(|err| match err {
+                StoreError::SumTooLarge => LedgerError::Invalid(TOO_LARGE),
+                other => other.into(),
+            })
+    }
+
     /// The forecast of the stored data and `hypothetical`, for an actor already
     /// authorized.
     async fn answer(
@@ -220,14 +231,7 @@ impl Ledger {
         let today = self.today().await?;
         let as_of = options.as_of.unwrap_or(today);
         validate_as_of(as_of).map_err(plan_items::invalid)?;
-        let mut data = self
-            .store
-            .forecast_data(as_of)
-            .await
-            .map_err(|err| match err {
-                StoreError::SumTooLarge => LedgerError::Invalid(TOO_LARGE),
-                other => other.into(),
-            })?;
+        let mut data = self.forecast_data(as_of).await?;
         let chosen = ForecastSettings {
             include_income: options
                 .include_income
@@ -275,7 +279,7 @@ fn check_hypothetical_category(
 
 /// The calculation's input: only what it needs, so provider error text and sealed
 /// data can't reach an answer.
-fn input(
+pub(super) fn input(
     today: Date,
     as_of: Date,
     chosen: ForecastSettings,

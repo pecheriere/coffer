@@ -319,16 +319,16 @@ async fn a_bad_currency_in_the_path_is_400() {
 async fn the_forecast_uses_it() {
     let world = world().await;
     world.funded("Checking", 1_000_000).await;
-    let blocked = world.forecast().await;
+    let without = world.forecast().await;
     assert_eq!(
-        blocked["blockers"],
+        without["cautions"],
         json!([{"kind": "emergency_fund_not_set", "currency": "USD"}])
     );
 
     put(&world, &world.admin, "USD", &fixed(250_000)).await;
 
     let forecast = world.forecast().await;
-    assert_eq!(forecast["blockers"], json!([]), "no blocker for it");
+    assert_eq!(forecast["cautions"], json!([]), "no caution for it");
     assert_eq!(
         forecast["totals"][0]["emergency_fund"],
         json!({"minor_units": 250_000, "currency": "USD"})

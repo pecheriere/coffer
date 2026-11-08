@@ -42,7 +42,7 @@ session, never with another token.
 
 | Scope | Allows |
 |---|---|
-| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
+| `read` | Read household data: `me`, `members`, `audit`, accounts, categories, transactions, connections, provider accounts and sync runs, and the plan: planned items, the household's forecast settings, the forecast, free money, plan versus actual, and `POST /api/v1/forecast/what-if`, which is a `POST` but persists nothing, so `read` may call it, and net worth: `GET /api/v1/reports/net-worth`, `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates`. |
 | `write` | Everything in `read`, plus changes to household data: accounts (creating, changing, recording balances), transactions (creating, reviewing, categorizing, assigning, merging, deleting), categories, rules, connections (connecting, reconnecting, removing, binding provider accounts), sync (requesting one) and planned items (creating, changing, deleting). Removing or reconnecting another member's connection also needs the `admin` role. |
 | `admin` | Everything in `write`, plus household administration, such as changing the forecast settings or entering an exchange rate by hand. Only admins can create `admin` tokens. |
 
@@ -96,7 +96,7 @@ token's access.
   one, unmarked, and a bucket none of whose accounts it sees isn't there.
   `GET /api/v1/fx/coverage`, `GET /api/v1/fx/rates` and `GET /api/v1/fx/manual-rates` need `all`
   at `balances`: which rates are stored depends on the currencies in use.
-- The forecast, a what-if and the plan-versus-actual report sum every account, so
+- The forecast, a what-if, free money and the plan-versus-actual report sum every account, so
   there is no partial one: below `all` at `transactions` they are a 403 whose
   detail is "this action needs transactions access to every account",
   whether or not any account is hidden. Ask the member for a token with that
@@ -111,7 +111,7 @@ token's access.
   account". `GET /api/v1/transactions` silently leaves out the accounts the
   token sees only at `balances`; naming one in `account=` is the 403.
 - Actions that span every account need an `all` grant: reading the audit
-  log, a connection's sync runs, the forecast, a what-if and the plan-versus-actual
+  log, a connection's sync runs, the forecast, a what-if, free money and the plan-versus-actual
   report need `all` at `transactions`; creating
   an account, binding a provider account, requesting a sync, adding,
   reconnecting or removing a connection, creating or changing a category

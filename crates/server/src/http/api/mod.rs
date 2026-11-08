@@ -8,6 +8,7 @@ mod categories;
 pub(crate) mod connections;
 pub mod extract;
 mod forecast;
+mod free_money;
 mod fx;
 mod household;
 pub(super) mod mcp;
@@ -87,6 +88,7 @@ fn routes() -> ApiRouter {
         .op(routes!(plan_items::settle, plan_items::unsettle))
         .op(routes!(forecast::get))
         .op(routes!(forecast::what_if))
+        .op(routes!(free_money::get))
         .op(routes!(reports::plan_vs_actual))
         .op(routes!(reports::net_worth))
         .op(routes!(fx::coverage))

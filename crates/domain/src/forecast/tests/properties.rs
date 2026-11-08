@@ -25,14 +25,14 @@ mod oracle;
 
 use oracle::{check_reduction, check_settled_list, dated, unsettled};
 
-const MAX_AMOUNT: i64 = 1_000_000_000;
+pub(super) const MAX_AMOUNT: i64 = 1_000_000_000;
 
 fn day(offset: i32) -> Date {
     AS_OF.checked_add(offset.days()).unwrap()
 }
 
 /// Mostly dollars, so most households have a single number to check.
-fn money(amount: impl Strategy<Value = i64>) -> impl Strategy<Value = Money> {
+pub(super) fn money(amount: impl Strategy<Value = i64>) -> impl Strategy<Value = Money> {
     (amount, 0..10).prop_map(|(minor, pick)| if pick == 0 { eur(minor) } else { usd(minor) })
 }
 
@@ -84,7 +84,7 @@ fn schedule() -> impl Strategy<Value = PlanSchedule> {
 
 /// A few months around the ones `as_of` picks from, so that they often hold an occurrence
 /// and the window often reaches them.
-fn settled_months() -> impl Strategy<Value = BTreeMap<CalendarMonth, SettlementKind>> {
+pub(super) fn settled_months() -> impl Strategy<Value = BTreeMap<CalendarMonth, SettlementKind>> {
     collection::btree_map(
         (-8..16).prop_map(|offset: i32| {
             CalendarMonth::of(
@@ -161,7 +161,7 @@ fn window_end(as_of: Date, months: u8) -> Result<Date, String> {
     }
 }
 
-fn spent_rows(
+pub(super) fn spent_rows(
     picks: &[(usize, i64, i32, u8)],
     items: &[ItemInput],
     as_of: Date,
@@ -196,7 +196,7 @@ fn target() -> impl Strategy<Value = Option<EmergencyFundTarget>> {
 }
 
 /// A target, or none, for each of dollars and euros.
-fn emergency_funds() -> impl Strategy<Value = EmergencyFunds> {
+pub(super) fn emergency_funds() -> impl Strategy<Value = EmergencyFunds> {
     (target(), target()).prop_map(|(dollars, euros)| {
         [("USD", dollars), ("EUR", euros)]
             .into_iter()
@@ -205,7 +205,7 @@ fn emergency_funds() -> impl Strategy<Value = EmergencyFunds> {
     })
 }
 
-fn input() -> impl Strategy<Value = ForecastInput> {
+pub(super) fn input() -> impl Strategy<Value = ForecastInput> {
     let categories = vec![CategoryId::new(), CategoryId::new(), CategoryId::new()];
     let spent = collection::vec(
         (0..categories.len(), -1_000..MAX_AMOUNT, any::<bool>()),
