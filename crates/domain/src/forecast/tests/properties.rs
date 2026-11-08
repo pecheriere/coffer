@@ -121,6 +121,8 @@ fn item(categories: Vec<CategoryId>) -> impl Strategy<Value = ItemInput> {
                 0 if !is_goal => inflow(base),
                 1 => hypothetical(0, base),
                 2 | 3 if is_recurring => budget(base),
+                // Marked as a budget, a one-off or a goal stays what it is.
+                2 => budget(base),
                 // Only a stored bill or one-off going out may be settled.
                 _ if !is_goal => ItemInput { settled, ..base },
                 _ => base,
