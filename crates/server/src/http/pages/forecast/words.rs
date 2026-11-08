@@ -136,8 +136,10 @@ pub(super) fn settled_budget_sentence(line: &SettledBudget) -> String {
     )
 }
 
-/// Why there is no number.
-pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
+/// Why there is no number. `can_manage` says whether the viewer may set an emergency fund:
+/// the page follows the sentence with a link to where it is set for one who may, and the
+/// sentence names who can for anyone else.
+pub(super) fn blocker_sentence(blocker: &Blocker, can_manage: bool) -> String {
     match blocker {
         Blocker::MixedCurrencies { currencies } => {
             let codes: Vec<&str> = currencies.iter().map(Currency::as_str).collect();
@@ -148,11 +150,18 @@ pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
                 listed(&codes)
             )
         }
-        Blocker::EmergencyFundNotSet { currency } => format!(
-            "No emergency fund is set for {}. Without one, coffer would overstate what could be \
-             invested. It is set through the API.",
-            currency.as_str()
-        ),
+        Blocker::EmergencyFundNotSet { currency } => {
+            let who = if can_manage {
+                ""
+            } else {
+                " An admin can set one on the Household page."
+            };
+            format!(
+                "No emergency fund is set for {}. Without one, coffer would overstate what could \
+                 be invested.{who}",
+                currency.as_str()
+            )
+        }
         Blocker::NoCountedAccounts => {
             "No account counts as cash yet, so there is nothing to measure the plan against."
                 .to_owned()
