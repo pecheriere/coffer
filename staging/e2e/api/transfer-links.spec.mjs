@@ -1,10 +1,10 @@
-// Two transactions said to be one movement of money. The seed's surplus is 40,740.84 EUR with
+// Two transactions said to be one movement of money. The seed's surplus is 42,270.84 EUR with
 // 85.40 of the 600.00 groceries budget spent, so 500.00 more filed as groceries lifts it by
 // 500.00, until a link says that money only moved.
 import { CheckedApi } from '../support/api.mjs';
 import { expect, test } from '../support/fixtures.mjs';
 
-const SURPLUS = 4_074_084;
+const SURPLUS = 4_227_084;
 const EUR = (minor_units) => ({ minor_units, currency: 'EUR' });
 
 // A manual transaction, filed if given a category.

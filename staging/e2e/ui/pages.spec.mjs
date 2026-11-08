@@ -9,7 +9,7 @@ const WIDTHS = {
 
 // Each answer is the element right after its label.
 const PAGES = [
-  { path: '/forecast', heading: 'Forecast', label: 'Surplus', answer: '40,740.84 EUR' },
+  { path: '/forecast', heading: 'Forecast', label: 'Surplus', answer: '42,270.84 EUR' },
   { path: '/net-worth', heading: 'Net worth', label: 'Net worth on', answer: '181,490.30 EUR' },
 ];
 
