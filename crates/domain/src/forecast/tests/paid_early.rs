@@ -264,3 +264,27 @@ fn matching_reaches_the_early_window() {
         assert_eq!(line(&forecast, "Tyres").counted, usd(counted));
     }
 }
+
+/// The mortgage of 1 February, next month, settled as paid for February, and paid on 28 January:
+/// that payment is the mortgage's, settled or not, so it stays off the budget of 500 on the 20th,
+/// which needs all 500 for January and 500 for 20 February, as it would in the same month.
+#[test]
+fn a_bill_next_month_settled_as_paid_keeps_its_early_payment_off_the_budget() {
+    let home = CategoryId::new();
+    let mut mortgage = one_off("Mortgage", usd(1_000), FEB_1, home);
+    let february: CalendarMonth = "2027-02".parse().unwrap();
+    mortgage.settled.insert(february, SettlementKind::Paid);
+    let forecast = run_as_given(&ForecastInput {
+        items: vec![
+            mortgage,
+            budget(monthly("Upkeep", usd(500), date(2027, 1, 20), home)),
+        ],
+        category_spent: vec![spent(home, 1_000)],
+        spent_transactions: vec![paid_on(home, usd(1_000), date(2027, 1, 28))],
+        ..on(JAN_30, 1)
+    });
+    let upkeep = line(&forecast, "Upkeep");
+    assert_eq!(upkeep.reduced_by, usd(0));
+    assert_eq!(upkeep.counted, usd(1_000));
+    assert_eq!(usd_totals(&forecast).planned_outflows, usd(1_000));
+}

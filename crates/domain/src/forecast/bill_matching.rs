@@ -60,7 +60,7 @@ pub fn payments_read_from(as_of: Date) -> Date {
 
 /// One occurrence of a stored recurring bill or one-off that the look-back reaches, one not settled
 /// in the [`BILL_EARLY_PAYMENT_DAYS`] after `as_of`, which a payment already made may have paid, or
-/// one settled as paid later in `as_of`'s month.
+/// one settled as paid later in `as_of`'s month or in that week.
 #[derive(Clone, Copy)]
 pub(super) struct Bill {
     pub(super) on: Date,

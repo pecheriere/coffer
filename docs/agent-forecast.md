@@ -462,8 +462,9 @@ window does not cover whole. Reading a month's `lines`:
 
 `payments` on a stored recurring bill's or one-off's line says which transaction paid
 which occurrence: one entry per occurrence from the first of last month up to and
-including `as_of`, and one for each later occurrence a payment already paid, by date, with `on`, `amount` and `paid_by` (`transaction`, `posted_on`,
-`amount`, `difference`), or `paid_by: null` for one nothing paid, and `before_history`. See [what pays a
+including `as_of`, and one for each later occurrence a payment already paid, by date,
+with `on`, `amount` and `paid_by` (`transaction`, `posted_on`, `amount`, `difference`),
+or `paid_by: null` for one nothing paid, and `before_history`. See [what pays a
 bill](#what-pays-a-bill). A paid item with nothing else to count still has a line, with
 `counted` 0, so you can see that.
 

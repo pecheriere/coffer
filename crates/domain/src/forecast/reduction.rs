@@ -163,7 +163,8 @@ pub(super) fn reduce(
             // A goal has no occurrences, so this is recurring bills and one-offs. One dated
             // `as_of`, or within the week after, may be what a payment already made paid, so it
             // can take a transaction, but it has not passed, so it owes no gap. One settled as
-            // paid later this month was paid, so it has a claim on what was spent too.
+            // paid later this month, or in that week, was paid, so it has a claim on what was
+            // spent too.
             let bill = |on| Bill {
                 on,
                 index,
@@ -177,20 +178,16 @@ pub(super) fn reduce(
             };
             let dates = item.schedule.occurrences(looked_at_from, through_as_of);
             bills.extend(dates.into_iter().map(bill));
-            let later = item.schedule.occurrences(through_as_of, reducible_until);
-            bills.extend(
-                later
-                    .into_iter()
-                    .map(bill)
-                    .filter(|one| one.settled == Some(SettlementKind::Paid)),
-            );
-            let early = item.schedule.occurrences(through_as_of, early_until);
-            bills.extend(
-                early
-                    .into_iter()
-                    .map(bill)
-                    .filter(|one| one.settled.is_none()),
-            );
+            // A settled one in the early window counts even in next month: a payment already
+            // made may be how it was paid.
+            let later = item
+                .schedule
+                .occurrences(through_as_of, reducible_until.max(early_until));
+            bills.extend(later.into_iter().map(bill).filter(|one| match one.settled {
+                Some(SettlementKind::Paid) => true,
+                Some(SettlementKind::Skipped) => false,
+                None => one.on < early_until,
+            }));
         }
     }
     bills.sort_by_key(|bill| (bill.on, bill.index));
