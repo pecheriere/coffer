@@ -29,12 +29,14 @@ struct PoolFigures {
     later_budgets: i128,
 }
 
-/// A stored budget, the only item whose window reaches back to the month's start.
+/// A stored budget, the only item whose window reaches back to the month's start. Only a
+/// recurring outflow is one: a one-off or a goal marked as a budget stays what it is.
 pub(super) fn is_stored_budget(item: &ItemInput) -> bool {
     matches!(item.source, LineSource::PlannedItem { .. })
         && item.direction == PlanDirection::Outflow
         && item.category.is_some()
         && item.spending == Some(PlanSpending::Budget)
+        && matches!(item.schedule, PlanSchedule::Recurring { .. })
 }
 
 /// What `item` counts for in `[from, to)`: a settled month's occurrences count as nothing.
@@ -90,8 +92,10 @@ pub(super) fn unsettled(input: &ForecastInput) -> ForecastInput {
 
 /// What `line` lists of `item`'s occurrences, checked against the inputs rather than the walk:
 /// one entry per date, each for the item's amount, and each paid by an outflow in the item's
-/// category and currency that the input holds, posted the day it says, for its whole amount: a
-/// refund, a possible duplicate and a charge a refund undid pay nothing (spec §8.9).
+/// category and currency that the input holds, posted the day it says, for its whole amount. A
+/// refund and a possible duplicate pay nothing (spec §8.9). That a charge a refund undid pays
+/// nothing is pinned only by the example tests, since telling which charge a refund undid would
+/// copy the implementation.
 pub(super) fn check_line_payments(
     input: &ForecastInput,
     item: &ItemInput,
@@ -239,11 +243,12 @@ pub(super) fn check_reduction(input: &ForecastInput, forecast: &Forecast) -> Res
             continue;
         };
         let figures = pools.entry((category, item.amount.currency)).or_default();
-        if item.spending == Some(PlanSpending::Budget) {
+        if is_stored_budget(item) {
             figures.month_budgets += dated(item, month_start, month_end)?;
             figures.later_budgets += dated(item, month_end, window_ends)?;
         } else {
-            // A goal has no occurrences, so this is recurring bills and one-offs.
+            // A goal has no occurrences, so this is recurring bills and one-offs, a one-off
+            // marked as a budget included.
             figures.earlier_bills += evidenced(input, item)?;
             figures.settled_paid |= item
                 .settled
