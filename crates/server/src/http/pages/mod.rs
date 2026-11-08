@@ -12,6 +12,7 @@
 mod account;
 mod admin;
 mod amounts;
+mod categories;
 mod connections;
 mod forecast;
 mod grants;
@@ -73,6 +74,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(connections::routes())
         .merge(household::routes())
         .merge(forecast::routes())
+        .merge(categories::routes())
         .merge(net_worth::routes())
         .merge(plaid)
         .route("/", get(home))
