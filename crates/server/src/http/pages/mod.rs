@@ -17,9 +17,11 @@ mod categories;
 mod connections;
 mod forecast;
 mod grants;
+mod home;
 mod household;
 mod layout;
 mod login;
+mod more;
 mod net_worth;
 mod plaid;
 mod plan;
@@ -36,7 +38,6 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::get;
 use axum::{Extension, Form, Json, Router};
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::MemberId;
@@ -85,15 +86,10 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(net_worth::routes())
         .merge(rules::routes())
         .merge(transactions::routes())
+        .merge(home::routes())
+        .merge(more::routes())
         .merge(plaid)
-        .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-}
-
-/// `/` sends a signed-in visitor to their account page. Anyone else never
-/// gets here: the [`PageSession`] rejection sends them to sign in.
-async fn home(_session: PageSession) -> Redirect {
-    Redirect::to("/account")
 }
 
 pub(super) async fn security_headers(mut response: Response) -> Response {
@@ -396,7 +392,7 @@ async fn start_session(
     let cookie = session_cookie(&token, state.config.session_absolute);
     Ok((
         [(header::SET_COOKIE, cookie)],
-        Json(serde_json::json!({ "redirect": "/account" })),
+        Json(serde_json::json!({ "redirect": "/" })),
     )
         .into_response())
 }

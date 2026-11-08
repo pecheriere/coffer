@@ -1,4 +1,5 @@
-//! `/api/v1/transactions`: listing and searching transactions, creating
+//! `/api/v1/transactions`: listing and searching transactions, counting the
+//! review queue, creating
 //! manual ones, reviewing them one at a time or in atomic batches, and
 //! resolving possible duplicates (merge, unmerge, dismiss).
 
@@ -23,6 +24,7 @@ use crate::http::AppState;
 use crate::http::extract::ApiActor;
 use crate::http::idempotency::{self, CreateRequest, IdempotencyKey};
 use crate::http::problem::{CommonProblems, Problem, ProblemBody};
+use crate::ledger::review_count::ReviewCount;
 use crate::ledger::transactions::{
     BatchOperation, NewManualTransactionInput, TransactionPage, TransactionPatch,
     TransactionQueryInput, TransactionView,
@@ -257,6 +259,30 @@ pub(super) async fn list(
             .ledger
             .list_transactions(&actor, query.into_input())
             .await?,
+    ))
+}
+
+/// Counts the review queue.
+#[utoipa::path(
+    get,
+    path = "/api/v1/transactions/review-count",
+    operation_id = "countReviewQueue",
+    tag = tags::TRANSACTIONS,
+    description = "How many transactions wait for a review, in every account the token may \
+                   see: the number of transactions `GET /api/v1/transactions?review=unreviewed` \
+                   pages through. Needs `read`.",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The count.", body = ReviewCount),
+        CommonProblems,
+    ),
+)]
+pub(super) async fn review_count(
+    State(state): State<AppState>,
+    ApiActor(actor): ApiActor,
+) -> Result<Json<ReviewCount>, Problem> {
+    Ok(Json(
+        state.ledger.count_transactions_to_review(&actor).await?,
     ))
 }
 

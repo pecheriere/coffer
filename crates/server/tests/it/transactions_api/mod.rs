@@ -21,6 +21,8 @@ use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
+mod review_count;
+
 struct World {
     server: TestServer,
     alice: Actor,

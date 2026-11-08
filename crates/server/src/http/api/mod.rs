@@ -65,6 +65,7 @@ fn routes() -> ApiRouter {
         .op(routes!(rules::apply))
         .op(routes!(rules::undo))
         .op(routes!(transactions::list, transactions::create))
+        .op(routes!(transactions::review_count))
         .op(routes!(transactions::batch))
         .op(routes!(transactions::merge))
         .op(routes!(transactions::unmerge))

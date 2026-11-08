@@ -21,21 +21,17 @@ pub struct Viewer {
     pub setup_needed: u32,
 }
 
-/// A main-navigation destination.
+/// A tab of the main navigation: every signed-in page lives under one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nav {
-    Account,
-    Accounts,
-    Transactions,
-    Forecast,
-    Plan,
-    Categories,
-    NetWorth,
-    Rules,
-    Connections,
-    Members,
-    Invites,
-    Household,
+    /// `/`: what to know today.
+    Home,
+    /// The plan.
+    Money,
+    /// Transactions and the review queue.
+    Activity,
+    /// `/more` and everything it links to.
+    More,
 }
 
 /// How a page is framed: its look, who is signed in, which navigation item
@@ -110,9 +106,7 @@ pub fn page_with_scripts(
                 }
                 main id="main" class=(main_class) {
                     @if let Some(viewer) = frame.viewer {
-                        @if frame.current != Some(Nav::Connections) {
-                            (setup_notice(viewer.setup_needed))
-                        }
+                        (setup_notice(viewer.setup_needed))
                     }
                     (content)
                 }
@@ -121,8 +115,8 @@ pub fn page_with_scripts(
     }
 }
 
-/// A reminder, on every signed-in page, of the bank accounts that wait for
-/// an account to feed; nothing when there are none.
+/// A reminder, on every signed-in page but those setting bank accounts up, of the
+/// bank accounts that wait for an account to feed; nothing when there are none.
 fn setup_notice(count: u32) -> Markup {
     html! {
         @if count > 0 {
@@ -138,34 +132,28 @@ fn setup_notice(count: u32) -> Markup {
     }
 }
 
+/// The tabs, in order: where each goes and what it is called.
+const TABS: [(Nav, &str, &str); 4] = [
+    (Nav::Home, "/", "Home"),
+    (Nav::Money, "/plan", "Money"),
+    (Nav::Activity, "/transactions", "Activity"),
+    (Nav::More, "/more", "More"),
+];
+
+/// The top bar. Its tabs are inline links on a wide screen and a bar fixed to the bottom of a
+/// phone's, by the stylesheet alone.
 fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
-    let link = |nav: Nav, href: &str, label: &str| {
-        html! {
-            a href=(href) aria-current=[(current == Some(nav)).then_some("page")] { (label) }
-        }
-    };
     html! {
         header.topbar {
-            a.brand href="/account" {
+            a.brand href="/" {
                 (illustration(&look.theme.illustrations.glyph, 28, "glyph"))
                 "coffer"
             }
             nav.nav aria-label="Main" {
-                (link(Nav::Account, "/account", "Account"))
-                (link(Nav::Accounts, "/accounts", "Accounts"))
-                (link(Nav::Transactions, "/transactions", "Transactions"))
-                (link(Nav::Forecast, "/forecast", "Forecast"))
-                (link(Nav::Plan, "/plan", "Plan"))
-                (link(Nav::Categories, "/categories", "Categories"))
-                (link(Nav::NetWorth, "/net-worth", "Net worth"))
-                (link(Nav::Rules, "/rules", "Rules"))
-                (link(Nav::Connections, "/connections", "Connections"))
-                @if viewer.can_manage_members {
-                    (link(Nav::Members, "/admin/members", "Members"))
-                    (link(Nav::Invites, "/admin/invites", "Invites"))
-                }
-                @if viewer.can_manage_household {
-                    (link(Nav::Household, "/admin/household", "Household"))
+                @for (nav, href, label) in TABS {
+                    a href=(href) aria-current=[(current == Some(nav)).then_some("page")] {
+                        (label)
+                    }
                 }
             }
             span.who {
@@ -233,7 +221,7 @@ pub fn error_body(look: Look, title: &str, detail: Option<&str>) -> Markup {
             @if let Some(detail) = detail {
                 p { (detail) }
             }
-            a.btn.btn-primary href="/account" { "Back to coffer" }
+            a.btn.btn-primary href="/" { "Back to coffer" }
         }
     }
 }

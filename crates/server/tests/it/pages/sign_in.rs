@@ -24,7 +24,7 @@ async fn full_journey() {
     let mut alice_key = server.authenticator();
     let done = admin.enroll(&mut alice_key, &setup, "alice", "Alice").await;
     assert_eq!(done.status, StatusCode::OK, "`done` status");
-    assert_eq!(done.json()["redirect"], "/account");
+    assert_eq!(done.json()["redirect"], "/");
     assert!(done.header(header::SET_COOKIE).contains("HttpOnly"));
 
     let account = admin.get("/account").await;
@@ -115,7 +115,7 @@ async fn full_journey() {
     let mut returning = Browser::new(&server);
     let done = returning.login(&mut alice_key, "alice").await;
     assert_eq!(done.status, StatusCode::OK, "`done` status");
-    assert_eq!(done.json()["redirect"], "/account");
+    assert_eq!(done.json()["redirect"], "/");
     let page = returning.get("/account").await;
     assert_eq!(page.status, StatusCode::OK);
     let out = returning
@@ -185,15 +185,5 @@ async fn root_sends_a_visitor_without_a_session_to_sign_in() {
     {
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
         assert_eq!(reply.header(header::LOCATION), "/login");
-    }
-}
-
-#[tokio::test]
-async fn root_sends_a_signed_in_member_home() {
-    let (_server, mut admin, _) = with_admin().await;
-
-    for reply in get_and_head(&mut admin, "/").await {
-        assert_eq!(reply.status, StatusCode::SEE_OTHER, "`reply` status");
-        assert_eq!(reply.header(header::LOCATION), "/account");
     }
 }

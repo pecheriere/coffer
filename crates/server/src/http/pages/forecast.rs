@@ -54,7 +54,7 @@ async fn forecast_page(
     let frame = Frame {
         look: session.look(&state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::Forecast),
+        current: Some(Nav::More),
         narrow: false,
     };
     // None for a role that couldn't settle, which sees the words and no buttons.

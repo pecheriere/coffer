@@ -45,7 +45,7 @@ pub(super) async fn rule_page(
     let frame = Frame {
         look: session.look(&state).await,
         viewer: Some(&viewer),
-        current: Some(Nav::Rules),
+        current: Some(Nav::More),
         narrow: false,
     };
     // None for a viewer who couldn't change or run this rule, who sees what it would do and

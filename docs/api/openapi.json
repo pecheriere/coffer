@@ -6815,6 +6815,103 @@
         ]
       }
     },
+    "/api/v1/transactions/review-count": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Counts the review queue.",
+        "description": "How many transactions wait for a review, in every account the token may see: the number of transactions `GET /api/v1/transactions?review=unreviewed` pages through. Needs `read`.",
+        "operationId": "countReviewQueue",
+        "responses": {
+          "200": {
+            "description": "The count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed: an invalid parameter, body or cursor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The bearer token is missing, unknown, expired or of a disabled member.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token's scope or the member's role does not allow the operation.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource, or no such route.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The route does not accept this method; `Allow` lists those it does.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A submitted value is not acceptable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/transactions/{transaction_id}": {
       "get": {
         "tags": [
@@ -13037,6 +13134,21 @@
           }
         ],
         "description": "Something in the reported months worth a look."
+      },
+      "ReviewCount": {
+        "type": "object",
+        "description": "How many transactions wait for someone to review them, in the accounts the actor reads at\n`transactions`.",
+        "required": [
+          "unreviewed"
+        ],
+        "properties": {
+          "unreviewed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unreviewed transactions in the accounts the token may see. A token that sees only some\naccounts counts only theirs.",
+            "minimum": 0
+          }
+        }
       },
       "ReviewStatus": {
         "type": "string",

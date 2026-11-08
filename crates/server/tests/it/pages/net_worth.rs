@@ -582,25 +582,21 @@ async fn all_range_still_answers_past_the_point_limit() {
 }
 
 #[tokio::test]
-async fn nav_links_to_net_worth_for_every_member() {
+async fn more_links_to_net_worth_for_every_member() {
     let world = world().await;
     world.golden().await;
     let mut alice = alice(&world).await;
     let mut bob = bob(&world).await;
 
     for browser in [&mut alice, &mut bob] {
-        let elsewhere = browser.get("/account").await;
-        assert!(
-            elsewhere
-                .body
-                .contains("<a href=\"/net-worth\">Net worth</a>")
-        );
+        let more = browser.get("/more").await;
+        assert!(more.body.contains("href=\"/net-worth\">Net worth history<"));
         let shown = browser.get(PAGE).await;
         assert_eq!(shown.status, StatusCode::OK);
         assert!(
             shown
                 .body
-                .contains("<a href=\"/net-worth\" aria-current=\"page\">Net worth</a>")
+                .contains("<a href=\"/more\" aria-current=\"page\">More</a>")
         );
         assert!(text_of(section(&shown.body, "answer")).contains("6,317.20 USD"));
     }
