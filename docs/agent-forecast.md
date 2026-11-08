@@ -362,11 +362,12 @@ the token's grants) hold the forecast's defaults:
   target applies to its own currency's totals only. Two kinds:
   `{"kind": "fixed", "minor_units": 300000}` (0 to 10^15, in the currency's minor
   units; 0 is allowed) and `{"kind": "months_of_outflows", "months": 2}` (1 to 60),
-  that currency's recurring outflows, bills and budgets, that fall in that many months
-  from `as_of`, before any reduction. A budget's earlier days in `as_of`'s month are
+  that currency's recurring outflows, bills and budgets, whose `tier` is `must_pay` or
+  `essentials` and that fall in that many months from `as_of`, before any reduction.
+  `flexible` ones are not in it: that spending can stop when money is short. A budget's earlier days in `as_of`'s month are
   not in it. One-offs and goals are not in it. A settled occurrence is: the emergency
-  fund says how much to hold, not what is owed. If that comes to 0 in a currency the
-  number stays, with the caution `emergency_fund_months_is_zero`. A currency the
+  fund says how much to hold, not what is owed. If that comes to 0 in a currency, as it does with only
+  `flexible` ones, the number stays, with the caution `emergency_fund_months_is_zero`. A currency the
   household doesn't use yet may have one; it changes nothing until it is in use.
 - `include_income` (default `false`) decides whether planned inflows reduce
   the cash needed.
@@ -680,7 +681,7 @@ first entry):
 | `emergency_fund_not_set` (`currency`) | A currency in use has no emergency fund. | Ask the owner what to hold back in that currency, then `PUT /household/emergency-funds/{currency}` (needs `admin`). To explore without setting one, a what-if may carry its own `emergency_funds`; say that they are not the household's. |
 | `no_counted_accounts` | No open `cash` or card account is in the forecast. | Look at `accounts[].not_counted`. Create or bind the household's accounts, or set `include_in_forecast` on the right ones (`PATCH /accounts/{id}`). A flag doesn't fix this on an account with `not_household`: `true` is a 422, because that money isn't the household's cash. |
 | `balance_missing` (`account`, `name`) | A counted account has no balance on or before `as_of`, so it could hold anything. | Record one (`PUT /accounts/{id}/balances/{on}`), wait for or request a sync of a linked account, or take the account out of the forecast. An account with `not_household` never raises this, and no flag makes a held account's balance count: if this one isn't the household's money, a member says so with `belongs_to`. |
-| `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. Each currency has its own emergency fund, applied to its row only: a months target is worked out from that currency's recurring outflows. |
+| `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. Each currency has its own emergency fund, applied to its row only: a months target is worked out from that currency's recurring `must_pay` and `essentials` outflows. |
 
 **Cautions** keep the number but make it `provisional`. Each has a `kind`
 and the fields shown:
@@ -699,7 +700,7 @@ and the fields shown:
 | `bill_unpaid_last_month` (`item`, `on`, `amount`) | A recurring bill or a one-off dated last month has no payment that fits and nobody settled it. It still counts as needed. | As for `bill_not_seen`, for that month. |
 | `bill_payment_unclear` (`item`, `on`, `amount`, `transaction`, `transaction_amount`) | That transaction may have paid this occurrence, but it could also be a budget's spending in the same category, so it stays with the budget and the bill still counts. | Ask. If it was the bill, settle the month as `paid`. Filing the bill under its own category stops this recurring. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
-| `emergency_fund_months_is_zero` (`currency`, `months`) | That currency's emergency fund of some months comes to 0, since no recurring outflow in it falls in those months. | The emergency fund is not protecting anything. Ask for a fixed one. |
+| `emergency_fund_months_is_zero` (`currency`, `months`) | That currency's emergency fund of some months comes to 0, since no recurring `must_pay` or `essentials` outflow in it falls in those months. | The emergency fund is not protecting anything. Ask for a fixed one, or whether some `flexible` item is essential. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
 | `goal_overdue` (`goal`, `due_on`) | A goal's due date has passed with money still to find. | Ask whether it is done (`completed: true`), moved (a new `due_on`), or still owed. |
@@ -868,7 +869,9 @@ entry), so `read` may call it. A token with grants needs `all` at
 `transactions`, as for the forecast. The body, every field optional:
 
 - `items`: up to 50 hypothetical items, written like planned items except that
-  `category` is optional and there is no `active` or `notes`. Each
+  `category` is optional and there is no `active` or `notes`. A `tier` follows the same
+  rules and defaults, so a months emergency fund counts a hypothetical item as it would
+  a stored one. Each
   answers in `items` and `months` with `source: {"kind": "hypothetical",
   "index": n}`, `n` being its position in your list. This month's spending
   neither reduces nor pays them.

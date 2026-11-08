@@ -321,11 +321,12 @@ fn hint_sentence(
     }
 }
 
-/// An emergency fund of some months of recurring outflows that came to 0.
+/// An emergency fund of some months of recurring must pay and essentials outflows that came
+/// to 0.
 fn zero_emergency_fund_sentence(fund_months: u8, currency: Currency) -> String {
     format!(
-        "The emergency fund in {1} is {0} of recurring outflows, and that comes to 0, since none \
-         are planned in {1}. Nothing is held back in that currency, so what could be invested \
+        "The emergency fund in {1} is {0} of recurring must pay and essentials outflows, and \
+         that comes to 0, since none are planned in {1}. Nothing is held back in that currency, so what could be invested \
          may be overstated.",
         months(fund_months),
         currency.as_str(),

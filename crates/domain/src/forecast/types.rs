@@ -19,7 +19,7 @@ use crate::ids::{
 use crate::money::{Currency, Money};
 use crate::plan::{
     CalendarMonth, EmergencyFund, EmergencyFunds, PlanDirection, PlanItemType, PlanSchedule,
-    PlanSpending, SettlementKind,
+    PlanSpending, PlanTier, SettlementKind,
 };
 use crate::transfer_rate::CrossCurrencyLink;
 
@@ -134,6 +134,8 @@ pub struct ItemInput {
     /// Whether this month's spending reduces it: `None` unless a recurring
     /// outflow, and a recurring outflow without one is a bill.
     pub spending: Option<PlanSpending>,
+    /// Which tier an outflow's money is set in; `None` for income.
+    pub tier: Option<PlanTier>,
     /// Spending linked to a goal, positive for money spent. 0 for anything else.
     pub goal_spent_minor: i64,
     /// Whether what is linked to this goal is on both the household's accounts and an account
@@ -647,7 +649,8 @@ pub enum Caution {
     },
     /// A closed card still owes money, which counts against cash.
     ClosedLiabilityOwing { account: AccountId, balance: Money },
-    /// This currency's emergency fund of some months of recurring outflows came to 0:
+    /// This currency's emergency fund of some months of recurring must pay and essentials
+    /// outflows came to 0:
     /// a silent emergency fund of 0 would overstate the surplus.
     EmergencyFundMonthsIsZero { currency: Currency, months: u8 },
     /// A short-term liability shows money in hand, perhaps entered with the

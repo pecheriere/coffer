@@ -105,7 +105,8 @@ pub(super) async fn update(
     tag = tags::HOUSEHOLD,
     description = "Sets how much cash to keep untouched in this currency, replacing any target \
                    it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months \
-                   (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows, \
+                   (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows \
+                   whose `tier` is `must_pay` or `essentials`, \
                    counted from a forecast's `as_of`. A forecast applies it to that currency's \
                    totals only, and has no number while a currency in use has none. A currency \
                    the household doesn't use yet may have one; it changes no answer until it is \

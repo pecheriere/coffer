@@ -21,7 +21,8 @@ pub enum EmergencyFundTarget {
         )]
         minor_units: i64,
     },
-    /// This many months, 1 to 60, of the currency's planned recurring outflows.
+    /// This many months, 1 to 60, of the currency's planned recurring outflows whose tier is
+    /// must pay or essentials.
     MonthsOfOutflows {
         #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 60))]
         months: u8,

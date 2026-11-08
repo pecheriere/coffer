@@ -2300,7 +2300,7 @@
           "forecast"
         ],
         "summary": "The cash forecast.",
-        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the emergency fund, minus any income counted. Each currency has its own emergency fund target (`setEmergencyFund`), applied only to that currency's totals: a fixed amount, or some months of that currency's recurring outflows, from `as_of`, whatever the horizon. `emergency_funds` lists the targets of the currencies in `totals`.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a currency in use with no emergency fund (`emergency_fund_not_set`, naming it) or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
+        "description": "How much cash the household needs over the window, and how much above that could be invested: `surplus` is `cash_available` minus `cash_needed`, and `cash_needed` is the planned outflows, plus the goals, plus the emergency fund, minus any income counted. Each currency has its own emergency fund target (`setEmergencyFund`), applied only to that currency's totals: a fixed amount, or some months of that currency's recurring `must_pay` and `essentials` outflows, from `as_of`, whatever the horizon. `emergency_funds` lists the targets of the currencies in `totals`.\n\n`status` says how far to trust it. `firm` is a number with nothing to warn about. `provisional` is a number with `cautions`, each saying what might change it. `unavailable` is no number: `surplus` is `null` and `blockers` say why, such as a currency in use with no emergency fund (`emergency_fund_not_set`, naming it) or an account without a balance. Several currencies are never netted: `surplus` is `null`, with the blocker `mixed_currencies`, and each row of `totals` has its own.\n\nA planned amount is a positive magnitude with a `direction`. Balances, `cash_available`, `projected_cash` and `surplus` carry a sign: a card owing money is negative, and a negative `surplus` is a shortfall. Amounts are integer minor units.\n\nA bill or one-off a person settled for a month (`settlePlanItem`) counts as nothing in that month: no gross, no gap, no caution. Settled as `paid`, it keeps what it was paid with off its category's budgets, never so far that settling raises the need. `settled` lists it with its amount, so no number silently differs, and it doesn't make the status `provisional` of itself, since a person decided.\n\nEvery number traces to its lines: `accounts` says which balances counted, `items` what each planned item added, `months` the same by calendar month. A stored budget counts its whole month: its occurrences earlier in `as_of`'s month are on its line and in the first month, less the spending bills and one-offs dated up to `as_of` leave in its category. This month's spending counts only where a balance already shows it: posted, not pending, on or before its account's balance date, and not removed or revised by its provider, though a refund flagged so still counts. Money out a balance may not show raises the caution `spending_newer_than_balance`, with `total` for what posted after the balance's date and `pending` for what has not posted, and leaves the number as it is: the forecast assumes each balance already reflects them, so where one doesn't, the cash available is overstated by up to those amounts. Only `expense` spending lowers what a goal needs, so moving money to savings for a goal doesn't.\n\nNeeds `read`; a token with account grants also needs `all` at `transactions`, since the answer sums every account. The refusal is the same whatever exists.",
         "operationId": "getForecast",
         "parameters": [
           {
@@ -3112,7 +3112,7 @@
           "household"
         ],
         "summary": "Sets one currency's emergency fund.",
-        "description": "Sets how much cash to keep untouched in this currency, replacing any target it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows, counted from a forecast's `as_of`. A forecast applies it to that currency's totals only, and has no number while a currency in use has none. A currency the household doesn't use yet may have one; it changes no answer until it is in use. Audited with the old and new target; the same target again writes nothing. A target out of range is 422; an unknown code, or a code not written as three capital letters, is 400.\n\nNeeds `admin`, whatever the token's account grants. The answer is the settings as `getHouseholdSettings` shows them to that token, so a token below `all` at `transactions` reads `emergency_funds` as `null`.",
+        "description": "Sets how much cash to keep untouched in this currency, replacing any target it had: a fixed amount in its minor units (`fixed`, 0 to 10^15), or some months (`months_of_outflows`, 1 to 60) of that currency's planned recurring outflows whose `tier` is `must_pay` or `essentials`, counted from a forecast's `as_of`. A forecast applies it to that currency's totals only, and has no number while a currency in use has none. A currency the household doesn't use yet may have one; it changes no answer until it is in use. Audited with the old and new target; the same target again writes nothing. A target out of range is 422; an unknown code, or a code not written as three capital letters, is 400.\n\nNeeds `admin`, whatever the token's account grants. The answer is the settings as `getHouseholdSettings` shows them to that token, so a token below `all` at `transactions` reads `emergency_funds` as `null`.",
         "operationId": "setEmergencyFund",
         "parameters": [
           {
@@ -9582,7 +9582,7 @@
           },
           {
             "type": "object",
-            "description": "This currency's emergency fund of some months of recurring outflows came to 0:\na silent emergency fund of 0 would overstate the surplus.",
+            "description": "This currency's emergency fund of some months of recurring must pay and essentials\noutflows came to 0:\na silent emergency fund of 0 would overstate the surplus.",
             "required": [
               "currency",
               "months",
@@ -10128,7 +10128,7 @@
           },
           {
             "type": "object",
-            "description": "This many months, 1 to 60, of the currency's planned recurring outflows.",
+            "description": "This many months, 1 to 60, of the currency's planned recurring outflows whose tier is\nmust pay or essentials.",
             "required": [
               "months",
               "kind"
@@ -10749,6 +10749,17 @@
               {
                 "$ref": "#/components/schemas/PlanSpending",
                 "description": "Only on a recurring outflow, where it is `bill` by default. This month's spending\nreduces no hypothetical item, whichever it is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanTier",
+                "description": "The tier of an outflow, by the same rules and defaults as a planned item's: a\nmonths emergency fund counts recurring `must_pay` and `essentials` outflows only."
               },
               {
                 "type": "null"
