@@ -47,4 +47,5 @@ mod staging_seed;
 mod sync_engine;
 mod transactions_api;
 mod transactions_core;
+mod transactions_page;
 mod transfer_links;

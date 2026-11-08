@@ -24,6 +24,7 @@ mod net_worth;
 mod plaid;
 mod plan;
 mod setup;
+mod transactions;
 #[cfg(test)]
 mod word_checks;
 
@@ -81,6 +82,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(plan::routes())
         .merge(categories::routes())
         .merge(net_worth::routes())
+        .merge(transactions::routes())
         .merge(plaid)
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
