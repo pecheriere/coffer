@@ -6,7 +6,7 @@ use coffer_domain::accounts::AccountKind;
 use coffer_server::testkit::captured_log_text;
 
 use super::bind::create_path;
-use super::{ACCOUNTS_FIRST, assert_inline_free, world};
+use super::{ACCOUNTS_FIRST, assert_inline_free, bound_to, world};
 
 const SETUP_ONE: &str = "1 new bank account needs setting up.";
 const SETUP_TWO: &str = "2 new bank accounts need setting up.";
@@ -182,5 +182,5 @@ async fn the_first_sync_walks_through_the_accounts_it_found() {
         .await;
     let done = world.admin.get("/connections").await;
     assert!(!done.body.contains("Set up your accounts"));
-    assert!(done.body.contains("Bound to A"));
+    assert!(bound_to(&done.body, "A"));
 }

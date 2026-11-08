@@ -27,6 +27,7 @@ pub use bill_matching::{
     BILL_AMOUNT_TOLERANCE_PERCENT, BILL_EARLY_PAYMENT_DAYS, BILL_LOOK_BACK_MONTHS,
     REFUND_UNDOES_FROM_PERCENT, REFUND_UNDOES_TO_PERCENT, bills_looked_at_from, payments_read_from,
 };
+pub use lines::{CountingFacts, left_out_of_forecast};
 pub use types::{
     AccountInput, AccountLine, BalanceInput, Blocker, CategorySpent, Caution, CurrencyTotals,
     FeedAlert, FeedProblem, FeedProblemReason, FeedStatus, Forecast, ForecastError, ForecastInput,

@@ -163,6 +163,15 @@ pub enum LiquidityClass {
 }
 
 impl LiquidityClass {
+    /// Every class, from the most spendable to the longest owed, the order a form lists them.
+    pub const ALL: [Self; 5] = [
+        Self::Cash,
+        Self::ShortTermLiability,
+        Self::Invested,
+        Self::Illiquid,
+        Self::LongTermLiability,
+    ];
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -386,13 +395,7 @@ mod tests {
             "CreditCard".parse::<AccountKind>(),
             Err(AccountError::UnknownKind)
         );
-        for class in [
-            LiquidityClass::Cash,
-            LiquidityClass::ShortTermLiability,
-            LiquidityClass::Invested,
-            LiquidityClass::Illiquid,
-            LiquidityClass::LongTermLiability,
-        ] {
+        for class in LiquidityClass::ALL {
             assert_eq!(class.as_str().parse::<LiquidityClass>(), Ok(class));
             assert_eq!(
                 serde_json::to_string(&class).unwrap(),
@@ -439,6 +442,15 @@ mod tests {
         assert_eq!(AccountKind::Education.as_str(), "education");
         assert_eq!(AccountKind::Custodial.as_str(), "custodial");
         assert_eq!(AccountKind::Charitable.as_str(), "charitable");
+    }
+
+    #[test]
+    fn every_class_is_listed_once_and_every_kind_s_default_among_them() {
+        let listed: std::collections::HashSet<_> = LiquidityClass::ALL.into_iter().collect();
+        assert_eq!(listed.len(), LiquidityClass::ALL.len());
+        for kind in AccountKind::ALL {
+            assert!(listed.contains(&default_liquidity(kind)), "{kind:?}");
+        }
     }
 
     #[test]

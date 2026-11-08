@@ -359,7 +359,7 @@ pub(super) fn no_amount_sentence(name: &str, conversion: Option<ConversionState>
 }
 
 /// What's in a liquidity class, in the words of a person rather than an accountant.
-pub(super) fn liquidity_name(class: LiquidityClass) -> &'static str {
+pub(in crate::http::pages) fn liquidity_name(class: LiquidityClass) -> &'static str {
     match class {
         LiquidityClass::Cash => "Cash",
         LiquidityClass::ShortTermLiability => "Cards and short-term debts",
