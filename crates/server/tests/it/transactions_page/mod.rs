@@ -1,7 +1,7 @@
 //! The transactions pages through the real router: the list and its filters, the review queue,
-//! one transaction's page and its forms, transfer links, possible duplicates, batch review, and
-//! transactions entered by hand. Every write is read back through the API and found in the audit
-//! log.
+//! one transaction's page and its forms, transfer links, possible duplicates, batch review, rules'
+//! guesses confirmed at once, and transactions entered by hand. Every write is read back through
+//! the API and found in the audit log.
 
 #![expect(
     clippy::unwrap_used,
@@ -10,6 +10,7 @@
 
 mod browse;
 mod duplicates;
+mod guesses;
 mod links;
 mod manual;
 mod review;

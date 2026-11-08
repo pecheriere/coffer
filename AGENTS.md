@@ -54,8 +54,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   account's page with its balances, with forms to create, change, close and reopen an account and
   record a balance (`fields.rs` holds the words and fields every account form uses, Connections'
   too), whose `transactions/` is the transactions list and
-  its review queue (`list.rs`, `filters.rs`) and one transaction's page (`detail.rs`), with the forms
-  that review, file, split (`splits.rs`) and edit one or mark several reviewed (`edit.rs`), link it
+  its review queue (`list.rs`, `filters.rs`, under how many wait to be checked) and one transaction's
+  page (`detail.rs`), with the forms that review, file, split (`splits.rs`) and edit one or mark
+  several reviewed (`edit.rs`), confirm the guesses rules made on the list's page (`guesses.rs`), link it
   with its other leg (`links.rs`), merge or dismiss its possible duplicates (`duplicates.rs`) and enter or
   delete one by hand (`manual.rs`), each through the ledger call its API operation makes, and whose `rules/` is the rules page (the list and
   the add form in `mod.rs` and `form.rs`; in `detail.rs` a rule's page, with what running it would
