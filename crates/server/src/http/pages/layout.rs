@@ -25,6 +25,7 @@ pub struct Viewer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nav {
     Account,
+    Transactions,
     Forecast,
     NetWorth,
     Connections,
@@ -147,6 +148,7 @@ fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
             }
             nav.nav aria-label="Main" {
                 (link(Nav::Account, "/account", "Account"))
+                (link(Nav::Transactions, "/transactions", "Transactions"))
                 (link(Nav::Forecast, "/forecast", "Forecast"))
                 (link(Nav::NetWorth, "/net-worth", "Net worth"))
                 (link(Nav::Connections, "/connections", "Connections"))
