@@ -10,8 +10,10 @@
 //! sent as a referrer. Browser reports log a route template only.
 
 mod account;
+mod accounts;
 mod admin;
 mod amounts;
+mod categories;
 mod connections;
 mod forecast;
 mod grants;
@@ -69,11 +71,13 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(setup::routes())
         .merge(login::routes())
         .merge(account::routes())
+        .merge(accounts::routes())
         .merge(grants::routes())
         .merge(admin::routes())
         .merge(connections::routes())
         .merge(household::routes())
         .merge(forecast::routes())
+        .merge(categories::routes())
         .merge(net_worth::routes())
         .merge(rules::routes())
         .merge(plaid)

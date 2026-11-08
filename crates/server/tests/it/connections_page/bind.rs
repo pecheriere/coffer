@@ -15,7 +15,7 @@ use coffer_store::{
     ProviderAccountUpsert, TransactionFilter,
 };
 
-use super::{World, assert_inline_free, world};
+use super::{World, assert_inline_free, bound_to, world};
 
 pub(super) fn create_path(id: ProviderAccountId) -> String {
     format!("/connections/provider-accounts/{id}/create-account")
@@ -181,7 +181,7 @@ async fn forms_appear_for_an_unbound_account_only() {
             .contains(&format!("action=\"{}\"", create_path(checking.id))),
         "a bound account offers no form"
     );
-    assert!(after.body.contains("Bound to Everyday"));
+    assert!(bound_to(&after.body, "Everyday"));
     assert_eq!(
         after.body.matches("Not bound").count(),
         1,
@@ -322,14 +322,10 @@ async fn link_to_an_existing_account_moves_held_records() {
         .and_then(|account| account.latest_balance.as_ref())
         .unwrap();
     assert_eq!(balance.balance.minor_units, 245_017);
-    assert!(
-        world
-            .admin
-            .get("/connections")
-            .await
-            .body
-            .contains("Bound to Joint")
-    );
+    assert!(bound_to(
+        &world.admin.get("/connections").await.body,
+        "Joint"
+    ));
 }
 
 #[tokio::test]
