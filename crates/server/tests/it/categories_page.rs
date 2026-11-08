@@ -7,7 +7,7 @@
 )]
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{Method, Request, StatusCode, header};
 use coffer_domain::audit::AuditActor;
 use coffer_domain::identity::{Actor, Role, Scope, TokenName, Via};
 use coffer_domain::ids::MemberId;
@@ -16,16 +16,18 @@ use coffer_server::testkit::TestServer;
 use coffer_server::testkit::browser::{Browser, Reply};
 use coffer_store::{AuditEvent, AuditFilter, PageRequest};
 use secrecy::ExposeSecret as _;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const PAGE: &str = "/categories";
 const GROUPS: &str = "/category-groups";
 
-/// A household with an admin, alice, and a token that reads what the API answers.
+/// A household with an admin, alice, a token that reads what the API answers and one that
+/// writes through it.
 pub(crate) struct World {
     pub(crate) server: TestServer,
     pub(crate) alice: Actor,
     reader: SecretToken,
+    writer: SecretToken,
 }
 
 pub(crate) async fn world() -> World {
@@ -48,10 +50,22 @@ pub(crate) async fn world() -> World {
         )
         .await
         .unwrap();
+    let (_, writer) = server
+        .agent_tokens
+        .create(
+            &alice,
+            TokenName::parse("writer").unwrap(),
+            Scope::Write,
+            None,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
     World {
         server,
         alice,
         reader,
+        writer,
     }
 }
 
@@ -97,6 +111,30 @@ impl World {
         let reply = Browser::new(&self.server).send(request).await;
         assert_eq!(reply.status, StatusCode::OK);
         reply.json()
+    }
+
+    /// Creates a monthly planned outflow on `category` through the API.
+    async fn plan_item(&self, category: &str) {
+        let body = json!({
+            "name": "Rent",
+            "category": category,
+            "amount": {"minor_units": 120_000, "currency": "USD"},
+            "direction": "outflow",
+            "schedule": {"type": "recurring", "every": 1, "unit": "months",
+                         "anchor_on": "2027-01-01"},
+        });
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/plan-items")
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", self.writer.expose_secret()),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let reply = Browser::new(&self.server).send(request).await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
     }
 
     /// The API's category groups.
@@ -313,6 +351,43 @@ async fn a_member_manages_categories_as_the_api_lets_them() {
     assert_eq!(world.audit("category").await.len(), 1);
 }
 
+#[tokio::test]
+async fn a_category_a_planned_item_uses_keeps_its_kind() {
+    let world = world().await;
+    let mut admin = world.admin().await;
+    let home = add_group(&world, &mut admin, "Home").await;
+    let rent = add_category(&world, &mut admin, &home, "Rent", "expense").await;
+    world.plan_item(&rent).await;
+    let audited = world.audit("category").await.len();
+    let lock =
+        "Its kind can't change while a planned item uses it or spending in it is linked to a goal.";
+    assert!(
+        admin.get(PAGE).await.body.contains(lock),
+        "the form says so first"
+    );
+
+    let fields = [
+        ("name", "Rent"),
+        ("kind", "income"),
+        ("group", home.as_str()),
+        ("position", "0"),
+    ];
+    let reply = post(&mut admin, &format!("{PAGE}/{rent}"), &fields).await;
+
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        reply.body.contains(lock),
+        "the same words as the form's hint: {}",
+        reply.body
+    );
+    assert_eq!(category(&world, "Rent").await["kind"], "expense");
+    assert_eq!(
+        world.audit("category").await.len(),
+        audited,
+        "nothing audited"
+    );
+}
+
 /// Where a form goes, what it sends, and what the refusal must say.
 type Refusal<'a> = (&'a str, Vec<(&'a str, &'a str)>, &'a str);
 
@@ -324,9 +399,10 @@ async fn refusals_are_fixed_text_that_never_echoes_the_input() {
     let rent = add_category(&world, &mut admin, &home, "Rent", "expense").await;
     let marker = format!("<b>MARKER</b>{}", "x".repeat(100));
     let path = format!("{PAGE}/{rent}");
+    let group_path = format!("{GROUPS}/{home}");
     let unknown_group = "0190f5f0-0000-7000-8000-000000000000";
 
-    let cases: [Refusal<'_>; 6] = [
+    let cases: [Refusal<'_>; 11] = [
         (GROUPS, vec![("name", &marker)], "1 to 100 characters"),
         (
             PAGE,
@@ -362,6 +438,36 @@ async fn refusals_are_fixed_text_that_never_echoes_the_input() {
             ],
             "whole number",
         ),
+        (
+            &path,
+            vec![
+                ("name", "Rent"),
+                ("kind", "expense"),
+                ("group", &home),
+                ("position", "10001"),
+            ],
+            "at most 10000",
+        ),
+        (
+            &group_path,
+            vec![("name", "Home"), ("position", "MARKER")],
+            "whole number",
+        ),
+        (
+            &group_path,
+            vec![("name", "Home"), ("position", "10001")],
+            "at most 10000",
+        ),
+        (
+            &format!("{path}/archive"),
+            vec![("archived", "MARKER")],
+            "not an answer the form offers",
+        ),
+        (
+            &format!("{group_path}/archive"),
+            vec![("archived", "MARKER")],
+            "not an answer the form offers",
+        ),
     ];
     for (path, fields, reason) in cases {
         let reply = post(&mut admin, path, &fields).await;
@@ -369,22 +475,6 @@ async fn refusals_are_fixed_text_that_never_echoes_the_input() {
         assert!(reply.body.contains(reason), "{reason}");
         assert!(!reply.body.contains("MARKER"), "does not echo");
     }
-    let too_far = [
-        ("name", "Rent"),
-        ("kind", "expense"),
-        ("group", home.as_str()),
-        ("position", "10001"),
-    ];
-    let reply = post(&mut admin, &path, &too_far).await;
-    assert!(reply.body.contains("at most 10000"), "the ledger's limit");
-
-    let reply = post(
-        &mut admin,
-        &format!("{path}/archive"),
-        &[("archived", "maybe")],
-    )
-    .await;
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let reply = post(&mut admin, GROUPS, &[("name", "Food"), ("extra", "1")]).await;
     assert_eq!(
@@ -396,16 +486,45 @@ async fn refusals_are_fixed_text_that_never_echoes_the_input() {
         .post_form(GROUPS, &[("csrf", "forged"), ("name", "Food")])
         .await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "a forged token");
-    let reply = post(
-        &mut admin,
-        &format!("{PAGE}/MARKER/archive"),
-        &[("archived", "yes")],
-    )
-    .await;
-    assert_eq!(reply.status, StatusCode::NOT_FOUND);
-
     assert_eq!(world.groups().await.len(), 1, "nothing written");
     assert_eq!(category(&world, "Rent").await["position"], 0);
     assert_eq!(world.audit("category_group").await.len(), 1);
     assert_eq!(world.audit("category").await.len(), 1);
+}
+
+#[tokio::test]
+async fn unknown_ids_are_not_found_and_not_echoed() {
+    let world = world().await;
+    let mut admin = world.admin().await;
+    let home = add_group(&world, &mut admin, "Home").await;
+    add_category(&world, &mut admin, &home, "Rent", "expense").await;
+
+    let unknown = "0190f5f0-0000-7000-8000-00000000abcd";
+    let category_form = [
+        ("name", "Rent"),
+        ("kind", "expense"),
+        ("group", home.as_str()),
+        ("position", "0"),
+    ];
+    let group_form = [("name", "Home"), ("position", "0")];
+    let archive = [("archived", "yes")];
+    let missing: [(String, &[(&str, &str)]); 5] = [
+        (format!("{PAGE}/{unknown}"), &category_form),
+        (format!("{PAGE}/{unknown}/archive"), &archive),
+        (format!("{GROUPS}/{unknown}"), &group_form),
+        (format!("{GROUPS}/{unknown}/archive"), &archive),
+        (format!("{PAGE}/{unknown}-not-an-id/archive"), &archive),
+    ];
+    for (path, fields) in missing {
+        let reply = post(&mut admin, &path, fields).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(!reply.body.contains(unknown), "does not echo {path}");
+    }
+
+    assert_eq!(
+        world.audit("category_group").await.len(),
+        1,
+        "nothing written"
+    );
+    assert_eq!(world.audit("category").await.len(), 1, "nothing written");
 }

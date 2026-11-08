@@ -10,13 +10,13 @@ use coffer_domain::ids::{CategoryGroupId, CategoryId};
 use coffer_domain::transactions::CategoryKind;
 use serde::Deserialize;
 
-use super::PAGE;
+use super::{KIND_LOCKED, PAGE};
 use crate::http::AppState;
 use crate::http::pages::{PageError, PageForm, PageSession};
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::categories::{
-    CategoryGroupInput, CategoryGroupPatch, CategoryInput, CategoryPatch,
+    CategoryGroupInput, CategoryGroupPatch, CategoryInput, CategoryPatch, KIND_IN_USE,
 };
 
 /// Unknown fields are refused: a forged form fails whole.
@@ -246,7 +246,11 @@ pub(super) async fn update_category(
         .ledger
         .update_category(&actor, id, patch)
         .await
-        .map_err(refused)?;
+        .map_err(|err| match err {
+            // The same words as the hint on the form.
+            LedgerError::Invalid(KIND_IN_USE) => PageError::invalid(KIND_LOCKED),
+            other => refused(other),
+        })?;
     Ok(back_to(category.group))
 }
 
