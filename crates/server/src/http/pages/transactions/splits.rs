@@ -67,9 +67,9 @@ pub(super) fn category_form(transaction: &TransactionView, names: &Names, csrf: 
                     option value=(NO_CATEGORY) selected[transaction.splits.is_empty()] {
                         "Uncategorized"
                     }
-                    @for category in names.offered_categories() {
+                    @for category in names.offered_categories(current) {
                         option value=(category.id) selected[current == Some(category.id)] {
-                            (category.label)
+                            (category.choice_label())
                         }
                     }
                 }
@@ -118,10 +118,10 @@ pub(super) fn splits_form(transaction: &TransactionView, names: &Names, csrf: &s
                             "Category"
                             select.input name={ "category_" (index) } {
                                 option value="" { "None" }
-                                @for category in names.offered_categories() {
+                                @for category in names.offered_categories(split.map(|split| split.category)) {
                                     option value=(category.id)
                                         selected[split.is_some_and(|split| split.category == category.id)] {
-                                        (category.label)
+                                        (category.choice_label())
                                     }
                                 }
                             }

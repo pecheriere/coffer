@@ -3,12 +3,14 @@
 //! entered by hand.
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use coffer_domain::ids::TransactionId;
 use coffer_domain::transactions::{ReviewStatus, TransactionOrigin};
 use maud::{Markup, html};
 
 use super::splits::{category_form, splits_form};
-use super::{LIST, Names, chips, detail_path, refused, title, transaction_id};
+use super::{LIST, Names, chips, detail_path, filed_as, refused, title, transaction_id};
 use crate::http::AppState;
 use crate::http::pages::account::viewer;
 use crate::http::pages::amounts::{day, money};
@@ -21,44 +23,76 @@ pub(super) async fn page(
     session: PageSession,
     Path(id): Path<String>,
 ) -> Result<Response, PageError> {
-    let id = transaction_id(&id)?;
+    render(&state, &session, transaction_id(&id)?, None).await
+}
+
+/// The page as the transaction is now; with `notice`, a 409 that says it above everything.
+pub(super) async fn render(
+    state: &AppState,
+    session: &PageSession,
+    id: TransactionId,
+    notice: Option<&str>,
+) -> Result<Response, PageError> {
     let actor = session.actor();
     let transaction = state
         .ledger
         .get_transaction(&actor, id)
         .await
         .map_err(refused)?;
-    let names = Names::read(&state, &actor).await?;
-    let viewer = viewer(&state, &session).await;
+    let names = Names::read(state, &actor).await?;
+    let viewer = viewer(state, session).await;
     let frame = Frame {
-        look: session.look(&state).await,
+        look: session.look(state).await,
         viewer: Some(&viewer),
         current: Some(Nav::Transactions),
         narrow: false,
     };
-    let content = content(&transaction, &names, &viewer.csrf);
-    Ok(frame_page(&frame, title(&transaction), &content).into_response())
+    let content = content(&transaction, &names, &viewer.csrf, notice);
+    let page = frame_page(&frame, title(&transaction), &content);
+    Ok(match notice {
+        Some(_) => (StatusCode::CONFLICT, page).into_response(),
+        None => page.into_response(),
+    })
 }
 
-fn content(transaction: &TransactionView, names: &Names, csrf: &str) -> Markup {
+/// The page. Forms the service would refuse, for an actor who can't change the transaction's
+/// account, are left out, and what they hold is shown as text.
+fn content(
+    transaction: &TransactionView,
+    names: &Names,
+    csrf: &str,
+    notice: Option<&str>,
+) -> Markup {
+    let writes = names.may_write(transaction.account);
     html! {
         p { a href=(LIST) { "All transactions" } }
         h1 { (title(transaction)) (chips(transaction)) }
+        @if let Some(notice) = notice {
+            p.notice role="alert" { (notice) }
+        }
         (summary(transaction, names))
-        (review_card(transaction, names, csrf))
+        (review_card(transaction, names, writes.then_some(csrf)))
         section.card id="category" {
             h2 { "Filed as" }
             @if transaction.splits.len() > 1 {
                 (parts(transaction, names))
+            } @else if !writes {
+                p { (filed_as(transaction, names)) }
             }
             @if let Some(by) = &transaction.categorized_by {
                 p.fine { "Last filed by " (names.by(by)) "." }
             }
-            (category_form(transaction, names, csrf))
-            (splits_form(transaction, names, csrf))
+            @if writes {
+                (category_form(transaction, names, csrf))
+                (splits_form(transaction, names, csrf))
+            }
         }
-        (details_card(transaction, names, csrf))
-        @if transaction.origin == TransactionOrigin::Manual {
+        @if writes {
+            (details_card(transaction, names, csrf))
+        } @else {
+            (details_text(transaction, names))
+        }
+        @if writes && transaction.origin == TransactionOrigin::Manual {
             (delete_card(transaction, csrf))
         }
     }
@@ -115,24 +149,27 @@ fn parts(transaction: &TransactionView, names: &Names) -> Markup {
     }
 }
 
-fn review_card(transaction: &TransactionView, names: &Names, csrf: &str) -> Markup {
+/// Who reviewed it, and with `csrf`, the form that changes that.
+fn review_card(transaction: &TransactionView, names: &Names, csrf: Option<&str>) -> Markup {
     let reviewed = transaction.review == ReviewStatus::Reviewed;
     html! {
         section.card id="review" {
             h2 { "Review" }
-            @if let (true, Some(by)) = (reviewed, &transaction.reviewed_by) {
-                p { "Reviewed by " (names.by(by)) "." }
-            } @else {
-                p { "Nobody has reviewed it yet." }
+            @match (reviewed, &transaction.reviewed_by) {
+                (true, Some(by)) => p { "Reviewed by " (names.by(by)) "." },
+                (true, None) => p { "Reviewed." },
+                (false, _) => p { "Nobody has reviewed it yet." },
             }
-            form method="post" action={ (detail_path(transaction.id)) "/review" } {
-                (csrf_field(csrf))
-                @if reviewed {
-                    p.fine { "Putting it back to review forgets who reviewed it. Nothing else changes." }
-                    button.btn type="submit" name="review" value="unreviewed" { "Put it back to review" }
-                } @else {
-                    p.fine { "Marking it reviewed records that you did. Nothing else changes." }
-                    button.btn.btn-primary type="submit" name="review" value="reviewed" { "Mark it reviewed" }
+            @if let Some(csrf) = csrf {
+                form method="post" action={ (detail_path(transaction.id)) "/review" } {
+                    (csrf_field(csrf))
+                    @if reviewed {
+                        p.fine { "Putting it back to review forgets who reviewed it. Nothing else changes." }
+                        button.btn type="submit" name="review" value="unreviewed" { "Put it back to review" }
+                    } @else {
+                        p.fine { "Marking it reviewed records that you did. Nothing else changes." }
+                        button.btn.btn-primary type="submit" name="review" value="reviewed" { "Mark it reviewed" }
+                    }
                 }
             }
         }
@@ -145,6 +182,12 @@ fn details_card(transaction: &TransactionView, names: &Names, csrf: &str) -> Mar
             h2 { "Payee, notes and who it's for" }
             form method="post" action={ (detail_path(transaction.id)) "/details" } {
                 (csrf_field(csrf))
+                // What the page showed, so a save changes only what was changed here, and is
+                // refused when that changed meanwhile.
+                input type="hidden" name="payee_was" value=(transaction.payee.as_deref().unwrap_or_default());
+                input type="hidden" name="notes_was" value=(transaction.notes.as_deref().unwrap_or_default());
+                input type="hidden" name="assignee_was"
+                    value=(transaction.assignee.map(|member| member.to_string()).unwrap_or_default());
                 label.field {
                     "Payee"
                     input.input type="text" name="payee" maxlength="200" autocomplete="off"
@@ -179,6 +222,25 @@ fn details_card(transaction: &TransactionView, names: &Names, csrf: &str) -> Mar
                     p.fine { "Last assigned by " (names.by(by)) "." }
                 }
                 button.btn.btn-primary type="submit" { "Save" }
+            }
+        }
+    }
+}
+
+/// The payee, notes and assignee, for an actor who can't change them.
+fn details_text(transaction: &TransactionView, names: &Names) -> Markup {
+    html! {
+        section.card id="details" {
+            h2 { "Payee, notes and who it's for" }
+            table.sums {
+                tbody {
+                    tr { th scope="row" { "Payee" } td { (transaction.payee.as_deref().unwrap_or("None")) } }
+                    tr { th scope="row" { "Notes" } td { (transaction.notes.as_deref().unwrap_or("None")) } }
+                    tr {
+                        th scope="row" { "Assigned to" }
+                        td { (transaction.assignee.map_or("Nobody", |member| names.member(member))) }
+                    }
+                }
             }
         }
     }
