@@ -162,7 +162,7 @@ async fn a_member_adds_and_runs_a_rule_as_the_api_allows() {
         .post_form(&format!("/rules/{rule}/apply"), &[("csrf", &csrf)])
         .await;
 
-    assert_eq!(ran.status, StatusCode::OK);
+    assert_eq!(ran.status, StatusCode::SEE_OTHER);
     assert_eq!(
         filed_under(&world.read_transaction(open).await),
         Some(groceries_text)

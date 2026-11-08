@@ -4,7 +4,7 @@
 use axum::http::{StatusCode, header};
 use serde_json::json;
 
-use super::{by_member, csrf_of, filed_under, world};
+use super::{by_member, change_form, csrf_of, filed_under, post_owned, world};
 
 #[tokio::test]
 async fn the_add_form_creates_the_rule_it_describes() {
@@ -84,25 +84,11 @@ async fn the_change_form_changes_what_it_sends_and_leaves_what_the_rule_did() {
     assert!(form.contains(r#"name="enabled" value="yes" checked"#));
 
     let groceries_text = groceries.to_string();
-    let changed = world
-        .browser
-        .post_form(
-            &format!("/rules/{rule}"),
-            &[
-                ("csrf", &page.csrf()),
-                ("match_kind", "contains"),
-                ("pattern", "corner"),
-                ("account", ""),
-                ("amount_min", ""),
-                ("amount_max", ""),
-                ("amount_currency", ""),
-                ("category", &groceries_text),
-                ("assignee", ""),
-                ("position", ""),
-                ("enabled", "yes"),
-            ],
-        )
-        .await;
+    let fields = change_form(
+        &page,
+        &[("pattern", "corner"), ("assignee", ""), ("position", "")],
+    );
+    let changed = post_owned(&mut world.browser, &format!("/rules/{rule}"), &fields).await;
 
     assert_eq!(changed.status, StatusCode::SEE_OTHER);
     assert_eq!(changed.header(header::LOCATION), format!("/rules/{rule}"));
@@ -136,7 +122,7 @@ async fn the_delete_form_deletes_the_rule_and_leaves_what_it_filled() {
         .browser
         .post_form(&format!("/rules/{rule}/apply"), &[("csrf", &csrf)])
         .await;
-    assert_eq!(ran.status, StatusCode::OK);
+    assert_eq!(ran.status, StatusCode::SEE_OTHER);
 
     let deleted = world
         .browser

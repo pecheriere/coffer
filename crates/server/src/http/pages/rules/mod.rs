@@ -3,10 +3,12 @@
 //! ([`detail`]) showing what running it would change before it is run, with the forms that
 //! run it, take back what it filled, change it and delete it. Every read and write goes
 //! through the service the API uses, so who may do what and the audit stay in one place; the
-//! page only leaves out the forms a viewer could not use.
+//! page only leaves out the forms a viewer could not use, and the accounts it could not name.
 
+mod change;
 mod detail;
 mod form;
+mod runs;
 mod words;
 
 use std::collections::BTreeMap;
@@ -25,7 +27,6 @@ use super::account::viewer;
 use super::layout::{Frame, Nav, empty_state, page};
 use super::{PageError, PageSession};
 use crate::http::AppState;
-use crate::http::api::members::household_members;
 use crate::http::problem::Problem;
 use crate::ledger::LedgerError;
 use crate::ledger::categories::CategoryGroupView;
@@ -38,9 +39,11 @@ const PAGE: &str = "/rules";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(PAGE, get(rules_page).post(form::create))
-        .route("/rules/{id}", get(detail::rule_page).post(form::update))
-        .route("/rules/{id}/apply", post(detail::apply))
-        .route("/rules/{id}/undo", post(detail::undo))
+        .route("/rules/{id}", get(detail::rule_page).post(change::update))
+        .route("/rules/{id}/apply", post(runs::apply))
+        .route("/rules/{id}/ran", get(runs::ran))
+        .route("/rules/{id}/undo", post(runs::undo))
+        .route("/rules/{id}/taken-back", get(runs::taken_back))
         .route("/rules/{id}/delete", post(detail::delete))
 }
 
@@ -53,6 +56,8 @@ struct AccountName {
     name: String,
     currency: Currency,
     closed: bool,
+    /// Whether the viewer may give a rule this account, as the ledger decides.
+    writable: bool,
 }
 
 /// A member a rule can assign.
@@ -62,39 +67,59 @@ struct MemberName {
 }
 
 /// What the ids a rule holds are called, and what its form offers: read through the services
-/// the API uses, so a viewer sees only the accounts it may.
+/// the API uses, so a viewer sees only the accounts it may, and is offered only those the ledger
+/// would let it give a rule.
 struct Names {
     accounts: BTreeMap<AccountId, AccountName>,
+    /// Whether the viewer may make a rule for every account, as the ledger decides.
+    every_account: bool,
     groups: Vec<CategoryGroupView>,
     members: BTreeMap<MemberId, MemberName>,
 }
 
+/// Whether the ledger lets `actor` give a rule `account`, or every account for none. A refusal
+/// is an answer; any other failure is the page's.
+async fn may_give(
+    state: &AppState,
+    actor: &Actor,
+    account: Option<AccountId>,
+) -> Result<bool, PageError> {
+    match state.ledger.authorize_rule_input(actor, account).await {
+        Ok(()) => Ok(true),
+        Err(LedgerError::Denied(_)) => Ok(false),
+        Err(err) => Err(refused(err)),
+    }
+}
+
 impl Names {
     async fn load(state: &AppState, actor: &Actor) -> Result<Self, PageError> {
-        let accounts = state
+        let mut accounts = BTreeMap::new();
+        for account in state
             .ledger
             .list_accounts(actor, true)
             .await
             .map_err(refused)?
-            .into_iter()
-            .map(|account| {
-                let name = AccountName {
-                    name: account.name,
-                    currency: account.currency,
-                    closed: account.closed,
-                };
-                (account.id, name)
-            })
-            .collect();
+        {
+            let name = AccountName {
+                writable: may_give(state, actor, Some(account.id)).await?,
+                name: account.name,
+                currency: account.currency,
+                closed: account.closed,
+            };
+            accounts.insert(account.id, name);
+        }
+        let every_account = may_give(state, actor, None).await?;
         let groups = state
             .ledger
             .list_categories(actor)
             .await
             .map_err(refused)?
             .items;
-        let members = household_members(state, actor)
+        let members = state
+            .ledger
+            .list_members(actor)
             .await
-            .map_err(PageError)?
+            .map_err(refused)?
             .into_iter()
             .map(|member| {
                 let name = MemberName {
@@ -106,16 +131,30 @@ impl Names {
             .collect();
         Ok(Self {
             accounts,
+            every_account,
             groups,
             members,
         })
     }
 
-    /// The account's name, to go inside a sentence.
-    fn account(&self, id: AccountId) -> &str {
-        self.accounts
-            .get(&id)
-            .map_or("an account", |account| account.name.as_str())
+    /// The account's name linking to its page, or plain words for one the viewer can't see.
+    fn account_link(&self, id: AccountId) -> Markup {
+        html! {
+            @match self.accounts.get(&id) {
+                Some(account) => a href={ "/accounts/" (id) } { (account.name) },
+                None => "an account",
+            }
+        }
+    }
+
+    /// Where a rule applies: its account, linked, or every account.
+    fn scope(&self, account: Option<AccountId>, every: &str) -> Markup {
+        html! {
+            @match account {
+                Some(account) => (self.account_link(account)),
+                None => (every),
+            }
+        }
     }
 
     fn category(&self, id: CategoryId) -> &str {
@@ -201,17 +240,14 @@ fn rule_table(rules: &[RuleView], names: &Names) -> Markup {
                 }
             }
             tbody {
-                @for rule in rules {
+                @for (rank, rule) in (1_usize..).zip(rules) {
                     tr {
-                        td { (rule.position) }
+                        td { (rank) }
                         th scope="row" {
                             a href={ "/rules/" (rule.id) } { (match_words(rule.match_kind, &rule.pattern)) }
                         }
                         td {
-                            @match rule.account {
-                                Some(account) => (names.account(account)),
-                                None => "Every account",
-                            }
+                            (names.scope(rule.account, "Every account"))
                             @if let Some(amount) = rule.amount {
                                 ", " (amount_words(amount))
                             }

@@ -11,6 +11,7 @@ mod forms;
 mod refusals;
 mod render;
 mod runs;
+mod stale;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -277,4 +278,58 @@ async fn csrf_of(browser: &mut Browser, path: &str) -> String {
     let page: Reply = browser.get(path).await;
     assert_eq!(page.status, StatusCode::OK);
     page.csrf()
+}
+
+/// `text` as an attribute value maud wrote, read back.
+fn unescaped(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// The `shown_*` fields the change form on `page` carries, by the name of the field each
+/// stands for: what the form sends when nobody touches it.
+fn shown_of(page: &Reply) -> Vec<(String, String)> {
+    let form = page.between(r#"id="change""#, "</form>");
+    let marker = r#"<input type="hidden" name="shown_"#;
+    form.match_indices(marker)
+        .map(|(at, _)| {
+            let rest = &form[at + marker.len()..];
+            let (name, rest) = rest.split_once('"').unwrap();
+            let rest = rest.strip_prefix(r#" value=""#).unwrap();
+            let (value, _) = rest.split_once('"').unwrap();
+            (name.to_owned(), unescaped(value))
+        })
+        .collect()
+}
+
+/// The change form on `page` as a person sends it after changing `changes`: every field as
+/// shown but those, with what the page showed. An empty `enabled` is an unticked box.
+fn change_form(page: &Reply, changes: &[(&str, &str)]) -> Vec<(String, String)> {
+    let shown = shown_of(page);
+    assert_eq!(shown.len(), 10, "the form carries every field it shows");
+    let mut fields = vec![("csrf".to_owned(), page.csrf())];
+    for (name, value) in &shown {
+        let value = changes
+            .iter()
+            .find(|(changed, _)| changed == name)
+            .map_or(value.as_str(), |(_, value)| value);
+        if !(name == "enabled" && value.is_empty()) {
+            fields.push((name.clone(), value.to_owned()));
+        }
+    }
+    for (name, value) in shown {
+        fields.push((format!("shown_{name}"), value));
+    }
+    fields
+}
+
+/// Sends `fields`, owned, as a form.
+async fn post_owned(browser: &mut Browser, path: &str, fields: &[(String, String)]) -> Reply {
+    let borrowed: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    browser.post_form(path, &borrowed).await
 }

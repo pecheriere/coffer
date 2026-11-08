@@ -1,5 +1,5 @@
 //! The ledger: accounts and their balances, categories, rules, transactions, the
-//! resolution of possible duplicates, and planned items.
+//! resolution of possible duplicates, planned items, and the members a reader sees.
 //! Every operation authorizes through the policy, with account access from
 //! the [`AccessResolver`], and writes its audit entry in the same
 //! transaction as its change.
@@ -9,6 +9,7 @@ pub mod categories;
 pub mod duplicates;
 pub mod forecast;
 pub mod manual_rates;
+pub mod members;
 pub mod net_worth;
 pub mod plan_items;
 pub mod plan_report;

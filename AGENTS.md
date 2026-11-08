@@ -47,8 +47,12 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   record a balance (`fields.rs` holds the words and fields every account form uses, Connections'
   too), and whose `rules/` is the rules page (the list and
   the add form in `mod.rs` and `form.rs`; in `detail.rs` a rule's page, with what running it would
-  change, and the forms that run it, take back what it filled, change and delete it); `browser_reports/`, the
-  unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
+  change and the forms that run it, take back what it filled, change and delete it; `change.rs`
+  sends only the fields a person changed and refuses a stale form's change to a field changed
+  meanwhile; `runs.rs` runs and takes back, answering 303 to a page of what it did); `browser_reports/`, the
+  unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories,
+  `members` (`Ledger::list_members`, the one read of every member, which the API, its MCP tool and
+  every page naming members go through; managing them stays in `auth`), `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
   household forecast `settings`, the `forecast` and its what-if, the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers

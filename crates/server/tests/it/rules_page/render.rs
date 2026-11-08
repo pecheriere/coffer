@@ -1,6 +1,6 @@
 //! What the list and a rule's page show.
 
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use serde_json::json;
 
 use super::{filed_under, world};
@@ -44,7 +44,9 @@ async fn the_list_names_each_rule_s_text_account_category_and_state() {
     assert!(list.contains("contains \u{201c}market\u{201d}"));
     assert!(list.contains("starts with \u{201c}TAX \u{201d}"));
     assert!(list.contains("Every account"));
-    assert!(list.contains("Everyday, amounts from -50.00 to -10.00 USD"));
+    assert!(list.contains(&format!(
+        r#"<a href="/accounts/{everyday}">Everyday</a>, amounts from -50.00 to -10.00 USD"#
+    )));
     assert!(list.contains("files under Groceries"));
     assert!(list.contains("Off"));
     let market = list.find("market").unwrap();
@@ -94,4 +96,82 @@ async fn an_unknown_or_malformed_rule_is_not_found() {
 
     assert_eq!(unknown.status, StatusCode::NOT_FOUND);
     assert_eq!(malformed.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_order_shows_where_a_rule_comes_not_its_stored_number() {
+    let mut world = world().await;
+    let groceries = world.category("Groceries").await;
+    world
+        .rule(json!({
+            "match_kind": "contains", "pattern": "market", "category": groceries,
+            "position": 5,
+        }))
+        .await;
+    let second = world
+        .rule(json!({
+            "match_kind": "contains", "pattern": "bakery", "category": groceries,
+            "position": 9,
+        }))
+        .await;
+
+    let list = world.browser.get("/rules").await;
+    let page = world.browser.get(&format!("/rules/{second}")).await;
+
+    let rows = list.between("<tbody>", "</tbody>");
+    assert!(rows.contains("<td>1</td>"));
+    assert!(rows.contains("<td>2</td>"));
+    assert!(!rows.contains("<td>9</td>"), "not the stored number");
+    let summary = page.between(r#"id="summary""#, "</section>");
+    assert!(summary.contains("number 2 of 2 in the order"));
+    let form = page.between(r#"id="change""#, "</form>");
+    assert!(
+        form.contains(
+            "Order number: lower runs first. Rules with the same number run oldest first."
+        )
+    );
+    assert!(
+        !form.contains("Leave empty"),
+        "the change form keeps the number it shows"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_s_page_links_its_account() {
+    let mut world = world().await;
+    let groceries = world.category("Groceries").await;
+    let everyday = world.account("Everyday").await;
+    let rule = world
+        .rule(json!({
+            "match_kind": "contains", "pattern": "market", "account": everyday,
+            "category": groceries,
+        }))
+        .await;
+
+    let page = world.browser.get(&format!("/rules/{rule}")).await;
+
+    let summary = page.between(r#"id="summary""#, "</section>");
+    assert!(summary.contains(&format!(r#"<a href="/accounts/{everyday}">Everyday</a>"#)));
+}
+
+#[tokio::test]
+async fn an_archived_group_with_nothing_to_offer_is_left_out_of_the_picker() {
+    let mut world = world().await;
+    world.category("Groceries").await;
+    let old = world.category("Old").await;
+    let (status, _) = world
+        .api(
+            Method::PATCH,
+            &format!("/api/v1/categories/{old}"),
+            Some(json!({"archived": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let page = world.browser.get("/rules").await;
+
+    let form = page.between(r#"id="add-rule""#, "</form>");
+    assert!(form.contains(r#"<optgroup label="Groceries group">"#));
+    assert!(!form.contains("Old group"), "no empty group");
+    assert!(form.contains(r#"<option value="">Every account</option>"#));
 }
