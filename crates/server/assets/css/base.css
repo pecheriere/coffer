@@ -151,6 +151,7 @@ button:disabled { opacity: .6; cursor: progress; }
 }
 /* On a phone the tabs are a bar fixed to the bottom of the screen; `main` keeps clear of it. */
 @media (max-width: 39.99rem) {
+  html { scroll-padding-bottom: calc(48px + .5rem + 1px); }
   .nav { position: fixed; inset: auto 0 0 0; z-index: 1; flex-wrap: nowrap; gap: .25rem; padding: .25rem; background: var(--nav-bg); border-top: 1px solid var(--nav-border-color); }
   .nav a { flex: 1 1 0; justify-content: center; min-width: 0; min-height: 48px; padding: 0 .25rem; }
   .page { padding-bottom: calc(3rem + 48px + .5rem + 1px); }

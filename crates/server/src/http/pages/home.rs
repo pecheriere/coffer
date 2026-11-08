@@ -30,6 +30,8 @@ use sparkline::sparkline;
 
 /// Where the review queue is.
 const QUEUE: &str = "/transactions?review=unreviewed";
+/// What the sparkline shows. A month with nothing to value has no point in it.
+const SPARKLINE_LABEL: &str = "Net worth at the end of each month with a value this past year";
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/", get(home_page))
@@ -120,10 +122,7 @@ fn net_worth_body(report: &NetWorthReport, may_choose: bool) -> Markup {
             p { (change_sentence(change)) }
         }
         @if let Some(totals) = totals {
-            (sparkline(&totals, &format!(
-                "Net worth at the end of each of the last {} months",
-                totals.len()
-            )))
+            (sparkline(&totals, SPARKLINE_LABEL))
         }
         @if report.status == NetWorthStatus::Provisional {
             p.fine { "This number could still change." }
@@ -154,11 +153,16 @@ fn no_total(report: &NetWorthReport, may_choose: bool) -> Markup {
     }
 }
 
-/// The latest total less the one before it, when both exist in one currency.
+/// The latest total less last month's closing one, when both exist in one currency. The
+/// report leaves out a period with nothing to value, so the point before the latest is
+/// last month's only when it ends the day before this month starts.
 fn change_this_month(report: &NetWorthReport) -> Option<Money> {
     let [.., before, latest] = report.points.as_slice() else {
         return None;
     };
+    if before.on.tomorrow().ok() != Some(latest.period_start) {
+        return None;
+    }
     let (before, latest) = (before.total?, latest.total?);
     if before.currency != latest.currency {
         return None;
@@ -194,15 +198,67 @@ fn to_check_card(count: ReviewCount) -> Markup {
 #[cfg(test)]
 mod tests {
     use coffer_domain::money::{Currency, Money};
-    use jiff::civil::date;
+    use coffer_domain::net_worth::{
+        NetWorthInterval, NetWorthPoint, NetWorthReport, NetWorthStatus,
+    };
+    use jiff::civil::{Date, date};
 
-    use super::{change_sentence, last_twelve_months};
+    use super::{change_sentence, change_this_month, last_twelve_months};
 
     fn usd(minor_units: i64) -> Money {
         Money {
             minor_units,
             currency: Currency::parse("USD").unwrap(),
         }
+    }
+
+    /// A month's point: valued on `on`, its period starting on `period_start`.
+    fn point(period_start: Date, on: Date, total: i64) -> NetWorthPoint {
+        NetWorthPoint {
+            on,
+            period_start,
+            partial: false,
+            total: Some(usd(total)),
+            by_liquidity: Vec::new(),
+            by_currency: vec![usd(total)],
+            unconverted: Vec::new(),
+            manual_rate: false,
+        }
+    }
+
+    fn report(points: Vec<NetWorthPoint>) -> NetWorthReport {
+        NetWorthReport {
+            display_currency: Some(Currency::parse("USD").unwrap()),
+            interval: NetWorthInterval::Month,
+            from: date(2025, 11, 1),
+            to: date(2026, 11, 2),
+            through: Some(date(2026, 11, 2)),
+            status: NetWorthStatus::Firm,
+            points,
+            accounts: Vec::new(),
+            blockers: Vec::new(),
+            cautions: Vec::new(),
+            manual_rates: Vec::new(),
+            buckets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_change_is_from_last_months_close() {
+        let report = report(vec![
+            point(date(2026, 10, 1), date(2026, 10, 31), 50_000),
+            point(date(2026, 11, 1), date(2026, 11, 2), 60_000),
+        ]);
+        assert_eq!(change_this_month(&report), Some(usd(10_000)));
+    }
+
+    #[test]
+    fn a_month_left_out_means_no_change_this_month() {
+        let report = report(vec![
+            point(date(2026, 9, 1), date(2026, 9, 30), 50_000),
+            point(date(2026, 11, 1), date(2026, 11, 2), 60_000),
+        ]);
+        assert_eq!(change_this_month(&report), None);
     }
 
     #[test]

@@ -19,20 +19,24 @@ async fn count(world: &World, token: &SecretToken) -> Value {
     body
 }
 
-/// A read token of Alice's holding `transactions` on `account` only.
-async fn token_on(world: &World, account: &str) -> SecretToken {
+fn grant(account: &str, level: AccountLevel) -> TokenGrant {
+    TokenGrant {
+        target: GrantTarget::Account(account.parse::<AccountId>().unwrap()),
+        level,
+    }
+}
+
+/// A read token of Alice's holding only `grants`.
+async fn token_with(world: &World, grants: Vec<TokenGrant>) -> SecretToken {
     let (_, secret) = world
         .server
         .agent_tokens
         .create(
             &world.alice,
-            TokenName::parse("one account").unwrap(),
+            TokenName::parse("some accounts").unwrap(),
             Scope::Read,
             None,
-            vec![TokenGrant {
-                target: GrantTarget::Account(account.parse::<AccountId>().unwrap()),
-                level: AccountLevel::Transactions,
-            }],
+            grants,
         )
         .await
         .unwrap();
@@ -50,8 +54,21 @@ async fn review_count_counts_only_readable_accounts() {
 
     let read = read_token(&world).await;
     assert_eq!(count(&world, &read).await, json!({"unreviewed": 3}));
-    let on_a = token_on(&world, &a).await;
+    let on_a = token_with(&world, vec![grant(&a, AccountLevel::Transactions)]).await;
     assert_eq!(count(&world, &on_a).await, json!({"unreviewed": 2}));
+    let balances_of_b = token_with(
+        &world,
+        vec![
+            grant(&a, AccountLevel::Transactions),
+            grant(&b, AccountLevel::Balances),
+        ],
+    )
+    .await;
+    assert_eq!(
+        count(&world, &balances_of_b).await,
+        json!({"unreviewed": 2}),
+        "seeing B's balances isn't reading its transactions"
+    );
 
     let anonymous = Request::builder()
         .method(Method::GET)
