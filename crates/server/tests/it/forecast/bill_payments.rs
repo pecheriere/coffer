@@ -62,6 +62,33 @@ async fn a_bill_paid_on_the_2nd_pays_last_month() {
     assert_eq!(forecast["status"], "firm");
 }
 
+/// §10.8: a bill due on 20 November, paid on the 14th, is already out of the balance, so it needs
+/// nothing and the answer says what paid it: 10,000.00 left.
+#[tokio::test]
+async fn a_bill_paid_early_needs_nothing_and_says_what_paid_it() {
+    let (world, checking) = holding().await;
+    let tyres = world.expense("Tyres").await;
+    world
+        .item(&outflow("Tyres", 1_000, tyres, &one_off_on("2026-11-20")))
+        .await;
+    let paid = world
+        .spend_linked(checking, "2026-11-14", 1_000, tyres, &Value::Null)
+        .await;
+
+    let forecast = world.forecast_at(ONE_MONTH).await;
+
+    let line = line(&forecast, "Tyres");
+    assert_eq!(line["counted"], usd(0));
+    assert_eq!(line["occurrences"], 0);
+    assert_eq!(
+        paid_days(&forecast, "Tyres"),
+        [("2026-11-20".to_owned(), json!("2026-11-14"))]
+    );
+    assert_eq!(line["payments"][0]["paid_by"]["transaction"], json!(paid));
+    assert_eq!(forecast["surplus"], usd(1_000_000));
+    assert_eq!(forecast["status"], "firm");
+}
+
 /// Unpaid, it counts on top of November's and is named: 10,000.00 - 10.00 - 10.00.
 #[tokio::test]
 async fn a_bill_unpaid_from_last_month_counts_and_is_named() {

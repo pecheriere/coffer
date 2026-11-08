@@ -2,11 +2,13 @@
 //! touched: a hypothetical item neither reduces, consumes nor owes, and a goal has spending of
 //! its own.
 //!
-//! A recurring bill or a one-off counts in full until its date passes, so one dated `as_of`
-//! counts in full even if it was paid that day. Past it, and back through last month, it is
-//! paid only by a transaction [`bill_matching`](super::bill_matching) matches to it: whatever
-//! isn't paid is still needed, and reported, since the money may have gone under another
-//! category.
+//! A recurring bill or a one-off counts in full until it is paid, by a transaction
+//! [`bill_matching`](super::bill_matching) matches to it, or until its date passes unpaid. A
+//! payment may come up to [`BILL_EARLY_PAYMENT_DAYS`] before the date (spec §10.8): from the day
+//! it posts the occurrence needs nothing, whether it is dated `as_of` or within that week after,
+//! since the money has already left the balance. One past its date, back through last month, that
+//! nothing paid is still needed, and reported, since the money may have gone under another
+//! category; one not yet due that nothing paid simply counts, and owes no caution.
 //!
 //! A budget is reduced, and it counts its whole calendar month: all its occurrences in
 //! `as_of`'s month, before `as_of` too, go into its line and the first bucket, so what it
@@ -24,7 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Span;
 use jiff::civil::Date;
 
-use super::bill_matching::{Bill, Matching, Seen, bills_looked_at_from, match_bills};
+use super::bill_matching::{
+    BILL_EARLY_PAYMENT_DAYS, Bill, Matching, Seen, bills_looked_at_from, match_bills,
+};
 use super::money;
 use super::settled::settlement_of;
 use super::types::{
@@ -50,8 +54,12 @@ pub(super) struct ItemAdjustment {
     pub(super) reduced_by: i128,
     /// What a recurring bill or one-off dated before `as_of` still needs.
     pub(super) unpaid: i128,
-    /// What the transactions say of each occurrence the look-back reaches, by date.
+    /// What the transactions say of each occurrence the look-back reaches, and of each later one
+    /// a payment already paid, by date.
     pub(super) payments: Vec<OccurrencePayment>,
+    /// The occurrences dated `as_of` or later that a payment already paid, in date order: they
+    /// need nothing.
+    pub(super) paid_ahead: Vec<Date>,
 }
 
 #[derive(Default)]
@@ -136,6 +144,11 @@ pub(super) fn reduce(
 
     let looked_at_from = bills_looked_at_from(input.as_of);
     let through_as_of = input.as_of.tomorrow().unwrap_or(Date::MAX);
+    // The last day a payment already made may be for, exclusive. It may cross into next month.
+    let early_until = input
+        .as_of
+        .checked_add(Span::new().days(BILL_EARLY_PAYMENT_DAYS + 1))
+        .map_or(end_exclusive, |day| day.min(end_exclusive));
     let mut bills = Vec::new();
     let mut month_budgets = Vec::new();
     for (index, item) in input.items.iter().enumerate() {
@@ -148,9 +161,9 @@ pub(super) fn reduce(
             month_budgets.extend(occurrences(dates, index, key, amount));
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs. One dated
-            // `as_of` may be what today's spending paid, so it can take a transaction, but it
-            // has not passed, so it owes no gap. One settled as paid later this month was paid,
-            // so it has a claim on what was spent too.
+            // `as_of`, or within the week after, may be what a payment already made paid, so it
+            // can take a transaction, but it has not passed, so it owes no gap. One settled as
+            // paid later this month was paid, so it has a claim on what was spent too.
             let bill = |on| Bill {
                 on,
                 index,
@@ -170,6 +183,13 @@ pub(super) fn reduce(
                     .into_iter()
                     .map(bill)
                     .filter(|one| one.settled == Some(SettlementKind::Paid)),
+            );
+            let early = item.schedule.occurrences(through_as_of, early_until);
+            bills.extend(
+                early
+                    .into_iter()
+                    .map(bill)
+                    .filter(|one| one.settled.is_none()),
             );
         }
     }
@@ -244,15 +264,14 @@ fn pools_after(
     pools
 }
 
-/// What `seen` leaves `bills` counting, per category and currency: an occurrence dated `as_of` or
-/// later counts in full, and one before that unless it was paid. Nothing that is settled or dated
-/// before the history counts.
-fn bills_counted(bills: &[Bill], seen: &[Seen], as_of: Date) -> BTreeMap<PoolKey, i128> {
+/// What `seen` leaves `bills` counting, per category and currency: an occurrence counts in full
+/// unless it was paid, whatever its date. Nothing that is settled or dated before the history
+/// counts.
+fn bills_counted(bills: &[Bill], seen: &[Seen]) -> BTreeMap<PoolKey, i128> {
     let mut counted: BTreeMap<PoolKey, i128> = BTreeMap::new();
     for (bill, seen) in bills.iter().zip(seen) {
-        let counts = bill.settled.is_none()
-            && !bill.before_history
-            && (bill.on >= as_of || !matches!(seen, Seen::Paid(..)));
+        let counts =
+            bill.settled.is_none() && !bill.before_history && !matches!(seen, Seen::Paid(..));
         if counts {
             *counted.entry(bill.key).or_default() += bill.amount;
         }
@@ -262,8 +281,8 @@ fn bills_counted(bills: &[Bill], seen: &[Seen], as_of: Date) -> BTreeMap<PoolKey
 
 /// The pools `matching` leaves, none lower than what its budgets would use with nothing settled,
 /// less what settling saved in its category. A budget's need rises by no more than that use falls,
-/// so settling can't raise the need, however a settled bill sends a payment on: to today's bill,
-/// which counts in full whatever pays it, or to a smaller one in tolerance.
+/// so settling can't raise the need, however a settled bill sends a payment on: to one not yet due,
+/// which then needs nothing, or to a smaller one in tolerance.
 ///
 /// Also the pools where that assumption moved the pool: a charge no transaction fits, or the
 /// floor, so a budget's reduction there may be money that was the bill's.
@@ -293,8 +312,8 @@ fn pools_settled(
         .collect();
     let unsettled = match_bills(&plain, input);
     let pools_unsettled = pools_after(spent, &unsettled, input);
-    let counted_unsettled = bills_counted(&plain, &unsettled.seen, input.as_of);
-    let counted = bills_counted(bills, &matching.seen, input.as_of);
+    let counted_unsettled = bills_counted(&plain, &unsettled.seen);
+    let counted = bills_counted(bills, &matching.seen);
     let mut planned: BTreeMap<PoolKey, i128> = BTreeMap::new();
     for budget in month_budgets {
         *planned.entry(budget.key).or_default() += budget.amount;
@@ -354,8 +373,9 @@ struct Outcome {
     spending_sensitive_currencies: BTreeSet<Currency>,
 }
 
-/// Enters what the transactions say of one unsettled occurrence. One dated `as_of` owes nothing
-/// yet, whatever they say: it counts in full, from the window.
+/// Enters what the transactions say of one unsettled occurrence. One dated `as_of` or later owes
+/// nothing yet: paid, it is listed for what paid it and needs nothing; if not, it counts in full,
+/// from the window, and only today's is listed.
 fn record(
     input: &ForecastInput,
     bill: &Bill,
@@ -365,6 +385,10 @@ fn record(
     outcome: &mut Outcome,
 ) -> Result<(), ForecastError> {
     let currency = bill.key.1;
+    let paid = matches!(seen, Seen::Paid(..));
+    if bill.on > input.as_of && !paid {
+        return Ok(());
+    }
     let row_at = |at: usize| input.spent_transactions.get(at);
     let paid_by = if let Seen::Paid(at, spent) = seen {
         row_at(at).map(|row| {
@@ -392,7 +416,11 @@ fn record(
         *total += bill.amount;
         return Ok(());
     }
-    if matches!(seen, Seen::Paid(..)) || bill.on >= input.as_of {
+    let due = bill.on < input.as_of;
+    if paid && !due {
+        adjustment.paid_ahead.push(bill.on);
+    }
+    if paid || !due {
         return Ok(());
     }
 

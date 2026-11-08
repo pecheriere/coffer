@@ -29,6 +29,7 @@ mod golden;
 mod inflow_window;
 mod item_cautions;
 mod newer_spending;
+mod paid_early;
 mod properties;
 mod reduction;
 mod rule_filed_transfers;

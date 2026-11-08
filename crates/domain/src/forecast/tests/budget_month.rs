@@ -400,14 +400,15 @@ fn a_bill_paid_on_as_of_does_not_eat_a_budget() {
     assert_eq!(upkeep.counted, usd(60_000), "three months in full");
 }
 
-/// The balance dated `as_of` already shows the payment, so this holds it twice, which
-/// lasts the day and is the safe direction.
+/// §10.8: the rent was paid the day before `as_of`, so the balance no longer holds it and
+/// November's needs nothing: holding it again would count it twice. A bill is still never reduced:
+/// what is left is December's and January's in full.
 #[test]
-fn spending_on_as_of_does_not_reduce_that_days_bill() {
+fn a_payment_the_day_before_pays_that_days_bill() {
     let forecast = run(&rent_due_today(200_000));
     let rent = line(&forecast, "Rent");
     assert_eq!(rent.reduced_by, usd(0), "a bill is never reduced");
-    assert_eq!(rent.counted, usd(600_000), "November's counts in full");
+    assert_eq!(rent.counted, usd(400_000), "December's and January's");
 }
 
 #[test]
