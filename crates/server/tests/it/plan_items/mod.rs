@@ -12,6 +12,7 @@ mod goal_links;
 mod grants;
 mod real_clock;
 mod settlements;
+mod tiers;
 mod validation;
 
 use axum::body::Body;

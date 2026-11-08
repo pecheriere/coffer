@@ -582,12 +582,13 @@ short:
 
 - `GET`, `POST`, `PATCH` and `DELETE /api/v1/plan-items` keep the plan:
   recurring items (a `bill`, or a `budget` that this month's spending
-  reduces), one-offs and goals (sinking funds). `GET` and `PATCH
+  reduces), one-offs and goals (sinking funds). Each outflow has a `tier`: `must_pay`,
+  `essentials` or `flexible`, or `saving_toward` for a goal. `GET` and `PATCH
   /api/v1/household/settings` hold each currency's emergency fund, whether income
   counts, the default horizon and when a balance is stale (changing them needs `admin`).
   `PUT` and `DELETE /api/v1/household/emergency-funds/{currency}` set and remove one
-  currency's emergency fund, a fixed amount or some months of its recurring outflows
-  (`admin`); the MCP tool `set_emergency_fund` sets one.
+  currency's emergency fund, a fixed amount or some months of its recurring `must_pay`
+  and `essentials` outflows (`admin`); the MCP tool `set_emergency_fund` sets one.
 - `PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` mark one month of a
   bill or one-off `paid` or `skipped`, for one paid with no transaction to
   categorize; the forecast then counts it as nothing and lists it in `settled`.

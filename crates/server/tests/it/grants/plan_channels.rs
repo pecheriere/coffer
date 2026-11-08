@@ -7,7 +7,7 @@ use axum::http::{Method, StatusCode};
 use coffer_domain::identity::Scope;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use coffer_domain::money::{Currency, Money};
-use coffer_domain::plan::{PlanDirection, PlanSchedule, PlannedItemName};
+use coffer_domain::plan::{PlanDirection, PlanSchedule, PlanTier, PlannedItemName};
 use coffer_domain::policy::{AccountLevel, GrantTarget};
 use coffer_domain::time::Clock as _;
 use coffer_server::secrets::SecretToken;
@@ -609,6 +609,7 @@ async fn fill_the_plan(world: &World, category: CategoryId, hidden: AccountId) {
                 on: date(2027, 3, 15),
             },
             spending: None,
+            tier: Some(PlanTier::MustPay),
             created_at: now,
         })
         .await
