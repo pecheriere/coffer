@@ -15,7 +15,7 @@ use coffer_server::themes;
 
 /// Every page a household sees, as (page, reply): sign-in, a bootstrap
 /// setup link, a new-member invite link, and the signed-in admin's account,
-/// connections, members, invites and household pages. Bob is a member, so the members page lists
+/// accounts, connections, members, invites and household pages. Bob is a member, so the members page lists
 /// someone the admin manages.
 async fn every_page() -> Vec<(&'static str, Reply)> {
     let server = TestServer::new().await;
@@ -53,6 +53,7 @@ async fn every_page() -> Vec<(&'static str, Reply)> {
 
     for path in [
         "/account",
+        "/accounts",
         "/admin/members",
         "/admin/invites",
         "/admin/household",

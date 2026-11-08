@@ -14,18 +14,31 @@ use crate::accounts::{BelongsTo, LiquidityClass};
 use crate::money::Money;
 use crate::plan::{PlanDirection, goal_need};
 
+/// What the forecast reads of an account to decide whether its balance counts as cash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CountingFacts {
+    pub liquidity: LiquidityClass,
+    pub belongs_to: BelongsTo,
+    pub include_in_forecast: bool,
+    pub closed: bool,
+    /// The balance it is read at, in minor units; `None` when it has none.
+    pub balance_minor: Option<i64>,
+}
+
+/// Why the forecast leaves an account out, or `None` when its balance counts: the one rule,
+/// which the forecast and a page saying what it does with an account both call.
+///
 /// Money that isn't the household's never counts, and that is the reason whatever else
 /// holds, since a flag can't change it (spec §8.11 B4, B8). A closed card's debt does not
 /// close with it, so one that still owes counts, unless the household has switched it out.
-pub(super) fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
+#[must_use]
+pub fn left_out_of_forecast(account: CountingFacts) -> Option<NotCountedReason> {
     let spendable = matches!(
         account.liquidity,
         LiquidityClass::Cash | LiquidityClass::ShortTermLiability
     );
     let owing = account.liquidity == LiquidityClass::ShortTermLiability
-        && account
-            .balance
-            .is_some_and(|balance| balance.minor_units < 0);
+        && account.balance_minor.is_some_and(|minor| minor < 0);
     if account.belongs_to != BelongsTo::Household {
         Some(NotCountedReason::NotHousehold)
     } else if account.closed && owing && account.include_in_forecast {
@@ -39,6 +52,17 @@ pub(super) fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
     } else {
         None
     }
+}
+
+/// [`left_out_of_forecast`] for an account as the forecast holds it.
+pub(super) fn not_counted(account: &AccountInput) -> Option<NotCountedReason> {
+    left_out_of_forecast(CountingFacts {
+        liquidity: account.liquidity,
+        belongs_to: account.belongs_to,
+        include_in_forecast: account.include_in_forecast,
+        closed: account.closed,
+        balance_minor: account.balance.map(|balance| balance.minor_units),
+    })
 }
 
 /// Whether the number reads this account: its balance is summed, or spending linked to a goal

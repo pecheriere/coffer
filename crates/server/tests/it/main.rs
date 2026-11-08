@@ -2,6 +2,7 @@
 //! single test binary so a change relinks one program instead of one per file.
 
 mod accounts;
+mod accounts_page;
 mod agent_tokens;
 mod api;
 mod appearance;
