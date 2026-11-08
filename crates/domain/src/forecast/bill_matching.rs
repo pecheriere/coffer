@@ -7,6 +7,10 @@
 //! its category and currency, by amount. It pays one at most. Whatever it can't be told apart
 //! from a budget's spending pays nothing, and stays in the budget's pool, so the bill still
 //! counts: the safe direction, and the caller says so with a caution.
+//!
+//! A payment may pay an occurrence not yet due, up to [`BILL_EARLY_PAYMENT_DAYS`] after `as_of`
+//! (spec §10.8), so a bill paid a few days early needs nothing from the day it was paid. An older
+//! unpaid occurrence it fits still comes first.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,8 +58,9 @@ pub fn payments_read_from(as_of: Date) -> Date {
         .unwrap_or(Date::MIN)
 }
 
-/// One occurrence of a stored recurring bill or one-off that the look-back reaches, or one settled
-/// as paid later in `as_of`'s month.
+/// One occurrence of a stored recurring bill or one-off that the look-back reaches, one not settled
+/// in the [`BILL_EARLY_PAYMENT_DAYS`] after `as_of`, which a payment already made may have paid, or
+/// one settled as paid later in `as_of`'s month or in that week.
 #[derive(Clone, Copy)]
 pub(super) struct Bill {
     pub(super) on: Date,
@@ -229,6 +234,11 @@ pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
         })
         .collect();
 
+    // A payment already made may be for a bill up to a week ahead, as `Payment::fits` allows.
+    let payable_until = input
+        .as_of
+        .checked_add(Span::new().days(BILL_EARLY_PAYMENT_DAYS))
+        .unwrap_or(Date::MAX);
     let mut plans = BudgetPlans {
         input,
         known: BTreeMap::new(),
@@ -247,7 +257,7 @@ pub(super) fn match_bills(bills: &[Bill], input: &ForecastInput) -> Matching {
                 matching.seen.get(position) == Some(&Seen::Nothing)
                     && bill.settled.is_none()
                     && !bill.before_history
-                    && bill.on <= input.as_of
+                    && bill.on <= payable_until
                     && payment.fits(bill, input)
                     && plans.tells_apart(payment, bill)
             })

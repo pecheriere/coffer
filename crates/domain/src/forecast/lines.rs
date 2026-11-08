@@ -112,7 +112,11 @@ pub(super) fn dated_line(
     let mut dates = item
         .schedule
         .occurrences(reduction::counts_from(item, window.as_of), end_exclusive);
-    dates.retain(|&on| !settled::is_settled(item, on));
+    // Settled, or already paid by a payment up to a week early (spec §10.8): either way it needs
+    // nothing, and a paid one is listed in `payments` instead.
+    dates.retain(|&on| {
+        !settled::is_settled(item, on) && adjustment.paid_ahead.binary_search(&on).is_err()
+    });
     let amount = i128::from(item.amount.minor_units);
     let currency = item.amount.currency;
     let occurrences = count(&dates)?;
@@ -121,6 +125,7 @@ pub(super) fn dated_line(
         reduced_by,
         unpaid,
         ref payments,
+        paid_ahead: _,
     } = *adjustment;
     // Paid and past, so listed for what paid it, and nowhere else: not even its currency is in use.
     let only_shown = gross == 0 && unpaid == 0;

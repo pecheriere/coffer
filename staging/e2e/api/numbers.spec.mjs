@@ -14,8 +14,9 @@ const NET_WORTH = 18_149_030;
 // 12 months of each: mortgage 1,350.00, utilities 180.00, car 320.00, subscription 15.00,
 // groceries budget 600.00 less the 85.40 spent this month; insurance 960.00 and boiler
 // 220.00 once; the 3,000.00 goal; a 1,000.00 emergency fund; 11 salaries of 4,200.00, today's
-// being already in the balance.
-const OUTFLOWS = 3_067_460;
+// being already in the balance. Today's mortgage and utilities are paid by today's
+// payments, already out of the balance, so they need nothing: 11 of each count.
+const OUTFLOWS = 2_914_460;
 const CASH = 2_921_544;
 const GOALS = 300_000;
 const EMERGENCY_FUND = 100_000;

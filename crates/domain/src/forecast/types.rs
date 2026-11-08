@@ -392,7 +392,8 @@ pub struct ItemLine {
     #[cfg_attr(feature = "openapi", schema(required))]
     pub account_hint: Option<AccountId>,
     /// How many times it falls in the window, and for a stored budget earlier in `as_of`'s
-    /// month too: 0 for a goal. An inflow counts only from the day after `as_of`.
+    /// month too: 0 for a goal. An inflow counts only from the day after `as_of`, and a bill
+    /// already paid, up to a week early, isn't counted (it is in `payments`).
     pub occurrences: u32,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub first_on: Option<Date>,
@@ -413,8 +414,8 @@ pub struct ItemLine {
     #[cfg_attr(feature = "openapi", schema(required))]
     pub goal: Option<GoalLine>,
     /// For a stored recurring bill or one-off: each occurrence from the start of last month up
-    /// to and including `as_of`, by date, and what paid it. A settled one isn't here but in
-    /// `settled`. Empty for anything else.
+    /// to and including `as_of`, and each later one a payment already paid, by date, and what
+    /// paid it. A settled one isn't here but in `settled`. Empty for anything else.
     pub payments: Vec<OccurrencePayment>,
 }
 
@@ -425,7 +426,7 @@ pub struct OccurrencePayment {
     pub on: Date,
     pub amount: Money,
     /// Null when no transaction matched, so it counts as still needed, in `unpaid` if it is dated
-    /// before `as_of`, unless `before_history`.
+    /// before `as_of`, unless `before_history`. Paid, it needs nothing, whatever its date.
     #[cfg_attr(feature = "openapi", schema(required))]
     pub paid_by: Option<PaidBy>,
     /// Dated last month, before the household's first transaction, so there is no evidence either

@@ -55,7 +55,8 @@ async fn spending_before_a_budgets_first_occurrence_this_month_reduces_it() {
 }
 
 /// Rent of 200,000 paid today with a balance dated today, and 5,000 more spent: what is
-/// spent on `as_of` reaches the pool, and the payment of the rent leaves it.
+/// spent on `as_of` reaches the pool, and the payment of the rent leaves it. §10.8: the balance no
+/// longer holds the rent, so November's needs nothing, and only December's and January's count.
 #[tokio::test]
 async fn a_bill_paid_on_as_of_leaves_only_the_rest_to_a_budget() {
     let world = world().await;
@@ -72,7 +73,7 @@ async fn a_bill_paid_on_as_of_leaves_only_the_rest_to_a_budget() {
     let forecast = world.forecast().await;
 
     assert_eq!(line(&forecast, "Upkeep")["reduced_by"], usd(5_000));
-    assert_eq!(line(&forecast, "Rent")["counted"], usd(600_000));
+    assert_eq!(line(&forecast, "Rent")["counted"], usd(400_000));
 }
 
 #[tokio::test]

@@ -137,11 +137,12 @@ fn a_bill_settled_before_the_history_takes_no_payment() {
     );
 }
 
-/// The payment that paid October goes on to today's rent, which counts in full whatever pays it.
-/// So settling October saves nothing and may cost the budget nothing: the rent's 1,000 and the
-/// budget's 1,000 less the 500 of spending left, 1,500.
+/// Unsettled, the 1,000 pays October and today's rent counts: 1,000, and the budget's 1,000 less
+/// the 500 of spending left, 1,500. §10.8: settled, the payment goes on to today's rent, which then
+/// needs nothing, so settling saved 1,000 and October's charge, which no transaction fits, may take
+/// all 500 of the budget's spending: the budget's 1,000.
 #[test]
-fn a_payment_moving_to_todays_bill_saves_nothing_so_charges_nothing() {
+fn a_payment_moving_to_todays_bill_pays_it() {
     let home = CategoryId::new();
     let input = on_rent_day(
         home,
@@ -152,13 +153,14 @@ fn a_payment_moving_to_todays_bill_saves_nothing_so_charges_nothing() {
         ],
     );
     assert_eq!(need(&unsettled(&input)), 1_500);
-    assert_eq!(need(&input), 1_500);
+    assert_eq!(need(&input), 1_000);
 }
 
-/// As above, with 950 more that can't be told from the budget's spending. Settled October would
-/// claim it, but saved nothing: the rent's 1,000 and the budget's 1,000 less 950, 1,050.
+/// As above, with 950 more that can't be told from the budget's spending: unsettled, the rent's
+/// 1,000 and the budget's 1,000 less 950, 1,050. §10.8: settled, the 1,000 pays today's rent, which
+/// needs nothing, and the 950 fits October, so it is October's and no budget's: the budget's 1,000.
 #[test]
-fn a_payment_moving_to_todays_bill_leaves_the_budgets_spending_alone() {
+fn a_payment_moving_to_todays_bill_takes_what_fits_october_off_the_budget() {
     let home = CategoryId::new();
     let input = on_rent_day(
         home,
@@ -169,7 +171,7 @@ fn a_payment_moving_to_todays_bill_leaves_the_budgets_spending_alone() {
         ],
     );
     assert_eq!(need(&unsettled(&input)), 1_050);
-    assert_eq!(need(&input), 1_050);
+    assert_eq!(need(&input), 1_000);
 }
 
 /// 110 is the exact amount of a bill on the 3rd, and fits one of 100 on the 5th too, in tolerance.
@@ -222,24 +224,38 @@ fn a_settled_bill_keeps_all_of_a_charge_that_fits_off_the_budget() {
     assert_eq!(need(&input), 500);
 }
 
-/// The floor reads from what the budget could use, not all the pool held. Unsettled: 1,000 pays
-/// October, today's rent counts 1,000, 200 is owed on the 2nd, and the 800 left clears the budget
-/// of 500, so 1,200. Settling October and the 200 saves that 200, so the budget may lose 200 of the
-/// 500 it used, though the pool held 800: today's rent and 200 of the budget, 1,200.
+/// The floor reads from what the budget could use, not all the pool held. 1,100 is the exact amount
+/// of a bill on the 3rd and fits one of 1,000 on the 5th, and is more than the budget of 1,050
+/// plans for November, so it is a bill's either way. Unsettled: it pays the 3rd, the 5th owes
+/// 1,000, and the 1,100 left of 2,200 clears the budget: 1,000. Settle the 3rd: it pays the 5th,
+/// saving 1,000, and the 3rd's 1,100, which nothing else fits, is charged, leaving the pool at 0.
+/// The floor is the 1,050 the budget used less that 1,000, so the budget needs 1,000 and the need
+/// stays at 1,000; the 1,100 the pool held would have left 950.
 #[test]
 fn the_floor_keeps_only_what_the_budget_could_use() {
     let home = CategoryId::new();
-    let mut input = on_rent_day(
-        home,
-        1_800,
-        vec![paid_on(home, usd(1_000), date(2026, 11, 5))],
-    );
-    input.items[1] = budget(monthly("Upkeep", usd(500), date(2026, 11, 20), home));
-    let mut extra = one_off("Extra", usd(200), date(2026, 11, 2), home);
-    extra.settled.insert(month("2026-11"), SettlementKind::Paid);
-    input.items.push(extra);
-    assert_eq!(need(&unsettled(&input)), 1_200);
-    assert_eq!(need(&input), 1_200);
+    let mut larger = one_off("Larger", usd(1_100), date(2026, 11, 3), home);
+    larger
+        .settled
+        .insert(month("2026-11"), SettlementKind::Paid);
+    let input = ForecastInput {
+        items: vec![
+            larger,
+            one_off("Smaller", usd(1_000), date(2026, 11, 5), home),
+            budget(monthly("Upkeep", usd(1_050), date(2026, 11, 20), home)),
+        ],
+        category_spent: vec![spent(home, 2_200)],
+        spent_transactions: vec![
+            paid_on(home, usd(1_100), date(2026, 11, 3)),
+            paid_on(home, usd(600), date(2026, 11, 8)),
+            paid_on(home, usd(500), date(2026, 11, 9)),
+        ],
+        horizon_months: 1,
+        emergency_funds: fixed_fund(usd(0)),
+        ..household()
+    };
+    assert_eq!(need(&unsettled(&input)), 1_000);
+    assert_eq!(need(&input), 1_000);
 }
 
 /// Dates where a month's length matters, an ordinary one, and a bill's own day.
