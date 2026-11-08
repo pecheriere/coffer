@@ -17,12 +17,13 @@ use coffer_domain::policy::{
 use maud::{Markup, html};
 use serde::Deserialize;
 
-use super::belonging::{
-    BELONGS_TO_UNKNOWN, SEEN_BY, answer_options, beneficiaries, held_for_field, in_form_words,
-    kind_field, parse_belongs_to,
-};
+use super::belonging::in_form_words;
 use super::{Notice, back, refused_on_row, render};
 use crate::http::AppState;
+use crate::http::pages::accounts::fields::{
+    BELONGS_TO_UNKNOWN, KIND_UNKNOWN, SEEN_BY, answer_options, beneficiaries, held_for_field,
+    kind_field, kind_label, parse_belongs_to, parse_kind,
+};
 use crate::http::pages::layout::csrf_field;
 use crate::http::pages::{PageError, PageForm, PageSession};
 use crate::ledger::accounts::{AccountView, assert_no_debug};
@@ -30,7 +31,6 @@ use crate::sync::connections::{
     ConnectionState, ConnectionView, NewLinkedAccountInput, ProviderAccountView,
 };
 
-pub(super) const KIND_UNKNOWN: &str = "Choose one of the account kinds in the list.";
 const ACCOUNT_UNKNOWN: &str = "Choose the account to link to.";
 /// Under a kind preselected from the provider's name, which is only a guess.
 const SUGGESTED: &str =
@@ -220,27 +220,6 @@ fn guess_sentence(kind: AccountKind) -> String {
     }
 }
 
-/// How a kind reads in the select.
-pub(super) fn kind_label(kind: AccountKind) -> &'static str {
-    match kind {
-        AccountKind::Checking => "Checking",
-        AccountKind::Savings => "Savings",
-        AccountKind::CreditCard => "Credit card",
-        AccountKind::Loan => "Loan",
-        AccountKind::Mortgage => "Mortgage",
-        AccountKind::Brokerage => "Brokerage",
-        AccountKind::Retirement => "Retirement",
-        AccountKind::Education => "Education savings (529)",
-        AccountKind::Custodial => "Custodial (UTMA, UGMA)",
-        AccountKind::Charitable => "Charitable (donor-advised fund)",
-        AccountKind::EquityComp => "Equity compensation",
-        AccountKind::Property => "Property",
-        AccountKind::Vehicle => "Vehicle",
-        AccountKind::OtherAsset => "Other asset",
-        AccountKind::OtherLiability => "Other liability",
-    }
-}
-
 fn provider_account_id(raw: &str) -> Result<ProviderAccountId, PageError> {
     raw.parse().map_err(|_| PageError::not_found())
 }
@@ -307,12 +286,8 @@ pub(super) async fn create_account(
     if let Err(err) = state.sync.authorize_create_account(&actor, id).await {
         return refused_on_row(&state, &session, err, id).await;
     }
-    let kind = match form.kind.as_str() {
-        "" => None,
-        raw => match raw.parse::<AccountKind>() {
-            Ok(kind) => Some(kind),
-            Err(_) => return unprocessable_on_row(&state, &session, KIND_UNKNOWN, id).await,
-        },
+    let Ok(kind) = parse_kind(&form.kind) else {
+        return unprocessable_on_row(&state, &session, KIND_UNKNOWN, id).await;
     };
     let Ok(belongs_to) = parse_belongs_to(&form.belongs_to) else {
         return unprocessable_on_row(&state, &session, BELONGS_TO_UNKNOWN, id).await;

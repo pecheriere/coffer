@@ -33,10 +33,8 @@ use crate::http::AppState;
 use crate::http::problem::{Problem, ProblemCode};
 use crate::ledger::net_worth::NetWorthQuery;
 use chart::{ChartPoint, ChartSize, line_chart, scale_misses_zero};
-use words::{
-    Names, blocker_sentence, caution_sentence, liquidity_name, manual_rate_sentence,
-    no_amount_sentence,
-};
+pub(super) use words::liquidity_name;
+use words::{Names, blocker_sentence, caution_sentence, manual_rate_sentence, no_amount_sentence};
 
 const NO_TOTAL: &str = "No total";
 /// Beside a figure resting on an exchange rate an admin entered.
@@ -730,7 +728,9 @@ fn accounts_table(
                 @for series in accounts {
                     @let at = latest.and_then(|on| point_on(series, on));
                     tr role="row" {
-                        th scope="row" role="rowheader" { (series.name) }
+                        th scope="row" role="rowheader" {
+                            a href={ "/accounts/" (series.account) } { (series.name) }
+                        }
                         @for (column, cell) in columns.iter().zip(account_cells(series, at, no_value, not_counted)) {
                             td role="cell" data-label=(column) {
                                 span.cell-stack {
