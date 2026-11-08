@@ -20,6 +20,7 @@ mod layout;
 mod login;
 mod net_worth;
 mod plaid;
+mod rules;
 mod setup;
 #[cfg(test)]
 mod word_checks;
@@ -74,6 +75,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .merge(household::routes())
         .merge(forecast::routes())
         .merge(net_worth::routes())
+        .merge(rules::routes())
         .merge(plaid)
         .route("/", get(home))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))

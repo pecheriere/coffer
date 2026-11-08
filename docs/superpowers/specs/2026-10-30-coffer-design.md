@@ -333,6 +333,9 @@ setup (bootstrap), accept invite / re-enroll, log in, log out, my passkeys,
 my agent tokens, SimpleFin connections, and for admins: members and invites.
 No financial data pages in v1, except a small forecast page, read-only but for settling a bill (§8.9,
 R14) and a read-only net worth page (§8.10, N13). (Connections get a page because pasting a setup token is a human step.)
+Since issue #49, a rules page keeps the rules of §8.13 too: it shows what running one would change
+before it runs, and runs it, takes back what it filled, changes and deletes it, through the services
+the API uses.
 
 ### 6.5 Authorization
 

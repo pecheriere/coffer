@@ -12,7 +12,7 @@ mod fx;
 mod household;
 pub(super) mod mcp;
 mod me;
-mod members;
+pub(super) mod members;
 pub mod openapi;
 mod plan_items;
 mod provider_accounts;

@@ -40,7 +40,9 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   `pages/`, whose `plaid.rs` serves the Plaid Link pages, the only ones
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, and whose `net_worth.rs` is the read-only net worth page
-  and its `chart.rs`, an SVG drawn in integers; `browser_reports/`, the
+  and its `chart.rs`, an SVG drawn in integers, and whose `rules/` is the rules page (the list and
+  the add form in `mod.rs` and `form.rs`; in `detail.rs` a rule's page, with what running it would
+  change, and the forms that run it, take back what it filled, change and delete it); `browser_reports/`, the
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
   household forecast `settings`, the `forecast` and its what-if, the

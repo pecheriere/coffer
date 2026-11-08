@@ -36,6 +36,7 @@ mod plaid_sync;
 mod plan_items;
 mod plan_vs_actual;
 mod rules;
+mod rules_page;
 mod scheduler_clock;
 mod serve;
 mod sessions;

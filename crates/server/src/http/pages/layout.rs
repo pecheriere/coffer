@@ -27,6 +27,7 @@ pub enum Nav {
     Account,
     Forecast,
     NetWorth,
+    Rules,
     Connections,
     Members,
     Invites,
@@ -149,6 +150,7 @@ fn topbar(look: Look, viewer: &Viewer, current: Option<Nav>) -> Markup {
                 (link(Nav::Account, "/account", "Account"))
                 (link(Nav::Forecast, "/forecast", "Forecast"))
                 (link(Nav::NetWorth, "/net-worth", "Net worth"))
+                (link(Nav::Rules, "/rules", "Rules"))
                 (link(Nav::Connections, "/connections", "Connections"))
                 @if viewer.can_manage_members {
                     (link(Nav::Members, "/admin/members", "Members"))
