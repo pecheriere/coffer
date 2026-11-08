@@ -4,6 +4,7 @@
 //! `mergeTransactions`, `dismissDuplicate` and `unmergeTransaction` do.
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::Redirect;
 use coffer_domain::ids::TransactionId;
 use coffer_domain::transactions::TransactionFlag;
@@ -15,6 +16,7 @@ use crate::http::AppState;
 use crate::http::pages::amounts::{day, money};
 use crate::http::pages::layout::csrf_field;
 use crate::http::pages::{PageError, PageForm, PageSession};
+use crate::http::problem::{Problem, ProblemCode};
 use crate::ledger::LedgerError;
 use crate::ledger::transactions::TransactionView;
 
@@ -22,6 +24,10 @@ const MERGE_FINE: &str = "Merging moves the other's bank records into the one ke
     other. The one kept keeps its own category, parts, review, notes, assignee and payee, so keep \
     the one that holds them.";
 const DISCARD: &str = "If the one deleted holds any of those, or a transfer link, discard them";
+/// The service's conflict when the box wasn't ticked, in the page's words: it names the API's
+/// field, which the page doesn't show.
+const MERGE_HOLDS: &str = "The one to delete holds a category, parts, a review, notes, an \
+    assignee, a payee of its own or a transfer link. To merge anyway, tick the box to discard them.";
 const UNMERGE_FINE: &str = "Moving a record out makes it a transaction of its own, with nothing \
     filed or reviewed. This one keeps what it holds. Later syncs keep them apart.";
 
@@ -32,7 +38,10 @@ pub(super) async fn candidates(
     session: &PageSession,
     transaction: &TransactionView,
 ) -> Result<Vec<TransactionView>, PageError> {
-    if !transaction.flags.contains(&TransactionFlag::PossibleDuplicate) {
+    if !transaction
+        .flags
+        .contains(&TransactionFlag::PossibleDuplicate)
+    {
         return Ok(Vec::new());
     }
     let actor = session.actor();
@@ -55,7 +64,9 @@ pub(super) fn card(
     names: &Names,
     csrf: &str,
 ) -> Markup {
-    let flagged = transaction.flags.contains(&TransactionFlag::PossibleDuplicate);
+    let flagged = transaction
+        .flags
+        .contains(&TransactionFlag::PossibleDuplicate);
     let merged = transaction.sources.len() > 1;
     if !flagged && !merged {
         return html! {};
@@ -176,12 +187,14 @@ pub(super) async fn merge(
         "yes" => true,
         _ => return Err(PageError::invalid("not an answer the form offers")),
     };
-    state
-        .ledger
-        .merge(&actor, target, duplicate, discard)
-        .await
-        .map_err(refused)?;
-    Ok(Redirect::to(&detail_path(target)))
+    match state.ledger.merge(&actor, target, duplicate, discard).await {
+        Ok(_) => Ok(Redirect::to(&detail_path(target))),
+        Err(LedgerError::Conflict(ProblemCode::MergeConflict, _)) if !discard => Err(PageError(
+            Problem::new(StatusCode::CONFLICT, ProblemCode::MergeConflict, "Conflict")
+                .with_detail(MERGE_HOLDS.to_owned()),
+        )),
+        Err(err) => Err(refused(err)),
+    }
 }
 
 /// Unknown fields are refused: a forged form fails whole.
@@ -223,6 +236,7 @@ pub(super) struct DismissForm {
     csrf: String,
 }
 
+/// Says the transaction isn't a duplicate of its candidates, as `dismissDuplicate` does.
 pub(super) async fn dismiss(
     State(state): State<AppState>,
     session: PageSession,

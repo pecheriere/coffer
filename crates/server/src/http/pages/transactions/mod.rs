@@ -1,12 +1,15 @@
 //! The transactions pages: the list with its filters and the review queue, one transaction's
-//! page, and the forms that review, file, split and edit one, mark several reviewed at once, and
-//! enter or delete one by hand. Every read and write goes through the ledger service the API
+//! page, and the forms that review, file, split and edit one, link it with its other leg, merge
+//! or dismiss its possible duplicates, mark several reviewed at once, and enter or delete one by
+//! hand. Every read and write goes through the ledger service the API
 //! uses, with the session's actor, so it authorizes and audits as for the API; the pages decide
 //! nothing of their own, and a refusal is the service's fixed words.
 
 mod detail;
+mod duplicates;
 mod edit;
 mod filters;
+mod links;
 mod list;
 mod manual;
 mod splits;
@@ -42,6 +45,14 @@ pub fn routes() -> Router<AppState> {
         .route("/transactions/{id}/splits", post(edit::splits))
         .route("/transactions/{id}/details", post(edit::details))
         .route("/transactions/{id}/delete", post(manual::delete))
+        .route("/transactions/{id}/link", post(links::link))
+        .route("/transactions/{id}/unlink", post(links::unlink))
+        .route("/transactions/{id}/merge", post(duplicates::merge))
+        .route("/transactions/{id}/unmerge", post(duplicates::unmerge))
+        .route(
+            "/transactions/{id}/dismiss-duplicate",
+            post(duplicates::dismiss),
+        )
 }
 
 /// A transaction's page.

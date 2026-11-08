@@ -20,7 +20,7 @@ use crate::ledger::transfer_links::{TransferCandidates, TransferLinkView};
 
 /// What the page knows of a transaction's link: the link, or what might be its other leg.
 pub(super) enum LinkState {
-    Linked(TransferLinkView),
+    Linked(Box<TransferLinkView>),
     Unlinked(TransferCandidates),
 }
 
@@ -36,7 +36,7 @@ impl LinkState {
                 .ledger
                 .get_transfer_link(&actor, link.id)
                 .await
-                .map(Self::Linked)
+                .map(|link| Self::Linked(Box::new(link)))
                 .map_err(refused),
             None => state
                 .ledger

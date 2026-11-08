@@ -42,7 +42,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   forecast page, read-only but for settling a bill it asks about, and whose `net_worth.rs` is the read-only net worth page
   and its `chart.rs`, an SVG drawn in integers; whose `transactions/` is the transactions list and its
   review queue (`list.rs`, `filters.rs`) and one transaction's page (`detail.rs`), with the forms that
-  review, file, split (`splits.rs`) and edit one or mark several reviewed (`edit.rs`) and enter or
+  review, file, split (`splits.rs`) and edit one or mark several reviewed (`edit.rs`), link it with
+  its other leg (`links.rs`), merge or dismiss its possible duplicates (`duplicates.rs`) and enter or
   delete one by hand (`manual.rs`), each through the ledger call its API operation makes; `browser_reports/`, the
   unauthenticated endpoint that logs what browsers report); `ledger` (accounts and balances, categories, `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the

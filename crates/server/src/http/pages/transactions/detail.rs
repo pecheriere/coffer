@@ -1,14 +1,15 @@
 //! One transaction's page: what `GET /api/v1/transactions/{id}` answers, in words, with the
-//! forms that review it, file or split it, edit its payee, notes and assignee, and delete one
-//! entered by hand.
+//! forms that review it, file or split it, edit its payee, notes and assignee, link it with its
+//! other leg, merge or dismiss its possible duplicates, and delete one entered by hand.
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use coffer_domain::transactions::{ReviewStatus, TransactionOrigin};
 use maud::{Markup, html};
 
+use super::links::LinkState;
 use super::splits::{category_form, splits_form};
-use super::{LIST, Names, chips, detail_path, refused, title, transaction_id};
+use super::{LIST, Names, chips, detail_path, duplicates, links, refused, title, transaction_id};
 use crate::http::AppState;
 use crate::http::pages::account::viewer;
 use crate::http::pages::amounts::{day, money};
@@ -29,6 +30,8 @@ pub(super) async fn page(
         .await
         .map_err(refused)?;
     let names = Names::read(&state, &actor).await?;
+    let link = LinkState::read(&state, &session, &transaction).await?;
+    let candidates = duplicates::candidates(&state, &session, &transaction).await?;
     let viewer = viewer(&state, &session).await;
     let frame = Frame {
         look: session.look(&state).await,
@@ -36,11 +39,18 @@ pub(super) async fn page(
         current: Some(Nav::Transactions),
         narrow: false,
     };
-    let content = content(&transaction, &names, &viewer.csrf);
+    let content = content(&transaction, &link, &candidates, &names, &viewer.csrf);
     Ok(frame_page(&frame, title(&transaction), &content).into_response())
 }
 
-fn content(transaction: &TransactionView, names: &Names, csrf: &str) -> Markup {
+/// The page, with `candidates` the transactions it may duplicate.
+fn content(
+    transaction: &TransactionView,
+    link: &LinkState,
+    candidates: &[TransactionView],
+    names: &Names,
+    csrf: &str,
+) -> Markup {
     html! {
         p { a href=(LIST) { "All transactions" } }
         h1 { (title(transaction)) (chips(transaction)) }
@@ -58,6 +68,8 @@ fn content(transaction: &TransactionView, names: &Names, csrf: &str) -> Markup {
             (splits_form(transaction, names, csrf))
         }
         (details_card(transaction, names, csrf))
+        (links::card(transaction, link, names, csrf))
+        (duplicates::card(transaction, candidates, names, csrf))
         @if transaction.origin == TransactionOrigin::Manual {
             (delete_card(transaction, csrf))
         }

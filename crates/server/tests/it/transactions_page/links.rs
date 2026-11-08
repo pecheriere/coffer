@@ -6,15 +6,19 @@ use coffer_domain::ids::{AccountId, TransactionId};
 use jiff::civil::date;
 use serde_json::json;
 
-use super::{World, account, assert_redirect, assert_refused, detail, signed_in, world};
+use super::{World, account, assert_redirect, assert_refused, detail, member, signed_in, world};
 
 /// Alice's "Checking" and "Savings", kept by hand, with an outflow of `out` from checking on
 /// 2 October and an inflow of `into` to savings on the 3rd.
 async fn legs(world: &mut World, out: i64, into: i64) -> (TransactionId, TransactionId, AccountId) {
     let checking = account(&world.server, &world.alice, "Checking", "USD").await;
     let savings = account(&world.server, &world.alice, "Savings", "USD").await;
-    let outflow = world.manual_in(checking, out, "To savings", date(2026, 10, 2)).await;
-    let inflow = world.manual_in(savings, into, "From checking", date(2026, 10, 3)).await;
+    let outflow = world
+        .manual_in(checking, out, "To savings", date(2026, 10, 2))
+        .await;
+    let inflow = world
+        .manual_in(savings, into, "From checking", date(2026, 10, 3))
+        .await;
     (outflow, inflow, savings)
 }
 
@@ -27,12 +31,18 @@ async fn a_suggested_leg_is_linked_and_the_link_removed() {
     assert!(page.body.contains("aria-label=\"Link with To savings\""));
 
     let reply = world
-        .post(&format!("{}/link", detail(inflow)), &[("other", &outflow.to_string())])
+        .post(
+            &format!("{}/link", detail(inflow)),
+            &[("other", &outflow.to_string())],
+        )
         .await;
     assert_redirect(&reply, &detail(inflow));
     let read = world.read(inflow).await;
     let link = read["transfer_link"]["id"].as_str().unwrap().to_owned();
-    assert_eq!(read["transfer_link"]["other_transaction"], outflow.to_string());
+    assert_eq!(
+        read["transfer_link"]["other_transaction"],
+        outflow.to_string()
+    );
     let stored = world
         .api(&format!("/api/v1/transfer-links/{link}"), StatusCode::OK)
         .await;
@@ -43,10 +53,22 @@ async fn a_suggested_leg_is_linked_and_the_link_removed() {
     assert_eq!(event.actor, signed_in(&world.alice));
 
     let page = world.page(&detail(outflow)).await;
-    assert!(page.body.contains("500.00 USD left Checking on 2 October 2026"));
-    assert!(page.body.contains("500.00 USD reached Savings on 3 October 2026"));
-    assert!(page.body.contains(&format!("href=\"/transactions/{inflow}\">The other leg")));
-    assert!(page.body.contains("is one movement"), "both accounts are counted cash");
+    assert!(
+        page.body
+            .contains("500.00 USD left Checking on 2 October 2026")
+    );
+    assert!(
+        page.body
+            .contains("500.00 USD reached Savings on 3 October 2026")
+    );
+    assert!(
+        page.body
+            .contains(&format!("href=\"/transactions/{inflow}\">The other leg"))
+    );
+    assert!(
+        page.body.contains("is one movement"),
+        "both accounts are counted cash"
+    );
 
     let reply = world
         .post(&format!("{}/unlink", detail(outflow)), &[("link", &link)])
@@ -54,7 +76,10 @@ async fn a_suggested_leg_is_linked_and_the_link_removed() {
     assert_redirect(&reply, &detail(outflow));
     assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
     world
-        .api(&format!("/api/v1/transfer-links/{link}"), StatusCode::NOT_FOUND)
+        .api(
+            &format!("/api/v1/transfer-links/{link}"),
+            StatusCode::NOT_FOUND,
+        )
         .await;
     assert_eq!(world.audit(&link).await[0].action, "transfer_link.remove");
 }
@@ -64,7 +89,10 @@ async fn any_other_leg_is_linked_by_its_address_and_the_difference_said() {
     let mut world = world().await;
     let (outflow, inflow, _) = legs(&mut world, -50_000, 49_500).await;
     let page = world.page(&detail(outflow)).await;
-    assert!(page.body.contains("coffer sees nothing that looks like its other leg."));
+    assert!(
+        page.body
+            .contains("coffer sees nothing that looks like its other leg.")
+    );
 
     let address = format!("https://coffer.example/transactions/{inflow}");
     let reply = world
@@ -72,7 +100,10 @@ async fn any_other_leg_is_linked_by_its_address_and_the_difference_said() {
         .await;
     assert_redirect(&reply, &detail(outflow));
     let page = world.page(&detail(outflow)).await;
-    assert!(page.body.contains("5.00 USD less arrived than left, such as for a fee."));
+    assert!(
+        page.body
+            .contains("5.00 USD less arrived than left, such as for a fee.")
+    );
 }
 
 #[tokio::test]
@@ -80,24 +111,36 @@ async fn legs_in_two_currencies_say_how_the_rate_check_went() {
     let mut world = world().await;
     let checking = account(&world.server, &world.alice, "Checking", "USD").await;
     let euros = account(&world.server, &world.alice, "Euros", "EUR").await;
-    let outflow = world.manual_in(checking, -11_000, "To euros", date(2026, 10, 2)).await;
-    let inflow = world.manual_in(euros, 10_000, "From dollars", date(2026, 10, 2)).await;
+    let outflow = world
+        .manual_in(checking, -11_000, "To euros", date(2026, 10, 2))
+        .await;
+    let inflow = world
+        .manual_in(euros, 10_000, "From dollars", date(2026, 10, 2))
+        .await;
 
     let reply = world
-        .post(&format!("{}/link", detail(inflow)), &[("other", &outflow.to_string())])
+        .post(
+            &format!("{}/link", detail(inflow)),
+            &[("other", &outflow.to_string())],
+        )
         .await;
     assert_redirect(&reply, &detail(inflow));
     let page = world.page(&detail(inflow)).await;
     assert!(page.body.contains("110.00 USD left Checking"));
     assert!(page.body.contains("100.00 EUR reached Euros"));
-    assert!(page.body.contains("No usable exchange rate is held for that day"));
+    assert!(
+        page.body
+            .contains("No usable exchange rate is held for that day")
+    );
 }
 
 #[tokio::test]
 async fn a_link_the_service_refuses_is_said_in_its_words() {
     let mut world = world().await;
     let (outflow, _, savings) = legs(&mut world, -50_000, 50_000).await;
-    let also_out = world.manual_in(savings, -2_000, "Cash out", date(2026, 10, 4)).await;
+    let also_out = world
+        .manual_in(savings, -2_000, "Cash out", date(2026, 10, 4))
+        .await;
     let path = format!("{}/link", detail(outflow));
 
     let reply = world.post(&path, &[("other", &also_out.to_string())]).await;
@@ -121,6 +164,61 @@ async fn a_link_the_service_refuses_is_said_in_its_words() {
     let reply = world
         .post(&format!("{}/unlink", detail(outflow)), &[("link", "xyzzy")])
         .await;
-    assert_refused(&reply, StatusCode::UNPROCESSABLE_ENTITY, "the form could not be read", "xyzzy");
+    assert_refused(
+        &reply,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the form could not be read",
+        "xyzzy",
+    );
+    assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
+}
+
+/// A member links on this page as the API lets a member do: on every account, as themselves.
+#[tokio::test]
+async fn a_member_links_as_themselves() {
+    let mut world = world().await;
+    let (outflow, inflow, _) = legs(&mut world, -50_000, 50_000).await;
+    let (mut bob, bob_actor) = member(&world).await;
+    let page = bob.get(&detail(outflow)).await;
+    assert_eq!(page.status, StatusCode::OK);
+    let reply = bob
+        .post_form(
+            &format!("{}/link", detail(outflow)),
+            &[("csrf", &page.csrf()), ("other", &inflow.to_string())],
+        )
+        .await;
+    assert_redirect(&reply, &detail(outflow));
+    let link = world.read(outflow).await["transfer_link"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(world.audit(&link).await[0].actor, signed_in(&bob_actor));
+}
+
+#[tokio::test]
+async fn the_link_forms_need_the_sessions_token_and_refuse_unknown_fields() {
+    let mut world = world().await;
+    let (outflow, inflow, _) = legs(&mut world, -50_000, 50_000).await;
+    let inflow = inflow.to_string();
+    let forms = [
+        (
+            format!("{}/link", detail(outflow)),
+            [("other", inflow.as_str())],
+        ),
+        (
+            format!("{}/unlink", detail(outflow)),
+            [("link", "0190f000-0000-7000-8000-000000000000")],
+        ),
+    ];
+    for (path, fields) in &forms {
+        let mut forged = vec![("csrf", "forged")];
+        forged.extend_from_slice(fields);
+        let reply = world.browser.post_form(path, &forged).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        let mut extra = fields.to_vec();
+        extra.push(("admin", "yes"));
+        let reply = world.post(path, &extra).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
     assert_eq!(world.read(outflow).await["transfer_link"], json!(null));
 }
