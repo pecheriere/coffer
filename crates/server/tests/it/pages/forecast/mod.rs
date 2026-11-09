@@ -20,7 +20,7 @@ use crate::forecast::{AS_OF, BALANCE_ON, World, outflow, usd};
 const PAGE: &str = "/forecast";
 
 /// A browser signed in as `world`'s alice.
-async fn signed_in(world: &World) -> Browser {
+pub(crate) async fn signed_in(world: &World) -> Browser {
     let session = world
         .server
         .sessions

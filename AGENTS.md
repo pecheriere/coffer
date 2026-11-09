@@ -42,8 +42,10 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   a tool's schemas read from the OpenAPI document), `health`,
   `pages/`, whose `layout.rs` frames every page under one of four tabs (Home, Money,
   Activity, More: inline links on a wide screen, a bar fixed to the bottom of a phone's),
-  whose `home.rs` is Home at `/`, read-only (net worth with its change this month and
-  `home/sparkline.rs`, a line drawn in integers, and how many transactions wait to be checked),
+  whose `home.rs` is Home at `/`, read-only (free money first, from `home/free_money.rs` with its
+  `home/words.rs` and `home/bar.rs`, a stacked bar drawn in integers, then net worth with its change
+  this month and `home/sparkline.rs`, a line drawn in integers, and how many transactions wait to
+  be checked),
   whose `more.rs` links to every page the tabs don't name, whose `plaid.rs` serves the Plaid Link pages, the only ones
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, whose `categories.rs` is the

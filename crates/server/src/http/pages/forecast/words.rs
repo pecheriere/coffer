@@ -17,14 +17,14 @@ use crate::http::pages::amounts::{day, magnitude, money};
 
 /// What the forecast's ids are called. An id with no name, which only a change between
 /// two reads can cause, falls back to a plain description.
-pub(super) struct Names<'a> {
+pub(in crate::http::pages) struct Names<'a> {
     accounts: BTreeMap<AccountId, &'a str>,
     pub(super) categories: BTreeMap<CategoryId, String>,
     pub(super) items: BTreeMap<PlannedItemId, String>,
 }
 
 impl<'a> Names<'a> {
-    pub(super) fn of_accounts(accounts: &'a [AccountLine]) -> Self {
+    pub(in crate::http::pages) fn of_accounts(accounts: &'a [AccountLine]) -> Self {
         Self {
             accounts: accounts
                 .iter()
@@ -138,7 +138,8 @@ pub(super) fn settled_budget_sentence(line: &SettledBudget) -> String {
 
 /// What follows the missing emergency fund's sentence for someone who can't set one: an admin
 /// gets a link to the Household page instead.
-pub(super) const ADMIN_SETS_EMERGENCY_FUND: &str = "An admin can set one on the Household page.";
+pub(in crate::http::pages) const ADMIN_SETS_EMERGENCY_FUND: &str =
+    "An admin can set one on the Household page.";
 
 /// A currency in use without an emergency fund: nothing is held back in it.
 fn no_emergency_fund_sentence(currency: Currency) -> String {
@@ -149,7 +150,7 @@ fn no_emergency_fund_sentence(currency: Currency) -> String {
 }
 
 /// Why there is no number.
-pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
+pub(in crate::http::pages) fn blocker_sentence(blocker: &Blocker) -> String {
     match blocker {
         Blocker::MixedCurrencies { currencies } => {
             let codes: Vec<&str> = currencies.iter().map(Currency::as_str).collect();
@@ -541,7 +542,11 @@ fn duplicates_sentence(count: u32) -> String {
 }
 
 /// What might change the number. `as_of` is the first day of the forecast.
-pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>) -> String {
+pub(in crate::http::pages) fn caution_sentence(
+    caution: &Caution,
+    as_of: Date,
+    names: &Names<'_>,
+) -> String {
     match caution {
         Caution::BalanceStale {
             account,
