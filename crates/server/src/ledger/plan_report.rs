@@ -110,10 +110,8 @@ fn input(
                 settled: settled.remove(&item.id).unwrap_or_default(),
                 id: item.id,
                 name: item.name.as_str().to_owned(),
-                category: item.category,
-                amount: item.amount,
+                versions: item.versions,
                 schedule: item.schedule,
-                spending: item.spending,
                 active: item.active,
             })
             .collect(),

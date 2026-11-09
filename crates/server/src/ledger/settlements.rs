@@ -115,7 +115,12 @@ impl Ledger {
         let mut tx = self.store.begin().await?;
         let today = self.time.today_seen_by(&mut tx).await?;
         validate_settlement_month(month, today).map_err(invalid)?;
-        let item = tx.get_planned_item(id).await?;
+        let item = tx
+            .get_planned_item(
+                id,
+                CalendarMonth::of(today).map_err(|_| LedgerError::NotFound)?,
+            )
+            .await?;
         if !settlement_applies(item.direction, &item.schedule, item.spending) {
             return Err(LedgerError::Invalid(NOT_SETTLEABLE));
         }
@@ -182,7 +187,12 @@ impl Ledger {
         validate_as_of(month.first_day()).map_err(invalid)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        tx.get_planned_item(id).await?;
+        let today = self.time.today_seen_by(&mut tx).await?;
+        tx.get_planned_item(
+            id,
+            CalendarMonth::of(today).map_err(|_| LedgerError::NotFound)?,
+        )
+        .await?;
         let settlements = tx.settlements_of_item(id).await?;
         let Some(current) = settlements.iter().find(|one| one.month == month) else {
             return Ok(());

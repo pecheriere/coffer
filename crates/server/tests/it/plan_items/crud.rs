@@ -324,8 +324,14 @@ async fn create_and_update_are_audited_field_by_field() {
     fields.sort_unstable();
     assert_eq!(
         fields,
-        ["account_hint", "amount_minor", "currency", "name"],
-        "only the changed fields"
+        [
+            "account_hint",
+            "amount_minor",
+            "currency",
+            "effective_from",
+            "name"
+        ],
+        "only the changed fields, and from when the values changed"
     );
     let name = change(updated, "name");
     assert_eq!(name.before, text("Water bill"));
@@ -404,8 +410,13 @@ async fn spending_is_patchable_and_audited() {
                 && event.changes.iter().any(|(field, _)| field == "spending")
         })
         .unwrap();
-    let fields: Vec<_> = latest.changes.iter().map(|(field, _)| field).collect();
-    assert_eq!(fields, ["spending"], "only the changed field");
+    let mut fields: Vec<_> = latest.changes.iter().map(|(field, _)| field).collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        ["effective_from", "spending"],
+        "only the changed field, and from when"
+    );
     assert_eq!(change(latest, "spending").before, text("budget"));
     assert_eq!(change(latest, "spending").after, text("bill"));
 

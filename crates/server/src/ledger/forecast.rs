@@ -10,15 +10,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use coffer_domain::forecast::{
     AccountInput, BalanceInput, CategorySpent, FeedAlert, FeedProblem, FeedProblemReason,
     FeedStatus, Forecast, ForecastInput, ItemInput, LineSource, LooseEnds, NewerSpending,
-    SpentTransaction, UnboundAccount, compute_forecast,
+    SpentTransaction, UnboundAccount, bills_looked_at_from, compute_forecast,
 };
 use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, ConnectionId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
     CalendarMonth, EmergencyFund, EmergencyFunds, ForecastSettings, MAX_HYPOTHETICAL_ITEMS,
-    PlanDirection, PlanSchedule, PlanSpending, PlanTier, PlannedItemName, SettlementKind,
-    resolved_tier, strict_date, validate_amount, validate_as_of,
+    MonthSpan, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlanTier, PlanValues,
+    PlannedItemName, SettlementKind, resolved_tier, strict_date, validate_amount, validate_as_of,
 };
 use coffer_domain::policy::{AccountLevel, Action, authorize};
 use coffer_store::{
@@ -205,6 +205,8 @@ impl Ledger {
                 goal_spent_minor: 0,
                 goal_linked_both_sides: false,
                 settled: BTreeMap::new(),
+                in_force: MonthSpan::ALWAYS,
+                also_matches: BTreeMap::new(),
             });
         }
         Ok(checked)
@@ -350,9 +352,9 @@ pub(super) fn input(
             .collect(),
         items: items
             .iter()
-            .map(|item| {
+            .flat_map(|item| {
                 let months = settled.remove(&item.id).unwrap_or_default();
-                stored_item(item, &goal_spent, &both_sides, months)
+                stored_items(item, as_of, &goal_spent, &both_sides, &months)
             })
             .chain(hypothetical)
             .collect(),
@@ -508,24 +510,68 @@ fn feed_problems(record: &ProviderAccountRecord, expected: Option<Currency>) -> 
     found
 }
 
-fn stored_item(
+/// The inputs of a stored item: one, but for a recurring item whose history reaches the
+/// look-back, which is one per version in force from last month on, each counting only the
+/// months it is in force for. A bill is matched to the amounts it held during a month as
+/// well as its own, so lowering one already paid doesn't make it unpaid.
+fn stored_items(
     item: &PlannedItemRecord,
+    as_of: Date,
     goal_spent: &BTreeMap<PlannedItemId, i64>,
     both_sides: &BTreeSet<PlannedItemId>,
-    settled: BTreeMap<CalendarMonth, SettlementKind>,
-) -> ItemInput {
-    ItemInput {
+    settled: &BTreeMap<CalendarMonth, SettlementKind>,
+) -> Vec<ItemInput> {
+    let input = |values: &PlanValues, in_force: MonthSpan| ItemInput {
         source: LineSource::PlannedItem { id: item.id },
         name: item.name.as_str().to_owned(),
-        category: Some(item.category),
-        amount: item.amount,
-        direction: item.direction,
+        category: Some(values.category),
+        amount: values.amount,
+        direction: values.direction,
         account_hint: item.account_hint,
         schedule: item.schedule,
-        spending: item.spending,
-        tier: item.tier,
+        spending: values.spending,
+        tier: values.tier,
         goal_spent_minor: goal_spent.get(&item.id).copied().unwrap_or(0),
         goal_linked_both_sides: both_sides.contains(&item.id),
-        settled,
+        settled: settled.clone(),
+        in_force,
+        also_matches: BTreeMap::new(),
+    };
+    if item.schedule.item_type() != PlanItemType::Recurring {
+        let values = PlanValues {
+            amount: item.amount,
+            direction: item.direction,
+            category: item.category,
+            spending: item.spending,
+            tier: item.tier,
+        };
+        return vec![input(&values, MonthSpan::ALWAYS)];
     }
+    let Ok(first) = CalendarMonth::of(bills_looked_at_from(as_of)) else {
+        return Vec::new();
+    };
+    let looked_at = MonthSpan {
+        from: Some(first),
+        until: None,
+    };
+    let months = [first, first.next(), first.next().next()];
+    item.versions
+        .timeline()
+        .into_iter()
+        .filter(|one| one.span.overlaps(looked_at))
+        .map(|one| {
+            let mut stored = input(&one.version.values, one.span);
+            for month in months {
+                let held: Vec<Money> = item
+                    .versions
+                    .held_during(month)
+                    .into_iter()
+                    .map(|values| values.amount)
+                    .filter(|amount| amount.currency == stored.amount.currency)
+                    .collect();
+                stored.also_matches.insert(month, held);
+            }
+            stored
+        })
+        .collect()
 }

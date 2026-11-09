@@ -11,7 +11,7 @@ use coffer_domain::ids::{
     RuleId, SourceRecordId, SplitId, TransactionId, TransferLinkId,
 };
 use coffer_domain::money::{Currency, Money};
-use coffer_domain::plan::PlanItemType;
+use coffer_domain::plan::{CalendarMonth, PlanItemType};
 use coffer_domain::policy::{AccountAccess, AccountLevel, authorize_account, plan_item_visible};
 use coffer_domain::transactions::{
     CategoryKind, Description, Memo, Notes, Payee, ReviewStatus, SplitError, SplitInput,
@@ -445,7 +445,11 @@ async fn check_goals(
         }
     }
     for goal in splits.iter().filter_map(|split| split.goal) {
-        let item = match tx.get_planned_item(goal).await {
+        // A goal's target changes only from this month, so its latest version is the one in
+        // force; its currency is all this reads of it.
+        let latest = CalendarMonth::of(Date::MAX)
+            .map_err(|_| LedgerError::Internal("the calendar has no last month"))?;
+        let item = match tx.get_planned_item(goal, latest).await {
             Ok(item) => item,
             Err(StoreError::NotFound) => return Err(LedgerError::Invalid(UNKNOWN_GOAL)),
             Err(other) => return Err(other.into()),

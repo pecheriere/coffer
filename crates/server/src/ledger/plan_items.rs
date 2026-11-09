@@ -13,8 +13,9 @@ use coffer_domain::identity::Actor;
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::Money;
 use coffer_domain::plan::{
-    CalendarMonth, InvalidMonth, MAX_PLAN_ITEMS, PlanDirection, PlanError, PlanSchedule,
-    PlanSpending, PlanTier, PlannedItemName, resolved_tier, spending_applies, validate_amount,
+    CalendarMonth, EffectiveFrom, InvalidMonth, MAX_PLAN_ITEMS, MonthSpan, PlanDirection,
+    PlanError, PlanSchedule, PlanSpending, PlanTier, PlannedItemName, resolved_tier,
+    spending_applies, validate_amount,
 };
 use coffer_domain::policy::{Action, authorize, plan_item_visible};
 use coffer_domain::transactions::{CategoryKind, Notes};
@@ -23,10 +24,11 @@ use coffer_store::{
     StoreTx,
 };
 use jiff::Timestamp;
+use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use self::patch::CheckedPatch;
+use self::patch::{CheckedPatch, Planned};
 use super::settlements::{SettlementView, settlements_value};
 use super::transactions::{Patch, notes};
 use super::{Ledger, LedgerError, audit, complete_created};
@@ -80,8 +82,34 @@ pub struct PlannedItemView {
     /// The months it is settled for, ordered by month: its occurrences in them count as
     /// nothing in a forecast.
     pub settlements: Vec<SettlementView>,
+    /// Its history: each version of `category`, `amount`, `direction`, `spending` and `tier`
+    /// that is ever in force, oldest first, with the months it is. The values above are the
+    /// one in force this month. A version replaced before it began is not listed.
+    pub versions: Vec<PlanVersionView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// One version of a planned item's values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PlanVersionView {
+    /// The first month it is in force; `null` on the first version, which also reads for
+    /// every month before it.
+    #[schema(required)]
+    pub from: Option<CalendarMonth>,
+    /// The first month it is no longer in force; `null` while it is the latest.
+    #[schema(required)]
+    pub until: Option<CalendarMonth>,
+    pub category: CategoryId,
+    pub amount: Money,
+    pub direction: PlanDirection,
+    #[schema(required)]
+    pub spending: Option<PlanSpending>,
+    #[schema(required)]
+    pub tier: Option<PlanTier>,
+    /// The day it was written.
+    #[schema(value_type = String, format = Date)]
+    pub written_on: Date,
 }
 
 impl PlannedItemView {
@@ -99,6 +127,25 @@ impl PlannedItemView {
             spending: record.spending,
             tier: record.tier,
             settlements,
+            versions: record
+                .versions
+                .timeline()
+                .into_iter()
+                .map(|one| {
+                    let MonthSpan { from, until } = one.span;
+                    let values = one.version.values;
+                    PlanVersionView {
+                        from,
+                        until,
+                        category: values.category,
+                        amount: values.amount,
+                        direction: values.direction,
+                        spending: values.spending,
+                        tier: values.tier,
+                        written_on: one.version.written_on,
+                    }
+                })
+                .collect(),
             created_at: record.created_at,
             updated_at: record.updated_at,
         }
@@ -177,6 +224,12 @@ pub struct PlannedItemPatch {
     /// tier, even from bill to budget; an item that becomes income loses it, and one that
     /// becomes an outflow takes its kind's default.
     pub tier: Option<PlanTier>,
+    /// From when `category`, `amount`, `direction`, `spending` and `tier` change: `this_month`
+    /// (the default), `next_month` (only on a recurring item), or a month written `YYYY-MM`
+    /// that is this month or next. A past month's plan never changes, so any other month is
+    /// refused, and so is a change to a one-off dated in a past month. A bill already paid
+    /// stays paid when its amount changes. Ignored when none of those five changes.
+    pub effective_from: Option<EffectiveFrom>,
 }
 
 fn views_of(settlements: &[SettlementRecord]) -> Vec<SettlementView> {
@@ -202,6 +255,11 @@ pub(super) fn invalid(error: PlanError) -> LedgerError {
         PlanError::IncomeHasNoTier => "income has no tier",
         PlanError::GoalIsSavingToward => "a goal is always saving toward",
         PlanError::OnlyGoalSavesToward => "only a goal is saving toward",
+        PlanError::PastVersion => "only this month's or next month's plan can change",
+        PlanError::NextMonthNeedsRecurring => "only a recurring item can change from next month",
+        PlanError::PastOneOffKeepsValues => {
+            "a one-off in a past month keeps its amount, category and tier"
+        }
         // `PlanError` is non-exhaustive, and no other variant arises here.
         _ => "the planned item is not valid",
     })
@@ -325,6 +383,7 @@ impl Ledger {
         let schedule = schedule_text(&input.schedule)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
+        let today = self.time.today_seen_by(&mut tx).await?;
         // Inside the write lock, so concurrent creates can't pass the limit.
         if tx.count_planned_items().await? >= MAX_PLAN_ITEMS {
             return Err(LedgerError::Conflict(ProblemCode::Conflict, TOO_MANY));
@@ -345,6 +404,7 @@ impl Ledger {
                 schedule: input.schedule,
                 spending,
                 tier,
+                written_on: today,
                 created_at: now,
             })
             .await?;
@@ -377,8 +437,11 @@ impl Ledger {
     }
 
     /// Changes a planned item. A patch that changes nothing writes nothing. One that changes
-    /// its amount, currency or schedule removes its settlements from the household's current
-    /// month on, in the same transaction and audit entry, and earlier ones stay.
+    /// its amount, currency or schedule removes its settlements from the month the change
+    /// takes effect from (the household's current month for a schedule), in the same
+    /// transaction and audit entry, and earlier ones stay. A change to the category, amount,
+    /// direction, spending kind or tier is a new version of the item's values, effective from
+    /// this month or next as `effective_from` says.
     ///
     /// # Errors
     ///
@@ -398,8 +461,15 @@ impl Ledger {
         let patch = CheckedPatch::new(patch)?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let current = tx.get_planned_item(id).await?;
-        let (changes, mut audited) = patch.changes(&mut tx, &current).await?;
+        let today = self.time.today_seen_by(&mut tx).await?;
+        let this_month = CalendarMonth::of(today).map_err(invalid_month)?;
+        let current = tx.get_planned_item(id, this_month).await?;
+        let Planned {
+            changes,
+            version,
+            mut audited,
+            settlements_end_from,
+        } = patch.changes(&mut tx, &current, today).await?;
         let mut settlements = tx.settlements_of_item(id).await?;
         if audited.is_empty() {
             return Ok(PlannedItemView::new(&current, views_of(&settlements)));
@@ -407,12 +477,9 @@ impl Ledger {
         // A settlement was made on what the item then owed and when, so a change to either
         // ends those still to matter. Earlier months are what happened. It errs toward
         // counting, and the member can settle again.
-        if changes.amount.is_some() || changes.schedule.is_some() {
-            let this_month = CalendarMonth::of(self.time.today_seen_by(&mut tx).await?)
-                .map_err(invalid_month)?;
-            let (ended, earlier): (Vec<_>, Vec<_>) = settlements
-                .into_iter()
-                .partition(|one| one.month >= this_month);
+        if let Some(from) = settlements_end_from {
+            let (ended, earlier): (Vec<_>, Vec<_>) =
+                settlements.into_iter().partition(|one| one.month >= from);
             for one in &ended {
                 tx.delete_settlement(id, one.month).await?;
             }
@@ -421,7 +488,12 @@ impl Ledger {
             }
             settlements = earlier;
         }
-        let record = tx.update_planned_item(id, changes, now).await?;
+        tx.update_planned_item(id, changes, now).await?;
+        if let Some((month, values)) = version {
+            tx.add_plan_version(id, today, EffectiveFrom::Month(month), values)
+                .await?;
+        }
+        let record = tx.get_planned_item(id, this_month).await?;
         audit(
             &mut tx,
             now,
@@ -452,7 +524,9 @@ impl Ledger {
         self.authorize_plan_write(actor).await?;
         let now = self.clock.now();
         let mut tx = self.store.begin().await?;
-        let current = tx.get_planned_item(id).await?;
+        let this_month =
+            CalendarMonth::of(self.time.today_seen_by(&mut tx).await?).map_err(invalid_month)?;
+        let current = tx.get_planned_item(id, this_month).await?;
         if tx.goal_has_links(id).await? {
             return Err(LedgerError::Conflict(ProblemCode::Conflict, GOAL_LINKED));
         }
@@ -501,7 +575,8 @@ impl Ledger {
     ) -> Result<PlannedItemView, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let access = self.access.resolve(actor).await?;
-        let record = self.store.get_planned_item(id).await?;
+        let this_month = CalendarMonth::of(self.today().await?).map_err(invalid_month)?;
+        let record = self.store.get_planned_item(id, this_month).await?;
         if !plan_item_visible(&access, record.account_hint) {
             return Err(LedgerError::NotFound);
         }
@@ -524,7 +599,11 @@ impl Ledger {
     ) -> Result<Vec<PlannedItemView>, LedgerError> {
         authorize(actor, Action::ReadHousehold)?;
         let access = self.access.resolve(actor).await?;
-        let records = self.store.list_planned_items(include_inactive).await?;
+        let this_month = CalendarMonth::of(self.today().await?).map_err(invalid_month)?;
+        let records = self
+            .store
+            .list_planned_items(include_inactive, this_month)
+            .await?;
         let mut settlements: BTreeMap<PlannedItemId, Vec<SettlementView>> = BTreeMap::new();
         for one in self.store.settlements().await? {
             settlements

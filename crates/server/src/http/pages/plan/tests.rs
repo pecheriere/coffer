@@ -36,6 +36,7 @@ fn budget(name: &str, tier: PlanTier) -> PlannedItemView {
         spending: Some(PlanSpending::Budget),
         tier: Some(tier),
         settlements: Vec::new(),
+        versions: Vec::new(),
         created_at: Timestamp::UNIX_EPOCH,
         updated_at: Timestamp::UNIX_EPOCH,
     }

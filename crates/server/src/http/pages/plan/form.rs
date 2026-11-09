@@ -137,6 +137,7 @@ impl ItemFields {
             schedule: Some(self.schedule),
             spending: self.spending,
             tier: self.tier,
+            effective_from: None,
         }
     }
 }
