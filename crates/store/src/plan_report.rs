@@ -4,6 +4,7 @@
 use coffer_domain::fx::RateBook;
 use coffer_domain::ids::PlannedItemId;
 use coffer_domain::money::Currency;
+use coffer_domain::plan::CalendarMonth;
 use coffer_domain::plan_report::{
     GoalMonth, MonthActual, MonthMoved, MonthNotHousehold, MonthUncategorized,
 };
@@ -12,7 +13,7 @@ use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
 
 use crate::convert::{parsed, text};
-use crate::planned_items::from_row as planned_item_from_row;
+use crate::planned_items::read_all as read_planned_items;
 use crate::settlements;
 use crate::spending_sql::{
     adds_to_category, count, counts_against_goal, left_out_of_category, spendable, splits_hold,
@@ -223,13 +224,8 @@ impl Store {
         let (from, to_exclusive) = (from.to_string(), to_exclusive.to_string());
         // One read transaction: a sync committing midway can't split a report.
         let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
-        let items = sqlx::query("SELECT * FROM planned_items ORDER BY id")
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(planned_item_from_row)
-            .collect::<Result<_, _>>()?;
+        let month = CalendarMonth::of(from_date).map_err(StoreError::backend)?;
+        let items = read_planned_items(&mut tx, true, month).await?;
         let settlements = settlements::all(&mut tx).await?;
         let actuals = sqlx::query(REPORT_ACTUALS)
             .bind(&from)

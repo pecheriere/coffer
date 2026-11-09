@@ -217,6 +217,38 @@ async fn dump(pool: &SqlitePool, table: &str, columns: &[String]) -> Vec<String>
     .await
 }
 
+/// The rows of `planned_items` as they were dumped when it held its values itself: since 0032
+/// the amount, currency, direction, category and spending kind are those of the first version.
+async fn planned_items_with_first_versions(pool: &SqlitePool, columns: &[String]) -> Vec<String> {
+    const MOVED: [&str; 5] = [
+        "category_id",
+        "amount_minor",
+        "currency",
+        "direction",
+        "spending",
+    ];
+    let quoted: Vec<String> = columns
+        .iter()
+        .map(|c| {
+            let owner = if MOVED.contains(&c.as_str()) {
+                "v"
+            } else {
+                "p"
+            };
+            format!("quote({owner}.\"{c}\")")
+        })
+        .collect();
+    strings(
+        pool,
+        &format!(
+            "SELECT {} FROM planned_items p JOIN planned_item_versions v \
+             ON v.item_id = p.id AND v.seq = 1 ORDER BY 1",
+            quoted.join(" || ' | ' || ")
+        ),
+    )
+    .await
+}
+
 /// Every table and its columns and rows, but for the migrator's own.
 async fn dump_all(pool: &SqlitePool) -> BTreeMap<String, (Vec<String>, Vec<String>)> {
     let tables = strings(
@@ -313,6 +345,14 @@ async fn migration_keeps_every_row() {
     // Whatever later migrations add, every row stays.
     every_migration().run(&pool).await.unwrap();
     for (table, (columns, rows)) in &before {
+        if table == "planned_items" {
+            assert_eq!(
+                &planned_items_with_first_versions(&pool, columns).await,
+                rows,
+                "planned_items keeps every row and value, the versioned ones in its first version"
+            );
+            continue;
+        }
         assert_eq!(
             &dump(&pool, table, columns).await,
             rows,

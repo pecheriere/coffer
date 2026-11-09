@@ -5,26 +5,27 @@
 use std::collections::HashMap;
 
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
-use coffer_domain::money::{Currency, Money};
+use coffer_domain::money::Money;
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlanTier,
-    PlannedItemName, spending_applies, validate_amount,
+    CalendarMonth, IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlanTier,
+    PlanValues, PlanVersion, PlanVersions, PlannedItemName,
 };
 use coffer_domain::transactions::Notes;
 use jiff::Timestamp;
 use jiff::civil::Date;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, SqliteExecutor};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::convert::{corrupt, parsed, parsed_opt, text, text_opt, time};
 use crate::members::expect_one;
 use crate::{Store, StoreError, StoreTx};
 
+mod versions;
+
 macro_rules! columns {
     () => {
-        "id, name, category_id, amount_minor, currency, direction, account_hint_id, notes, \
-         active, item_type, every, unit, anchor_on, end_on, one_off_on, goal_start_on, \
-         goal_due_on, goal_completed, spending, tier, created_at, updated_at"
+        "id, name, account_hint_id, notes, active, item_type, every, unit, anchor_on, end_on, \
+         one_off_on, goal_start_on, goal_due_on, goal_completed, created_at, updated_at"
     };
 }
 
@@ -33,6 +34,8 @@ macro_rules! columns {
 pub struct PlannedItemRecord {
     pub id: PlannedItemId,
     pub name: PlannedItemName,
+    /// The category, amount, direction, spending kind and tier below are the version in force
+    /// in the month the read named; [`Self::versions`] has them all.
     pub category: CategoryId,
     /// A positive magnitude; [`Self::direction`] says which way it goes.
     pub amount: Money,
@@ -45,8 +48,18 @@ pub struct PlannedItemRecord {
     pub spending: Option<PlanSpending>,
     /// Set on every outflow, and only there: saving toward on a goal, and on nothing else.
     pub tier: Option<PlanTier>,
+    /// Every version of the values above, oldest write first.
+    pub versions: PlanVersions,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+impl PlannedItemRecord {
+    /// The values in force in `month`.
+    #[must_use]
+    pub fn values_in(&self, month: CalendarMonth) -> PlanValues {
+        *self.versions.in_force(month)
+    }
 }
 
 /// A planned item to create.
@@ -65,6 +78,8 @@ pub struct NewPlannedItem {
     /// Set on every outflow: the table refuses one on income, and saving toward on anything
     /// but a goal or anything else on a goal.
     pub tier: Option<PlanTier>,
+    /// The household's day, which the first version is written on.
+    pub written_on: Date,
     pub created_at: Timestamp,
 }
 
@@ -72,9 +87,6 @@ pub struct NewPlannedItem {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlannedItemChanges {
     pub name: Option<PlannedItemName>,
-    pub category: Option<CategoryId>,
-    pub amount: Option<Money>,
-    pub direction: Option<PlanDirection>,
     /// `Some(None)` clears the hint.
     pub account_hint: Option<Option<AccountId>>,
     /// `Some(None)` clears the notes.
@@ -82,10 +94,6 @@ pub struct PlannedItemChanges {
     pub active: Option<bool>,
     /// A schedule of the item's own type: the table refuses any other.
     pub schedule: Option<PlanSchedule>,
-    /// `Some(None)` clears it.
-    pub spending: Option<Option<PlanSpending>>,
-    /// `Some(None)` clears it, as an item becoming income must in the same change.
-    pub tier: Option<Option<PlanTier>>,
 }
 
 /// The schedule columns of one row, each `None` where its type has none.
@@ -166,31 +174,21 @@ fn schedule_from_row(row: &SqliteRow) -> Result<PlanSchedule, StoreError> {
     }
 }
 
-pub(crate) fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError> {
-    let amount = Money {
-        minor_units: row.try_get("amount_minor").map_err(StoreError::from_sqlx)?,
-        currency: Currency::parse(&text(row, "currency")?).map_err(StoreError::backend)?,
-    };
-    validate_amount(amount).map_err(StoreError::backend)?;
-    let direction = parsed(row, "direction")?;
+/// An item row with its history, read as it stands in `month`.
+pub(crate) fn from_row(
+    row: &SqliteRow,
+    history: Vec<PlanVersion>,
+    month: CalendarMonth,
+) -> Result<PlannedItemRecord, StoreError> {
     let schedule = schedule_from_row(row)?;
-    schedule.validate(direction).map_err(StoreError::backend)?;
-    let spending = parsed_opt(row, "spending")?;
-    if spending.is_some() != spending_applies(direction, &schedule) {
-        return Err(corrupt("planned item spending does not fit its type"));
-    }
-    // The table's CHECK allows a NULL tier on any row (migration 0031), so an outflow
-    // without one is refused here.
-    let tier: Option<PlanTier> = parsed_opt(row, "tier")?;
-    if tier.is_some() != (direction == PlanDirection::Outflow) {
-        return Err(corrupt("planned item tier does not fit its direction"));
-    }
+    let versions = versions::checked(history, &schedule)?;
+    let values = *versions.in_force(month);
     Ok(PlannedItemRecord {
         id: parsed(row, "id")?,
         name: PlannedItemName::parse(&text(row, "name")?).map_err(StoreError::backend)?,
-        category: parsed(row, "category_id")?,
-        amount,
-        direction,
+        category: values.category,
+        amount: values.amount,
+        direction: values.direction,
         account_hint: parsed_opt(row, "account_hint_id")?,
         notes: text_opt(row, "notes")?
             .map(|notes| Notes::parse(&notes))
@@ -198,16 +196,43 @@ pub(crate) fn from_row(row: &SqliteRow) -> Result<PlannedItemRecord, StoreError>
             .map_err(StoreError::backend)?,
         active: row.try_get("active").map_err(StoreError::from_sqlx)?,
         schedule,
-        spending,
-        tier,
+        spending: values.spending,
+        tier: values.tier,
+        versions,
         created_at: time(row, "created_at")?,
         updated_at: time(row, "updated_at")?,
     })
 }
 
-async fn fetch<'e>(
-    executor: impl SqliteExecutor<'e>,
+/// Every planned item (only the active ones unless `include_inactive`), by id, with its history
+/// read at `month`, in one consistent read of `conn`.
+pub(crate) async fn read_all(
+    conn: &mut SqliteConnection,
+    include_inactive: bool,
+    month: CalendarMonth,
+) -> Result<Vec<PlannedItemRecord>, StoreError> {
+    let rows = sqlx::query(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM planned_items WHERE active = 1 OR ? ORDER BY id"
+    ))
+    .bind(include_inactive)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(StoreError::from_sqlx)?;
+    let mut histories = versions::load_all(conn).await?;
+    rows.iter()
+        .map(|row| {
+            let id: PlannedItemId = parsed(row, "id")?;
+            from_row(row, histories.remove(&id).unwrap_or_default(), month)
+        })
+        .collect()
+}
+
+async fn fetch(
+    conn: &mut SqliteConnection,
     id: PlannedItemId,
+    month: CalendarMonth,
 ) -> Result<PlannedItemRecord, StoreError> {
     let row = sqlx::query(concat!(
         "SELECT ",
@@ -215,10 +240,11 @@ async fn fetch<'e>(
         " FROM planned_items WHERE id = ?"
     ))
     .bind(id.to_string())
-    .fetch_one(executor)
+    .fetch_one(&mut *conn)
     .await
     .map_err(StoreError::from_sqlx)?;
-    from_row(&row)
+    let history = versions::load_one(conn, id).await?;
+    from_row(&row, history, month)
 }
 
 /// The account hint of each of `ids` that exists.
@@ -264,14 +290,10 @@ impl StoreTx {
         sqlx::query(concat!(
             "INSERT INTO planned_items (",
             columns!(),
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(id.to_string())
         .bind(new.name.as_str())
-        .bind(new.category.to_string())
-        .bind(new.amount.minor_units)
-        .bind(new.amount.currency.as_str())
-        .bind(new.direction.as_str())
         .bind(new.account_hint.map(|account| account.to_string()))
         .bind(new.notes.as_ref().map(Notes::as_str))
         .bind(new.active)
@@ -284,13 +306,24 @@ impl StoreTx {
         .bind(columns.goal_start_on)
         .bind(columns.goal_due_on)
         .bind(columns.goal_completed)
-        .bind(new.spending.map(PlanSpending::as_str))
-        .bind(new.tier.map(PlanTier::as_str))
         .bind(new.created_at.as_millisecond())
         .bind(new.created_at.as_millisecond())
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
+        let first = PlanVersion {
+            seq: 1,
+            effective_from: versions::first_month(&new.schedule)?,
+            written_on: new.written_on,
+            values: PlanValues {
+                amount: new.amount,
+                direction: new.direction,
+                category: new.category,
+                spending: new.spending,
+                tier: new.tier,
+            },
+        };
+        versions::insert(&mut self.tx, id, &first).await?;
         Ok(PlannedItemRecord {
             id,
             name: new.name,
@@ -303,12 +336,14 @@ impl StoreTx {
             schedule: new.schedule,
             spending: new.spending,
             tier: new.tier,
+            versions: PlanVersions::new(vec![first]).map_err(StoreError::backend)?,
             created_at: new.created_at,
             updated_at: new.created_at,
         })
     }
 
-    /// Apply `changes` to a planned item at `at` and return it as it now is.
+    /// Apply `changes` to a planned item at `at`. The values that change over time are not
+    /// here: see [`Self::add_plan_version`].
     ///
     /// # Errors
     ///
@@ -320,26 +355,11 @@ impl StoreTx {
         id: PlannedItemId,
         changes: PlannedItemChanges,
         at: Timestamp,
-    ) -> Result<PlannedItemRecord, StoreError> {
+    ) -> Result<(), StoreError> {
         let mut query = QueryBuilder::<Sqlite>::new("UPDATE planned_items SET updated_at = ");
         query.push_bind(at.as_millisecond());
         if let Some(name) = &changes.name {
             query.push(", name = ").push_bind(name.as_str());
-        }
-        if let Some(category) = changes.category {
-            query
-                .push(", category_id = ")
-                .push_bind(category.to_string());
-        }
-        if let Some(amount) = changes.amount {
-            query
-                .push(", amount_minor = ")
-                .push_bind(amount.minor_units)
-                .push(", currency = ")
-                .push_bind(amount.currency.as_str());
-        }
-        if let Some(direction) = changes.direction {
-            query.push(", direction = ").push_bind(direction.as_str());
         }
         if let Some(account_hint) = changes.account_hint {
             query
@@ -376,24 +396,13 @@ impl StoreTx {
                 .push(", goal_completed = ")
                 .push_bind(columns.goal_completed);
         }
-        if let Some(spending) = changes.spending {
-            query
-                .push(", spending = ")
-                .push_bind(spending.map(PlanSpending::as_str));
-        }
-        if let Some(tier) = changes.tier {
-            query
-                .push(", tier = ")
-                .push_bind(tier.map(PlanTier::as_str));
-        }
         query.push(" WHERE id = ").push_bind(id.to_string());
         let result = query
             .build()
             .execute(&mut *self.tx)
             .await
             .map_err(StoreError::from_sqlx)?;
-        expect_one(result.rows_affected())?;
-        fetch(&mut *self.tx, id).await
+        expect_one(result.rows_affected())
     }
 
     /// Delete a planned item.
@@ -410,7 +419,7 @@ impl StoreTx {
         expect_one(result.rows_affected())
     }
 
-    /// Fetch a planned item, as seen by this transaction.
+    /// Fetch a planned item as it stands in `month`, as seen by this transaction.
     ///
     /// # Errors
     ///
@@ -418,8 +427,9 @@ impl StoreTx {
     pub async fn get_planned_item(
         &mut self,
         id: PlannedItemId,
+        month: CalendarMonth,
     ) -> Result<PlannedItemRecord, StoreError> {
-        fetch(&mut *self.tx, id).await
+        fetch(&mut self.tx, id, month).await
     }
 
     /// Whether any planned item, inactive ones included, uses `category`, as
@@ -432,12 +442,13 @@ impl StoreTx {
         &mut self,
         category: CategoryId,
     ) -> Result<bool, StoreError> {
-        let (exists,): (bool,) =
-            sqlx::query_as("SELECT EXISTS (SELECT 1 FROM planned_items WHERE category_id = ?)")
-                .bind(category.to_string())
-                .fetch_one(&mut *self.tx)
-                .await
-                .map_err(StoreError::from_sqlx)?;
+        let (exists,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM planned_item_versions WHERE category_id = ?)",
+        )
+        .bind(category.to_string())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(StoreError::from_sqlx)?;
         Ok(exists)
     }
 
@@ -518,7 +529,7 @@ impl Store {
         hints_of(&mut conn, ids).await
     }
 
-    /// Fetch a planned item.
+    /// Fetch a planned item as it stands in `month`.
     ///
     /// # Errors
     ///
@@ -526,11 +537,13 @@ impl Store {
     pub async fn get_planned_item(
         &self,
         id: PlannedItemId,
+        month: CalendarMonth,
     ) -> Result<PlannedItemRecord, StoreError> {
-        fetch(&self.pool, id).await
+        let mut conn = self.pool.acquire().await.map_err(StoreError::from_sqlx)?;
+        fetch(&mut conn, id, month).await
     }
 
-    /// The planned items, ordered by id; inactive ones only when
+    /// The planned items as they stand in `month`, ordered by id; inactive ones only when
     /// `include_inactive`.
     ///
     /// # Errors
@@ -539,16 +552,9 @@ impl Store {
     pub async fn list_planned_items(
         &self,
         include_inactive: bool,
+        month: CalendarMonth,
     ) -> Result<Vec<PlannedItemRecord>, StoreError> {
-        let rows = sqlx::query(concat!(
-            "SELECT ",
-            columns!(),
-            " FROM planned_items WHERE active = 1 OR ? ORDER BY id"
-        ))
-        .bind(include_inactive)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(StoreError::from_sqlx)?;
-        rows.iter().map(from_row).collect()
+        let mut tx = self.pool.begin().await.map_err(StoreError::from_sqlx)?;
+        read_all(&mut tx, include_inactive, month).await
     }
 }
