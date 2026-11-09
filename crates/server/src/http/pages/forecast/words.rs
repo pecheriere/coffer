@@ -136,10 +136,20 @@ pub(super) fn settled_budget_sentence(line: &SettledBudget) -> String {
     )
 }
 
-/// Why there is no number. `can_manage` says whether the viewer may set an emergency fund:
-/// the page follows the sentence with a link to where it is set for one who may, and the
-/// sentence names who can for anyone else.
-pub(super) fn blocker_sentence(blocker: &Blocker, can_manage: bool) -> String {
+/// What follows the missing emergency fund's sentence for someone who can't set one: an admin
+/// gets a link to the Household page instead.
+pub(super) const ADMIN_SETS_EMERGENCY_FUND: &str = "An admin can set one on the Household page.";
+
+/// A currency in use without an emergency fund: nothing is held back in it.
+fn no_emergency_fund_sentence(currency: Currency) -> String {
+    format!(
+        "No emergency fund is set for {}, so everything left counts as free.",
+        currency.as_str()
+    )
+}
+
+/// Why there is no number.
+pub(super) fn blocker_sentence(blocker: &Blocker) -> String {
     match blocker {
         Blocker::MixedCurrencies { currencies } => {
             let codes: Vec<&str> = currencies.iter().map(Currency::as_str).collect();
@@ -148,18 +158,6 @@ pub(super) fn blocker_sentence(blocker: &Blocker, can_manage: bool) -> String {
                  is no single total. Any sums below are per currency, and are never added \
                  together.",
                 listed(&codes)
-            )
-        }
-        Blocker::EmergencyFundNotSet { currency } => {
-            let who = if can_manage {
-                ""
-            } else {
-                " An admin can set one on the Household page."
-            };
-            format!(
-                "No emergency fund is set for {}. Without one, coffer would overstate what could \
-                 be invested.{who}",
-                currency.as_str()
             )
         }
         Blocker::NoCountedAccounts => {
@@ -602,6 +600,7 @@ pub(super) fn caution_sentence(caution: &Caution, as_of: Date, names: &Names<'_>
         Caution::ClosedLiabilityOwing { account, balance } => {
             closed_owing_sentence(names.account_first(*account), *balance)
         }
+        Caution::EmergencyFundNotSet { currency } => no_emergency_fund_sentence(*currency),
         Caution::EmergencyFundMonthsIsZero {
             currency,
             months: fund_months,

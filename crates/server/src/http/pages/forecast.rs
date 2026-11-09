@@ -9,7 +9,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use coffer_domain::forecast::{Blocker, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
+use coffer_domain::forecast::{Caution, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{Action, authorize};
@@ -22,8 +22,8 @@ use super::{PageError, PageSession, refused};
 use crate::http::AppState;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
-    Names, blocker_sentence, caution_sentence, month_name, months, rule_filed_transfers_sentence,
-    settled_budget_sentence, settled_sentence,
+    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_sentence, month_name, months,
+    rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -128,16 +128,7 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage
                 h3 { "Why there's no number" }
                 ul.reasons {
                     @for blocker in &forecast.blockers {
-                        li {
-                            (blocker_sentence(blocker, can_manage))
-                            @if can_manage && matches!(blocker, Blocker::EmergencyFundNotSet { .. }) {
-                                " "
-                                a href="/admin/household#emergency-fund" {
-                                    "Set one on the Household page"
-                                }
-                                "."
-                            }
-                        }
+                        li { (blocker_sentence(blocker)) }
                     }
                 }
             }
@@ -147,6 +138,17 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage
                     @for caution in &forecast.cautions {
                         li {
                             (caution_sentence(caution, forecast.as_of, names))
+                            @if matches!(caution, Caution::EmergencyFundNotSet { .. }) {
+                                " "
+                                @if can_manage {
+                                    a href="/admin/household#emergency-fund" {
+                                        "Set one on the Household page"
+                                    }
+                                    "."
+                                } @else {
+                                    (ADMIN_SETS_EMERGENCY_FUND)
+                                }
+                            }
                             @if let Some(csrf) = csrf {
                                 (settle::forms(caution, forecast.as_of, names, csrf))
                             }
@@ -192,7 +194,11 @@ fn headline(forecast: &Forecast) -> Markup {
             Some(surplus) => {
                 h2.answer-label { "Surplus" }
                 p.answer-number { (money(surplus)) }
-                p.fine { "What could be invested once the planned outflows, goals and emergency fund are covered." }
+                @if forecast.cautions.iter().any(|caution| matches!(caution, Caution::EmergencyFundNotSet { .. })) {
+                    p.fine { "What is left once the planned outflows and goals are covered. Set an emergency fund target before treating any of it as money to invest." }
+                } @else {
+                    p.fine { "What could be invested once the planned outflows, goals and emergency fund are covered." }
+                }
             }
             None => {
                 h2.answer-label { "No number yet" }
@@ -392,6 +398,44 @@ mod tests {
         assert!(!reading.contains("<form"));
         let writing = content(&forecast, &names, Some("token"), true).into_string();
         assert!(writing.contains("paid for all of November 2026"));
+    }
+
+    /// Only a plan with an emergency fund target may suggest investing the surplus.
+    #[test]
+    fn the_surplus_suggests_investing_only_once_a_target_is_set() {
+        let usd = Money {
+            minor_units: 100_000,
+            currency: Currency::parse("USD").unwrap(),
+        };
+        let mut forecast = Forecast {
+            as_of: date(2026, 11, 15),
+            end_exclusive: date(2026, 12, 15),
+            horizon_months: 1,
+            include_income: false,
+            emergency_funds: Vec::new(),
+            stale_after_days: 7,
+            status: ForecastStatus::Firm,
+            surplus: Some(usd),
+            totals: Vec::new(),
+            accounts: Vec::new(),
+            items: Vec::new(),
+            months: Vec::new(),
+            blockers: Vec::new(),
+            cautions: Vec::new(),
+            rule_filed_transfers: Vec::new(),
+            settled: Vec::new(),
+            settled_budgets: Vec::new(),
+        };
+        let names = Names::of_accounts(&[]);
+        let with_target = content(&forecast, &names, None, false).into_string();
+        assert!(with_target.contains("could be invested"));
+
+        forecast.cautions = vec![Caution::EmergencyFundNotSet {
+            currency: usd.currency,
+        }];
+        let without = content(&forecast, &names, None, false).into_string();
+        assert!(!without.contains("could be invested"));
+        assert!(without.contains("Set an emergency fund target"));
     }
 
     /// A note with no number behind it: it shows when rules filed a transfer with no link, and

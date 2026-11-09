@@ -93,6 +93,46 @@ pub(super) fn account_line(account: &AccountInput, book: &mut Book) -> AccountLi
     }
 }
 
+/// What an item's occurrences from `as_of` up to `until_exclusive` come to, and what they still
+/// need. The forecast and free money both read it, so the two can't count an item differently.
+pub(super) struct Need {
+    /// The dates that still count, in order: none settled, and none a payment already paid up
+    /// to a week early (spec §10.8), since either way it needs nothing.
+    pub(super) dates: Vec<Date>,
+    pub(super) occurrences: u32,
+    /// What those dates come to, before this month's spending.
+    pub(super) gross: i128,
+    /// What an outflow still needs: `gross`, less what this month's spending took off a budget,
+    /// plus what bills and one-offs dated before `as_of` still owe. A budget's reduction never
+    /// exceeds its month's occurrences, so this is never below 0 once `until_exclusive` reaches
+    /// the next month's first day.
+    pub(super) needed: i128,
+}
+
+/// [`Need`] for `item`, counting from where its occurrences start counting at `as_of`: a stored
+/// budget from its month's first day, income from the day after, anything else from `as_of`.
+pub(super) fn still_needed(
+    item: &ItemInput,
+    adjustment: &ItemAdjustment,
+    as_of: Date,
+    until_exclusive: Date,
+) -> Result<Need, ForecastError> {
+    let mut dates = item
+        .schedule
+        .occurrences(reduction::counts_from(item, as_of), until_exclusive);
+    dates.retain(|&on| {
+        !settled::is_settled(item, on) && adjustment.paid_ahead.binary_search(&on).is_err()
+    });
+    let occurrences = count(&dates)?;
+    let gross = i128::from(item.amount.minor_units) * i128::from(occurrences);
+    Ok(Need {
+        dates,
+        occurrences,
+        gross,
+        needed: gross - adjustment.reduced_by + adjustment.unpaid,
+    })
+}
+
 /// A recurring or one-off item's line, adding it to its currency's tally.
 /// `month_counts` is a buffer, so a daily item costs no allocation per date.
 pub(super) fn dated_line(
@@ -109,18 +149,14 @@ pub(super) fn dated_line(
     } else {
         window.income_end_exclusive
     };
-    let mut dates = item
-        .schedule
-        .occurrences(reduction::counts_from(item, window.as_of), end_exclusive);
-    // Settled, or already paid by a payment up to a week early (spec §10.8): either way it needs
-    // nothing, and a paid one is listed in `payments` instead.
-    dates.retain(|&on| {
-        !settled::is_settled(item, on) && adjustment.paid_ahead.binary_search(&on).is_err()
-    });
+    let Need {
+        dates,
+        occurrences,
+        gross,
+        needed,
+    } = still_needed(item, adjustment, window.as_of, end_exclusive)?;
     let amount = i128::from(item.amount.minor_units);
     let currency = item.amount.currency;
-    let occurrences = count(&dates)?;
-    let gross = amount * i128::from(occurrences);
     let ItemAdjustment {
         reduced_by,
         unpaid,
@@ -156,7 +192,7 @@ pub(super) fn dated_line(
 
         let tally = book.tally(currency);
         if outflow {
-            tally.outflows += gross - reduced_by + unpaid;
+            tally.outflows += needed;
         } else {
             tally.inflows += gross;
         }
@@ -175,7 +211,7 @@ pub(super) fn dated_line(
     }
 
     let counted = if outflow {
-        gross - reduced_by + unpaid
+        needed
     } else if include_income && !uncounted_inflow {
         gross
     } else {

@@ -30,7 +30,7 @@ use crate::http::AppState;
 use crate::http::api::extract::{TypedJson, TypedPath, TypedQuery};
 use crate::http::api::household::EmergencyFundPath;
 use crate::http::api::transactions::BatchRequest;
-use crate::http::api::{accounts, categories, forecast, fx, household, me, members};
+use crate::http::api::{accounts, categories, forecast, free_money, fx, household, me, members};
 use crate::http::api::{plan_items, reports, transactions};
 use crate::http::extract::ApiActor;
 use crate::http::problem::Problem;
@@ -401,6 +401,26 @@ const ROWS: &[Row] = &[
             Box::pin(async move {
                 let body = call.arguments.body()?;
                 reply(forecast::what_if(State(call.state), call.actor, TypedJson(body)).await)
+            })
+        },
+    },
+    Row {
+        name: "get_free_money",
+        title: "Free money",
+        operation: "getFreeMoney",
+        needs: Needs::Read,
+        lead: "How much cash is free now in each currency, after what the plan still needs, \
+               what goals have set aside and the emergency fund. Give each currency's answer on \
+               its own, never added together. Never report a `provisional` answer without its \
+               cautions, nor a number for a currency whose `free_money` is `null`: its \
+               `blockers` say why. Without an emergency fund (`emergency_fund_not_set`), say that all of \
+               it counts as free and that a member may want to set one. Go by each blocker's \
+               and caution's `kind`, as for `get_forecast`.",
+        input: as_operation,
+        call: |call| {
+            Box::pin(async move {
+                call.arguments.finish()?;
+                reply(free_money::get(State(call.state), call.actor).await)
             })
         },
     },

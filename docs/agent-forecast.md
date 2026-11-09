@@ -25,8 +25,8 @@ UUIDs; `$BASE` is the server's address.
    `POST $BASE/api/v1/categories` with
    `{"group": "<group>", "name": "Rent", "kind": "expense"}`. A household starts
    with no categories, and every planned item needs one.
-4. An emergency fund for each currency in use, which the forecast is blocked without
-   (`emergency_fund_not_set`). An admin can also set one, and the forecast settings, on
+4. An emergency fund for each currency in use. Without one, nothing is held back in that
+   currency: everything left counts as free, with the caution `emergency_fund_not_set`. An admin can also set one, and the forecast settings, on
    the Household page (`/admin/household`):
 
    ```sh
@@ -357,9 +357,10 @@ the token's grants) hold the forecast's defaults:
 
 - `emergency_funds` lists each currency's emergency fund, sorted by currency: cash
   that must stay untouched in that currency on top of the horizon's planned spending
-  and goals. A currency missing from it has none, and **a forecast has no number
-  while a currency in use has none** (blocker `emergency_fund_not_set`, naming the
-  currency): a silent emergency fund of 0 would overstate what can be invested. A
+  and goals. A currency missing from it has none: **nothing is held back in a
+  currency in use without one**, and the caution `emergency_fund_not_set` names it,
+  so the number stays but isn't firm. Ask the owner for one rather than reporting that
+  money as safe to invest. A
   target applies to its own currency's totals only. Two kinds:
   `{"kind": "fixed", "minor_units": 300000}` (0 to 10^15, in the currency's minor
   units; 0 is allowed) and `{"kind": "months_of_outflows", "months": 2}` (1 to 60),
@@ -679,7 +680,6 @@ first entry):
 
 | `kind` | Means | Do |
 |---|---|---|
-| `emergency_fund_not_set` (`currency`) | A currency in use has no emergency fund. | Ask the owner what to hold back in that currency, then `PUT /household/emergency-funds/{currency}` (needs `admin`). To explore without setting one, a what-if may carry its own `emergency_funds`; say that they are not the household's. |
 | `no_counted_accounts` | No open `cash` or card account is in the forecast. | Look at `accounts[].not_counted`. Create or bind the household's accounts, or set `include_in_forecast` on the right ones (`PATCH /accounts/{id}`). A flag doesn't fix this on an account with `not_household`: `true` is a 422, because that money isn't the household's cash. |
 | `balance_missing` (`account`, `name`) | A counted account has no balance on or before `as_of`, so it could hold anything. | Record one (`PUT /accounts/{id}/balances/{on}`), wait for or request a sync of a linked account, or take the account out of the forecast. An account with `not_household` never raises this, and no flag makes a held account's balance count: if this one isn't the household's money, a member says so with `belongs_to`. |
 | `mixed_currencies` (`currencies`) | More than one currency is in use. A forecast doesn't convert between currencies (what a household can invest is held per currency, and one converted figure would hide that), so there is no `surplus`. Conversion lives in [net worth](agent-net-worth.md), which does not lift this. | Report each row of `totals` on its own, with its own `surplus`, and never add them. Each currency has its own emergency fund, applied to its row only: a months target is worked out from that currency's recurring `must_pay` and `essentials` outflows. |
@@ -701,6 +701,7 @@ and the fields shown:
 | `bill_unpaid_last_month` (`item`, `on`, `amount`) | A recurring bill or a one-off dated last month has no payment that fits and nobody settled it. It still counts as needed. | As for `bill_not_seen`, for that month. |
 | `bill_payment_unclear` (`item`, `on`, `amount`, `transaction`, `transaction_amount`) | That transaction may have paid this occurrence, but it could also be a budget's spending in the same category, so it stays with the budget and the bill still counts. | Ask. If it was the bill, settle the month as `paid`. Filing the bill under its own category stops this recurring. |
 | `closed_liability_owing` (`account`, `balance`) | A closed card still owes money, which counts against the cash. | If it was paid off, record its balance as 0. If it shouldn't count, set `include_in_forecast` to `false`. |
+| `emergency_fund_not_set` (`currency`) | A currency in use has no emergency fund, so nothing is held back in it: everything left counts in the surplus and in free money. | Say so beside the number, and ask the owner what to hold back in that currency, then `PUT /household/emergency-funds/{currency}` (needs `admin`, or the Household page). To explore without setting one, a what-if may carry its own `emergency_funds`; say that they are not the household's. Until one is set, don't suggest investing that currency's money. |
 | `emergency_fund_months_is_zero` (`currency`, `months`) | That currency's emergency fund of some months comes to 0, since no recurring `must_pay` or `essentials` outflow in it falls in those months. | The emergency fund is not protecting anything. Ask for a fixed one, or whether some `flexible` item is essential. |
 | `liability_balance_positive` (`account`, `balance`) | A card or other short-term liability shows money in hand, often a balance entered with the wrong sign. It was added as it stands and inflates the cash. | Ask the owner and record the balance with the right sign (negative is owed). |
 | `goal_one_off_overlap` (`goal`, `one_off`, `category`) | A goal and a one-off in the same category within a month of its due date may be the same expense, counted twice. A one-off settled for its month raises nothing. | Ask which it is; remove one or set it `active: false`. |
@@ -977,6 +978,47 @@ over the next six months, which is almost nothing, and the figure is
 provisional: an internet bill from the 10th has no payment in Utilities, and a
 60.00 fuel charge may not be in the balance yet. Report those two with the
 number, not the number alone.
+
+## Free money
+
+`GET /api/v1/free-money` (MCP `get_free_money`) answers "how much cash is free right now?",
+one row per currency, never added together or converted. It needs the forecast's access
+(`read`, and `all` at `transactions` for a token with grants) and writes nothing. For each
+currency, at the household's today:
+
+```
+still need = what must pay items still need from today through must_pay_through (today + 30 days)
+           + what essentials and flexible items still need this calendar month
+set aside  = what active goals have set aside so far, less what was spent from them
+before     = cash_available − still need − set aside
+emergency_fund_held = before, between 0 and emergency_fund_target
+free_money = before − emergency_fund_target, never below 0
+shortfall  = −before, never below 0
+```
+
+- `still_need` is split into `must_pay_this_month`, `must_pay_coming` (after this month,
+  through `must_pay_through`), `essentials` and `flexible`, with their `total`. Each item
+  needs what it plans less what was spent on it, never below 0: an overspent budget needs 0
+  and takes nothing from another item, since the money is simply gone from the cash.
+- A bill paid (matched by a transaction, up to 7 days early), or settled for its month,
+  needs nothing; one dated earlier and still unpaid is still needed, back to the first of
+  last month. So `must_pay_this_month` holds this month's unpaid must pay occurrences and
+  last month's. This is the same
+  reduction the forecast uses, so the two agree: on the first day of a 31-day month,
+  `still_need.total` equals a one-month forecast's `planned_outflows`.
+- **Planned income never counts**, whatever `include_income` says: free money is about cash
+  that exists. **Investments never count**: `cash_available` is the forecast's (counted
+  cash balances, less short-term debts).
+- A currency without an emergency fund target holds nothing back: all of `before` is free,
+  with the caution `emergency_fund_not_set`. Say so, and don't suggest investing it until a
+  target is set.
+- `status` is `unavailable` when no currency has a number, `provisional` with any blocker or
+  caution, `firm` otherwise. The blockers and cautions are a one-month forecast's, read as
+  above, but `mixed_currencies` never applies. `balance_missing` leaves only its own
+  account's currency without a number (`free_money`, `emergency_fund_held` and `shortfall`
+  are `null`); `no_counted_accounts` leaves every currency without one.
+- Report it as "free money" and its parts as "still need", "set aside" and "emergency
+  fund", in that order; never report a `provisional` answer without its cautions.
 
 ## Plan versus actual
 

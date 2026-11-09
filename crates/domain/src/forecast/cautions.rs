@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 use jiff::Span;
 use jiff::civil::Date;
 
-use super::book::Book;
 use super::lines::{not_counted, read_by_number};
 use super::reduction::Reduction;
 use super::settled;
@@ -14,14 +13,14 @@ use super::{AccountInput, Caution, ForecastError, ForecastInput, HintEffect, Ite
 use crate::accounts::LiquidityClass;
 use crate::ids::AccountId;
 use crate::money::{Currency, Money};
-use crate::plan::{EmergencyFundTarget, PlanDirection, PlanSchedule};
+use crate::plan::{PlanDirection, PlanSchedule};
 use crate::transfer_rate::mismatches;
 
 pub(super) fn cautions(
     input: &ForecastInput,
     items: &[ItemLine],
     reduction: &Reduction,
-    book: &Book,
+    fund_cautions: Vec<Caution>,
     counted: &BTreeSet<AccountId>,
 ) -> Result<Vec<Caution>, ForecastError> {
     let mut cautions = Vec::new();
@@ -101,14 +100,7 @@ pub(super) fn cautions(
         });
     }
     cautions.extend(reduction.bill_cautions.iter().cloned());
-    for (&currency, tally) in &book.tallies {
-        if let Some(&EmergencyFundTarget::MonthsOfOutflows { months }) =
-            input.emergency_funds.get(&currency)
-            && tally.emergency_fund == 0
-        {
-            cautions.push(Caution::EmergencyFundMonthsIsZero { currency, months });
-        }
-    }
+    cautions.extend(fund_cautions);
     loose_end_cautions(input, reduction, &mut cautions);
     cautions.extend(
         input

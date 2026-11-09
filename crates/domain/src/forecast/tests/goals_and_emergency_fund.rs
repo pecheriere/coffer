@@ -505,11 +505,17 @@ fn without_an_emergency_fund_no_dip_is_reported() {
         items: vec![one_off("Big", usd(5_000_000), date(2026, 12, 1), other)],
         ..household()
     });
-    assert_eq!(forecast.cautions, [], "no emergency fund, no dip");
     assert_eq!(
-        forecast.status,
-        ForecastStatus::Unavailable,
-        "and no number"
+        forecast.cautions,
+        [Caution::EmergencyFundNotSet {
+            currency: currency("USD"),
+        }],
+        "no emergency fund, no dip: only the missing target is said"
+    );
+    assert_eq!(
+        forecast.surplus,
+        Some(usd(1_000_000 - 5_000_000)),
+        "a number all the same"
     );
 }
 

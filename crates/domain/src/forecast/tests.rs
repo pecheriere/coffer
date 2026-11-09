@@ -25,6 +25,9 @@ mod bill_matching;
 mod blockers;
 mod budget_month;
 mod clamp_and_duplicates;
+mod emergency_fund_caution;
+mod free_money;
+mod free_money_properties;
 mod goals_and_emergency_fund;
 mod golden;
 mod inflow_window;
@@ -229,6 +232,11 @@ fn hypothetical(index: u32, item: ItemInput) -> ItemInput {
 /// dates, so only this month is in question, and unless it lists its own transactions each
 /// category's spending is one, the day before `as_of`.
 fn run(input: &ForecastInput) -> Forecast {
+    run_as_given(&with_spending(input))
+}
+
+/// `input` with the spending [`run`] means by it.
+fn with_spending(input: &ForecastInput) -> ForecastInput {
     let month_start = input.as_of.first_of_month();
     let mut rows = Vec::new();
     for item in &input.items {
@@ -263,10 +271,10 @@ fn run(input: &ForecastInput) -> Forecast {
         }
     }
     rows.extend(input.spent_transactions.iter().copied());
-    run_as_given(&ForecastInput {
+    ForecastInput {
         spent_transactions: rows,
         ..input.clone()
-    })
+    }
 }
 
 /// The one `bill_not_seen` `forecast` should hold for `category`, naming the items that owe.

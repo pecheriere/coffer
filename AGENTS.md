@@ -15,7 +15,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   forecast settings, the emergency fund target per currency), `forecast` and `plan_report`, the pure calculations
   behind the cash forecast and plan versus actual (`forecast.rs` computes it; its
   `book.rs`, `lines.rs` and `cautions.rs` hold the running amounts, the line each
-  account, item and goal gets, and what makes the answer provisional); `fx`, exchange rates held
+  account, item and goal gets, and what makes the answer provisional; `free_money.rs`
+  computes free money per currency from the same pieces, so the two can't disagree); `fx`, exchange rates held
   exactly and conversion through the euro; `transfer_rate`, the check of a transfer link's legs in
   two currencies against a rate, which changes no amount; `net_worth`, the daily values, the
   periods and the report). No I/O.
@@ -68,7 +69,8 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   every page naming members go through; managing them stays in `auth`), `plan_items`,
   `settlements` (one month of a planned item marked paid or skipped), the
   household forecast `settings`, `emergency_funds` (one currency's target set or removed by an
-  admin, audited, and read only with the forecast's access), the `forecast` and its what-if, the
+  admin, audited, and read only with the forecast's access), the `forecast` and its what-if,
+  `free_money` (the same read and input as the forecast, with its access), the
   `plan_report`, `net_worth` (net worth and the FX endpoints: authorizes, gathers
   what the actor sees at `balances`, and hands it to the domain's report),
   `manual_rates` (exchange rates an admin enters: validated, audited and marked),

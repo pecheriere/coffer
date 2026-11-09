@@ -303,11 +303,13 @@ fn json_shapes_are_stable() {
     assert!(json["surplus"].is_null(), "no number is an explicit null");
     assert_eq!(
         json["blockers"],
-        serde_json::json!([
-            {"kind": "emergency_fund_not_set", "currency": "USD"},
-            {"kind": "no_counted_accounts"},
-        ]),
+        serde_json::json!([{"kind": "no_counted_accounts"}]),
         "blockers are tagged"
+    );
+    assert_eq!(
+        json["cautions"],
+        serde_json::json!([{"kind": "emergency_fund_not_set", "currency": "USD"}]),
+        "cautions are tagged"
     );
     assert_eq!(
         json["totals"][0]["emergency_fund"],
