@@ -202,6 +202,11 @@ fn effective_from_parses_keywords_and_months() {
     );
     assert!(parse("\"soon\"").is_err());
     assert_eq!(
+        "soon".parse::<EffectiveFrom>(),
+        Err(PlanError::InvalidEffectiveFrom),
+        "a malformed month is no past month"
+    );
+    assert_eq!(
         serde_json::to_string(&EffectiveFrom::Month(month("2026-12"))).unwrap(),
         "\"2026-12\""
     );
@@ -265,4 +270,53 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn a_row_written_for_this_month_supersedes_a_pending_one_unless_next_month_is_written_again() {
+    let category = CategoryId::new();
+    let pending = row(2, "2026-12", date(2026, 11, 5), values(category, 1200));
+    let alone = PlanVersions::new(vec![
+        row(1, "2026-01", date(2026, 1, 3), values(category, 1000)),
+        pending,
+        row(3, "2026-11", date(2026, 11, 10), values(category, 900)),
+    ])
+    .unwrap();
+    assert_eq!(
+        minor(alone.in_force(month("2026-12"))),
+        900,
+        "the later write wins, which is why a patch from this month rewrites next month"
+    );
+
+    let rewritten = PlanVersions::new(vec![
+        row(1, "2026-01", date(2026, 1, 3), values(category, 1000)),
+        pending,
+        row(3, "2026-11", date(2026, 11, 10), values(category, 900)),
+        row(4, "2026-12", date(2026, 11, 10), values(category, 1200)),
+    ])
+    .unwrap();
+    assert_eq!(minor(rewritten.in_force(month("2026-11"))), 900);
+    assert_eq!(minor(rewritten.in_force(month("2026-12"))), 1200);
+}
+
+#[test]
+fn starting_in_answers_the_row_that_takes_effect_that_month() {
+    let category = CategoryId::new();
+    let versions = PlanVersions::new(vec![
+        row(1, "2026-01", date(2026, 1, 3), values(category, 1000)),
+        row(2, "2026-12", date(2026, 11, 5), values(category, 1200)),
+    ])
+    .unwrap();
+    assert_eq!(
+        versions
+            .starting_in(month("2026-12"))
+            .map(|v| minor(&v.values)),
+        Some(1200)
+    );
+    assert!(versions.starting_in(month("2026-11")).is_none());
+    assert!(versions.starting_in(month("2027-01")).is_none());
+    assert!(
+        versions.starting_in(month("2026-01")).is_none(),
+        "the first row is in force before it too: nothing is pending"
+    );
 }

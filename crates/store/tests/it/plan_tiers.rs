@@ -134,24 +134,19 @@ async fn the_check_refuses_a_tier_that_breaks_the_rules() {
     let world = world().await;
     let bill = world.insert(world.new_item(one_off())).await;
     let pool = world.pool().await;
+    let insert = |direction: &str, tier: &str| {
+        format!(
+            "INSERT INTO planned_item_versions (item_id, seq, effective_from, written_on, \
+             amount_minor, currency, direction, category_id, spending, tier) VALUES ('{bill}', 2, \
+             '2027-03', '2027-03-01', 100, 'USD', '{direction}', '{category}', NULL, {tier})",
+            category = world.category,
+        )
+    };
 
     for (sql, what) in [
-        (
-            format!(
-                "UPDATE planned_item_versions SET tier = 'emergency_fund' WHERE item_id = '{bill}'"
-            ),
-            "an unknown tier",
-        ),
-        (
-            format!(
-                "UPDATE planned_item_versions SET direction = 'inflow' WHERE item_id = '{bill}'"
-            ),
-            "income keeping a tier",
-        ),
-        (
-            format!("UPDATE planned_item_versions SET tier = NULL WHERE item_id = '{bill}'"),
-            "an outflow without a tier",
-        ),
+        (insert("outflow", "'emergency_fund'"), "an unknown tier"),
+        (insert("inflow", "'essentials'"), "income keeping a tier"),
+        (insert("outflow", "NULL"), "an outflow without a tier"),
     ] {
         assert!(
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
@@ -161,12 +156,10 @@ async fn the_check_refuses_a_tier_that_breaks_the_rules() {
             "the schema refuses {what}"
         );
     }
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "UPDATE planned_item_versions SET direction = 'inflow', tier = NULL WHERE item_id = '{bill}'"
-    )))
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(insert("inflow", "NULL")))
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 }
 
@@ -211,7 +204,8 @@ async fn tier_roundtrips_and_changes() {
     assert_eq!(record.tier, Some(PlanTier::Flexible), "a rename keeps it");
 }
 
-/// The table can't see an item's type, so the store refuses what reads back wrong.
+/// The triggers refuse a tier that doesn't fit the item's type; were one written anyway, the
+/// store refuses what reads back wrong.
 #[tokio::test]
 async fn a_tier_that_does_not_fit_the_item_is_corrupt() {
     let world = world().await;
@@ -223,6 +217,7 @@ async fn a_tier_that_does_not_fit_the_item_is_corrupt() {
         }))
         .await;
     let bill = world.insert(world.new_item(one_off())).await;
+    world.allow_corrupting_versions().await;
     let pool = world.pool().await;
 
     for (item, tier) in [(goal, "flexible"), (bill, "saving_toward")] {

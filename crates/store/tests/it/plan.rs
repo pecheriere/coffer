@@ -122,6 +122,17 @@ impl World {
         record.id
     }
 
+    /// Lifts the versions' append-only trigger, for a test that corrupts a row to see the
+    /// store refuse to read it.
+    pub(crate) async fn allow_corrupting_versions(&self) {
+        let pool = self.pool().await;
+        sqlx::query("DROP TRIGGER planned_item_versions_no_update")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
     /// A direct connection, since no store call can write a row the types
     /// refuse.
     pub(crate) async fn pool(&self) -> sqlx::SqlitePool {
@@ -536,6 +547,7 @@ async fn check_refuses_mixed_schedule_columns() {
 async fn corrupt_currency_is_a_backend_error() {
     let world = world().await;
     let id = world.insert(world.new_item(one_off())).await;
+    world.allow_corrupting_versions().await;
 
     world
         .store
@@ -557,6 +569,7 @@ async fn corrupt_currency_is_a_backend_error() {
 async fn corrupt_spending_is_a_backend_error() {
     let world = world().await;
     let recurring = world.insert(world.new_item(schedules()[0])).await;
+    world.allow_corrupting_versions().await;
     world
         .store
         .execute_unchecked_for_tests(

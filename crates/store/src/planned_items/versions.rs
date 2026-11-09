@@ -100,7 +100,10 @@ pub(super) fn checked(
 
 /// Whether `values` fit an item on `schedule`: an amount in range, a spending kind on a
 /// recurring outflow only, a tier on an outflow only and saving toward on a goal only.
-fn check_values(values: &PlanValues, schedule: &PlanSchedule) -> Result<(), &'static str> {
+pub(super) fn check_values(
+    values: &PlanValues,
+    schedule: &PlanSchedule,
+) -> Result<(), &'static str> {
     validate_amount(values.amount).map_err(|_| "plan version amount out of range")?;
     schedule
         .validate(values.direction)

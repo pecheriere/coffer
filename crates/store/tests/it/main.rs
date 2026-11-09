@@ -12,6 +12,7 @@ mod ledger;
 mod net_worth;
 mod plan;
 mod plan_tiers;
+mod plan_version_triggers;
 mod plan_versions;
 mod provider_dismissal;
 mod review_count;

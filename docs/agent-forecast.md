@@ -280,7 +280,9 @@ that changes one line per version, each with its `effective_from`, counting only
 is in force for, and raises the item's cautions once. A bill is matched to a payment within
 10% of any amount it held during that month, so lowering a bill already paid doesn't make it
 unpaid: the payment's `difference` shows what it paid over the new amount. Plan versus actual
-reads, for each month, the version in force then.
+reads, for each month, the version in force then. A change from this month also applies
+its fields to a change already pending for next month, as a second version for next month
+(audited with `next_month_` fields), so next month keeps its rise with the new values.
 
 ### Settling a month
 
@@ -320,11 +322,13 @@ objects in its `settlements`, ordered by month.
   An item that has settlements can't become a budget or income: that `PATCH` is a
   409 `conflict` until they are deleted.
 - **Changing the item:** a settlement was made on what the item then owed and when.
-  A `PATCH` that really changes its `amount`, currency included, or its `schedule`
-  removes its settlements from the household's current month on, so the occurrences
-  count again until someone settles them again. The answer shows what is left, the
-  `planned_item.update` audit entry says which went under `settlements`, and earlier
-  months stay as history. Any other change, such as a name or category, keeps them.
+  A `PATCH` that really changes its `schedule` removes its settlements from the
+  household's current month on; one that really changes its `amount`, currency
+  included, removes those from next month on, and a bill settled for this month stays
+  paid. The occurrences count again until someone settles them again. The answer shows
+  what is left, the `planned_item.update` audit entry says which went under
+  `settlements`, and earlier months stay as history. Any other change, such as a name
+  or category, keeps them.
   Moving a one-off away and back doesn't bring a settlement back.
 - **Which months:** `YYYY-MM`, in the years 1970 to 2200, at most 12 calendar months
   from today's either way, and holding an occurrence of the item (422 otherwise; a

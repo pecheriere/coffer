@@ -1,6 +1,7 @@
 //! A settlement doesn't outlive the facts it was made on (spec §8.9 R9a): changing what an
-//! item is owed or when removes its settlements from the household's current month on, so
-//! nobody is taken to have said what they didn't.
+//! item is owed or when ends its settlements, so nobody is taken to have said what they
+//! didn't: a new schedule from the household's current month on, a new amount from next month
+//! on (a bill settled for this month stays paid).
 
 use axum::http::{Method, StatusCode};
 use coffer_server::testkit::TestServer;
@@ -152,7 +153,7 @@ async fn the_window_is_counted_from_the_households_month() {
     );
 }
 
-/// In the household's zone it is still December, so a change on New Year's Eve ends
+/// In the household's zone it is still December, so a new schedule on New Year's Eve ends
 /// December's settlement, and November's is history.
 #[tokio::test]
 async fn the_current_month_is_the_households() {
@@ -160,7 +161,14 @@ async fn the_current_month_is_the_households() {
     world.settle(&item, "2026-11", "paid").await;
     world.settle(&item, "2026-12", "paid").await;
 
-    let answer = world.patched(&item, &json!({"amount": usd(20_000)})).await;
+    let answer = world
+        .patched(
+            &item,
+            &json!({"schedule": {
+                "type": "recurring", "every": 1, "unit": "months", "anchor_on": "2020-01-21",
+            }}),
+        )
+        .await;
 
     let months: Vec<&Value> = answer["settlements"]
         .as_array()
@@ -206,5 +214,9 @@ async fn a_chosen_zone_moves_the_month_with_no_restart() {
         .iter()
         .map(|one| &one["month"])
         .collect();
-    assert_eq!(months, [&json!("2026-12")], "history in the new zone");
+    assert_eq!(
+        months,
+        [&json!("2026-12"), &json!("2027-01")],
+        "January is this month in the new zone: it stays paid, and 2028-01 goes"
+    );
 }

@@ -537,6 +537,31 @@ fn stored_items(
         in_force,
         also_matches: BTreeMap::new(),
     };
+    let held_in = |stored: &mut ItemInput, month: CalendarMonth| {
+        let held: Vec<Money> = item
+            .versions
+            .held_during(month)
+            .into_iter()
+            .map(|values| values.amount)
+            .filter(|amount| amount.currency == stored.amount.currency)
+            .collect();
+        stored.also_matches.insert(month, held);
+    };
+    if let PlanSchedule::OneOff { on } = item.schedule {
+        // A one-off is matched like a bill: to the amounts it held during its month too.
+        let values = PlanValues {
+            amount: item.amount,
+            direction: item.direction,
+            category: item.category,
+            spending: item.spending,
+            tier: item.tier,
+        };
+        let mut stored = input(&values, MonthSpan::ALWAYS);
+        if let Ok(month) = CalendarMonth::of(on) {
+            held_in(&mut stored, month);
+        }
+        return vec![stored];
+    }
     if item.schedule.item_type() != PlanItemType::Recurring {
         let values = PlanValues {
             amount: item.amount,
@@ -562,14 +587,7 @@ fn stored_items(
         .map(|one| {
             let mut stored = input(&one.version.values, one.span);
             for month in months {
-                let held: Vec<Money> = item
-                    .versions
-                    .held_during(month)
-                    .into_iter()
-                    .map(|values| values.amount)
-                    .filter(|amount| amount.currency == stored.amount.currency)
-                    .collect();
-                stored.also_matches.insert(month, held);
+                held_in(&mut stored, month);
             }
             stored
         })

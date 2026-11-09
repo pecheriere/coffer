@@ -109,6 +109,8 @@ pub enum PlanError {
     OnlyGoalSavesToward,
     #[error("only this month's or next month's plan can change")]
     PastVersion,
+    #[error("effective_from must be this_month, next_month or YYYY-MM")]
+    InvalidEffectiveFrom,
     #[error("only a recurring item can change from next month")]
     NextMonthNeedsRecurring,
     #[error("a one-off in a past month keeps its amount, category and tier")]

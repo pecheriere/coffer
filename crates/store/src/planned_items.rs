@@ -279,12 +279,25 @@ impl StoreTx {
     ///
     /// # Errors
     ///
-    /// Backend failures, including a category or hinted account that does not
-    /// exist.
+    /// `Invalid` for values that don't fit the schedule (nothing is written); backend
+    /// failures, including a category or hinted account that does not exist.
     pub async fn insert_planned_item(
         &mut self,
         new: NewPlannedItem,
     ) -> Result<PlannedItemRecord, StoreError> {
+        let first = PlanVersion {
+            seq: 1,
+            effective_from: versions::first_month(&new.schedule)?,
+            written_on: new.written_on,
+            values: PlanValues {
+                amount: new.amount,
+                direction: new.direction,
+                category: new.category,
+                spending: new.spending,
+                tier: new.tier,
+            },
+        };
+        versions::check_values(&first.values, &new.schedule).map_err(StoreError::Invalid)?;
         let id = PlannedItemId::new();
         let columns = ScheduleColumns::of(&new.schedule);
         sqlx::query(concat!(
@@ -311,18 +324,6 @@ impl StoreTx {
         .execute(&mut *self.tx)
         .await
         .map_err(StoreError::from_sqlx)?;
-        let first = PlanVersion {
-            seq: 1,
-            effective_from: versions::first_month(&new.schedule)?,
-            written_on: new.written_on,
-            values: PlanValues {
-                amount: new.amount,
-                direction: new.direction,
-                category: new.category,
-                spending: new.spending,
-                tier: new.tier,
-            },
-        };
         versions::insert(&mut self.tx, id, &first).await?;
         Ok(PlannedItemRecord {
             id,

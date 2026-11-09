@@ -21,12 +21,20 @@ use crate::ledger::LedgerError;
 use crate::ledger::transactions::{Patch, notes};
 
 /// `audited` with what differs between the amounts `from` and `to`.
-fn amount_audited(mut audited: AuditChanges, from: Money, to: Money) -> AuditChanges {
+fn amount_audited(mut audited: AuditChanges, from: Money, to: Money, prefix: &str) -> AuditChanges {
     if to.minor_units != from.minor_units {
-        audited = audited.change("amount_minor", from.minor_units, to.minor_units);
+        audited = audited.change(
+            &format!("{prefix}amount_minor"),
+            from.minor_units,
+            to.minor_units,
+        );
     }
     if to.currency != from.currency {
-        audited = audited.change("currency", from.currency.as_str(), to.currency.as_str());
+        audited = audited.change(
+            &format!("{prefix}currency"),
+            from.currency.as_str(),
+            to.currency.as_str(),
+        );
     }
     audited
 }
@@ -50,10 +58,13 @@ pub(super) struct CheckedPatch {
 /// change, and what the audit trail says.
 pub(super) struct Planned {
     pub(super) changes: PlannedItemChanges,
-    /// The month the new values take effect from, and the values.
-    pub(super) version: Option<(CalendarMonth, PlanValues)>,
+    /// The versions to write, in order: each with the month it takes effect from and its
+    /// values. A change from this month is followed by one for next month when a change is
+    /// already pending there, as the later write is the one that reads.
+    pub(super) versions: Vec<(CalendarMonth, PlanValues)>,
     pub(super) audited: AuditChanges,
-    /// Settlements from this month on end: the amount or the schedule changed.
+    /// Settlements from this month on end: the schedule changed; from next month on: the
+    /// amount did.
     pub(super) settlements_end_from: Option<CalendarMonth>,
 }
 
@@ -154,7 +165,7 @@ impl CheckedPatch {
             spending,
             tier,
         };
-        let mut version = None;
+        let mut versions = Vec::new();
         if values != base {
             let month = effective.map_err(invalid)?;
             if let PlanSchedule::OneOff { on } = schedule
@@ -162,21 +173,31 @@ impl CheckedPatch {
             {
                 return Err(invalid(PlanError::PastOneOffKeepsValues));
             }
-            audited =
-                values_audited(audited, &base, &values).set("effective_from", month.to_string());
-            version = Some((month, values));
+            audited = values_audited(audited, &base, &values, "")
+                .set("effective_from", month.to_string());
+            versions.push((month, values));
+            if month == this_month
+                && let Some((next, carried, pending)) = self
+                    .carried_to_next_month(tx, current, this_month, &schedule, &values)
+                    .await?
+            {
+                audited = values_audited(audited, &pending, &carried, "next_month_")
+                    .set("next_month_effective_from", next.to_string());
+                versions.push((next, carried));
+            }
         }
-        let amount_changed = values.amount != base.amount;
         let settlements_end_from = if changes.schedule.is_some() {
             Some(this_month)
-        } else if amount_changed {
-            version.map(|(month, _)| month)
+        } else if values.amount != base.amount {
+            // A change from this month leaves the month's own settlement: a paid bill stays
+            // paid. What it settles in later months was on the amount they held.
+            Some(this_month.next())
         } else {
             None
         };
         Ok(Planned {
             changes,
-            version,
+            versions,
             audited,
             settlements_end_from,
         })
@@ -184,6 +205,50 @@ impl CheckedPatch {
 }
 
 impl CheckedPatch {
+    /// What a patch from this month leaves a change already pending for next month with: its
+    /// values with the fields the patch names, and the pending values, unless that is what
+    /// next month reads anyway (`new` being what this month's version gives it).
+    async fn carried_to_next_month(
+        &self,
+        tx: &mut StoreTx,
+        current: &PlannedItemRecord,
+        this_month: CalendarMonth,
+        schedule: &PlanSchedule,
+        new: &PlanValues,
+    ) -> Result<Option<(CalendarMonth, PlanValues, PlanValues)>, LedgerError> {
+        let next = this_month.next();
+        let Some(pending) = current.versions.starting_in(next).map(|one| one.values) else {
+            return Ok(None);
+        };
+        let direction = self.direction.unwrap_or(pending.direction);
+        let category = self.category.unwrap_or(pending.category);
+        schedule.validate(direction).map_err(invalid)?;
+        if direction != pending.direction || category != pending.category {
+            check_category(tx, category, direction).await?;
+        }
+        let spending = resolved_spending(
+            self.spending,
+            pending.spending.unwrap_or(PlanSpending::Bill),
+            direction,
+            schedule,
+        )?;
+        let tier = tier_left(self.tier, &pending, direction, schedule, spending)?;
+        if !settlement_applies(direction, schedule, spending)
+            && settlement_applies(pending.direction, schedule, pending.spending)
+            && !tx.settlements_of_item(current.id).await?.is_empty()
+        {
+            return Err(LedgerError::Conflict(ProblemCode::Conflict, SETTLED));
+        }
+        let carried = PlanValues {
+            amount: self.amount.unwrap_or(pending.amount),
+            direction,
+            category,
+            spending,
+            tier,
+        };
+        Ok((carried != pending && carried != *new).then_some((next, carried, pending)))
+    }
+
     /// What the patch changes of the item itself, apart from the values that have versions:
     /// its name, hint, notes, whether it is active and its `schedule`.
     async fn own_changes(
@@ -239,25 +304,35 @@ impl CheckedPatch {
     }
 }
 
-/// `audited` with what differs between the values `from` and `to`.
-fn values_audited(mut audited: AuditChanges, from: &PlanValues, to: &PlanValues) -> AuditChanges {
+/// `audited` with what differs between the values `from` and `to`, each field's name led
+/// by `prefix`.
+fn values_audited(
+    mut audited: AuditChanges,
+    from: &PlanValues,
+    to: &PlanValues,
+    prefix: &str,
+) -> AuditChanges {
     if to.category != from.category {
-        audited = audited.change("category", from.category, to.category);
+        audited = audited.change(&format!("{prefix}category"), from.category, to.category);
     }
-    audited = amount_audited(audited, from.amount, to.amount);
+    audited = amount_audited(audited, from.amount, to.amount, prefix);
     if to.direction != from.direction {
-        audited = audited.change("direction", from.direction.as_str(), to.direction.as_str());
+        audited = audited.change(
+            &format!("{prefix}direction"),
+            from.direction.as_str(),
+            to.direction.as_str(),
+        );
     }
     if to.spending != from.spending {
         audited = audited.change(
-            "spending",
+            &format!("{prefix}spending"),
             from.spending.map(PlanSpending::as_str),
             to.spending.map(PlanSpending::as_str),
         );
     }
     if to.tier != from.tier {
         audited = audited.change(
-            "tier",
+            &format!("{prefix}tier"),
             from.tier.map(PlanTier::as_str),
             to.tier.map(PlanTier::as_str),
         );

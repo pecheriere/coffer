@@ -152,6 +152,7 @@ async fn forecast_items_load_in_a_deterministic_order() {
     for _ in 0..3 {
         inserted.push(world.insert(world.new_item(one_off())).await);
     }
+    world.allow_corrupting_versions().await;
     let pool = world.pool().await;
     let rewritten = [
         "ffffffff-0000-7000-8000-000000000000",

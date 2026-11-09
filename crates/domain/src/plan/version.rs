@@ -129,6 +129,14 @@ impl PlanVersions {
         &self.row_in_force(month).values
     }
 
+    /// The row that takes effect in `month` and is in force there, if any: a change written
+    /// ahead of that month. The first row never is, as it also reads for the months before it.
+    #[must_use]
+    pub fn starting_in(&self, month: CalendarMonth) -> Option<&PlanVersion> {
+        let row = self.row_in_force(month);
+        (row.effective_from == month && row.seq != self.0[0].seq).then_some(row)
+    }
+
     /// Each row that is ever in force, with the months it is.
     #[must_use]
     pub fn timeline(&self) -> Vec<VersionSpan<'_>> {
@@ -237,7 +245,7 @@ impl FromStr for EffectiveFrom {
             other => other
                 .parse()
                 .map(Self::Month)
-                .map_err(|_| PlanError::PastVersion),
+                .map_err(|_| PlanError::InvalidEffectiveFrom),
         }
     }
 }

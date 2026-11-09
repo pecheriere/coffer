@@ -256,6 +256,9 @@ pub(super) fn invalid(error: PlanError) -> LedgerError {
         PlanError::GoalIsSavingToward => "a goal is always saving toward",
         PlanError::OnlyGoalSavesToward => "only a goal is saving toward",
         PlanError::PastVersion => "only this month's or next month's plan can change",
+        PlanError::InvalidEffectiveFrom => {
+            "effective_from must be this_month, next_month or YYYY-MM"
+        }
         PlanError::NextMonthNeedsRecurring => "only a recurring item can change from next month",
         PlanError::PastOneOffKeepsValues => {
             "a one-off in a past month keeps its amount, category and tier"
@@ -437,11 +440,12 @@ impl Ledger {
     }
 
     /// Changes a planned item. A patch that changes nothing writes nothing. One that changes
-    /// its amount, currency or schedule removes its settlements from the month the change
-    /// takes effect from (the household's current month for a schedule), in the same
-    /// transaction and audit entry, and earlier ones stay. A change to the category, amount,
+    /// its schedule removes its settlements from the household's current month on, and one
+    /// that changes its amount or currency those from next month on (a bill settled for this
+    /// month stays paid), in the same transaction and audit entry, and earlier ones stay. A change to the category, amount,
     /// direction, spending kind or tier is a new version of the item's values, effective from
-    /// this month or next as `effective_from` says.
+    /// this month or next as `effective_from` says; one from this month also applies its fields to
+    /// a change already pending for next month, as a second version.
     ///
     /// # Errors
     ///
@@ -466,7 +470,7 @@ impl Ledger {
         let current = tx.get_planned_item(id, this_month).await?;
         let Planned {
             changes,
-            version,
+            versions,
             mut audited,
             settlements_end_from,
         } = patch.changes(&mut tx, &current, today).await?;
@@ -489,7 +493,7 @@ impl Ledger {
             settlements = earlier;
         }
         tx.update_planned_item(id, changes, now).await?;
-        if let Some((month, values)) = version {
+        for (month, values) in versions {
             tx.add_plan_version(id, today, EffectiveFrom::Month(month), values)
                 .await?;
         }
@@ -643,6 +647,7 @@ mod tests {
             PlanError::IncomeHasNoTier,
             PlanError::GoalIsSavingToward,
             PlanError::OnlyGoalSavesToward,
+            PlanError::InvalidEffectiveFrom,
         ] {
             assert_eq!(invalid(error).to_string(), error.to_string());
         }

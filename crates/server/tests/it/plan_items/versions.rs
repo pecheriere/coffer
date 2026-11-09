@@ -143,3 +143,88 @@ async fn effective_from_alone_changes_nothing() {
     assert_eq!(after["versions"].as_array().unwrap().len(), 1);
     assert_eq!(world.audit().await.len(), audited, "nothing is written");
 }
+
+/// Rent rises to 12,000 from December; on the 10th of November its tier changes from this
+/// month. December keeps the rise and takes the new tier too, November has the new tier and
+/// the old amount, and the history lists exactly that.
+#[tokio::test]
+async fn a_change_from_this_month_carries_over_to_a_pending_next_month() {
+    let world = world_on_november_10().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world
+        .patch(
+            &id,
+            &json!({"amount": euros(12_000), "effective_from": "next_month"}),
+        )
+        .await;
+
+    let after = world.patch(&id, &json!({"tier": "essentials"})).await;
+
+    assert_eq!(after["amount"]["minor_units"], json!(4_200));
+    assert_eq!(after["tier"], json!("essentials"));
+    let versions = after["versions"].as_array().unwrap();
+    let shown: Vec<(Value, Value, Value, Value)> = versions
+        .iter()
+        .map(|v| {
+            (
+                v["from"].clone(),
+                v["until"].clone(),
+                v["amount"]["minor_units"].clone(),
+                v["tier"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            (
+                Value::Null,
+                json!("2026-11"),
+                json!(4_200),
+                json!("must_pay")
+            ),
+            (
+                json!("2026-11"),
+                json!("2026-12"),
+                json!(4_200),
+                json!("essentials")
+            ),
+            (
+                json!("2026-12"),
+                Value::Null,
+                json!(12_000),
+                json!("essentials")
+            ),
+        ]
+    );
+    let audited = world.audit().await;
+    let last = audited.first().unwrap();
+    let names: Vec<&str> = last.changes.iter().map(|(name, _)| name).collect();
+    assert!(names.contains(&"tier"), "{names:?}");
+    assert!(names.contains(&"next_month_tier"), "{names:?}");
+    assert!(names.contains(&"next_month_effective_from"), "{names:?}");
+}
+
+/// A field the patch doesn't name keeps the pending version's value, and a patch that leaves
+/// next month as the pending version already reads writes nothing for it.
+#[tokio::test]
+async fn only_the_patched_fields_carry_over() {
+    let world = world_on_november_10().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world
+        .patch(
+            &id,
+            &json!({"amount": euros(12_000), "tier": "flexible", "effective_from": "next_month"}),
+        )
+        .await;
+
+    let after = world.patch(&id, &json!({"amount": euros(5_000)})).await;
+
+    let versions = after["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 3);
+    assert_eq!(versions[1]["amount"]["minor_units"], json!(5_000));
+    assert_eq!(versions[1]["tier"], json!("must_pay"));
+    assert_eq!(versions[2]["from"], json!("2026-12"));
+    assert_eq!(versions[2]["amount"]["minor_units"], json!(5_000));
+    assert_eq!(versions[2]["tier"], json!("flexible"), "not named: kept");
+}

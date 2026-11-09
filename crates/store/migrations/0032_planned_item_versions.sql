@@ -72,7 +72,7 @@ INSERT INTO planned_item_settlements SELECT * FROM planned_item_settlements_held
 -- a month is the row with the highest seq among those effective by then (the first row when
 -- none is). `direction` is versioned because `spending` and `tier` depend on it. That a goal
 -- saves toward and that only a recurring outflow has a spending kind depend on the item's
--- type, which this table doesn't know: the store checks them when it reads a row.
+-- type, which a CHECK here can't see: triggers below join planned_items for them.
 CREATE TABLE planned_item_versions (
     item_id TEXT NOT NULL REFERENCES planned_items (id) ON DELETE CASCADE,
     seq INTEGER NOT NULL CHECK (seq >= 1),
@@ -108,6 +108,53 @@ SELECT id, 1,
         ELSE 'must_pay'
     END) END
 FROM planned_items_held;
+
+-- What the CHECKs of planned_items said of these columns while they lived there. They run on
+-- insert only, as the table is append-only.
+CREATE TRIGGER planned_item_versions_spending_fits BEFORE INSERT ON planned_item_versions
+WHEN EXISTS (
+    SELECT 1 FROM planned_items AS item
+    WHERE item.id = NEW.item_id
+        AND (NEW.spending IS NOT NULL)
+            <> (item.item_type = 'recurring' AND NEW.direction = 'outflow')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'only a recurring outflow has a spending kind, and it always does');
+END;
+
+CREATE TRIGGER planned_item_versions_goal_is_outflow BEFORE INSERT ON planned_item_versions
+WHEN NEW.direction <> 'outflow'
+    AND EXISTS (
+        SELECT 1 FROM planned_items AS item
+        WHERE item.id = NEW.item_id AND item.item_type = 'goal'
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'a goal is always an outflow');
+END;
+
+CREATE TRIGGER planned_item_versions_saving_toward_is_goal BEFORE INSERT ON planned_item_versions
+WHEN NEW.tier IS NOT NULL
+    AND EXISTS (
+        SELECT 1 FROM planned_items AS item
+        WHERE item.id = NEW.item_id
+            AND (NEW.tier = 'saving_toward') <> (item.item_type = 'goal')
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'the saving_toward tier is a goal''s, and only a goal''s');
+END;
+
+CREATE TRIGGER planned_item_versions_no_update BEFORE UPDATE ON planned_item_versions
+BEGIN
+    SELECT RAISE(ABORT, 'planned_item_versions is append-only');
+END;
+
+-- A version goes with its item (ON DELETE CASCADE runs this after the item row is gone) and
+-- no other way.
+CREATE TRIGGER planned_item_versions_no_delete BEFORE DELETE ON planned_item_versions
+WHEN EXISTS (SELECT 1 FROM planned_items WHERE id = OLD.item_id)
+BEGIN
+    SELECT RAISE(ABORT, 'planned_item_versions is append-only');
+END;
 
 DROP TABLE planned_item_settlements_held;
 DROP TABLE planned_items_held;
