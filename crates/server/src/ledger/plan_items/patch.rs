@@ -206,8 +206,9 @@ impl CheckedPatch {
 
 impl CheckedPatch {
     /// What a patch from this month leaves a change already pending for next month with: its
-    /// values with the fields the patch names, and the pending values, unless that is what
-    /// next month reads anyway (`new` being what this month's version gives it).
+    /// values with the fields the patch names, unless that is what next month reads anyway (`new`
+    /// being what this month's version gives it, as its sequence is higher than the pending one's).
+    /// Equal to the pending values still writes: the new row re-asserts them over `new`.
     async fn carried_to_next_month(
         &self,
         tx: &mut StoreTx,
@@ -246,7 +247,7 @@ impl CheckedPatch {
             spending,
             tier,
         };
-        Ok((carried != pending && carried != *new).then_some((next, carried, pending)))
+        Ok((carried != *new).then_some((next, carried, pending)))
     }
 
     /// What the patch changes of the item itself, apart from the values that have versions:

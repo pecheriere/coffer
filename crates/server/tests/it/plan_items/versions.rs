@@ -206,7 +206,7 @@ async fn a_change_from_this_month_carries_over_to_a_pending_next_month() {
 }
 
 /// A field the patch doesn't name keeps the pending version's value, and a patch that leaves
-/// next month as the pending version already reads writes nothing for it.
+/// next month as this month's new version already reads writes nothing for it.
 #[tokio::test]
 async fn only_the_patched_fields_carry_over() {
     let world = world_on_november_10().await;
@@ -227,4 +227,32 @@ async fn only_the_patched_fields_carry_over() {
     assert_eq!(versions[2]["from"], json!("2026-12"));
     assert_eq!(versions[2]["amount"]["minor_units"], json!(5_000));
     assert_eq!(versions[2]["tier"], json!("flexible"), "not named: kept");
+}
+
+/// The patched value equals the pending one but another pending field differs: this month's new
+/// version has the higher sequence, so next month must be written to keep the pending tier.
+#[tokio::test]
+async fn a_patch_equal_to_the_pending_amount_keeps_the_pending_tier() {
+    let world = world_on_november_10().await;
+    let id = world.create(&recurring(world.expense)).await;
+    world
+        .patch(
+            &id,
+            &json!({"amount": euros(12_000), "tier": "flexible", "effective_from": "next_month"}),
+        )
+        .await;
+
+    let after = world.patch(&id, &json!({"amount": euros(12_000)})).await;
+
+    let versions = after["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 3);
+    assert_eq!(versions[1]["amount"]["minor_units"], json!(12_000));
+    assert_eq!(versions[1]["tier"], json!("must_pay"));
+    assert_eq!(versions[2]["from"], json!("2026-12"));
+    assert_eq!(versions[2]["amount"]["minor_units"], json!(12_000));
+    assert_eq!(
+        versions[2]["tier"],
+        json!("flexible"),
+        "the pending tier survives"
+    );
 }
