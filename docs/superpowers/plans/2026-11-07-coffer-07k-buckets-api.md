@@ -87,7 +87,9 @@ pub struct Bucket { pub item: PlannedItemId, pub name: String, pub tier: PlanTie
 pub struct Pace { pub elapsed_permille: u16, pub spent_permille: u32, pub ahead: bool }
 pub struct GoalBucket { pub item: PlannedItemId, pub name: String, pub target: Money, pub start_on: Date,
                         pub due_on: Date, pub completed: bool, pub set_aside: Money, pub spent: Money, pub remaining: Money }
-pub struct BucketTotals { pub currency: Currency, pub planned: Money, pub spent: Money, pub left: Money, pub over: Money }
+pub struct BucketTotals { pub currency: Currency, pub planned: Money, pub spent: Money, pub left: Money, pub over: Money,
+                          /// This month only: 07h's free money for the currency; null for a past month or a blocked currency.
+                          pub free_money: Option<Money> }
 ```
 Buckets ordered by tier (`must_pay`, `essentials`, `flexible`), then name, then id.
 
