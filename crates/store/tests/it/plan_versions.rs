@@ -2,6 +2,11 @@
 //! direction, category, spending kind and tier into a first version without losing a
 //! settlement or a goal link, and a version can only be written from this month or next.
 
+#![expect(
+    clippy::unwrap_used,
+    reason = "integration test: helpers outside #[test] functions panic to fail the test"
+)]
+
 use coffer_domain::ids::{CategoryId, MemberId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
@@ -120,6 +125,12 @@ async fn migration_versions_every_item_and_keeps_settlements() {
 
     let store = Store::open(&path).await.unwrap();
 
+    check_first_versions(&store, &seeded, category).await;
+    check_links_and_keys(&path, &seeded).await;
+}
+
+/// Every item has one version equal to its old values, and what stayed with the item stayed.
+async fn check_first_versions(store: &Store, seeded: &Seeded, category: CategoryId) {
     let eur = Money {
         minor_units: 40_000,
         currency: Currency::parse("EUR").unwrap(),
@@ -216,10 +227,13 @@ async fn migration_versions_every_item_and_keeps_settlements() {
             .len(),
         1
     );
+}
 
+/// The goal's linked split and every foreign key survive the rebuild.
+async fn check_links_and_keys(path: &std::path::Path, seeded: &Seeded) {
     let pool = SqlitePool::connect_with(
         SqliteConnectOptions::new()
-            .filename(&path)
+            .filename(path)
             .foreign_keys(true),
     )
     .await
