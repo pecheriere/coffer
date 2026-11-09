@@ -92,6 +92,8 @@
 - [ ] **Step 4: Run** the tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS, gate green.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07s commit -m "Lead the forecast page with the projection and the suggestion"`; update `AGENTS.md`'s crate map (`pages/charts.rs`, `pages/cash_chart.rs`, `pages/invest_words.rs`, `home/invest.rs`); push `money-07s-home-cash-chart-invest`; PR "Home's cash chart and invest card; forecast page answers first", "Closes #158", with how it looked at 375 px and 1280 px, Mochi and Fjord, light and dark (or that it wasn't looked at), and that it changes `staging/e2e/ui/pages.spec.mjs` (CI runs it).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 None.

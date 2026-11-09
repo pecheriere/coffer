@@ -19,9 +19,11 @@
 - The line, one step per month from today, for `g` = growth − spread, growth, growth + spread:
   ```
   v(0)     = start
-  v(m + 1) = round_half_away_from_zero(v(m) × (120_000 + g) / 120_000) + monthly saving
+  F        = the exact monthly factor: the smallest integer F with F^12 ≥ SCALE^11 × SCALE × (10_000 + g) / 10_000,
+             SCALE = 10^12, found once per growth value by integer binary search (no floats)
+  v(m + 1) = round_half_away_from_zero(v(m) × F / SCALE) + monthly saving
   ```
-  (a twelfth of the annual real rate each month), all in `i128`, `OutOfRange` past `i64`. The answer gives one point per year (`today + k years`, k = 0..=25) per line; the reach dates are found month by month: the first month whose value is at or above the target, on the likely line (`likely`), the optimistic (`earliest`) and the pessimistic (`latest`); `null` when not within 25 years; `already: true` when `start ≥ target`.
+  (the exact twelfth root of the annual real rate, so 5% means 5% a year; owner's decision, 2026-11-08), all in `i128`, `OutOfRange` past `i64`. The answer gives one point per year (`today + k years`, k = 0..=25) per line; the reach dates are found month by month: the first month whose value is at or above the target, on the likely line (`likely`), the optimistic (`earliest`) and the pessimistic (`latest`); `null` when not within 25 years; `already: true` when `start ≥ target`.
 - **The house** (no link between a loan and an asset exists in coffer today): left out when `include_house` is false = every account in the `illiquid` liquidity class plus every `mortgage` account, one rule `future::is_house(liquidity, kind)` (planner's call, open question 1). Left-out value is reported (`house_left_out`).
 - **Monthly saving from data:** over the last 12 complete months (`[first of this month − 12 months, first of this month)`), counting only months that start on or after the household's first transaction's month: per currency, income = the net of `income` categories, spending = −(net of `expense` categories) + uncategorized outflows on spendable household accounts (the plan report's `REPORT_ACTUALS` and `REPORT_UNCATEGORIZED`, so Future and plan versus actual agree on what spending is); each converted to the display currency at today with `fx::convert`; monthly = total ÷ months, rounded half away from zero. Transfers and accounts not the household's never count.
 - **Today's money:** everything is in the display currency at today's rates; growth is real, so no inflation step.
@@ -30,7 +32,7 @@
 
 ## Review Focus
 
-1. **Exactness and rounding.** Growth 0 → `v(m) = start + m × saving` exactly; one step of 100,000.00 at 500 bp → 100,416.67 (41,666.666… rounds up); negative values round away from zero symmetrically. → Task 1 `zero_growth_is_linear`, `one_step_rounds_half_away_from_zero`, `negative_values_round_symmetrically`.
+1. **Exactness and rounding.** Growth 0 → `v(m) = start + m × saving` exactly; one step of 100,000.00 at 500 bp → 100,407.41 (the monthly factor 1.004074123784); twelve steps of 100,000.00 at 500 bp with no saving → 105,000.00 within 1 cent → Task 1 `twelve_months_compound_to_the_annual_rate`; negative values round away from zero symmetrically. → Task 1 `zero_growth_is_linear`, `one_step_rounds_half_away_from_zero`, `twelve_months_compound_to_the_annual_rate` (100,000.00, 500 bp, no saving → 105,000.00 ± 1 cent), `the_monthly_factor_is_the_exact_root` (F^12 brackets the annual factor at SCALE), `negative_values_round_symmetrically`.
 2. **The range's order.** For `start ≥ 0` and saving ≥ 0, pessimistic ≤ likely ≤ optimistic at every point, and earliest ≤ likely ≤ latest. → Task 1 proptest `the_range_is_ordered`.
 3. **The house.** A 400,000 property and its 250,000 mortgage are left out by default (start lower by 150,000, `house_left_out` 150,000); a car loan (kind `loan`) stays. → Task 1 `the_house_and_its_mortgage_are_left_out`, Task 3 `the_house_is_left_out_by_default`.
 4. **Saving from too little data, or in a currency without a rate.** 5 months of history → average over 5 with `saving_from_fewer_months`; EUR without a rate → left out with `saving_currency_not_converted`. → Task 1 `saving_averages_the_months_there_are`, `a_currency_without_a_rate_is_left_out`.
@@ -80,7 +82,7 @@
   `monthly_income` and `monthly_spending` are answered separately because 07u's "a year without income" needs them.
 
 - [ ] **Step 1: Write the failing tests** (USD minor units unless said):
-  - `projection.rs`: `zero_growth_is_linear`, `one_step_rounds_half_away_from_zero`, `negative_values_round_symmetrically`, `the_mockups_headline` (start 600,000.00, saving 3,000.00, 500 bp, target 2,000,000.00 → `likely`, `earliest`, `latest` as computed by `grow`, earliest ≤ likely ≤ latest), `a_target_already_reached`, `a_target_never_reached_is_null`, `one_point_per_year_for_25_years` (26 points, `on` = today + k years), `the_house_and_its_mortgage_are_left_out`, `include_house_counts_them`, `a_target_in_another_currency_is_ignored`, `a_saving_set_overrides_the_data`, `no_display_currency_blocks`, `no_net_worth_today_blocks`, `too_large_is_out_of_range`.
+  - `projection.rs`: `zero_growth_is_linear`, `one_step_rounds_half_away_from_zero`, `twelve_months_compound_to_the_annual_rate` (100,000.00, 500 bp, no saving → 105,000.00 ± 1 cent), `the_monthly_factor_is_the_exact_root` (F^12 brackets the annual factor at SCALE), `negative_values_round_symmetrically`, `the_mockups_headline` (start 600,000.00, saving 3,000.00, 500 bp, target 2,000,000.00 → `likely`, `earliest`, `latest` as computed by `grow`, earliest ≤ likely ≤ latest), `a_target_already_reached`, `a_target_never_reached_is_null`, `one_point_per_year_for_25_years` (26 points, `on` = today + k years), `the_house_and_its_mortgage_are_left_out`, `include_house_counts_them`, `a_target_in_another_currency_is_ignored`, `a_saving_set_overrides_the_data`, `no_display_currency_blocks`, `no_net_worth_today_blocks`, `too_large_is_out_of_range`.
   - `saving.rs`: `saving_is_income_minus_spending_over_twelve_months` (12 months of 5,000 income and 4,200 spending incl. 200 uncategorized → 800.00), `saving_averages_the_months_there_are`, `a_partial_first_month_is_left_out`, `no_history_saves_nothing_with_a_caution`, `a_currency_without_a_rate_is_left_out`, `two_currencies_convert_at_today`.
   - `properties.rs`: `the_range_is_ordered`, `zero_growth_is_linear_for_any_inputs`, `history_never_includes_the_house_when_left_out`.
 - [ ] **Step 2: Run** `nice -n 15 env -u CARGO_TARGET_DIR cargo nextest run -p coffer-domain --all-features -j 3 -E 'test(future)'`. Expected: FAIL to compile.
@@ -125,10 +127,12 @@
 - [ ] **Step 2: Run** `… -p coffer-server --all-features -j 3 -E 'test(future) | test(net_worth) | test(parity)'`. Expected: FAIL.
 - [ ] **Step 3: Implement**; regenerate `docs/api/openapi.json`; write the docs.
 - [ ] **Step 4: Run**, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS, gate green.
-- [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07t commit -m "Serve the Future projection and its settings through the API and MCP"`; push `money-07t-future-projection`; PR "Future projection, range and target", "Closes #159", listing the planner's calls (monthly compounding at a twelfth of the rate, yearly points, the house rule, growth range) and what was verified locally versus by CI.
+- [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07t commit -m "Serve the Future projection and its settings through the API and MCP"`; push `money-07t-future-projection`; PR "Future projection, range and target", "Closes #159", listing the planner's calls (exact monthly compounding, yearly points, the house rule, growth range) and what was verified locally versus by CI.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **What is "the house"?** Coffer has no link between a loan and the asset it is secured by. Recommended: every `illiquid` account plus every `mortgage` account (a car stays out, its car loan stays in, which errs low). The alternative, a "secured by" link on loan accounts, is a change to accounts, their API and form, worth its own issue if the rule proves wrong.
-2. **Growth compounding.** Recommended: a twelfth of the annual real rate each month (5% reads as 5.12% a year), simple and exact; the alternative, the exact monthly root, needs fixed-point roots for no visible difference at this precision.
+2. **Growth compounding.** Owner's decision (2026-11-08), against the planner's first recommendation: the exact monthly rate, so a 5% setting grows 5% a year (a twelfth of the rate each month would read as 5.12% and err optimistic by about 3% at 25 years). See the formula above.
 3. **Who may change Future's settings and what-ifs?** Recommended: any member who can write household data (`WriteHousehold`), since Future is planning data like the plan; `ManageHousehold` (admins only, as the forecast settings) would leave members with chips they can't use. 07u and 07v follow this answer.

@@ -90,6 +90,8 @@
 - [ ] **Step 4: Run** the tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS, gate green.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07v commit -m "Show where net worth is heading on the Future page"`; push `money-07v-future-page`; PR "Future page", "Closes #161", with how it looked at 375 px and 1280 px, Mochi and Fjord, light and dark (or that it wasn't looked at), that it changes `staging/e2e/ui/pages.spec.mjs`, and what was verified locally versus by CI.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 None (who may change the chips is 07t's open question 3).

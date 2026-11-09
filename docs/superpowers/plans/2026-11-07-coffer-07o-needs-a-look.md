@@ -90,6 +90,8 @@ pub struct CoverOption { pub from: CoverSource, pub available: Money, /// min(re
 - [ ] **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07o commit -m "Serve what needs a look through the API and MCP"`; push; PR "Needs a look and the auto-cover threshold", "Closes #154", naming the planner's calls (smallest first; thresholds admin-only).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **Who shares out free money among several overspends.** Recommended: smallest first, so the fewest overspends ask for a choice. The alternative, the order they happened, needs the day each bucket crossed its plan, which coffer doesn't keep.

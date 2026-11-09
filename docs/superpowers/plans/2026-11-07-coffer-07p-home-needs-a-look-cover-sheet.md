@@ -59,6 +59,8 @@
 - [ ] **Step 2: Run** `… -E 'test(pages::home) | test(needs_words)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07p commit -m "Show what needs a look on Home"`; push; PR "Home's Needs a look and the cover sheet", "Closes #155", noting the "To check" card folded into the section (07s inserts its invest card before the section and the cash chart after net worth).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **The "To check" card.** Recommended: fold it into Needs a look as one entry, so Home has one list of what's waiting. The alternative keeps both, which repeats the count.

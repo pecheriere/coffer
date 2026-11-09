@@ -79,6 +79,8 @@ pub fn check_cover(request: &CoverRequest, from: Option<&CoverSide>, to: &CoverS
 - [ ] **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07n commit -m "Store covers and serve them through the API and MCP"`; push; PR "Covers", "Closes #153", naming the planner's calls (this month only; the two bounds on the amount).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **Covers in past months.** Recommended: this month only; once a month ends its overspends simply came from free money (§10.6). Allowing last month would let history be rewritten after the fact.

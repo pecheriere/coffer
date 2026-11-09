@@ -98,6 +98,8 @@
 - [ ] **Step 4: Run**, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS, gate green.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07u commit -m "Add and remove Future what-ifs through the API, and add them through MCP"`; push `money-07u-future-what-ifs`; PR "Future what-ifs", "Closes #160", with the planner's calls (a month for "from a year", at most 20, value change without a target) and what was verified locally versus by CI.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 None.

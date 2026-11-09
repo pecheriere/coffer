@@ -127,6 +127,8 @@
 
 The Household thresholds form (both fields) is built here, not in 07p: 07p's "threshold form on Household" moves to this unit, since 07r follows 07o and has both setters.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **Who may press "Not now"?** Recommended: any member who can write household data (`WriteHousehold`) and see the forecast, since it hides a card on everyone's Home; admins only would leave members with a card they can't dismiss.

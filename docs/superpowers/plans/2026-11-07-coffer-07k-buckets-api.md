@@ -113,6 +113,8 @@ Buckets ordered by tier (`must_pay`, `essentials`, `flexible`), then name, then 
 - [ ] **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07k commit -m "Serve a month's buckets through the API and MCP"`; push; PR "Buckets: this month and past months", "Closes #150, closes #120, closes #134", naming the planner's calls (the excess goes to the last budget; a past month read on its last day with the next month's payments).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **Where a shared category's excess shows.** Two budgets in one category overspent: recommended, the last to run out (in date order) carries the whole excess; the alternative, splitting it by planned share, is fairer-looking but invents a rule the reduction doesn't have.

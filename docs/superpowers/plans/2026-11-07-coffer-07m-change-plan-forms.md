@@ -71,6 +71,8 @@ pub(super) fn patch_of(kind: Kind, form: &ItemForm, current: &PlannedItemView) -
 - [ ] **Step 2: Run** `… -E 'test(redirect) | test(forecast)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07m commit -m "Send the plan page to Money"`; push `money-07m-change-plan`; PR "Change the plan from Money, one form per kind", "Closes #152". It says the e2e browser specs that used `/plan` change with it (if any do: `rg -n "/plan" staging/e2e`), checked only by CI.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **One-off income.** Recommended: the one-off form asks "money out" or "money in", and the income form is for repeating income only, so a bonus is a one-off. The alternative, a sixth kind, adds a form for a rare case.

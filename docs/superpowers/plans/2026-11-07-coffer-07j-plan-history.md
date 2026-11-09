@@ -139,7 +139,9 @@ All derive `Debug, Clone, PartialEq, Eq` (and `Copy` where fields allow); `Effec
 - [ ] **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS, gate green.
 - [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07j commit -m "Change a plan item from this month or next, through the API"`; push `money-07j-plan-history`; PR "Plan history: effective-dated versions", "Closes #149", naming the planner's calls (direction versioned; next month only on recurring items; the held-amounts matching rule; the table rebuild) and that the staging seed is unchanged (CI's e2e checks the API shape).
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 1. **Plan writes in MCP.** Today MCP reads the plan but can't change it; `effective_from` is a parameter of a REST-only action, so 07j adds no tool. Recommended: keep it so here, and open an issue for `create_plan_item`/`update_plan_item` tools before 07m makes plan changes a main flow.
 2. **A goal's target from next month.** Recommended: no (a goal's target is a total by a date, and a change from this month already leaves past months' set aside as it was).

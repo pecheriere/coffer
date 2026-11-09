@@ -134,6 +134,8 @@
 2. **The line is net of goals' set-aside**, so the emergency fund line is the only line it is compared with on Home (07s), and the keep-or-invest suggestion (07r) is `min(free money, low point − target)`.
 3. **Own endpoint**, not a field of free money.
 
-## Open questions for the owner
+## Owner's decisions (2026-11-08)
+
+Each question below was settled as recommended (owner's decision, 2026-11-08), except where a line says otherwise.
 
 None.
