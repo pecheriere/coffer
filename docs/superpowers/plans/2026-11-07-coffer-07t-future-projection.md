@@ -131,3 +131,4 @@
 
 1. **What is "the house"?** Coffer has no link between a loan and the asset it is secured by. Recommended: every `illiquid` account plus every `mortgage` account (a car stays out, its car loan stays in, which errs low). The alternative, a "secured by" link on loan accounts, is a change to accounts, their API and form, worth its own issue if the rule proves wrong.
 2. **Growth compounding.** Recommended: a twelfth of the annual real rate each month (5% reads as 5.12% a year), simple and exact; the alternative, the exact monthly root, needs fixed-point roots for no visible difference at this precision.
+3. **Who may change Future's settings and what-ifs?** Recommended: any member who can write household data (`WriteHousehold`), since Future is planning data like the plan; `ManageHousehold` (admins only, as the forecast settings) would leave members with chips they can't use. 07u and 07v follow this answer.
