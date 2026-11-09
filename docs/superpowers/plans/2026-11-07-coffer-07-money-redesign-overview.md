@@ -242,7 +242,7 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
 - Scope: suggestion `free money − cushion` (§4.5), shown at or above the invest minimum per currency
   (default 500 major units), withheld with no emergency fund (§10.5); "Not now" stores the dismissed
   amount (§10.6); API, MCP, Household form for the minimum.
-- Depends on: 07c, 07q.
+- Depends on: 07c, 07q, 07o (0035 alters 07o's `currency_thresholds`; found while planning 07r).
 
 **07s — Home's cash chart and invest card; forecast page answers first** · #158
 - Scope: Home's 3-month chart with the emergency fund line and the low point; the invest card with
@@ -266,7 +266,7 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
 **07v — Future page** · #161
 - Scope: the `Future` tab, chart with range and target line, milestones (goals' due dates, mortgage
   end), input chips, what-ifs, the overspending note.
-- Depends on: 07t, 07u.
+- Depends on: 07t, 07u, 07k (the overspending note reads this month's `over` from buckets; found while planning 07v).
 
 ## Order and parallelism
 
@@ -278,9 +278,10 @@ Issue numbers are `07a` = #140 up to `07v` = #161, in letter order.
 | 4 | 07i, 07j | 07a + 07f + 07h (i), 07h (j) |
 | 5 | 07k | 07j |
 | 6 | 07l, 07n, 07q | 07f + 07k (l), 07k (n), 07h + 07j (q) |
-| 7 | 07m, 07o, 07r | 07l (m), 07n (o), 07c + 07q (r) |
-| 8 | 07p, 07s | 07l + 07m + 07o (p), 07i + 07r (s) |
-| any after 07a | 07t → 07u → 07v | — |
+| 7 | 07m, 07o | 07l (m), 07n (o) |
+| 8 | 07p, 07r | 07l + 07m + 07o (p), 07c + 07o + 07q (r) |
+| 9 | 07s | 07i + 07r |
+| any after 07a | 07t → 07u; 07v after 07u and 07k | — |
 
 What parallel units still share, and how to merge them: `docs/api/openapi.json` (the second to merge
 regenerates it), `mcp/tools.rs` and `tests/it/mcp/parity.rs` (rows added at different places: keep both;
