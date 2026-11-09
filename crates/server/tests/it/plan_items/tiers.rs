@@ -155,7 +155,11 @@ async fn a_patch_changes_only_what_it_sends() {
     let change = tier_change(latest).unwrap();
     assert_eq!(change.before, text("flexible"));
     assert_eq!(change.after, text("essentials"));
-    assert_eq!(latest.changes.iter().count(), 1, "only the tier changed");
+    assert_eq!(
+        latest.changes.iter().count(),
+        2,
+        "only the tier changed, and from when"
+    );
 
     let audited = world.audit().await.len();
     world.patch(&id, &json!({"tier": "essentials"})).await;

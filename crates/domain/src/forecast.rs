@@ -18,6 +18,7 @@ mod bill_matching;
 mod book;
 mod cautions;
 mod free_money;
+mod item_input;
 mod lines;
 mod reduction;
 mod settled;
@@ -253,7 +254,7 @@ fn months_of_outflows(
         if !recurring || !held_for || item.amount.currency != currency {
             continue;
         }
-        let dates = item.schedule.occurrences(input.as_of, end_exclusive);
+        let dates = item.occurrences(input.as_of, end_exclusive);
         held += i128::from(item.amount.minor_units) * i128::from(count(&dates)?);
     }
     Ok(held)

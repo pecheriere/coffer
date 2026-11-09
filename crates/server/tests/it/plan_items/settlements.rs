@@ -13,6 +13,8 @@ use coffer_store::{IdempotencyOwner, Reservation};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
+mod changes;
+
 use super::{World, all, goal, item_uri, on, one_off, recurring, with, world};
 
 /// The day the clock says in this file: `2027-01` is this month.
@@ -546,60 +548,6 @@ async fn resending_the_amount_and_schedule_with_a_rename_keeps_the_settlement() 
 
     assert_eq!(patched["settlements"], before["settlements"]);
     assert_eq!(world.months_of(&id).await, ["2027-01"]);
-}
-
-/// From the current month on they go, in one audit entry with the change that ended them;
-/// earlier months are what happened, and stay.
-#[tokio::test]
-async fn a_new_amount_removes_this_month_on_and_keeps_earlier_ones() {
-    let world = settling_world().await;
-    let id = world.create(&long_running(world.expense)).await;
-    for month in ["2026-12", "2027-01", "2027-02"] {
-        world.settled(&id, month).await;
-    }
-    let audited = world.audit().await.len();
-
-    let patched = world
-        .patch(
-            &id,
-            &json!({"amount": {"minor_units": 5000, "currency": "USD"}}),
-        )
-        .await;
-
-    assert_eq!(patched["settlements"][0]["month"], "2026-12");
-    assert_eq!(patched["settlements"].as_array().unwrap().len(), 1);
-    assert_eq!(world.months_of(&id).await, ["2026-12"]);
-    let events = world.audit().await;
-    assert_eq!(events.len(), audited + 1, "one entry");
-    assert_eq!(events[0].action, "planned_item.update");
-    let removed = events[0]
-        .changes
-        .iter()
-        .find(|(name, _)| *name == "settlements")
-        .unwrap()
-        .1;
-    assert_eq!(
-        removed.before,
-        AuditValue::Text(r#"[["2027-01","paid"],["2027-02","paid"]]"#.into())
-    );
-    assert_eq!(removed.after, AuditValue::Null);
-}
-
-#[tokio::test]
-async fn a_new_currency_removes_them_too() {
-    let world = settling_world().await;
-    let id = world.create(&recurring(world.expense)).await;
-    world.settled(&id, "2027-01").await;
-
-    let patched = world
-        .patch(
-            &id,
-            &json!({"amount": {"minor_units": 4200, "currency": "EUR"}}),
-        )
-        .await;
-
-    assert_eq!(patched["settlements"], json!([]));
-    assert_eq!(world.months_of(&id).await, Vec::<String>::new());
 }
 
 /// A token short of `all` at `write` gets the same refusal for a hidden item and a missing

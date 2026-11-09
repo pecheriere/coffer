@@ -71,8 +71,15 @@ pub(super) fn cautions(
             }),
     );
 
+    // An item with a history has a line per version, and its cautions are about the item.
+    let mut about_items = Vec::new();
     for line in items {
-        item_cautions(line, input, counted, &mut cautions);
+        item_cautions(line, input, counted, &mut about_items);
+    }
+    for caution in about_items {
+        if !cautions.contains(&caution) {
+            cautions.push(caution);
+        }
     }
     // From the items and not their lines: a goal the links have fully paid has no line, which
     // is when they may have overstated it most.

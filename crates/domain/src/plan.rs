@@ -19,6 +19,7 @@ mod settings;
 mod settlement;
 pub mod strict_date;
 mod tier;
+mod version;
 
 pub use emergency_fund::{EmergencyFund, EmergencyFundTarget, EmergencyFunds};
 pub(crate) use goal::div_half_even;
@@ -30,6 +31,7 @@ pub use settlement::{
     validate_settlement_month,
 };
 pub use tier::{PlanTier, default_tier, resolved_tier};
+pub use version::{EffectiveFrom, MonthSpan, PlanValues, PlanVersion, PlanVersions, VersionSpan};
 
 /// The largest amount of a planned item or a fixed emergency fund, in minor units.
 pub const MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000;
@@ -105,6 +107,18 @@ pub enum PlanError {
     GoalIsSavingToward,
     #[error("only a goal is saving toward")]
     OnlyGoalSavesToward,
+    #[error("only this month's or next month's plan can change")]
+    PastVersion,
+    #[error("effective_from must be this_month, next_month or YYYY-MM")]
+    InvalidEffectiveFrom,
+    #[error("only a recurring item can change from next month")]
+    NextMonthNeedsRecurring,
+    #[error("a one-off in a past month keeps its amount, category and tier")]
+    PastOneOffKeepsValues,
+    #[error("a planned item needs at least one version")]
+    EmptyVersions,
+    #[error("the versions of a planned item must be numbered in order")]
+    UnorderedVersions,
 }
 
 string_enum!(

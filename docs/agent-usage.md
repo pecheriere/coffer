@@ -589,6 +589,10 @@ short:
   `PUT` and `DELETE /api/v1/household/emergency-funds/{currency}` set and remove one
   currency's emergency fund, a fixed amount or some months of its recurring `must_pay`
   and `essentials` outflows (`admin`); the MCP tool `set_emergency_fund` sets one.
+- `PATCH /api/v1/plan-items/{id}` changes the `category`, `amount`, `direction`, `spending`
+  and `tier` from `effective_from`: `this_month` (the default), `next_month` (recurring items
+  only) or a `YYYY-MM` month that is this month or next. The past never changes. The item
+  answers its `versions`.
 - `PUT` and `DELETE /api/v1/plan-items/{id}/settlements/{month}` mark one month of a
   bill or one-off `paid` or `skipped`, for one paid with no transaction to
   categorize; the forecast then counts it as nothing and lists it in `settled`.

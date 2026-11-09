@@ -2,11 +2,13 @@
 
 use jiff::civil::date;
 
-use super::{actual, bill, budget, dollars, every_months, input, item, report, spent};
+use super::{
+    actual, bill, budget, dollars, every_months, input, item, report, spent, with_spending,
+};
 use super::{eur, month, usd};
 use crate::ids::CategoryId;
 use crate::money::Money;
-use crate::plan::{IntervalUnit, PlanSchedule, PlanSpending};
+use crate::plan::{IntervalUnit, PlanSchedule, PlanSpending, PlanVersions};
 use crate::plan_report::{MonthActual, ReportItem};
 use crate::transactions::CategoryKind;
 
@@ -149,10 +151,10 @@ fn spending_before_a_budget_starts_is_not_charged_to_it() {
     let mut asked = input(4);
     asked.from = month("2026-08");
     asked.today = date(2026, 11, 15);
-    asked.items = vec![ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(food, 100, every_months(1, date(2026, 10, 10)))
-    }];
+    asked.items = vec![with_spending(
+        item(food, 100, every_months(1, date(2026, 10, 10))),
+        PlanSpending::Budget,
+    )];
     asked.actuals = vec![
         spent("2026-08", food, 500),
         spent("2026-09", food, 500),
@@ -174,9 +176,8 @@ fn spending_after_a_budget_ends_is_not_charged_to_it() {
     let mut asked = input(4);
     asked.from = month("2026-08");
     asked.today = date(2026, 11, 15);
-    asked.items = vec![ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(
+    asked.items = vec![with_spending(
+        item(
             food,
             100,
             PlanSchedule::Recurring {
@@ -185,8 +186,9 @@ fn spending_after_a_budget_ends_is_not_charged_to_it() {
                 anchor_on: date(2026, 8, 10),
                 end_on: Some(date(2026, 9, 30)),
             },
-        )
-    }];
+        ),
+        PlanSpending::Budget,
+    )];
     asked.actuals = vec![
         spent("2026-08", food, 50),
         spent("2026-09", food, 60),
@@ -207,9 +209,8 @@ fn the_month_a_budget_ends_counts_whole() {
     let food = CategoryId::new();
     let mut asked = input(1);
     asked.from = month("2026-09");
-    asked.items = vec![ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(
+    asked.items = vec![with_spending(
+        item(
             food,
             100,
             PlanSchedule::Recurring {
@@ -218,8 +219,9 @@ fn the_month_a_budget_ends_counts_whole() {
                 anchor_on: date(2026, 8, 10),
                 end_on: Some(date(2026, 9, 12)),
             },
-        )
-    }];
+        ),
+        PlanSpending::Budget,
+    )];
     asked.actuals = vec![spent("2026-09", food, 60)];
 
     assert_eq!(report(&asked).rollovers[0].spent, dollars(60));
@@ -231,9 +233,8 @@ fn a_budget_ending_on_the_first_runs_through_that_month() {
     let food = CategoryId::new();
     let mut asked = input(1);
     asked.from = month("2026-09");
-    asked.items = vec![ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(
+    asked.items = vec![with_spending(
+        item(
             food,
             100,
             PlanSchedule::Recurring {
@@ -242,8 +243,9 @@ fn a_budget_ending_on_the_first_runs_through_that_month() {
                 anchor_on: date(2026, 8, 1),
                 end_on: Some(date(2026, 9, 1)),
             },
-        )
-    }];
+        ),
+        PlanSpending::Budget,
+    )];
     asked.actuals = vec![spent("2026-09", food, 60)];
 
     assert_eq!(report(&asked).rollovers[0].spent, dollars(60));
@@ -254,10 +256,10 @@ fn a_budget_ending_on_the_first_runs_through_that_month() {
 fn a_bi_monthly_budgets_off_month_still_counts() {
     let food = CategoryId::new();
     let mut asked = input(2);
-    asked.items = vec![ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(food, 100, every_months(2, date(2026, 1, 10)))
-    }];
+    asked.items = vec![with_spending(
+        item(food, 100, every_months(2, date(2026, 1, 10))),
+        PlanSpending::Budget,
+    )];
     asked.actuals = vec![spent("2026-01", food, 10), spent("2026-02", food, 20)];
 
     let row = report(&asked).rollovers[0];
@@ -270,17 +272,19 @@ fn a_bi_monthly_budgets_off_month_still_counts() {
 #[test]
 fn a_month_counts_while_any_budget_in_the_category_runs() {
     let food = CategoryId::new();
-    let running = |anchor_on, end_on| ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(
-            food,
-            100,
-            PlanSchedule::Recurring {
-                every: 1,
-                unit: IntervalUnit::Months,
-                anchor_on,
-                end_on: Some(end_on),
-            },
+    let running = |anchor_on, end_on| {
+        with_spending(
+            item(
+                food,
+                100,
+                PlanSchedule::Recurring {
+                    every: 1,
+                    unit: IntervalUnit::Months,
+                    anchor_on,
+                    end_on: Some(end_on),
+                },
+            ),
+            PlanSpending::Budget,
         )
     };
     let mut asked = input(3);
@@ -301,13 +305,13 @@ fn a_month_counts_while_any_budget_in_the_category_runs() {
 #[test]
 fn a_budget_runs_only_in_its_own_currency() {
     let food = CategoryId::new();
-    let euro_budget = ReportItem {
-        amount: Money {
-            minor_units: 100,
-            currency: eur(),
-        },
-        ..budget(food, 100)
+    let mut euro_budget = budget(food, 100);
+    let mut rows = euro_budget.versions.rows().to_vec();
+    rows[0].values.amount = Money {
+        minor_units: 100,
+        currency: eur(),
     };
+    euro_budget.versions = PlanVersions::new(rows).unwrap();
     let mut asked = input(1);
     asked.items = vec![budget(food, 100), euro_budget];
     asked.actuals = vec![spent("2026-01", food, 30)];
@@ -325,8 +329,10 @@ fn a_budget_runs_only_in_its_own_currency() {
 fn an_inactive_budget_keeps_no_month_running() {
     let food = CategoryId::new();
     let mut asked = input(2);
-    let mut live = item(food, 100, every_months(1, date(2026, 2, 10)));
-    live.spending = Some(PlanSpending::Budget);
+    let live = with_spending(
+        item(food, 100, every_months(1, date(2026, 2, 10))),
+        PlanSpending::Budget,
+    );
     let stopped = ReportItem {
         active: false,
         ..budget(food, 100)
@@ -342,8 +348,10 @@ fn an_inactive_budget_keeps_no_month_running() {
 fn a_bill_keeps_no_month_running() {
     let house = CategoryId::new();
     let mut asked = input(2);
-    let mut late = item(house, 100, every_months(1, date(2026, 2, 10)));
-    late.spending = Some(PlanSpending::Budget);
+    let late = with_spending(
+        item(house, 100, every_months(1, date(2026, 2, 10))),
+        PlanSpending::Budget,
+    );
     asked.items = vec![late, bill(house, 7)];
     asked.actuals = vec![spent("2026-01", house, 40), spent("2026-02", house, 7)];
 

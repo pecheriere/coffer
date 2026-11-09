@@ -610,6 +610,7 @@ async fn fill_the_plan(world: &World, category: CategoryId, hidden: AccountId) {
             },
             spending: None,
             tier: Some(PlanTier::MustPay),
+            written_on: date(2027, 1, 1),
             created_at: now,
         })
         .await

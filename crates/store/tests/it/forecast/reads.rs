@@ -152,20 +152,37 @@ async fn forecast_items_load_in_a_deterministic_order() {
     for _ in 0..3 {
         inserted.push(world.insert(world.new_item(one_off())).await);
     }
+    world.allow_corrupting_versions().await;
     let pool = world.pool().await;
     let rewritten = [
         "ffffffff-0000-7000-8000-000000000000",
         "00000000-0000-7000-8000-000000000000",
         "88888888-0000-7000-8000-000000000000",
     ];
+    // The versions refer to the ids, so both change in one transaction that checks at its end.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     for (id, new_id) in inserted.iter().zip(rewritten) {
-        sqlx::query("UPDATE planned_items SET id = ? WHERE id = ?")
+        for table in ["planned_items", "planned_item_versions"] {
+            let column = if table == "planned_items" {
+                "id"
+            } else {
+                "item_id"
+            };
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET {column} = ? WHERE {column} = ?"
+            )))
             .bind(new_id)
             .bind(id.to_string())
-            .execute(&pool)
+            .execute(&mut *tx)
             .await
             .unwrap();
+        }
     }
+    tx.commit().await.unwrap();
 
     let data = world.store.forecast_data(AS_OF).await.unwrap();
 

@@ -34,8 +34,8 @@ use crate::fx::RateBook;
 use crate::ids::{CategoryId, PlannedItemId, TransferLinkId};
 use crate::money::{Currency, Money};
 use crate::plan::{
-    CalendarMonth, PlanSchedule, PlanSpending, SettlementKind, div_half_even, goal_accrued,
-    occurrences_in,
+    CalendarMonth, PlanSchedule, PlanSpending, PlanVersions, SettlementKind, div_half_even,
+    goal_accrued, occurrences_in,
 };
 use crate::transactions::CategoryKind;
 use crate::transfer_rate::{CrossCurrencyLink, mismatches};
@@ -71,12 +71,10 @@ pub struct PlanReportInput {
 pub struct ReportItem {
     pub id: PlannedItemId,
     pub name: String,
-    pub category: CategoryId,
-    /// A positive magnitude.
-    pub amount: Money,
+    /// The category, amount (a positive magnitude) and spending kind (a budget has a
+    /// rollover; a bill doesn't) by month: a month reads the version in force then.
+    pub versions: PlanVersions,
     pub schedule: PlanSchedule,
-    /// A budget has a rollover; a bill doesn't.
-    pub spending: Option<PlanSpending>,
     /// An inactive item plans and accrues nothing, but money linked to an inactive goal
     /// keeps its line, since it counts nowhere else.
     pub active: bool,
@@ -472,16 +470,17 @@ struct Happened {
 fn planned_by_month(input: &PlanReportInput, reported: &[CalendarMonth]) -> BTreeMap<Key, Planned> {
     let mut planned: BTreeMap<Key, Planned> = BTreeMap::new();
     for item in input.items.iter().filter(|item| item.active) {
-        let amount = i128::from(item.amount.minor_units);
-        let is_budget = item.spending == Some(PlanSpending::Budget);
         for &month in reported {
+            let values = item.versions.in_force(month);
+            let amount = i128::from(values.amount.minor_units);
+            let is_budget = values.spending == Some(PlanSpending::Budget);
             let is_settled = item.settled.contains_key(&month);
             for on in item
                 .schedule
                 .occurrences(month.first_day(), month.next().first_day())
             {
                 let entry = planned
-                    .entry((month, item.category, item.amount.currency))
+                    .entry((month, values.category, values.amount.currency))
                     .or_default();
                 entry.total += amount;
                 if is_settled {
@@ -571,6 +570,7 @@ fn settled_rows(
             let Some(&kind) = item.settled.get(&month) else {
                 continue;
             };
+            let values = item.versions.in_force(month);
             let occurrences = occurrences_in(&item.schedule, month).len();
             if occurrences == 0 {
                 continue;
@@ -580,11 +580,11 @@ fn settled_rows(
                 month,
                 item: item.id,
                 name: item.name.clone(),
-                category: item.category,
+                category: values.category,
                 kind,
                 amount: money(
-                    i128::from(item.amount.minor_units) * occurrences,
-                    item.amount.currency,
+                    i128::from(values.amount.minor_units) * occurrences,
+                    values.amount.currency,
                 )?,
             });
         }
@@ -606,8 +606,17 @@ fn goal_rows(
             else {
                 continue;
             };
-            let accrued_at =
-                |at: Date| i128::from(goal_accrued(item.amount.minor_units, start_on, due_on, at));
+            // A goal's target changes from the month it is set, so a month sets aside what
+            // the target of its own month asked for.
+            let values = item.versions.in_force(month);
+            let accrued_at = |at: Date| {
+                i128::from(goal_accrued(
+                    values.amount.minor_units,
+                    start_on,
+                    due_on,
+                    at,
+                ))
+            };
             let accrued = if item.active {
                 accrued_at(month.next().first_day()) - accrued_at(month.first_day())
             } else {
@@ -621,7 +630,7 @@ fn goal_rows(
             if accrued == 0 && spent == 0 && left_out == 0 {
                 continue;
             }
-            let currency = item.amount.currency;
+            let currency = values.amount.currency;
             rows.push(GoalRow {
                 month,
                 goal: item.id,
@@ -646,26 +655,21 @@ fn rollover_rows(
     planned: &BTreeMap<Key, Planned>,
     actuals: &BTreeMap<Key, Happened>,
 ) -> Result<Vec<RolloverRow>, ForecastError> {
-    let mut budgets: BTreeMap<Pair, Vec<PlanSchedule>> = BTreeMap::new();
-    for item in input
-        .items
-        .iter()
-        .filter(|item| item.active && item.spending == Some(PlanSpending::Budget))
-    {
-        budgets
-            .entry((item.category, item.amount.currency))
-            .or_default()
-            .push(item.schedule);
-    }
+    let budgets: Vec<&ReportItem> = input.items.iter().filter(|item| item.active).collect();
     let mut rows = Vec::new();
     for &pair @ (category, currency) in pairs {
-        let schedules = budgets.get(&pair).map_or(&[][..], Vec::as_slice);
         let (mut budgeted, mut spent) = (0, 0);
         for &month in months {
             let key = (month, category, currency);
             let plan = planned.get(&key).copied().unwrap_or_default();
             budgeted += plan.budget;
-            if !schedules.iter().any(|schedule| runs_in(schedule, month)) {
+            let running = budgets.iter().any(|item| {
+                let values = item.versions.in_force(month);
+                values.spending == Some(PlanSpending::Budget)
+                    && (values.category, values.amount.currency) == pair
+                    && runs_in(&item.schedule, month)
+            });
+            if !running {
                 continue;
             }
             let actual = actuals.get(&key).map_or(0, |happened| happened.actual);

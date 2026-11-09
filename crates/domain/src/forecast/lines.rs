@@ -117,9 +117,7 @@ pub(super) fn still_needed(
     as_of: Date,
     until_exclusive: Date,
 ) -> Result<Need, ForecastError> {
-    let mut dates = item
-        .schedule
-        .occurrences(reduction::counts_from(item, as_of), until_exclusive);
+    let mut dates = item.occurrences(reduction::counts_from(item, as_of), until_exclusive);
     dates.retain(|&on| {
         !settled::is_settled(item, on) && adjustment.paid_ahead.binary_search(&on).is_err()
     });
@@ -224,6 +222,7 @@ pub(super) fn dated_line(
         direction: item.direction,
         category: item.category,
         account_hint: item.account_hint,
+        effective_from: item.in_force.from,
         occurrences,
         first_on: dates.first().copied(),
         last_on: dates.last().copied(),
@@ -282,6 +281,7 @@ pub(super) fn goal_line(
         direction: item.direction,
         category: item.category,
         account_hint: item.account_hint,
+        effective_from: item.in_force.from,
         occurrences: 0,
         first_on: None,
         last_on: None,

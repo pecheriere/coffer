@@ -11,8 +11,8 @@ use coffer_domain::accounts::{AccountKind, AccountName, BelongsTo, LiquidityClas
 use coffer_domain::ids::{AccountId, CategoryId, PlannedItemId};
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlannedItemName, default_tier,
-    spending_applies,
+    CalendarMonth, EffectiveFrom, IntervalUnit, PlanDirection, PlanSchedule, PlanSpending,
+    PlanTier, PlanValues, PlannedItemName, default_tier, spending_applies,
 };
 use coffer_domain::transactions::{
     CategoryGroupName, CategoryKind, CategoryName, Description, Notes, SplitInput,
@@ -110,6 +110,7 @@ impl World {
                 &schedule,
                 spending_applies(PlanDirection::Outflow, &schedule).then_some(PlanSpending::Bill),
             ),
+            written_on: date(2027, 1, 1),
             created_at: at(1),
         }
     }
@@ -119,6 +120,17 @@ impl World {
         let record = tx.insert_planned_item(new).await.unwrap();
         tx.commit().await.unwrap();
         record.id
+    }
+
+    /// Lifts the versions' append-only trigger, for a test that corrupts a row to see the
+    /// store refuse to read it.
+    pub(crate) async fn allow_corrupting_versions(&self) {
+        let pool = self.pool().await;
+        sqlx::query("DROP TRIGGER planned_item_versions_no_update")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     /// A direct connection, since no store call can write a row the types
@@ -131,6 +143,11 @@ impl World {
         .await
         .unwrap()
     }
+}
+
+/// A month the tests read items in: after every schedule they use begins.
+pub(crate) fn read_month() -> CalendarMonth {
+    "2027-06".parse().unwrap()
 }
 
 pub(crate) fn one_off() -> PlanSchedule {
@@ -175,7 +192,11 @@ async fn planned_item_roundtrips_each_schedule() {
 
         let id = world.insert(new).await;
 
-        let record = world.store.get_planned_item(id).await.unwrap();
+        let record = world
+            .store
+            .get_planned_item(id, read_month())
+            .await
+            .unwrap();
         assert_eq!(record.schedule, schedule, "the schedule comes back whole");
         assert_eq!(record.name.as_str(), "Water bill");
         assert_eq!(record.category, world.category);
@@ -190,7 +211,7 @@ async fn planned_item_roundtrips_each_schedule() {
 
         let mut tx = world.store.begin().await.unwrap();
         assert_eq!(
-            tx.get_planned_item(id).await.unwrap(),
+            tx.get_planned_item(id, read_month()).await.unwrap(),
             record,
             "a transaction reads the same record"
         );
@@ -206,24 +227,27 @@ async fn update_changes_only_the_named_columns() {
     let id = world.insert(new).await;
 
     let mut tx = world.store.begin().await.unwrap();
-    let record = tx
-        .update_planned_item(
-            id,
-            PlannedItemChanges {
-                amount: Some(usd(1)),
-                account_hint: Some(None),
-                schedule: Some(PlanSchedule::OneOff {
-                    on: date(2027, 4, 1),
-                }),
-                ..PlannedItemChanges::default()
-            },
-            at(9),
-        )
-        .await
-        .unwrap();
+    tx.update_planned_item(
+        id,
+        PlannedItemChanges {
+            account_hint: Some(None),
+            schedule: Some(PlanSchedule::OneOff {
+                on: date(2027, 4, 1),
+            }),
+            ..PlannedItemChanges::default()
+        },
+        at(9),
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
-    assert_eq!(record.amount, usd(1));
+    let record = world
+        .store
+        .get_planned_item(id, read_month())
+        .await
+        .unwrap();
+    assert_eq!(record.amount, usd(4_200), "the amount is a version's");
     assert_eq!(record.account_hint, None, "Some(None) clears the hint");
     assert_eq!(
         record.schedule,
@@ -238,56 +262,67 @@ async fn update_changes_only_the_named_columns() {
 }
 
 #[tokio::test]
-async fn spending_roundtrips_and_changes() {
+async fn spending_roundtrips_and_changes_by_version() {
     let world = world().await;
     let schedule = schedules()[0];
     let mut new = world.new_item(schedule);
     new.spending = Some(PlanSpending::Budget);
     let id = world.insert(new).await;
-    let read = world.store.get_planned_item(id).await.unwrap();
+    let read = world
+        .store
+        .get_planned_item(id, read_month())
+        .await
+        .unwrap();
     assert_eq!(read.spending, Some(PlanSpending::Budget));
 
+    let today = date(2027, 6, 10);
+    let values = |direction, spending, tier| PlanValues {
+        amount: usd(4_200),
+        direction,
+        category: world.category,
+        spending,
+        tier,
+    };
     let mut tx = world.store.begin().await.unwrap();
-    let record = tx
-        .update_planned_item(
-            id,
-            PlannedItemChanges {
-                spending: Some(Some(PlanSpending::Bill)),
-                ..PlannedItemChanges::default()
-            },
-            at(3),
-        )
-        .await
-        .unwrap();
+    tx.add_plan_version(
+        id,
+        today,
+        EffectiveFrom::ThisMonth,
+        values(
+            PlanDirection::Outflow,
+            Some(PlanSpending::Bill),
+            Some(PlanTier::MustPay),
+        ),
+    )
+    .await
+    .unwrap();
+    let record = tx.get_planned_item(id, read_month()).await.unwrap();
     assert_eq!(record.spending, Some(PlanSpending::Bill));
-    // An inflow has neither, so the three change together.
-    let record = tx
-        .update_planned_item(
-            id,
-            PlannedItemChanges {
-                direction: Some(PlanDirection::Inflow),
-                spending: Some(None),
-                tier: Some(None),
-                ..PlannedItemChanges::default()
-            },
-            at(4),
-        )
-        .await
-        .unwrap();
-    assert_eq!(record.spending, None);
+    // An inflow has neither a spending kind nor a tier, so the three change together.
+    tx.add_plan_version(
+        id,
+        today,
+        EffectiveFrom::ThisMonth,
+        values(PlanDirection::Inflow, None, None),
+    )
+    .await
+    .unwrap();
+    let record = tx.get_planned_item(id, read_month()).await.unwrap();
+    assert_eq!(
+        (record.spending, record.direction),
+        (None, PlanDirection::Inflow)
+    );
     let refused = tx
-        .update_planned_item(
+        .add_plan_version(
             id,
-            PlannedItemChanges {
-                spending: Some(Some(PlanSpending::Bill)),
-                ..PlannedItemChanges::default()
-            },
-            at(5),
+            today,
+            EffectiveFrom::ThisMonth,
+            values(PlanDirection::Inflow, Some(PlanSpending::Bill), None),
         )
         .await;
     assert!(
-        matches!(refused, Err(StoreError::Backend(_))),
-        "the table's check refuses a spending kind on an inflow"
+        matches!(refused, Err(StoreError::Invalid(_))),
+        "a spending kind on an inflow is refused"
     );
 }
 
@@ -339,7 +374,7 @@ async fn delete_and_missing_items_answer_not_found() {
     tx.commit().await.unwrap();
 
     assert!(matches!(
-        world.store.get_planned_item(id).await,
+        world.store.get_planned_item(id, read_month()).await,
         Err(StoreError::NotFound)
     ));
 }
@@ -414,95 +449,57 @@ async fn list_is_ordered_by_id_and_keeps_inactive_only_when_asked() {
         records.iter().map(|record| record.id).collect::<Vec<_>>()
     };
     assert_eq!(
-        ids(world.store.list_planned_items(false).await.unwrap()),
+        ids(world
+            .store
+            .list_planned_items(false, read_month())
+            .await
+            .unwrap()),
         [active, later]
     );
     assert_eq!(
-        ids(world.store.list_planned_items(true).await.unwrap()),
+        ids(world
+            .store
+            .list_planned_items(true, read_month())
+            .await
+            .unwrap()),
         [active, inactive, later]
     );
 }
 
-/// Rows the schema refuses: direction, item type, then the schedule's columns
-/// and the spending kind. Each sets columns that don't fit its type.
-const REFUSED_ROWS: &[(&str, &str, &str)] = &[
+/// Rows the schema refuses: item type, then the schedule's columns. Each sets columns that
+/// don't fit its type.
+const REFUSED_ROWS: &[(&str, &str)] = &[
     // A recurring item without its anchor.
     (
-        "outflow",
         "recurring",
-        "1, 'months', NULL, NULL, NULL, NULL, NULL, NULL, 'bill'",
+        "1, 'months', NULL, NULL, NULL, NULL, NULL, NULL",
     ),
     // A recurring item that also has a one-off date.
     (
-        "outflow",
         "recurring",
-        "1, 'months', '2027-01-01', NULL, '2027-01-01', NULL, NULL, NULL, 'bill'",
+        "1, 'months', '2027-01-01', NULL, '2027-01-01', NULL, NULL, NULL",
     ),
     // A recurring item that also has a goal's columns.
     (
-        "outflow",
         "recurring",
-        "1, 'months', '2027-01-01', NULL, NULL, '2027-01-01', '2027-02-01', 0, 'bill'",
-    ),
-    // A recurring outflow without a spending kind.
-    (
-        "outflow",
-        "recurring",
-        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, NULL",
-    ),
-    // A recurring outflow with an unknown one.
-    (
-        "outflow",
-        "recurring",
-        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'splurge'",
-    ),
-    // A recurring inflow with one.
-    (
-        "inflow",
-        "recurring",
-        "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'bill'",
+        "1, 'months', '2027-01-01', NULL, NULL, '2027-01-01', '2027-02-01', 0",
     ),
     // A one-off without its date.
-    (
-        "outflow",
-        "one_off",
-        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL",
-    ),
+    ("one_off", "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL"),
     // A one-off with a recurring item's end date.
     (
-        "outflow",
         "one_off",
-        "NULL, NULL, NULL, '2027-01-01', '2027-01-01', NULL, NULL, NULL, NULL",
-    ),
-    // A one-off with a spending kind.
-    (
-        "outflow",
-        "one_off",
-        "NULL, NULL, NULL, NULL, '2027-01-01', NULL, NULL, NULL, 'bill'",
+        "NULL, NULL, NULL, '2027-01-01', '2027-01-01', NULL, NULL, NULL",
     ),
     // A goal without its completed flag.
     (
-        "outflow",
         "goal",
-        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', NULL, NULL",
-    ),
-    // A goal that brings money in.
-    (
-        "inflow",
-        "goal",
-        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, NULL",
-    ),
-    // A goal with a spending kind.
-    (
-        "outflow",
-        "goal",
-        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, 'budget'",
+        "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', NULL",
     ),
     // A date that isn't one.
     (
-        "outflow",
         "one_off",
-        "NULL, NULL, NULL, NULL, 'soon', NULL, NULL, NULL, NULL",
+        "NULL, NULL, NULL, NULL, 'soon', NULL, NULL, NULL",
     ),
 ];
 
@@ -510,18 +507,16 @@ const REFUSED_ROWS: &[(&str, &str, &str)] = &[
 async fn check_refuses_mixed_schedule_columns() {
     let world = world().await;
     let pool = world.pool().await;
-    let insert = |direction: &str, item_type: &str, schedule: &str| {
+    let insert = |item_type: &str, schedule: &str| {
         format!(
-            "INSERT INTO planned_items (id, name, category_id, amount_minor, currency, direction, \
-             active, item_type, every, unit, anchor_on, end_on, one_off_on, goal_start_on, \
-             goal_due_on, goal_completed, spending, created_at, updated_at) VALUES ('{id}', 'Water bill', \
-             '{category}', 100, 'USD', '{direction}', 1, '{item_type}', {schedule}, 0, 0)",
+            "INSERT INTO planned_items (id, name, active, item_type, every, unit, anchor_on, \
+             end_on, one_off_on, goal_start_on, goal_due_on, goal_completed, created_at, \
+             updated_at) VALUES ('{id}', 'Water bill', 1, '{item_type}', {schedule}, 0, 0)",
             id = PlannedItemId::new(),
-            category = world.category,
         )
     };
-    for (direction, item_type, schedule) in REFUSED_ROWS {
-        let sql = insert(direction, item_type, schedule);
+    for (item_type, schedule) in REFUSED_ROWS {
+        let sql = insert(item_type, schedule);
         assert!(
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                 .execute(&pool)
@@ -530,24 +525,17 @@ async fn check_refuses_mixed_schedule_columns() {
             "the schema refuses a row whose columns don't fit its type"
         );
     }
-    for (direction, item_type, schedule) in [
+    for (item_type, schedule) in [
         (
-            "outflow",
             "goal",
-            "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0, NULL",
+            "NULL, NULL, NULL, NULL, NULL, '2027-01-01', '2027-02-01', 0",
         ),
         (
-            "outflow",
             "recurring",
-            "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, 'budget'",
-        ),
-        (
-            "inflow",
-            "recurring",
-            "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL, NULL",
+            "1, 'months', '2027-01-01', NULL, NULL, NULL, NULL, NULL",
         ),
     ] {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(insert(direction, item_type, schedule)))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(insert(item_type, schedule)))
             .execute(&pool)
             .await
             .unwrap();
@@ -559,19 +547,20 @@ async fn check_refuses_mixed_schedule_columns() {
 async fn corrupt_currency_is_a_backend_error() {
     let world = world().await;
     let id = world.insert(world.new_item(one_off())).await;
+    world.allow_corrupting_versions().await;
 
     world
         .store
-        .execute_unchecked_for_tests("UPDATE planned_items SET currency = ?", "ZZZ")
+        .execute_unchecked_for_tests("UPDATE planned_item_versions SET currency = ?", "ZZZ")
         .await
         .unwrap();
 
     assert!(matches!(
-        world.store.get_planned_item(id).await,
+        world.store.get_planned_item(id, read_month()).await,
         Err(StoreError::Backend(_))
     ));
     assert!(matches!(
-        world.store.list_planned_items(true).await,
+        world.store.list_planned_items(true, read_month()).await,
         Err(StoreError::Backend(_))
     ));
 }
@@ -580,17 +569,19 @@ async fn corrupt_currency_is_a_backend_error() {
 async fn corrupt_spending_is_a_backend_error() {
     let world = world().await;
     let recurring = world.insert(world.new_item(schedules()[0])).await;
+    world.allow_corrupting_versions().await;
     world
         .store
         .execute_unchecked_for_tests(
-            "UPDATE planned_items SET spending = ? WHERE item_type = 'recurring'",
+            "UPDATE planned_item_versions SET spending = ? \
+             WHERE item_id IN (SELECT id FROM planned_items WHERE item_type = 'recurring')",
             "splurge",
         )
         .await
         .unwrap();
     assert!(
         matches!(
-            world.store.get_planned_item(recurring).await,
+            world.store.get_planned_item(recurring, read_month()).await,
             Err(StoreError::Backend(_))
         ),
         "an unknown kind is corruption"
@@ -600,14 +591,15 @@ async fn corrupt_spending_is_a_backend_error() {
     world
         .store
         .execute_unchecked_for_tests(
-            "UPDATE planned_items SET spending = ? WHERE item_type = 'one_off'",
+            "UPDATE planned_item_versions SET spending = ? \
+             WHERE item_id IN (SELECT id FROM planned_items WHERE item_type = 'one_off')",
             "bill",
         )
         .await
         .unwrap();
     assert!(
         matches!(
-            world.store.get_planned_item(other).await,
+            world.store.get_planned_item(other, read_month()).await,
             Err(StoreError::Backend(_))
         ),
         "a kind on an item that can't have one is corruption"
@@ -625,7 +617,7 @@ async fn corrupt_schedule_is_a_backend_error() {
         .await
         .unwrap();
     assert!(matches!(
-        world.store.get_planned_item(id).await,
+        world.store.get_planned_item(id, read_month()).await,
         Err(StoreError::Backend(_))
     ));
 
@@ -636,7 +628,7 @@ async fn corrupt_schedule_is_a_backend_error() {
         .unwrap();
     assert!(
         matches!(
-            world.store.get_planned_item(id).await,
+            world.store.get_planned_item(id, read_month()).await,
             Err(StoreError::Backend(_))
         ),
         "a date the domain would refuse is corruption too"

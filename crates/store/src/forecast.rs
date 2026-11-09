@@ -10,7 +10,7 @@ use coffer_domain::ids::{
     AccountId, CategoryId, ConnectionId, PlannedItemId, TransactionId, TransferLinkId,
 };
 use coffer_domain::money::Currency;
-use coffer_domain::plan::{EmergencyFunds, ForecastSettings};
+use coffer_domain::plan::{CalendarMonth, EmergencyFunds, ForecastSettings};
 use coffer_domain::transfer_rate::CrossCurrencyLink;
 use jiff::civil::Date;
 use sqlx::SqliteConnection;
@@ -21,7 +21,7 @@ use crate::balances::snapshot_from_row;
 use crate::convert::{int, parsed, parsed_opt, text};
 use crate::emergency_funds::fetch_emergency_funds;
 use crate::household::fetch_forecast_settings;
-use crate::planned_items::from_row as planned_item_from_row;
+use crate::planned_items::read_all as read_planned_items;
 use crate::provider_accounts::provider_account_from_row;
 use crate::rule_filed_transfers;
 use crate::settlements;
@@ -517,13 +517,8 @@ impl Store {
         let settings = fetch_forecast_settings(&mut *tx).await?;
         let emergency_funds = fetch_emergency_funds(&mut *tx).await?;
         let accounts = accounts_with_balances(&mut tx, &day).await?;
-        let items = sqlx::query("SELECT * FROM planned_items WHERE active = 1 ORDER BY id")
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(StoreError::from_sqlx)?
-            .iter()
-            .map(planned_item_from_row)
-            .collect::<Result<_, _>>()?;
+        let month = CalendarMonth::of(as_of).map_err(StoreError::backend)?;
+        let items = read_planned_items(&mut tx, false, month).await?;
         let settlements = settlements::all(&mut tx).await?;
         let goal_spent = sqlx::query(GOAL_SPENT)
             .bind(&day)

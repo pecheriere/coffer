@@ -10,7 +10,7 @@ use jiff::civil::Date;
 
 use super::bill_matching::bills_looked_at_from;
 use super::{ForecastError, ForecastInput, ItemInput, SettledLine, count, money};
-use crate::plan::{CalendarMonth, SettlementKind, occurrences_in};
+use crate::plan::{CalendarMonth, SettlementKind};
 
 /// Whether `item`'s occurrence on `on` is in a settled month.
 pub(super) fn is_settled(item: &ItemInput, on: Date) -> bool {
@@ -38,7 +38,7 @@ pub(super) fn settled_lines(
     let mut lines = Vec::new();
     for item in &input.items {
         for (&month, &kind) in &item.settled {
-            let mut dates = occurrences_in(&item.schedule, month);
+            let mut dates = item.occurrences_in(month);
             dates.retain(|on| (looked_at_from..end_exclusive).contains(on));
             let occurrences = count(&dates)?;
             if occurrences == 0 {

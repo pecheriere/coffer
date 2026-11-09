@@ -18,8 +18,8 @@ use crate::ids::{
 };
 use crate::money::{Currency, Money};
 use crate::plan::{
-    CalendarMonth, EmergencyFund, EmergencyFunds, PlanDirection, PlanItemType, PlanSchedule,
-    PlanSpending, PlanTier, SettlementKind,
+    CalendarMonth, EmergencyFund, EmergencyFunds, MonthSpan, PlanDirection, PlanItemType,
+    PlanSchedule, PlanSpending, PlanTier, SettlementKind,
 };
 use crate::transfer_rate::CrossCurrencyLink;
 
@@ -145,6 +145,14 @@ pub struct ItemInput {
     /// The months a person settled it for. Only a stored recurring bill or one-off
     /// outflow has any: a what-if can't settle, and the ledger refuses anything else.
     pub settled: BTreeMap<CalendarMonth, SettlementKind>,
+    /// The months this input's values are in force for. An item with a history is given as
+    /// one input per span, so every occurrence counted goes through [`Self::occurrences`],
+    /// which clips to it.
+    pub in_force: MonthSpan,
+    /// For a stored recurring item, the other amounts it held during a month (see
+    /// `PlanVersions::held_during`), which a payment may still be matched to: lowering a paid
+    /// bill doesn't un-pay it.
+    pub also_matches: BTreeMap<CalendarMonth, Vec<Money>>,
 }
 
 /// Where a line of the breakdown comes from.
@@ -395,6 +403,10 @@ pub struct ItemLine {
     pub category: Option<CategoryId>,
     #[cfg_attr(feature = "openapi", schema(required))]
     pub account_hint: Option<AccountId>,
+    /// The month this line's values take effect from, when the item has an earlier version
+    /// whose line comes before it; null for an item's first line.
+    #[cfg_attr(feature = "openapi", schema(required))]
+    pub effective_from: Option<CalendarMonth>,
     /// How many times it falls in the window, and for a stored budget earlier in `as_of`'s
     /// month too: 0 for a goal. An inflow counts only from the day after `as_of`, and a bill
     /// already paid, up to a week early, isn't counted (it is in `payments`).

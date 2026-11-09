@@ -1,20 +1,20 @@
 //! Tiers on planned items (money redesign §4.1): migration 0031 gives every stored outflow
 //! the default for its kind and keeps settlements, and the store refuses an outflow read
-//! without one, since the table's CHECK allows a NULL tier.
+//! without one; since 0032 the versions table's CHECK refuses an outflow without a tier.
 
 use std::borrow::Cow;
 
 use coffer_domain::ids::{CategoryId, MemberId, PlannedItemId};
-use coffer_domain::plan::{PlanSchedule, PlanTier, PlannedItemName};
-use coffer_store::{PlannedItemChanges, Store, StoreError};
+use coffer_domain::plan::{EffectiveFrom, PlanSchedule, PlanTier, PlanValues, PlannedItemName};
+use coffer_store::{PlannedItemChanges, Store};
 use jiff::civil::date;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteConnectOptions;
 
-use crate::plan::{at, one_off, world};
+use crate::plan::{at, one_off, read_month, world};
 
-fn migrations_up_to(last: i64) -> Migrator {
+pub(crate) fn migrations_up_to(last: i64) -> Migrator {
     let mut upto = sqlx::migrate!("./migrations");
     upto.migrations = Cow::Owned(
         upto.iter()
@@ -122,7 +122,7 @@ async fn migration_tiers_every_outflow() {
         ),
         (seeded.income, None, "income has none"),
     ] {
-        let record = store.get_planned_item(id).await.unwrap();
+        let record = store.get_planned_item(id, read_month()).await.unwrap();
         assert_eq!(record.tier, expected, "{what}");
     }
     let settlements = store.settlements_of_item(seeded.bill).await.unwrap();
@@ -130,65 +130,23 @@ async fn migration_tiers_every_outflow() {
 }
 
 #[tokio::test]
-async fn an_outflow_without_a_tier_is_corrupt() {
-    let world = world().await;
-    let id = world.insert(world.new_item(one_off())).await;
-
-    world
-        .store
-        .execute_unchecked_for_tests(
-            "UPDATE planned_items SET tier = NULL WHERE id = ?",
-            &id.to_string(),
-        )
-        .await
-        .unwrap();
-
-    assert!(
-        matches!(
-            world.store.get_planned_item(id).await,
-            Err(StoreError::Backend(_))
-        ),
-        "an outflow without a tier is corruption"
-    );
-    assert!(
-        matches!(
-            world.store.list_planned_items(true).await,
-            Err(StoreError::Backend(_))
-        ),
-        "the list refuses it too"
-    );
-}
-
-#[tokio::test]
 async fn the_check_refuses_a_tier_that_breaks_the_rules() {
     let world = world().await;
-    let goal = world
-        .insert(world.new_item(PlanSchedule::Goal {
-            start_on: date(2027, 1, 1),
-            due_on: date(2027, 7, 1),
-            completed: false,
-        }))
-        .await;
     let bill = world.insert(world.new_item(one_off())).await;
     let pool = world.pool().await;
+    let insert = |direction: &str, tier: &str| {
+        format!(
+            "INSERT INTO planned_item_versions (item_id, seq, effective_from, written_on, \
+             amount_minor, currency, direction, category_id, spending, tier) VALUES ('{bill}', 2, \
+             '2027-03', '2027-03-01', 100, 'USD', '{direction}', '{category}', NULL, {tier})",
+            category = world.category,
+        )
+    };
 
     for (sql, what) in [
-        (
-            format!("UPDATE planned_items SET tier = 'flexible' WHERE id = '{goal}'"),
-            "a goal marked flexible",
-        ),
-        (
-            format!("UPDATE planned_items SET tier = 'saving_toward' WHERE id = '{bill}'"),
-            "a one-off saving toward",
-        ),
-        (
-            format!("UPDATE planned_items SET tier = 'emergency_fund' WHERE id = '{bill}'"),
-            "an unknown tier",
-        ),
-        (
-            format!("UPDATE planned_items SET direction = 'inflow' WHERE id = '{bill}'"),
-            "income keeping a tier",
-        ),
+        (insert("outflow", "'emergency_fund'"), "an unknown tier"),
+        (insert("inflow", "'essentials'"), "income keeping a tier"),
+        (insert("outflow", "NULL"), "an outflow without a tier"),
     ] {
         assert!(
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
@@ -198,12 +156,10 @@ async fn the_check_refuses_a_tier_that_breaks_the_rules() {
             "the schema refuses {what}"
         );
     }
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "UPDATE planned_items SET direction = 'inflow', tier = NULL WHERE id = '{bill}'"
-    )))
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(insert("inflow", "NULL")))
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 }
 
@@ -213,35 +169,72 @@ async fn tier_roundtrips_and_changes() {
     let mut new = world.new_item(one_off());
     new.tier = Some(PlanTier::Essentials);
     let id = world.insert(new).await;
-    assert_eq!(
-        world.store.get_planned_item(id).await.unwrap().tier,
-        Some(PlanTier::Essentials),
-        "the tier is stored"
-    );
+    let read = world
+        .store
+        .get_planned_item(id, read_month())
+        .await
+        .unwrap();
+    assert_eq!(read.tier, Some(PlanTier::Essentials), "the tier is stored");
 
     let mut tx = world.store.begin().await.unwrap();
-    let record = tx
-        .update_planned_item(
-            id,
-            PlannedItemChanges {
-                tier: Some(Some(PlanTier::Flexible)),
-                ..PlannedItemChanges::default()
-            },
-            at(3),
-        )
-        .await
-        .unwrap();
+    tx.add_plan_version(
+        id,
+        date(2027, 6, 10),
+        EffectiveFrom::ThisMonth,
+        PlanValues {
+            tier: Some(PlanTier::Flexible),
+            ..read.versions.in_force(read_month()).to_owned()
+        },
+    )
+    .await
+    .unwrap();
+    let record = tx.get_planned_item(id, read_month()).await.unwrap();
     assert_eq!(record.tier, Some(PlanTier::Flexible), "the tier changes");
-    let record = tx
-        .update_planned_item(
-            id,
-            PlannedItemChanges {
-                name: Some(PlannedItemName::parse("Renamed").unwrap()),
-                ..PlannedItemChanges::default()
-            },
-            at(4),
-        )
+    tx.update_planned_item(
+        id,
+        PlannedItemChanges {
+            name: Some(PlannedItemName::parse("Renamed").unwrap()),
+            ..PlannedItemChanges::default()
+        },
+        at(4),
+    )
+    .await
+    .unwrap();
+    let record = tx.get_planned_item(id, read_month()).await.unwrap();
+    assert_eq!(record.tier, Some(PlanTier::Flexible), "a rename keeps it");
+}
+
+/// The triggers refuse a tier that doesn't fit the item's type; were one written anyway, the
+/// store refuses what reads back wrong.
+#[tokio::test]
+async fn a_tier_that_does_not_fit_the_item_is_corrupt() {
+    let world = world().await;
+    let goal = world
+        .insert(world.new_item(PlanSchedule::Goal {
+            start_on: date(2027, 1, 1),
+            due_on: date(2027, 7, 1),
+            completed: false,
+        }))
+        .await;
+    let bill = world.insert(world.new_item(one_off())).await;
+    world.allow_corrupting_versions().await;
+    let pool = world.pool().await;
+
+    for (item, tier) in [(goal, "flexible"), (bill, "saving_toward")] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "UPDATE planned_item_versions SET tier = '{tier}' WHERE item_id = '{item}'"
+        )))
+        .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(record.tier, Some(PlanTier::Flexible), "None keeps it");
+        assert!(matches!(
+            world.store.get_planned_item(item, read_month()).await,
+            Err(coffer_store::StoreError::Backend(_))
+        ));
+    }
+    assert!(matches!(
+        world.store.list_planned_items(true, read_month()).await,
+        Err(coffer_store::StoreError::Backend(_))
+    ));
+    pool.close().await;
 }
