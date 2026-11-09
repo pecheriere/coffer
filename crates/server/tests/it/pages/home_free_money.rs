@@ -176,6 +176,83 @@ async fn a_blocked_currency_says_why() {
 }
 
 #[tokio::test]
+async fn a_blocked_lead_currency_says_why() {
+    let world = world().await;
+    world.emergency_fund(0).await;
+    world
+        .account_with("Checking", "checking", "USD", json!({}))
+        .await;
+    world.settings(&json!({"display_currency": "USD"})).await;
+
+    let (_, card) = free_card(&world).await;
+    let words = text_of(&card);
+
+    assert!(
+        words.contains("USD: No number yet: Checking has no balance yet"),
+        "{words}"
+    );
+    assert!(!card.contains("hero-number"), "no big number: {words}");
+    assert!(!words.contains("0.00 USD free"), "never a zero: {words}");
+}
+
+#[tokio::test]
+async fn each_blocked_currency_lists_only_its_own_accounts() {
+    let world = world().await;
+    world.emergency_fund(0).await;
+    world
+        .account_with("Checking", "checking", "USD", json!({}))
+        .await;
+    world
+        .account_with("Euros", "checking", "EUR", json!({}))
+        .await;
+    world
+        .emergency_fund_of("EUR", &json!({"kind": "fixed", "minor_units": 0}))
+        .await;
+    world.settings(&json!({"display_currency": "USD"})).await;
+
+    let (_, card) = free_card(&world).await;
+    let words = text_of(&card);
+
+    assert!(
+        words.contains("USD: No number yet: Checking has no balance yet"),
+        "{words}"
+    );
+    assert!(
+        words.contains("EUR: No number yet: Euros has no balance yet"),
+        "{words}"
+    );
+    let usd = words.find("USD: No number yet").unwrap();
+    let eur = words.find("EUR: No number yet").unwrap();
+    assert!(
+        !words[usd..eur].contains("Euros"),
+        "the USD line names no euro account: {words}"
+    );
+    assert!(
+        !words[eur..].contains("Checking has no balance"),
+        "the EUR line names no dollar account: {words}"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_balance_caution_names_its_account() {
+    let world = world().await;
+    world.emergency_fund(0).await;
+    let old = world
+        .account_with("Old savings", "savings", "USD", json!({}))
+        .await;
+    world.balance(old, "2026-10-01", 500_000).await;
+
+    let (_, card) = free_card(&world).await;
+    let words = text_of(&card);
+
+    assert!(
+        words.contains("The balance of Old savings is"),
+        "the caution names the account: {words}"
+    );
+    assert!(!words.contains("an account"), "{words}");
+}
+
+#[tokio::test]
 async fn no_emergency_fund_is_worth_knowing() {
     let world = world().await;
     world.funded("Checking", 1_000_000).await;

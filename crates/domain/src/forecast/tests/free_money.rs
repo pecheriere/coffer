@@ -357,6 +357,7 @@ fn a_missing_balance_blocks_only_its_currency() {
         [Blocker::BalanceMissing {
             account: id,
             name: "Konto".to_owned(),
+            currency: eur(0).currency,
         }],
         "the mix of currencies blocks nothing here"
     );

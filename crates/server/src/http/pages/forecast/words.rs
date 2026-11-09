@@ -2,6 +2,7 @@
 //! `match` here is exhaustive, so a new kind fails the build until it has words, and
 //! the tests below fail until it has a sample to check them with.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use coffer_domain::forecast::{
@@ -18,7 +19,7 @@ use crate::http::pages::amounts::{day, magnitude, money};
 /// What the forecast's ids are called. An id with no name, which only a change between
 /// two reads can cause, falls back to a plain description.
 pub(in crate::http::pages) struct Names<'a> {
-    accounts: BTreeMap<AccountId, &'a str>,
+    accounts: BTreeMap<AccountId, Cow<'a, str>>,
     pub(super) categories: BTreeMap<CategoryId, String>,
     pub(super) items: BTreeMap<PlannedItemId, String>,
 }
@@ -28,21 +29,31 @@ impl<'a> Names<'a> {
         Self {
             accounts: accounts
                 .iter()
-                .map(|line| (line.account, line.name.as_str()))
+                .map(|line| (line.account, Cow::Borrowed(line.name.as_str())))
                 .collect(),
             categories: BTreeMap::new(),
             items: BTreeMap::new(),
         }
     }
 
+    /// Whether a sentence about `id` would have no name for it.
+    pub(super) fn lacks_account(&self, id: AccountId) -> bool {
+        !self.accounts.contains_key(&id)
+    }
+
+    /// Learns an account's name from a lookup.
+    pub(super) fn add_account(&mut self, id: AccountId, name: String) {
+        self.accounts.insert(id, Cow::Owned(name));
+    }
+
     /// The account's name, to go inside a sentence.
     fn account(&self, id: AccountId) -> &str {
-        self.accounts.get(&id).copied().unwrap_or("an account")
+        self.accounts.get(&id).map_or("an account", Cow::as_ref)
     }
 
     /// The account's name, to start a sentence.
     fn account_first(&self, id: AccountId) -> &str {
-        self.accounts.get(&id).copied().unwrap_or("An account")
+        self.accounts.get(&id).map_or("An account", Cow::as_ref)
     }
 
     fn category(&self, id: CategoryId) -> Option<&str> {
@@ -168,6 +179,20 @@ pub(in crate::http::pages) fn blocker_sentence(blocker: &Blocker) -> String {
         Blocker::BalanceMissing { name, .. } => {
             format!("{name} has no balance yet, so it could hold anything.")
         }
+    }
+}
+
+/// The account a caution speaks of, for the kinds that name one. A kind not listed has no
+/// account to name; one added here later only costs its name if it is forgotten, as the
+/// sentence then says "an account".
+pub(super) fn caution_account(caution: &Caution) -> Option<AccountId> {
+    match caution {
+        Caution::BalanceStale { account, .. }
+        | Caution::AccountFeedProblem { account, .. }
+        | Caution::ClosedLiabilityOwing { account, .. }
+        | Caution::LiabilityBalancePositive { account, .. }
+        | Caution::ItemHintNotCounted { account, .. } => Some(*account),
+        _ => None,
     }
 }
 

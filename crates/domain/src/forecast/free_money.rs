@@ -97,10 +97,9 @@ pub fn compute_free_money(input: &ForecastInput) -> Result<FreeMoney, ForecastEr
     let unblocked = |currency: Currency| {
         !forecast.blockers.iter().any(|blocker| match blocker {
             Blocker::NoCountedAccounts => true,
-            Blocker::BalanceMissing { account, .. } => input
-                .accounts
-                .iter()
-                .any(|found| found.id == *account && found.currency == currency),
+            Blocker::BalanceMissing {
+                currency: blocked, ..
+            } => *blocked == currency,
             Blocker::MixedCurrencies { .. } => false,
         })
     };

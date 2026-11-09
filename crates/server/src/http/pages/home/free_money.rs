@@ -123,10 +123,16 @@ fn in_order(answer: &FreeMoney, display: Option<Currency>) -> Vec<&FreeMoneyCurr
     rows
 }
 
-/// Why there is no number, after "No number yet:".
-fn why(blockers: &[Blocker]) -> String {
+/// Why there is no number, after "No number yet:". A currency's line gives its own accounts'
+/// blockers; one that is not per currency, such as no account counting as cash, shows under
+/// every blocked line. With no currency (nothing is held), every blocker is given.
+fn why(blockers: &[Blocker], currency: Option<Currency>) -> String {
     blockers
         .iter()
+        .filter(|blocker| match (blocker, currency) {
+            (Blocker::BalanceMissing { currency: own, .. }, Some(row)) => *own == row,
+            _ => true,
+        })
         .map(blocker_sentence)
         .collect::<Vec<_>>()
         .join(" ")
@@ -155,7 +161,7 @@ pub(super) fn card(
                     p.fine { "Choose a display currency on the Household page to pick which one leads." }
                 }
             } @else {
-                p { "No number yet: " (why(&answer.blockers)) }
+                p { "No number yet: " (why(&answer.blockers, None)) }
             }
             (worth_knowing(answer, names, can_manage))
             p { a href="/forecast" { "How this is worked out" } }
@@ -164,14 +170,15 @@ pub(super) fn card(
 }
 
 fn one_line(row: &FreeMoneyCurrency, blockers: &[Blocker]) -> String {
-    hero_sentence(row).unwrap_or_else(|| format!("No number yet: {}", why(blockers)))
+    hero_sentence(row)
+        .unwrap_or_else(|| format!("No number yet: {}", why(blockers, Some(row.currency))))
 }
 
 /// The leading currency: the answer large, the bar, and the legend that says every part.
 fn lead_currency(row: &FreeMoneyCurrency, answer: &FreeMoney) -> Markup {
     let Some(sentence) = hero_sentence(row) else {
         return html! {
-            p { (row.currency.as_str()) ": No number yet: " (why(&answer.blockers)) }
+            p { (row.currency.as_str()) ": No number yet: " (why(&answer.blockers, Some(row.currency))) }
         };
     };
     let short = row.shortfall.is_some_and(|short| short.minor_units > 0);

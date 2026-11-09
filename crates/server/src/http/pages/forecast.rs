@@ -24,8 +24,8 @@ use super::{PageError, PageSession, refused};
 use crate::http::AppState;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
-    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_sentence, month_name, months,
-    rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
+    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_account, caution_sentence,
+    month_name, months, rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -82,6 +82,24 @@ pub(in crate::http::pages) async fn names<'a>(
     let mut names = Names::of_accounts(accounts);
     if cautions.is_empty() {
         return names;
+    }
+    // Home passes no accounts. A hidden account is not listed for the actor, so its name is
+    // never read here and its sentence says "an account".
+    if cautions
+        .iter()
+        .filter_map(caution_account)
+        .any(|id| names.lacks_account(id))
+    {
+        match state.ledger.list_accounts(actor, true).await {
+            Ok(views) => {
+                for view in views {
+                    if names.lacks_account(view.id) {
+                        names.add_account(view.id, view.name);
+                    }
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "could not read the forecast's account names"),
+        }
     }
     match state.ledger.list_categories(actor).await {
         Ok(tree) => {

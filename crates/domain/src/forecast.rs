@@ -276,10 +276,19 @@ fn blockers(input: &ForecastInput, accounts: &[AccountLine], book: &Book) -> Vec
     }
     for line in accounts {
         if line.counted && line.balance.is_none() {
-            blockers.push(Blocker::BalanceMissing {
-                account: line.account,
-                name: line.name.clone(),
-            });
+            // Every line comes from an input account, so the lookup always finds one.
+            let currency = input
+                .accounts
+                .iter()
+                .find(|account| account.id == line.account)
+                .map(|account| account.currency);
+            if let Some(currency) = currency {
+                blockers.push(Blocker::BalanceMissing {
+                    account: line.account,
+                    name: line.name.clone(),
+                    currency,
+                });
+            }
         }
     }
     blockers

@@ -9019,15 +9019,19 @@
           },
           {
             "type": "object",
-            "description": "A counted account has no balance, so it could hold anything.",
+            "description": "A counted account has no balance, so it could hold anything. `currency` is the\naccount's, so a currency's answer can tell its own blockers from the others'.",
             "required": [
               "account",
               "name",
+              "currency",
               "kind"
             ],
             "properties": {
               "account": {
                 "$ref": "#/components/schemas/AccountId"
+              },
+              "currency": {
+                "$ref": "#/components/schemas/Currency"
               },
               "kind": {
                 "type": "string",
