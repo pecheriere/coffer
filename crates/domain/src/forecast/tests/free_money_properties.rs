@@ -25,13 +25,12 @@ fn wide(money: Money) -> i128 {
 }
 
 /// Whether a blocker in `answer` leaves `currency` without a number.
-fn blocked(answer: &FreeMoney, input: &ForecastInput, currency: Currency) -> bool {
+fn blocked(answer: &FreeMoney, currency: Currency) -> bool {
     answer.blockers.iter().any(|blocker| match blocker {
         Blocker::NoCountedAccounts => true,
-        Blocker::BalanceMissing { account, .. } => input
-            .accounts
-            .iter()
-            .any(|found| found.id == *account && found.currency == currency),
+        Blocker::BalanceMissing {
+            currency: blocked, ..
+        } => *blocked == currency,
         Blocker::MixedCurrencies { .. } => false,
     })
 }
@@ -227,7 +226,7 @@ proptest! {
                 .map_or(0, |totals| wide(totals.cash_available));
             prop_assert_eq!(wide(row.cash_available), forecast_cash, "the forecast's cash");
 
-            prop_assert_eq!(row.free_money.is_none(), blocked(&answer, &input, row.currency), "blocked");
+            prop_assert_eq!(row.free_money.is_none(), blocked(&answer, row.currency), "blocked");
             prop_assert_eq!(row.free_money.is_none(), row.emergency_fund_held.is_none());
             prop_assert_eq!(row.free_money.is_none(), row.shortfall.is_none());
             let (Some(free), Some(held), Some(shortfall)) =

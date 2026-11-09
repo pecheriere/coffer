@@ -562,8 +562,13 @@ pub enum Blocker {
     MixedCurrencies { currencies: Vec<Currency> },
     /// No account counts as cash.
     NoCountedAccounts,
-    /// A counted account has no balance, so it could hold anything.
-    BalanceMissing { account: AccountId, name: String },
+    /// A counted account has no balance, so it could hold anything. `currency` is the
+    /// account's, so a currency's answer can tell its own blockers from the others'.
+    BalanceMissing {
+        account: AccountId,
+        name: String,
+        currency: Currency,
+    },
 }
 
 /// Something that keeps the number but stops it being firm.
