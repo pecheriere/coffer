@@ -23,7 +23,7 @@
 - `ahead_of_pace { item, spent, planned, runs_out_on }` when `elapsed_permille ≥ 250`, the bucket has a pace (07k: monthly or more often), `spent_permille > elapsed_permille`, and the run-out day falls in this month: `runs_out_on = month_start + ceil(planned × days_elapsed / spent) − 1` days, integer maths, days elapsed including today.
 - `transactions_to_check { count }` when the actor's review count > 0.
 - Order: needs a source, covered from free money, ahead of pace, bills that differ, transactions to check, auto covered (after the fact, §4.6.5).
-- Threshold: `auto_cover` per currency, default `100 × 10^exponent` minor units; 0 to 10^15. `GET /api/v1/household/thresholds` lists every currency in use (07h's set) with its value and `is_default`; `PUT /api/v1/household/thresholds/{currency}/auto-cover` `{ "minor_units": n }` sets it; `DELETE` of the same resets it (REST only). Setting needs an admin, as the emergency fund does; reading as household settings.
+- Threshold: `auto_cover` per currency, default `100 × 10^exponent` minor units; 0 to 10^15. `GET /api/v1/household/thresholds` lists every currency in use (07h's set) with its value and `is_default`; `PUT /api/v1/household/thresholds/{currency}` takes optional fields (07r adds `invest_minimum` to the same body): `auto_cover` absent leaves it, a number of minor units sets it, `null` puts the default back (the `Patch` type plan item patches use). One shape for both thresholds, so agents learn one call. Setting needs an admin, as the emergency fund does; reading as household settings.
 - `needs-a-look` authorization as the forecast. Read-only.
 
 ## Review Focus
@@ -69,11 +69,11 @@ pub struct CoverOption { pub from: CoverSource, pub available: Money, /// min(re
 
 **Files:**
 - Create: `crates/store/migrations/0034_currency_thresholds.sql`, `crates/store/src/thresholds.rs`, `crates/store/tests/it/thresholds.rs`, `crates/domain/src/plan/thresholds.rs` (`default_auto_cover(Currency) -> Money`, `validate_threshold`), `crates/server/src/ledger/thresholds.rs`, `crates/server/tests/it/thresholds.rs` (+ `mod` lines)
-- Modify: `crates/store/src/lib.rs`, `crates/server/src/http/api/household.rs` (three operations: `listThresholds`, `setAutoCoverThreshold`, `resetAutoCoverThreshold`; if it passes ~700 lines, `household/thresholds.rs`), `crates/server/src/http/api/{mod.rs, openapi.rs}`, `crates/server/src/http/api/mcp/tools.rs` (`get_thresholds`, `set_auto_cover_threshold`), `crates/server/tests/it/mcp/parity/` (two rows)
+- Modify: `crates/store/src/lib.rs`, `crates/server/src/http/api/household.rs` (two operations: `listThresholds`, `setCurrencyThresholds`; if it passes ~700 lines, `household/thresholds.rs`), `crates/server/src/http/api/{mod.rs, openapi.rs}`, `crates/server/src/http/api/mcp/tools.rs` (`get_thresholds`, `set_currency_thresholds`, `Needs::Write`, admin token), `crates/server/tests/it/mcp/parity/` (two rows)
 
 **Migration:** `currency_thresholds (currency TEXT PRIMARY KEY CHECK (length(currency) = 3 AND currency NOT GLOB '*[^A-Z]*'), auto_cover_minor INTEGER CHECK (auto_cover_minor BETWEEN 0 AND 1000000000000000)) STRICT, WITHOUT ROWID`. NULL: the default. 07r adds `invest_minimum_minor` the same way.
 
-- [ ] **Step 1: Write the failing tests:** store `thresholds_roundtrip_and_reset`; server `thresholds_list_defaults_for_currencies_in_use` (USD 100.00, JPY 100, `is_default` true), `an_admin_sets_and_resets`, `a_member_cant_set` (403), `out_of_range_is_422`, parity rows.
+- [ ] **Step 1: Write the failing tests:** store `thresholds_roundtrip_and_reset`; server `thresholds_list_defaults_for_currencies_in_use` (USD 100.00, JPY 100, `is_default` true), `an_admin_sets_and_resets` (`{"auto_cover": 5000}` then `{"auto_cover": null}`; `{}` changes nothing), `a_member_cant_set` (403), `out_of_range_is_422`, parity rows.
 - [ ] **Step 2: Run** `… -p coffer-store … -E 'test(thresholds)'`, `… -p coffer-server … -E 'test(thresholds) | test(parity)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run.** Expected: PASS.
 - [ ] **Step 5: Commit** — `git -C ../coffer-07o commit -m "Keep an auto-cover threshold per currency (migration 0034)"`.
 

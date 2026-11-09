@@ -2,24 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Home gets its "Needs a look" section after the free money answer; a cover sheet page (works without JS) lists the sources allowed for one overspend with their effect, or offers to change the plan from next month; a bucket's page lists this month's covers with undo; Household gets the auto-cover threshold form. Closes #155.
+**Goal:** Home gets its "Needs a look" section after the free money answer; a cover sheet page (works without JS) lists the sources allowed for one overspend with their effect, or offers to change the plan from next month; a bucket's page lists this month's covers with undo. The threshold forms on Household are 07r's (auto-cover and invest minimum together). Closes #155.
 
-**Architecture:** Pages on the ledger calls the API makes: `Ledger::needs_a_look` (07o), `create_cover`/`list_covers`/`delete_cover` (07n), the threshold calls (07o). The one new number, the sources for an overspend that isn't in "needs a source" (one free money covered, which the owner may re-source, §4.6.2), gets its own small read so the page and an agent see the same options: `GET /api/v1/covers/options?to={item}` and MCP `get_cover_options`, from 07o's domain function made public. Every action is a plain form with POST-redirect-GET.
+**Architecture:** Pages on the ledger calls the API makes: `Ledger::needs_a_look` (07o), `create_cover`/`list_covers`/`delete_cover` (07n). The one new number, the sources for an overspend that isn't in "needs a source" (one free money covered, which the owner may re-source, §4.6.2), gets its own small read so the page and an agent see the same options: `GET /api/v1/covers/options?to={item}` and MCP `get_cover_options`, from 07o's domain function made public. Every action is a plain form with POST-redirect-GET.
 
 **Tech Stack:** Rust 2024, axum, maud, utoipa, rmcp.
 
-**Spec:** §4.6 (1 to 6), §5 (Home order, the cover sheet "a page or `<dialog>` that works without JS", Household's threshold), §10.6. Overview: unit 07p.
+**Spec:** §4.6 (1 to 6), §5 (Home order, the cover sheet "a page or `<dialog>` that works without JS"), §10.6. Overview: unit 07p.
 
 **Depends on:** 07l (#151), 07m (#152), 07o (#154) merged. **Branch / worktree:** `money-07p-needs-a-look-pages`, `../coffer-07p`. No migration.
 
 ## Global Constraints
 
-- Everything in the overview's "Rules for every unit" applies; CSP, theme, wording rules; read-only viewers see the list but no cover, undo or threshold forms, and their POSTs are refused.
+- Everything in the overview's "Rules for every unit" applies; CSP, theme, wording rules; read-only viewers see the list but no cover or undo forms, and their POSTs are refused.
 - Home's order (§5): free money (07i), Needs a look, net worth. The existing "To check" card (07a) folds into Needs a look as its `transactions_to_check` entry, linking the review queue (planner's call: one place for what's waiting). No entries: the section says "Nothing needs a look" in one line, never a warning.
 - Sentences (`home/needs_words.rs`), one per entry, the answer first: "Restaurants went $640 over. Free money covers $180; the rest needs a source. **Choose**", "Restaurants went $64 over · covered from free money · **Change**", "Groceries runs out around Nov 24 at this pace", "Insurance was paid $108, $8 more than planned", "3 transactions to check", and auto-covered ones grouped last ("Covered from free money: Coffee $4, Books $12").
 - The cover sheet, `GET /money/cover/{item}`: the overspend in one sentence, then one form per source: a bucket source is a button "Take $460 from Hobbies (leaves $40)"; a goal source shows its effect ("moves the Japan trip back about 4 weeks", from `goal_delay_days`: "about N days" under 14, else weeks rounded) and needs a ticked checkbox; the emergency fund's says "Your emergency fund will be $460 under its target until free money refills it" and needs a ticked checkbox. Then "Or change the plan: raise Restaurants to $350 a month from next month", a link to 07m's edit form with `?from=next_month&amount=` prefilled (planned + over, rounded up to a whole major unit). `POST /money/cover/{item}` creates the cover and redirects to Home with a one-line notice; a refusal re-renders the sheet with the ledger's message.
 - Bucket page (07l): a "Covers this month" list (from, to, amount, who, when) with an "Undo" form each for writers, `POST /money/covers/{id}/undo` → 303 back. Past months' covers are listed without undo.
-- Household: an "Auto-cover" card listing each currency in use with its threshold ("$100, the default"), a set form and a reset button, admin only, beside the emergency fund card, in `household/thresholds.rs`.
+- Home's final order (§5, matching 07s): free money, invest (07s), `#needs-a-look`, net worth, cash chart (07s), forecast link. 07p lands first, so it places `#needs-a-look` right after free money and 07s inserts `#invest` before it.
 
 ## Review Focus
 
@@ -49,15 +49,15 @@
 - [ ] **Step 2: Run** `… -E 'test(cover_sheet) | test(cover_words) | test(money_bucket)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run.** Expected: PASS.
 - [ ] **Step 5: Commit** — `git -C ../coffer-07p commit -m "Cover an overspend from a page, and undo it"`.
 
-### Task 3: Home's Needs a look and Household's threshold
+### Task 3: Home's Needs a look
 
 **Files:**
-- Create: `crates/server/src/http/pages/home/needs_a_look.rs`, `crates/server/src/http/pages/home/needs_words.rs` (with unit tests), `crates/server/src/http/pages/household/thresholds.rs` (card, set, reset), `crates/server/tests/it/pages/household/thresholds.rs`
-- Modify: `crates/server/src/http/pages/home.rs` (the section after the free money card; `to_check_card` goes), `crates/server/src/http/pages/household.rs` (`mod thresholds;`, the card, routes), `crates/server/src/http/pages/word_checks.rs`, `crates/server/tests/it/pages/home.rs` (the "To check" assertions move to the section's entry)
+- Create: `crates/server/src/http/pages/home/needs_a_look.rs`, `crates/server/src/http/pages/home/needs_words.rs` (with unit tests)
+- Modify: `crates/server/src/http/pages/home.rs` (the section after the free money card; `to_check_card` goes), `crates/server/src/http/pages/word_checks.rs`, `crates/server/tests/it/pages/home.rs` (the "To check" assertions move to the section's entry)
 
-- [ ] **Step 1: Write the failing tests:** `home_lists_what_needs_a_look_after_free_money` (order of sections; each seeded entry's sentence and link), `nothing_needs_a_look_says_so_in_one_line`, `transactions_to_check_link_the_queue`, `every_needs_a_look_kind_has_words`, `an_admin_sets_and_resets_the_auto_cover_threshold`, `a_member_sees_the_threshold_without_a_form`.
-- [ ] **Step 2: Run** `… -E 'test(pages::home) | test(needs_words) | test(thresholds)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
-- [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07p commit -m "Show what needs a look on Home, and the auto-cover threshold on Household"`; push; PR "Home's Needs a look and the cover sheet", "Closes #155", noting the "To check" card folded into the section (per §5, 07s puts the invest card between free money and Needs a look, and the cash chart after net worth).
+- [ ] **Step 1: Write the failing tests:** `home_lists_what_needs_a_look_after_free_money` (order of sections; each seeded entry's sentence and link), `nothing_needs_a_look_says_so_in_one_line`, `transactions_to_check_link_the_queue`, `every_needs_a_look_kind_has_words`.
+- [ ] **Step 2: Run** `… -E 'test(pages::home) | test(needs_words)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run** the filtered tests, then `uptime` and `nice -n 15 scripts/gate.sh`. Expected: PASS.
+- [ ] **Step 5: Commit, push, PR** — `git -C ../coffer-07p commit -m "Show what needs a look on Home"`; push; PR "Home's Needs a look and the cover sheet", "Closes #155", noting the "To check" card folded into the section (07s inserts its invest card before the section and the cash chart after net worth).
 
 ## Open questions for the owner
 
