@@ -56,9 +56,12 @@ pub enum LookEntry {
     TransactionsToCheck { count: u64 },
     AutoCovered { item: PlannedItemId, over: Money },
 }
-pub struct CoverOption { pub from: CoverSource, pub available: Money, pub needs_confirmation: bool }
+pub struct CoverOption { pub from: CoverSource, pub available: Money, /// min(rest, available): what the cover sheet offers to take.
+                         pub takes: Money, pub needs_confirmation: bool,
+                         /// A goal only: how many days later it reaches its target if `takes` is drawn, ceil(takes × total days / target).
+                         pub goal_delay_days: Option<u32> }
 ```
-- [ ] **Step 1: Write the failing tests:** `free_money_covers_part_and_the_rest_needs_a_source`, `the_threshold_is_inclusive`, `free_money_goes_to_the_smallest_first`, `a_currency_is_never_netted_with_another`, `bills_over_and_under_are_listed`, `no_heads_up_before_a_quarter_of_the_month`, `runs_out_on_is_exact` (planned 300, spent 150 by day 10 → runs out on day 20), `a_long_period_budget_gets_no_heads_up`, `a_covered_overspend_is_gone`, `transactions_to_check_only_when_some`, `the_order_is_fixed`.
+- [ ] **Step 1: Write the failing tests:** `free_money_covers_part_and_the_rest_needs_a_source`, `the_threshold_is_inclusive`, `free_money_goes_to_the_smallest_first`, `a_currency_is_never_netted_with_another`, `bills_over_and_under_are_listed`, `no_heads_up_before_a_quarter_of_the_month`, `runs_out_on_is_exact` (planned 300, spent 150 by day 10 → runs out on day 20), `a_goal_source_says_how_long_it_delays` (target 730 over 365 days, takes 60 → 30 days), `a_long_period_budget_gets_no_heads_up`, `a_covered_overspend_is_gone`, `transactions_to_check_only_when_some`, `the_order_is_fixed`.
 - [ ] **Step 2: Run** `nice -n 15 env -u CARGO_TARGET_DIR cargo nextest run -p coffer-domain --all-features -j 3 -E 'test(needs_a_look)'`. Expected: FAIL. **Step 3: Implement.** **Step 4: Run.** Expected: PASS.
 - [ ] **Step 5: Commit** — `git -C ../coffer-07o commit -m "Work out what needs a look this month"`.
 
