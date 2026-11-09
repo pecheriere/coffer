@@ -6,15 +6,15 @@
 use coffer_domain::ids::{AccountId, CategoryId};
 use coffer_domain::money::{Currency, DecimalAmount, Money, format_minor_units};
 use coffer_domain::plan::{
-    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, spending_applies,
-    strict_date,
+    IntervalUnit, PlanDirection, PlanItemType, PlanSchedule, PlanSpending, PlanTier,
+    spending_applies, strict_date,
 };
 use coffer_domain::transactions::CategoryKind;
 use jiff::civil::Date;
 use maud::{Markup, html};
 use serde::Deserialize;
 
-use super::words::unit_word;
+use super::words::{tier_class, tier_hint, tier_word, unit_word};
 use crate::http::pages::PageError;
 use crate::ledger::accounts::AccountView;
 use crate::ledger::categories::CategoryGroupView;
@@ -83,6 +83,8 @@ pub(super) struct ItemForm {
     #[serde(default)]
     spending: String,
     #[serde(default)]
+    tier: String,
+    #[serde(default)]
     account_hint: String,
     #[serde(default)]
     notes: String,
@@ -101,6 +103,7 @@ pub(super) struct ItemFields {
     active: bool,
     schedule: PlanSchedule,
     spending: Option<PlanSpending>,
+    tier: Option<PlanTier>,
 }
 
 impl ItemFields {
@@ -115,12 +118,13 @@ impl ItemFields {
             active: Some(self.active),
             schedule: self.schedule,
             spending: self.spending,
-            tier: None,
+            tier: self.tier,
         }
     }
 
     /// Every field, so the ledger changes what differs: empty notes clear them, and no
-    /// account clears the hint.
+    /// account clears the hint. No tier keeps the item's, or gives one becoming an outflow
+    /// its kind's default.
     pub(super) fn into_patch(self) -> PlannedItemPatch {
         PlannedItemPatch {
             name: Some(self.name),
@@ -132,7 +136,7 @@ impl ItemFields {
             active: Some(self.active),
             schedule: Some(self.schedule),
             spending: self.spending,
-            tier: None,
+            tier: self.tier,
         }
     }
 }
@@ -224,6 +228,7 @@ impl ItemForm {
         } else {
             None
         };
+        let tier = tier_of(&self.tier, direction, &schedule)?;
         let account_hint = match self.account_hint.as_str() {
             "" => None,
             text => Some(
@@ -244,7 +249,50 @@ impl ItemForm {
             active: checkbox(&self.active)?,
             schedule,
             spending,
+            tier,
         })
+    }
+}
+
+/// The tier the form chose, read only for an outflow that repeats or happens once: the
+/// combined form holds the field whatever is chosen, income has no tier and a goal is always
+/// saving toward, so a choice left over from another kind is dropped, not refused.
+fn tier_of(
+    text: &str,
+    direction: PlanDirection,
+    schedule: &PlanSchedule,
+) -> Result<Option<PlanTier>, PageError> {
+    let chosen = direction == PlanDirection::Outflow
+        && !matches!(schedule, PlanSchedule::Goal { .. })
+        && !text.is_empty();
+    if !chosen {
+        return Ok(None);
+    }
+    text.parse()
+        .map(Some)
+        .map_err(|_| PageError::invalid("not a tier the form offers"))
+}
+
+/// The tiers a person chooses from: saving toward belongs to goals alone.
+const CHOOSABLE_TIERS: [PlanTier; 3] =
+    [PlanTier::MustPay, PlanTier::Essentials, PlanTier::Flexible];
+
+/// The tier choice of an outflow that repeats or happens once, with `current` chosen.
+fn tier_field(current: Option<PlanTier>) -> Markup {
+    html! {
+        fieldset.choices {
+            legend { "Which bucket this money is in" }
+            @for tier in CHOOSABLE_TIERS {
+                label.choice {
+                    input type="radio" name="tier" value=(tier.as_str()) checked[current == Some(tier)];
+                    span.tier-mark.(tier_class(tier)) aria-hidden="true" {}
+                    span {
+                        (tier_word(tier))
+                        span.fine.choice-hint { (tier_hint(tier)) }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -305,6 +353,14 @@ pub(super) fn fields(choices: &Choices<'_>, item: Option<&PlannedItemView>) -> M
                     PlanSchedule::OneOff { .. } => (one_off_fields(Some(item))),
                     PlanSchedule::Goal { .. } => (goal_fields(Some(item))),
                 }
+                // Income may become an outflow here, so it is offered the choice too; the
+                // form's reading drops it while the item stays income.
+                @if !matches!(item.schedule, PlanSchedule::Goal { .. }) {
+                    @if item.direction == PlanDirection::Inflow {
+                        p.fine { "Income has no bucket: the choice below counts only if it becomes money going out." }
+                    }
+                    (tier_field(item.tier))
+                }
             }
             None => {
                 label.field {
@@ -329,6 +385,12 @@ pub(super) fn fields(choices: &Choices<'_>, item: Option<&PlannedItemView>) -> M
                     legend { "If it's a goal" }
                     (goal_fields(None))
                 }
+                p.fine {
+                    "For money going out that repeats or happens once, choose its bucket; "
+                    "without a choice a budget is flexible and anything else must pay. Income "
+                    "has none."
+                }
+                (tier_field(None))
             }
         }
         (account_field(choices, item))
@@ -434,6 +496,7 @@ fn goal_fields(item: Option<&PlannedItemView>) -> Markup {
     };
     html! {
         p.fine { "The amount is the target, set aside evenly from the first day to the day it is due." }
+        p.fine { "Goals are always saving toward." }
         label.field {
             "Start setting aside on"
             input.input type="date" name="start_on" value=[start_on];

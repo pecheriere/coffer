@@ -48,7 +48,7 @@ questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-desig
   with a content security policy of their own, whose `forecast.rs` is the
   forecast page, read-only but for settling a bill it asks about, whose `categories.rs` is the
   categories page (groups and categories created, changed and archived, its handlers in
-  `categories/forms.rs`), whose `plan.rs` is the plan page (planned items listed, added,
+  `categories/forms.rs`), whose `plan.rs` is the plan page (planned items listed by tier, added,
   changed, paused and deleted after a page that asks, in `plan/edit.rs`, `plan/delete.rs`,
   the shared form in `plan/form.rs` and its words in `plan/words.rs`), whose `net_worth.rs` is the read-only net worth page
   and its `chart.rs`, an SVG drawn in integers, whose `accounts/` is the accounts list and each
@@ -279,6 +279,10 @@ a throwaway server and seed. What holds it together:
   and one `:root` block, colours as `light-dark(<light>, <dark>)`.
   Components (`assets/css/base.css`) read only tokens: no colour literal or
   font name outside a theme file.
+- Each tier has a colour token (`tier-must-pay`, `tier-essentials`, `tier-flexible`,
+  `tier-saving`, `tier-emergency`), read only through the `.tier-…` classes in `base.css`
+  (`color` for an HTML `.tier-mark`, `fill` in SVG). A mark always sits beside the tier's
+  word, and no tier colour comes within the negative colour's distance in Oklab.
 - Adding a theme: the token file (plus its fonts and `ofl-<family>.txt` under
   `assets/fonts/`), then one `Theme` entry in `crates/server/src/themes/mod.rs`.
   The theme tests check every token in both schemes and WCAG AA contrast.

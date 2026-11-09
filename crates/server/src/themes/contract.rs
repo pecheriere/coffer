@@ -45,6 +45,11 @@ pub(crate) const COLOUR_TOKENS: &[&str] = &[
     "nav-border-color",
     "nav-active-bg",
     "nav-active-fg",
+    "tier-must-pay",
+    "tier-essentials",
+    "tier-flexible",
+    "tier-saving",
+    "tier-emergency",
 ];
 
 /// Tokens that must be present with a non-empty value.
@@ -120,10 +125,31 @@ pub(crate) const PAIRS: &[(&str, &str, Min)] = &[
     ("control-border", "bg", Min::Ui),
     ("input-border-color", "card-bg", Min::Ui),
     ("accent", "nav-bg", Min::Ui),
+    // A tier's mark is a graphic beside its word (WCAG 1.4.11).
+    ("tier-must-pay", "card-bg", Min::Ui),
+    ("tier-must-pay", "surface", Min::Ui),
+    ("tier-essentials", "card-bg", Min::Ui),
+    ("tier-essentials", "surface", Min::Ui),
+    ("tier-flexible", "card-bg", Min::Ui),
+    ("tier-flexible", "surface", Min::Ui),
+    ("tier-saving", "card-bg", Min::Ui),
+    ("tier-saving", "surface", Min::Ui),
+    ("tier-emergency", "card-bg", Min::Ui),
+    ("tier-emergency", "surface", Min::Ui),
 ];
 
-/// How far apart, in Oklab, negative amounts and the accent must sit.
+/// How far apart, in Oklab, negative amounts and the accent must sit; a tier's colour sits
+/// as far from negative amounts, so no tier reads as an overspend.
 pub(crate) const NEGATIVE_ACCENT_MIN_DISTANCE: f64 = 0.15;
+
+/// The tier colours, one per tier and the emergency fund, each also in [`COLOUR_TOKENS`].
+pub(crate) const TIER_TOKENS: &[&str] = &[
+    "tier-must-pay",
+    "tier-essentials",
+    "tier-flexible",
+    "tier-saving",
+    "tier-emergency",
+];
 
 /// Reads a theme file.
 ///
