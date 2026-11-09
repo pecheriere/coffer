@@ -14,6 +14,7 @@ mod real_clock;
 mod settlements;
 mod tiers;
 mod validation;
+mod versions;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};

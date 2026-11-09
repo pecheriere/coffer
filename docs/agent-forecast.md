@@ -270,8 +270,17 @@ Endpoints, all under `/api/v1`:
 - `PUT` and `DELETE /plan-items/{item_id}/settlements/{month}` (`write`) settle one
   month of an item, or stop doing so: see [Settling a month](#settling-a-month).
 
-The plan has no history: changing an item changes what the report shows for
-past months too.
+A change to an item's `category`, `amount`, `direction`, `spending` or `tier` is a new
+version of those values, effective from `effective_from` on the `PATCH`: `this_month` (the
+default), `next_month` (a recurring item only) or a month `YYYY-MM` that is this month or next.
+A past month never changes, so any other month is refused (422), and so is a change to a
+one-off dated in a past month. The item answers its `versions` (each with `from`, `until` and
+`written_on`); its top-level values are those in force this month. The forecast gives an item
+that changes one line per version, each with its `effective_from`, counting only the months it
+is in force for, and raises the item's cautions once. A bill is matched to a payment within
+10% of any amount it held during that month, so lowering a bill already paid doesn't make it
+unpaid: the payment's `difference` shows what it paid over the new amount. Plan versus actual
+reads, for each month, the version in force then.
 
 ### Settling a month
 
