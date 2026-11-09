@@ -12,12 +12,16 @@ use super::{
 use crate::fx::RateBook;
 use crate::ids::{CategoryId, PlannedItemId};
 use crate::money::{Currency, Money};
-use crate::plan::{CalendarMonth, IntervalUnit, PlanSchedule, PlanSpending};
+use crate::plan::{
+    CalendarMonth, IntervalUnit, PlanDirection, PlanSchedule, PlanSpending, PlanTier, PlanValues,
+    PlanVersion, PlanVersions,
+};
 use crate::transactions::CategoryKind;
 
 mod rate_mismatch;
 mod rollover;
 mod settled;
+mod versions;
 
 fn usd() -> Currency {
     Currency::parse("USD").unwrap()
@@ -69,28 +73,60 @@ fn item(category: CategoryId, minor_units: i64, schedule: PlanSchedule) -> Repor
     ReportItem {
         id: PlannedItemId::new(),
         name: "Item".into(),
-        category,
-        amount: dollars(minor_units),
+        versions: versions(&[(None, category, minor_units, None)]),
         schedule,
-        spending: None,
         active: true,
         goal_spent: Vec::new(),
         settled: BTreeMap::new(),
     }
 }
 
-fn budget(category: CategoryId, minor_units: i64) -> ReportItem {
+/// A history written on 2025-01-01: each row is effective from the month given (the first
+/// from January 2025), with its category, amount in dollars and spending kind.
+fn versions(rows: &[(Option<&str>, CategoryId, i64, Option<PlanSpending>)]) -> PlanVersions {
+    let rows = rows
+        .iter()
+        .zip(1_u32..)
+        .map(
+            |(&(from, category, minor_units, spending), seq)| PlanVersion {
+                seq,
+                effective_from: from.map_or_else(|| month("2025-01"), month),
+                written_on: date(2025, 1, 1),
+                values: PlanValues {
+                    amount: dollars(minor_units),
+                    direction: PlanDirection::Outflow,
+                    category,
+                    spending,
+                    tier: Some(PlanTier::MustPay),
+                },
+            },
+        )
+        .collect();
+    PlanVersions::new(rows).unwrap()
+}
+
+/// `item` with its first version's spending kind replaced.
+fn with_spending(item: ReportItem, spending: PlanSpending) -> ReportItem {
+    let mut rows = item.versions.rows().to_vec();
+    rows[0].values.spending = Some(spending);
     ReportItem {
-        spending: Some(PlanSpending::Budget),
-        ..item(category, minor_units, every_months(1, date(2025, 1, 10)))
+        versions: PlanVersions::new(rows).unwrap(),
+        ..item
     }
 }
 
+fn budget(category: CategoryId, minor_units: i64) -> ReportItem {
+    with_spending(
+        item(category, minor_units, every_months(1, date(2025, 1, 10))),
+        PlanSpending::Budget,
+    )
+}
+
 fn bill(category: CategoryId, minor_units: i64) -> ReportItem {
-    ReportItem {
-        spending: Some(PlanSpending::Bill),
-        ..item(category, minor_units, every_months(1, date(2025, 1, 10)))
-    }
+    with_spending(
+        item(category, minor_units, every_months(1, date(2025, 1, 10))),
+        PlanSpending::Bill,
+    )
 }
 
 fn goal(category: CategoryId, minor_units: i64, start_on: Date, due_on: Date) -> ReportItem {

@@ -153,7 +153,10 @@ fn versions_must_be_numbered_in_order() {
     let category = CategoryId::new();
     let a = row(2, "2026-01", date(2026, 1, 3), values(category, 1));
     let b = row(2, "2026-02", date(2026, 2, 3), values(category, 2));
-    assert_eq!(PlanVersions::new(vec![a, b]), Err(PlanError::UnorderedVersions));
+    assert_eq!(
+        PlanVersions::new(vec![a, b]),
+        Err(PlanError::UnorderedVersions)
+    );
 }
 
 #[test]

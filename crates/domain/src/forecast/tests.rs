@@ -16,8 +16,8 @@ use crate::fx::RateBook;
 use crate::ids::{AccountId, CategoryId, PlannedItemId, TransactionId};
 use crate::money::{Currency, Money};
 use crate::plan::{
-    EmergencyFundTarget, EmergencyFunds, IntervalUnit, PlanDirection, PlanSchedule, PlanSpending,
-    PlanTier, default_tier, spending_applies,
+    EmergencyFundTarget, EmergencyFunds, IntervalUnit, MonthSpan, PlanDirection, PlanSchedule,
+    PlanSpending, PlanTier, default_tier, spending_applies,
 };
 
 mod account_cautions;
@@ -41,6 +41,7 @@ mod settled;
 mod settled_budgets;
 mod settling_need;
 mod spending_cautions;
+mod versions;
 mod window_and_range;
 
 const AS_OF: Date = date(2026, 11, 15);
@@ -150,6 +151,8 @@ fn stored(name: &str, amount: Money, schedule: PlanSchedule) -> ItemInput {
         goal_spent_minor: 0,
         goal_linked_both_sides: false,
         settled: BTreeMap::new(),
+        in_force: MonthSpan::ALWAYS,
+        also_matches: BTreeMap::new(),
     }
 }
 

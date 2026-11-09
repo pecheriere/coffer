@@ -157,7 +157,7 @@ pub(super) fn reduce(
         };
         let amount = i128::from(item.amount.minor_units);
         if is_stored_budget(item) {
-            let dates = item.schedule.occurrences(month_start, reducible_until);
+            let dates = item.occurrences(month_start, reducible_until);
             month_budgets.extend(occurrences(dates, index, key, amount));
         } else {
             // A goal has no occurrences, so this is recurring bills and one-offs. One dated
@@ -176,13 +176,11 @@ pub(super) fn reduce(
                 before_history: on < month_start
                     && input.earliest_transaction.is_none_or(|first| on < first),
             };
-            let dates = item.schedule.occurrences(looked_at_from, through_as_of);
+            let dates = item.occurrences(looked_at_from, through_as_of);
             bills.extend(dates.into_iter().map(bill));
             // A settled one in the early window counts even in next month: a payment already
             // made may be how it was paid.
-            let later = item
-                .schedule
-                .occurrences(through_as_of, reducible_until.max(early_until));
+            let later = item.occurrences(through_as_of, reducible_until.max(early_until));
             bills.extend(later.into_iter().map(bill).filter(|one| match one.settled {
                 Some(SettlementKind::Paid) => true,
                 Some(SettlementKind::Skipped) => false,

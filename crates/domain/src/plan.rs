@@ -31,9 +31,7 @@ pub use settlement::{
     validate_settlement_month,
 };
 pub use tier::{PlanTier, default_tier, resolved_tier};
-pub use version::{
-    EffectiveFrom, MonthSpan, PlanValues, PlanVersion, PlanVersions, VersionSpan,
-};
+pub use version::{EffectiveFrom, MonthSpan, PlanValues, PlanVersion, PlanVersions, VersionSpan};
 
 /// The largest amount of a planned item or a fixed emergency fund, in minor units.
 pub const MAX_PLAN_AMOUNT_MINOR: i64 = 1_000_000_000_000_000;

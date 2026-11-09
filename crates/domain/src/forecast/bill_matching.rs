@@ -19,7 +19,7 @@ use jiff::civil::Date;
 
 use super::reduction::{PoolKey, is_stored_budget, pool_key};
 use super::types::{ForecastInput, SpentTransaction};
-use crate::plan::{CalendarMonth, SettlementKind, occurrences_in};
+use crate::plan::{CalendarMonth, SettlementKind};
 
 /// How many calendar months before `as_of`'s a bill can still be unpaid from.
 pub const BILL_LOOK_BACK_MONTHS: i8 = 1;
@@ -122,7 +122,11 @@ impl Payment<'_> {
             .unwrap_or(Date::MIN);
         key_of(self.row) == bill.key
             && earliest <= self.row.posted_on
-            && close_enough(self.amount, bill.amount)
+            && (close_enough(self.amount, bill.amount)
+                || input.items.get(bill.index).is_some_and(|item| {
+                    item.also_matches_on(bill.on)
+                        .any(|held| close_enough(self.amount, held))
+                }))
             && (self.row.posted_on >= bills_looked_at_from(input.as_of)
                 || self.is_closest_to(bill, input))
     }
@@ -139,7 +143,7 @@ impl Payment<'_> {
         let previous = input
             .items
             .get(bill.index)
-            .and_then(|item| item.schedule.occurrences(window, bill.on).last().copied());
+            .and_then(|item| item.neighbours(window, bill.on).last().copied());
         previous.is_none_or(|previous| {
             days_to(self.row.posted_on, bill.on) < days_to(previous, self.row.posted_on)
         })
@@ -200,7 +204,7 @@ impl BudgetPlans<'_> {
                 .iter()
                 .filter(|item| is_stored_budget(item) && pool_key(item) == Some(key))
                 .map(|item| {
-                    let held = occurrences_in(&item.schedule, month).len();
+                    let held = item.occurrences_in(month).len();
                     i128::from(item.amount.minor_units)
                         .saturating_mul(i128::try_from(held).unwrap_or(i128::MAX))
                 })
@@ -209,9 +213,13 @@ impl BudgetPlans<'_> {
     }
 
     /// Whether `payment`, which fits `bill`, can be told from a budget's spending: it is the
-    /// bill's exact amount, or more than the category's budgets plan for its whole month.
+    /// bill's exact amount (or one it held during the month), or more than the category's budgets plan for its whole month.
     fn tells_apart(&mut self, payment: Payment<'_>, bill: &Bill) -> bool {
         payment.amount == bill.amount
+            || self.input.items.get(bill.index).is_some_and(|item| {
+                item.also_matches_on(bill.on)
+                    .any(|held| held == payment.amount)
+            })
             || CalendarMonth::of(payment.row.posted_on)
                 .is_ok_and(|month| payment.amount > self.of(bill.key, month))
     }
