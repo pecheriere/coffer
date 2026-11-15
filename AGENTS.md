@@ -6,6 +6,16 @@ coffer is a self-hosted household finance hub: it holds a family's accounts,
 balances, transactions and spending plan, and AI agents query it to answer
 questions and help plan. Design: `docs/superpowers/specs/2026-10-30-coffer-design.md`.
 
+## Tracking work: beads
+
+Work in this repository is tracked with [beads](https://github.com/gastownhall/beads) (`bd`), prefix `cof-`, not GitHub issues. Pull requests name the bead they deliver. GitHub issues stay open for reports from outside: each is triaged into a bead, and the bead's description links the issue.
+
+- `bd prime` loads the workflow; `bd ready` lists work with no blockers.
+- Create a bead before starting work, claim it (`bd update <id> --claim`) and close it when the change merges.
+- No markdown TODO lists or memory files: use beads, and `bd remember` for durable project knowledge.
+
+The database runs as a local Dolt server that `bd` starts on demand. Its data lives in `.beads/` in the main checkout and is never committed: worktrees use the main checkout's database.
+
 ## Crate map
 
 - `coffer-domain` (`crates/domain`): pure domain types (ids, identity, policy,
