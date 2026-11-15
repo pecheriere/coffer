@@ -1,5 +1,7 @@
 # coffer
 
+[![CI on main](https://github.com/pecheriere/coffer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pecheriere/coffer/actions/workflows/ci.yml?query=branch%3Amain)
+
 coffer is a self-hosted household financial hub: a backend that holds a
 family's accounts, balances, transactions and spending plan, and that AI agents
 (and later a UI) query to answer questions and help plan. Its motivating
