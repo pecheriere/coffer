@@ -47,8 +47,9 @@ What exists and what comes next:
   rebuilds in short steps; an MCP endpoint giving agents the forecast, what-if, plan, net
   worth and review queue as tools under their token's own access; and end-to-end tests
   on a staging stack with made-up data.
-- **Next:** a forecast across currencies and more MCP tools. See the
-  [issues](https://github.com/pecheriere/coffer/issues) for what is planned.
+- **Next:** a forecast across currencies and more MCP tools. Planned work is
+  tracked in beads, not in the [issues](https://github.com/pecheriere/coffer/issues), which
+  are open for reports.
 
 Configuration is in [docs/configuration.md](docs/configuration.md); to run
 coffer in a container, see [docs/container.md](docs/container.md). coffer now
