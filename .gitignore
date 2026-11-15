@@ -8,3 +8,7 @@ __pycache__/
 /staging/e2e/test-results
 /staging/e2e/playwright-report
 /staging/e2e/.browser
+
+# Beads: the issue database lives in .beads/ and is backed up outside git
+.beads/
+.beads.gate.lock
