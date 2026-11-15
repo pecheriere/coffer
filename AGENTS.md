@@ -191,10 +191,11 @@ a throwaway server and seed. What holds it together:
 - Actions are pinned to the full commit SHA of a release at least 7 days old
   (comment with the tag); `persist-credentials: false` on every checkout;
   `--locked` everywhere. Only GitHub-owned actions and the allow-listed
-  third-party ones (dtolnay/rust-toolchain, Swatinem/rust-cache,
-  EmbarkStudios/cargo-deny-action, zizmorcore/zizmor-action,
-  ossf/scorecard-action, docker/setup-buildx-action,
-  docker/build-push-action) may be used. Spectral runs from a digest-pinned
+  third-party ones (Swatinem/rust-cache, EmbarkStudios/cargo-deny-action,
+  zizmorcore/zizmor-action, ossf/scorecard-action,
+  docker/setup-buildx-action, docker/build-push-action) may be used. CI
+  installs Rust with the runner's own `rustup`, which reads
+  `rust-toolchain.toml`. Spectral runs from a digest-pinned
   image built from `.github/spectral/Dockerfile`.
 - The Dockerfile pins the Rust base image by digest (the version in
   `rust-toolchain.toml`) and its build tools by version, each a release at
