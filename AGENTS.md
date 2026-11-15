@@ -193,10 +193,13 @@ a throwaway server and seed. What holds it together:
   `--locked` everywhere. Only GitHub-owned actions and the allow-listed
   third-party ones (Swatinem/rust-cache, EmbarkStudios/cargo-deny-action,
   zizmorcore/zizmor-action, ossf/scorecard-action,
-  docker/setup-buildx-action, docker/build-push-action) may be used. CI
-  installs Rust with the runner's own `rustup`, which reads
-  `rust-toolchain.toml`. Spectral runs from a digest-pinned
-  image built from `.github/spectral/Dockerfile`.
+  docker/setup-buildx-action, docker/build-push-action, docker/login-action,
+  docker/metadata-action, dependabot/fetch-metadata) may be used. This list
+  mirrors the repository's Actions allow-list setting: an action missing
+  there fails the whole workflow at startup, even in a skipped job, so a new
+  one is added to both before its workflow merges. CI installs Rust with the
+  runner's own `rustup`, which reads `rust-toolchain.toml`. Spectral runs
+  from a digest-pinned image built from `.github/spectral/Dockerfile`.
 - The Dockerfile pins the Rust base image by digest (the version in
   `rust-toolchain.toml`) and its build tools by version, each a release at
   least 7 days old; Dependabot proposes base image updates.
