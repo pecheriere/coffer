@@ -6,7 +6,7 @@ name: coffer-staging
 x-node: &node
   # The newest LTS Node image at least 7 days old when pinned. Node's standard
   # library is all that runs here, so nothing is installed.
-  image: node:26.12.1-alpine3.23@sha256:bc2b334006f15c7167bbeb2f08f28c2df883f7594a0470e04454ebe7560cfe68
+  image: node:26.13.0-alpine3.23@sha256:44a3247313f9bc069a4ec25d01b66254ed7dc4d0408727d8720dc827f0753423
   user: node
   read_only: true
   cap_drop: [ALL]
