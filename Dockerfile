@@ -4,7 +4,7 @@
 # rust-toolchain.toml (1.99). No `# syntax=` line: the Dockerfile frontend
 # built into BuildKit covers everything used here, so no unpinned frontend
 # image is pulled at build time.
-FROM --platform=$BUILDPLATFORM rust:1.99.0-alpine3.23@sha256:42c2519fdf75d9e34cc61a1aaf34b1a684da9bfd65fe5daefef98d92a801b001 AS build
+FROM --platform=$BUILDPLATFORM rust:1.99.1-alpine3.23@sha256:51e1b72c7f236093c084f6e3051239f033fba9e4c0c1430cc2ed479d0a3bd14c AS build
 
 ARG TARGETARCH
 
