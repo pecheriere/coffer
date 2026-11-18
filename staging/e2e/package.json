@@ -4,7 +4,7 @@
   "type": "module",
   "description": "End-to-end tests against the staging stack. Run them with scripts/staging.sh test.",
   "devDependencies": {
-    "@playwright/test": "1.64.1",
+    "@playwright/test": "1.65.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1"
   }
