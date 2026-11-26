@@ -1,9 +1,13 @@
-//! Home at `/` (spec §5): what to know today. Net worth with how it moved this month, and
-//! how many transactions wait to be checked. Read-only: it calls the ledger as
-//! `GET /api/v1/reports/net-worth` and `GET /api/v1/transactions/review-count` do and adds
-//! nothing up, and a part the viewer may not read is left out.
+//! Home at `/` (spec §5): what to know today. Free money with its breakdown, net worth with
+//! how it moved this month, and how many transactions wait to be checked. Read-only: it calls
+//! the ledger as `GET /api/v1/free-money`, `GET /api/v1/reports/net-worth` and
+//! `GET /api/v1/transactions/review-count` do and adds nothing up, and a part the viewer may
+//! not read is left out.
 
+mod bar;
+mod free_money;
 mod sparkline;
+mod words;
 
 use axum::Router;
 use axum::extract::State;
@@ -13,12 +17,14 @@ use coffer_domain::money::Money;
 use coffer_domain::net_worth::{
     MIN_VALUE_DATE, NetWorthBlocker, NetWorthInterval, NetWorthReport, NetWorthStatus,
 };
+use coffer_domain::policy::{Action, authorize};
 use jiff::ToSpan as _;
 use jiff::civil::Date;
 use maud::{Markup, html};
 
 use super::account::viewer;
 use super::amounts::{magnitude, money};
+use super::forecast::names;
 use super::layout::{Frame, Nav, page};
 use super::transactions::to_check;
 use super::{PageError, PageSession};
@@ -51,19 +57,41 @@ fn last_twelve_months(today: Date) -> NetWorthQuery {
     }
 }
 
+/// What a part of Home read, or nothing when the viewer may not read it: the rest of Home
+/// still shows. Any other failure fails the page.
+fn readable<T>(read: Result<T, LedgerError>) -> Result<Option<T>, PageError> {
+    match read {
+        Ok(part) => Ok(Some(part)),
+        Err(LedgerError::Denied(_)) => Ok(None),
+        Err(err) => Err(PageError(Problem::from(err))),
+    }
+}
+
 async fn home_page(
     State(state): State<AppState>,
     session: PageSession,
 ) -> Result<Response, PageError> {
     let actor = session.actor();
-    let net_worth = match state
-        .ledger
-        .net_worth_by_day(&actor, last_twelve_months)
-        .await
-    {
-        Ok(report) => Some(report),
-        Err(LedgerError::Denied(_)) => None,
-        Err(err) => return Err(PageError(Problem::from(err))),
+    let net_worth = readable(
+        state
+            .ledger
+            .net_worth_by_day(&actor, last_twelve_months)
+            .await,
+    )?;
+    let free_money = readable(state.ledger.free_money(&actor).await)?;
+    let free_money_card = match &free_money {
+        Some(answer) => {
+            let display = readable(state.ledger.household_settings(&actor).await)?
+                .and_then(|settings| settings.display_currency);
+            let names = names(&state, &actor, &[], &answer.cautions).await;
+            Some(free_money::card(
+                answer,
+                &names,
+                display,
+                authorize(&actor, Action::ManageHousehold).is_ok(),
+            ))
+        }
+        None => None,
     };
     let to_check = state
         .ledger
@@ -79,6 +107,9 @@ async fn home_page(
     };
     let content = html! {
         h1 { "Home" }
+        @if let Some(card) = &free_money_card {
+            (card)
+        }
         @if let Some(report) = &net_worth {
             (net_worth_card(report, viewer.can_manage_household))
         }
@@ -198,7 +229,8 @@ mod tests {
     };
     use jiff::civil::{Date, date};
 
-    use super::{change_sentence, change_this_month, last_twelve_months};
+    use super::{change_sentence, change_this_month, last_twelve_months, readable};
+    use crate::ledger::LedgerError;
 
     fn usd(minor_units: i64) -> Money {
         Money {
@@ -268,5 +300,25 @@ mod tests {
         assert_eq!(change_sentence(usd(10_000)), "Up 100.00 USD this month");
         assert_eq!(change_sentence(usd(-2_550)), "Down 25.50 USD this month");
         assert_eq!(change_sentence(usd(0)), "No change this month");
+    }
+
+    #[test]
+    fn a_part_the_viewer_may_not_read_is_left_out() {
+        use coffer_domain::policy::{AccountLevel, Action, Denied, DenyReason};
+
+        let denied = Denied {
+            action: Action::AccessAccount {
+                needed: AccountLevel::Transactions,
+            },
+            reason: DenyReason::EveryAccount {
+                needed: AccountLevel::Transactions,
+            },
+        };
+        assert!(matches!(readable(Ok(3)), Ok(Some(3))));
+        assert!(matches!(
+            readable::<u8>(Err(LedgerError::Denied(denied))),
+            Ok(None)
+        ));
+        assert!(readable::<u8>(Err(LedgerError::Invalid("too big"))).is_err());
     }
 }

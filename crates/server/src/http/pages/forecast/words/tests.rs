@@ -197,6 +197,7 @@ fn blockers() -> Vec<Blocker> {
         Blocker::BalanceMissing {
             account: AccountId::new(),
             name: "Rainy day".to_owned(),
+            currency: Currency::parse("USD").unwrap(),
         },
     ]
 }
@@ -237,7 +238,7 @@ fn named() -> Named {
     let (account, category) = (AccountId::new(), CategoryId::new());
     let (goal_id, one_off_id) = (PlannedItemId::new(), PlannedItemId::new());
     let mut names = Names::of_accounts(&[]);
-    names.accounts.insert(account, "Visa");
+    names.add_account(account, "Visa".to_owned());
     names.categories.insert(category, "Home".to_owned());
     names.items.insert(goal_id, "Roof".to_owned());
     names.items.insert(one_off_id, "Boiler".to_owned());

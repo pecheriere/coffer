@@ -219,7 +219,7 @@ async fn a_missing_balance_leaves_no_number() {
     assert_eq!(answer["status"], "unavailable");
     assert_eq!(
         answer["blockers"],
-        json!([{"kind": "balance_missing", "account": empty, "name": "Savings"}])
+        json!([{"kind": "balance_missing", "account": empty, "name": "Savings", "currency": "USD"}])
     );
     let row = &answer["currencies"][0];
     for field in ["free_money", "emergency_fund_held", "shortfall"] {

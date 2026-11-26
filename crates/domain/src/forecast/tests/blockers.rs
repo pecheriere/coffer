@@ -216,6 +216,7 @@ fn counted_account_without_balance_blocks() {
         [Blocker::BalanceMissing {
             account: id,
             name: "New".to_owned(),
+            currency: usd(0).currency,
         }],
         "it could hold anything"
     );

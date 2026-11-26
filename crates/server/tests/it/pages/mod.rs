@@ -9,6 +9,7 @@
 mod admin_grants;
 pub(crate) mod forecast;
 mod home;
+mod home_free_money;
 mod household;
 mod members;
 mod navigation;

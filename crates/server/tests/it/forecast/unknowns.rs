@@ -450,7 +450,7 @@ async fn counted_account_without_balance_blocks() {
     assert_eq!(forecast["surplus"], Value::Null);
     assert_eq!(
         forecast["blockers"],
-        json!([{"kind": "balance_missing", "account": account, "name": "Empty"}])
+        json!([{"kind": "balance_missing", "account": account, "name": "Empty", "currency": "USD"}])
     );
 }
 

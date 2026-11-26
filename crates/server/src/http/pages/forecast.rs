@@ -3,13 +3,15 @@
 //! the two cannot differ. Its only forms settle a bill a caution asks about, and undo that.
 
 mod settle;
-mod words;
+pub(in crate::http::pages) mod words;
 
 use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use coffer_domain::forecast::{Caution, CurrencyTotals, Forecast, ForecastStatus, MonthBucket};
+use coffer_domain::forecast::{
+    AccountLine, Caution, CurrencyTotals, Forecast, ForecastStatus, MonthBucket,
+};
 use coffer_domain::identity::Actor;
 use coffer_domain::money::{Currency, Money};
 use coffer_domain::policy::{Action, authorize};
@@ -22,8 +24,8 @@ use super::{PageError, PageSession, refused};
 use crate::http::AppState;
 use crate::ledger::forecast::ForecastOptions;
 use words::{
-    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_sentence, month_name, months,
-    rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
+    ADMIN_SETS_EMERGENCY_FUND, Names, blocker_sentence, caution_account, caution_sentence,
+    month_name, months, rule_filed_transfers_sentence, settled_budget_sentence, settled_sentence,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -49,7 +51,7 @@ async fn forecast_page(
         .forecast(&actor, ForecastOptions::default())
         .await
         .map_err(refused)?;
-    let names = names(&state, &actor, &forecast).await;
+    let names = names(&state, &actor, &forecast.accounts, &forecast.cautions).await;
     let viewer = viewer(&state, &session).await;
     let frame = Frame {
         look: session.look(&state).await,
@@ -71,10 +73,33 @@ async fn forecast_page(
 /// speaks of a category or a planned item by its id. A name is a courtesy: the numbers
 /// are already read, so a lookup that fails costs its names, and the sentences read
 /// without them.
-async fn names<'a>(state: &AppState, actor: &Actor, forecast: &'a Forecast) -> Names<'a> {
-    let mut names = Names::of_accounts(&forecast.accounts);
-    if forecast.cautions.is_empty() {
+pub(in crate::http::pages) async fn names<'a>(
+    state: &AppState,
+    actor: &Actor,
+    accounts: &'a [AccountLine],
+    cautions: &[Caution],
+) -> Names<'a> {
+    let mut names = Names::of_accounts(accounts);
+    if cautions.is_empty() {
         return names;
+    }
+    // Home passes no accounts. A hidden account is not listed for the actor, so its name is
+    // never read here and its sentence says "an account".
+    if cautions
+        .iter()
+        .filter_map(caution_account)
+        .any(|id| names.lacks_account(id))
+    {
+        match state.ledger.list_accounts(actor, true).await {
+            Ok(views) => {
+                for view in views {
+                    if names.lacks_account(view.id) {
+                        names.add_account(view.id, view.name);
+                    }
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "could not read the forecast's account names"),
+        }
     }
     match state.ledger.list_categories(actor).await {
         Ok(tree) => {
@@ -117,6 +142,18 @@ fn content(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manag
     }
 }
 
+/// What to do about a missing emergency fund: a link for who may set one, else who can.
+pub(in crate::http::pages) fn emergency_fund_next_step(can_manage: bool) -> Markup {
+    html! {
+        @if can_manage {
+            a href="/admin/household#emergency-fund" { "Set one on the Household page" }
+            "."
+        } @else {
+            (ADMIN_SETS_EMERGENCY_FUND)
+        }
+    }
+}
+
 /// The answer, how far to trust it and why, all together.
 fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage: bool) -> Markup {
     let blocked = !forecast.blockers.is_empty();
@@ -140,14 +177,7 @@ fn answer(forecast: &Forecast, names: &Names<'_>, csrf: Option<&str>, can_manage
                             (caution_sentence(caution, forecast.as_of, names))
                             @if matches!(caution, Caution::EmergencyFundNotSet { .. }) {
                                 " "
-                                @if can_manage {
-                                    a href="/admin/household#emergency-fund" {
-                                        "Set one on the Household page"
-                                    }
-                                    "."
-                                } @else {
-                                    (ADMIN_SETS_EMERGENCY_FUND)
-                                }
+                                (emergency_fund_next_step(can_manage))
                             }
                             @if let Some(csrf) = csrf {
                                 (settle::forms(caution, forecast.as_of, names, csrf))
